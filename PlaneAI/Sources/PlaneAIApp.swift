@@ -1,17 +1,22 @@
 import SwiftUI
+import PlaneAICore
 
 @main
 struct PlaneAIApp: App {
     @State private var ghosttyManager = GhosttyAppManager()
+    @State private var projectStore = ProjectStoreViewModel()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(ghosttyManager: ghosttyManager)
-                .frame(minWidth: 640, minHeight: 480)
+            NavigationSplitView {
+                ProjectSidebarView(store: projectStore)
+            } detail: {
+                ContentView(ghosttyManager: ghosttyManager)
+            }
+            .frame(minWidth: 640, minHeight: 480)
         }
         .commands {
-            // Cmd+Q is handled by default SwiftUI app lifecycle
-            CommandGroup(replacing: .newItem) {} // Remove Cmd+N for now
+            CommandGroup(replacing: .newItem) {}
         }
     }
 }
