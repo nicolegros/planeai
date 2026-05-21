@@ -19,7 +19,11 @@ struct TmuxSessionTests {
         let manager = TmuxManager()
         let session = TmuxSession(project: "proj", sessionId: "s1", workingDirectory: "/tmp")
         let cmd = manager.attachCommand(for: session)
-        #expect(cmd == ["tmux", "attach-session", "-t", "planeai-proj-s1"])
+        #expect(cmd.count == 4)
+        #expect(cmd[0].hasSuffix("tmux"))
+        #expect(cmd[1] == "attach-session")
+        #expect(cmd[2] == "-t")
+        #expect(cmd[3] == "planeai-proj-s1")
     }
 }
 

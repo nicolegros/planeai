@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2E93378E035C164FEE3D26CB /* ProjectStoreViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */; };
+		51BDE1C2C1DAC2259D37F0CE /* NewSessionPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7378366AD571318B5275A762 /* NewSessionPaletteView.swift */; };
 		54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */; };
 		6EDF1FF57ACB5B886858F16F /* TerminalSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */; };
 		82C7B4C1217D24D9D68A076C /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2428429E5D570DEBA5C9716F /* TerminalView.swift */; };
@@ -23,6 +24,7 @@
 		4E7ADA2EDDC71D8CF3C53A7C /* PlaneAICore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PlaneAICore; path = Packages/PlaneAICore; sourceTree = SOURCE_ROOT; };
 		5346FBB9C3AB7B8E4D11CAF6 /* ProjectSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSidebarView.swift; sourceTree = "<group>"; };
 		6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceView.swift; sourceTree = "<group>"; };
+		7378366AD571318B5275A762 /* NewSessionPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionPaletteView.swift; sourceTree = "<group>"; };
 		B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaneAIApp.swift; sourceTree = "<group>"; };
 		B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyAppManager.swift; sourceTree = "<group>"; };
 		BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStoreViewModel.swift; sourceTree = "<group>"; };
@@ -80,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */,
+				7378366AD571318B5275A762 /* NewSessionPaletteView.swift */,
 				B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */,
 				5346FBB9C3AB7B8E4D11CAF6 /* ProjectSidebarView.swift */,
 				BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */,
@@ -181,6 +184,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A2DAAE23F97BE53A3576D14A /* GhosttyAppManager.swift in Sources */,
+				51BDE1C2C1DAC2259D37F0CE /* NewSessionPaletteView.swift in Sources */,
 				54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */,
 				A3F5555054C086626124584A /* ProjectSidebarView.swift in Sources */,
 				2E93378E035C164FEE3D26CB /* ProjectStoreViewModel.swift in Sources */,

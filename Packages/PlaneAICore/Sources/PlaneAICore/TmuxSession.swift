@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "ca.nicolegros.planeai", category: "TmuxManager")
 
 /// Manages tmux sessions for planeai. Each session is named `planeai-<project>-<sessionId>`.
 public struct TmuxSession: Sendable {
@@ -17,11 +20,20 @@ public struct TmuxSession: Sendable {
 }
 
 /// Errors from tmux operations.
-public enum TmuxError: Error, Equatable {
+public enum TmuxError: Error, Equatable, LocalizedError {
     case tmuxNotFound
     case sessionAlreadyExists(String)
     case sessionNotFound(String)
     case commandFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .tmuxNotFound: "tmux not found on PATH"
+        case .sessionAlreadyExists(let n): "Session '\(n)' already exists"
+        case .sessionNotFound(let n): "Session '\(n)' not found"
+        case .commandFailed(let msg): "Command failed: \(msg)"
+        }
+    }
 }
 
 /// Manages tmux session lifecycle. All methods shell out to the `tmux` binary.
@@ -47,8 +59,11 @@ public final class TmuxManager: Sendable {
     /// Creates a new tmux session with status bar disabled and prefix key remapped to unreachable combo.
     @discardableResult
     public func createSession(_ session: TmuxSession) throws -> TmuxSession {
+        logger.info("Creating session: \(session.name) in \(session.workingDirectory)")
+
         // Check if session already exists
         if hasSession(named: session.name) {
+            logger.warning("Session already exists: \(session.name)")
             throw TmuxError.sessionAlreadyExists(session.name)
         }
 
@@ -60,6 +75,7 @@ public final class TmuxManager: Sendable {
         ])
 
         guard result.status == 0 else {
+            logger.error("new-session failed: \(result.stderr)")
             throw TmuxError.commandFailed(result.stderr)
         }
 
@@ -106,7 +122,8 @@ public final class TmuxManager: Sendable {
 
     /// Returns the tmux attach command arguments for a given session (for ghostty surface rendering).
     public func attachCommand(for session: TmuxSession) -> [String] {
-        ["tmux", "attach-session", "-t", session.name]
+        let tmux = UserEnvironment.which("tmux") ?? "tmux"
+        return [tmux, "attach-session", "-t", session.name]
     }
 
     // MARK: - Private
@@ -124,18 +141,26 @@ public final class TmuxManager: Sendable {
 
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
+        process.environment = UserEnvironment.processEnvironment
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
+
+        logger.debug("Running: \(arguments.joined(separator: " "))")
+        logger.debug("PATH: \(UserEnvironment.path)")
 
         do {
             try process.run()
             process.waitUntilExit()
         } catch {
+            logger.error("Process launch failed: \(error.localizedDescription)")
             return RunResult(stdout: "", stderr: error.localizedDescription, status: -1)
         }
 
         let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 {
+            logger.error("Command failed (\(process.terminationStatus)): \(arguments.joined(separator: " ")) — stderr: \(stderr)")
+        }
         return RunResult(stdout: stdout, stderr: stderr, status: process.terminationStatus)
     }
 }

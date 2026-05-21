@@ -5,12 +5,14 @@ import GhosttyKit
 final class TerminalSurfaceView: NSView {
     private var ghosttyApp: ghostty_app_t?
     private var surface: ghostty_surface_t?
+    private var command: String?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
-    func configure(app: ghostty_app_t) {
+    func configure(app: ghostty_app_t, command: String? = nil) {
         self.ghosttyApp = app
+        self.command = command
         self.wantsLayer = true // Ensure Metal layer is available
     }
 
@@ -23,7 +25,15 @@ final class TerminalSurfaceView: NSView {
         cfg.scale_factor = Double(window?.backingScaleFactor ?? 2.0)
         cfg.font_size = 0
         cfg.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+
+        // If a command is specified, pass it to ghostty
+        let commandCString = command.flatMap { strdup($0) }
+        cfg.command = UnsafePointer(commandCString)
+
         surface = ghostty_surface_new(app, &cfg)
+
+        commandCString.map { free($0) }
+
         if surface == nil {
             NSLog("PlaneAI: failed to create ghostty surface")
         }
@@ -39,6 +49,7 @@ final class TerminalSurfaceView: NSView {
         ghostty_surface_set_content_scale(surface, scale, scale)
         updateSurfaceSize()
         ghostty_surface_set_focus(surface, true)
+        window?.makeFirstResponder(self)
     }
 
     override func setFrameSize(_ newSize: NSSize) {

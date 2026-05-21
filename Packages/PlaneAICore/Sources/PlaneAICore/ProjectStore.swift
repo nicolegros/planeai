@@ -7,7 +7,7 @@ public enum BranchStrategy: String, Codable, Sendable {
     case main
 }
 
-public struct Project: Identifiable, Codable, Equatable, Sendable {
+public struct Project: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public let repoPath: String
@@ -64,9 +64,10 @@ public final class ProjectStore {
         guard !projects.contains(where: { $0.name == name }) else {
             throw ProjectStoreError.duplicateName(name)
         }
+        let expandedPath = NSString(string: repoPath).expandingTildeInPath
         let project = Project(
             name: name,
-            repoPath: repoPath,
+            repoPath: expandedPath,
             defaultProvider: defaultProvider,
             defaultAutoApprove: defaultAutoApprove,
             defaultBranchStrategy: defaultBranchStrategy
@@ -113,11 +114,12 @@ public final class ProjectStore {
 public enum GitRepoValidator {
     /// Validates that the given path is an existing directory containing a git repository.
     public static func validate(path: String) throws {
+        let expanded = NSString(string: path).expandingTildeInPath
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir), isDir.boolValue else {
             throw ProjectStoreError.invalidGitRepo(path)
         }
-        let gitPath = (path as NSString).appendingPathComponent(".git")
+        let gitPath = (expanded as NSString).appendingPathComponent(".git")
         guard FileManager.default.fileExists(atPath: gitPath) else {
             throw ProjectStoreError.invalidGitRepo(path)
         }
