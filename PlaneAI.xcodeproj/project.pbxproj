@@ -1,0 +1,398 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */; };
+		6EDF1FF57ACB5B886858F16F /* TerminalSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */; };
+		82C7B4C1217D24D9D68A076C /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2428429E5D570DEBA5C9716F /* TerminalView.swift */; };
+		A2DAAE23F97BE53A3576D14A /* GhosttyAppManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */; };
+		A3B3D51F4DF2FB117A952429 /* PlaneAICore in Frameworks */ = {isa = PBXBuildFile; productRef = 8C59F10CA21E069C448FC0EA /* PlaneAICore */; };
+		C7B2331C2629B273B72BDF44 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E92F65A4D95C5CD22E86C7C1 /* GhosttyKit.xcframework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2428429E5D570DEBA5C9716F /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
+		30A47321B53CC8C8739BF562 /* PlaneAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlaneAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E7ADA2EDDC71D8CF3C53A7C /* PlaneAICore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PlaneAICore; path = Packages/PlaneAICore; sourceTree = SOURCE_ROOT; };
+		6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceView.swift; sourceTree = "<group>"; };
+		B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaneAIApp.swift; sourceTree = "<group>"; };
+		B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyAppManager.swift; sourceTree = "<group>"; };
+		E92F65A4D95C5CD22E86C7C1 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = vendor/ghostty/macos/GhosttyKit.xcframework; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		FA2CAE53177571A32B08CD65 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A3B3D51F4DF2FB117A952429 /* PlaneAICore in Frameworks */,
+				C7B2331C2629B273B72BDF44 /* GhosttyKit.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		8BFA319732AE29C329A97D18 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				30A47321B53CC8C8739BF562 /* PlaneAI.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A6AAA3119AB431642995A8B2 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				4E7ADA2EDDC71D8CF3C53A7C /* PlaneAICore */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		ABFF9AD67753A118698D0AE8 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				E92F65A4D95C5CD22E86C7C1 /* GhosttyKit.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D2F62CE315A07433B3E15FDC = {
+			isa = PBXGroup;
+			children = (
+				A6AAA3119AB431642995A8B2 /* Packages */,
+				E915FC9E330C43173506F75B /* PlaneAI */,
+				ABFF9AD67753A118698D0AE8 /* Frameworks */,
+				8BFA319732AE29C329A97D18 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DF0F02C4FC20E8DB908CC7E3 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */,
+				B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */,
+				6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */,
+				2428429E5D570DEBA5C9716F /* TerminalView.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E915FC9E330C43173506F75B /* PlaneAI */ = {
+			isa = PBXGroup;
+			children = (
+				DF0F02C4FC20E8DB908CC7E3 /* Sources */,
+			);
+			path = PlaneAI;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		650D6B16ADC9810F49E1C1B5 /* PlaneAI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 16092692C1247CAC85C863BF /* Build configuration list for PBXNativeTarget "PlaneAI" */;
+			buildPhases = (
+				7D357C82BE5F45399536A125 /* Build GhosttyKit */,
+				D9A9F4A0CA5E8FC1153FA703 /* Sources */,
+				FA2CAE53177571A32B08CD65 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PlaneAI;
+			packageProductDependencies = (
+				8C59F10CA21E069C448FC0EA /* PlaneAICore */,
+			);
+			productName = PlaneAI;
+			productReference = 30A47321B53CC8C8739BF562 /* PlaneAI.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		2D22FCC8386D7C001B098CAE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 5DAD629B8462C89C8CB9093E /* Build configuration list for PBXProject "PlaneAI" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = D2F62CE315A07433B3E15FDC;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5F070AA4E27FC1DFBD2BE9EA /* XCLocalSwiftPackageReference "Packages/PlaneAICore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 8BFA319732AE29C329A97D18 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				650D6B16ADC9810F49E1C1B5 /* PlaneAI */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		7D357C82BE5F45399536A125 /* Build GhosttyKit */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build GhosttyKit";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ ! -d \"${PROJECT_DIR}/vendor/ghostty/macos/GhosttyKit.xcframework\" ]; then\n  echo \"warning: GhosttyKit.xcframework not found. Run scripts/build-ghostty.sh first.\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D9A9F4A0CA5E8FC1153FA703 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A2DAAE23F97BE53A3576D14A /* GhosttyAppManager.swift in Sources */,
+				54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */,
+				6EDF1FF57ACB5B886858F16F /* TerminalSurfaceView.swift in Sources */,
+				82C7B4C1217D24D9D68A076C /* TerminalView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		331059E6D49551B00731BA3D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		3735F5EC2F57D95966DAA1E2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		6DA1CD4BB0835FC67EF6723B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PlaneAI/Resources/PlaneAI.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"vendor/ghostty/macos\"",
+				);
+				INFOPLIST_FILE = PlaneAI/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-lstdc++",
+					"-framework Carbon",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.nicolegros.planeai;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		7AD506AF753FF6EE9D72A309 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PlaneAI/Resources/PlaneAI.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"vendor/ghostty/macos\"",
+				);
+				INFOPLIST_FILE = PlaneAI/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-lstdc++",
+					"-framework Carbon",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ca.nicolegros.planeai;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		16092692C1247CAC85C863BF /* Build configuration list for PBXNativeTarget "PlaneAI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7AD506AF753FF6EE9D72A309 /* Debug */,
+				6DA1CD4BB0835FC67EF6723B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5DAD629B8462C89C8CB9093E /* Build configuration list for PBXProject "PlaneAI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				331059E6D49551B00731BA3D /* Debug */,
+				3735F5EC2F57D95966DAA1E2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5F070AA4E27FC1DFBD2BE9EA /* XCLocalSwiftPackageReference "Packages/PlaneAICore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/PlaneAICore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8C59F10CA21E069C448FC0EA /* PlaneAICore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PlaneAICore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 2D22FCC8386D7C001B098CAE /* Project object */;
+}

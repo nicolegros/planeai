@@ -1,3 +1,21 @@
+# Zig
 .zig-cache/
 zig-out/
 *.o
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# GhosttyKit build output (built locally via scripts/build-ghostty.sh)
+vendor/ghostty/macos/GhosttyKit.xcframework/
+vendor/ghostty/zig-out/
+
+# macOS
+.DS_Store

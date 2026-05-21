@@ -1,0 +1,57 @@
+name: PlaneAI
+options:
+  bundleIdPrefix: ca.nicolegros
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  PlaneAICore:
+    path: Packages/PlaneAICore
+
+targets:
+  PlaneAI:
+    type: application
+    platform: macOS
+    sources:
+      - path: PlaneAI/Sources
+    resources:
+      - path: PlaneAI/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ca.nicolegros.planeai
+        INFOPLIST_FILE: PlaneAI/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: PlaneAI/Resources/PlaneAI.entitlements
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SWIFT_VERSION: "5.10"
+        OTHER_LDFLAGS:
+          - "-lstdc++"
+          - "-framework Carbon"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: false
+    dependencies:
+      - package: PlaneAICore
+      - framework: vendor/ghostty/macos/GhosttyKit.xcframework
+        embed: false
+    preBuildScripts:
+      - name: "Build GhosttyKit"
+        script: |
+          if [ ! -d "${PROJECT_DIR}/vendor/ghostty/macos/GhosttyKit.xcframework" ]; then
+            echo "warning: GhosttyKit.xcframework not found. Run scripts/build-ghostty.sh first."
+          fi
+        basedOnDependencyAnalysis: false
+
+schemes:
+  PlaneAI:
+    build:
+      targets:
+        PlaneAI: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PlaneAI
