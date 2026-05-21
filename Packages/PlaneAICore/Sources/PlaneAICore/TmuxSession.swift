@@ -126,6 +126,52 @@ public final class TmuxManager: Sendable {
         return [tmux, "attach-session", "-t", session.name]
     }
 
+    /// Returns true if the primary pane (pane 0) in the session still has a running process.
+    public func isPaneAlive(sessionName: String) -> Bool {
+        let result = run(["tmux", "list-panes", "-t", sessionName, "-F", "#{pane_dead}"])
+        guard result.status == 0 else { return false }
+        let firstLine = result.stdout.split(separator: "\n").first.map(String.init) ?? "1"
+        return firstLine == "0"
+    }
+
+    /// Captures the full scrollback of a session to a file.
+    public func captureScrollback(sessionName: String, to path: String) {
+        _ = run(["tmux", "capture-pane", "-t", sessionName, "-p", "-S", "-"])
+        let result = run(["tmux", "capture-pane", "-t", sessionName, "-p", "-S", "-32768"])
+        if result.status == 0 {
+            try? result.stdout.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// Checks if a directory has unmerged/uncommitted changes.
+    public static func hasUnmergedChanges(at path: String) -> Bool {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-C", path, "status", "--porcelain"]
+        process.environment = UserEnvironment.processEnvironment
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch { return false }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Removes a git worktree directory.
+    public func removeWorktree(at path: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["rm", "-rf", path]
+        process.environment = UserEnvironment.processEnvironment
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+
     // MARK: - Private
 
     private struct RunResult: Sendable {

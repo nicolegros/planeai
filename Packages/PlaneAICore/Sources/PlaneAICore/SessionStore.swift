@@ -5,12 +5,13 @@ import Observation
 @Observable
 public final class SessionStore {
     public private(set) var sessions: [SessionInfo] = []
+    public private(set) var archivedSessions: [SessionInfo] = []
     private let projects: [Project]
     private let tmuxListProvider: () -> String
 
     public init(projects: [Project], tmuxListProvider: @escaping () -> String = defaultTmuxList) {
         self.projects = projects
-    self.tmuxListProvider = tmuxListProvider
+        self.tmuxListProvider = tmuxListProvider
     }
 
     /// Refreshes the session list from tmux.
@@ -21,11 +22,70 @@ public final class SessionStore {
             .map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { $0.hasPrefix("planeai-") }
             .compactMap { parseLine($0) }
+            .filter { session in !archivedSessions.contains(where: { $0.id == session.id }) }
     }
 
     /// Sessions grouped by project name, preserving order.
     public var groupedByProject: [String: [SessionInfo]] {
         Dictionary(grouping: sessions, by: \.projectName)
+    }
+
+    // MARK: - Lifecycle
+
+    /// Toggles a session between running and completed state.
+    public func complete(sessionId: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = sessions[idx]
+        let newState: SessionState = s.state == .completed ? .running : .completed
+        sessions[idx] = SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: newState, projectId: s.projectId, projectName: s.projectName)
+    }
+
+    /// Archives a session: removes from active list, adds to archived list.
+    public func archive(sessionId: String) {
+        if let idx = sessions.firstIndex(where: { $0.id == sessionId }) {
+            let s = sessions.remove(at: idx)
+            archivedSessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .archived, projectId: s.projectId, projectName: s.projectName))
+        }
+    }
+
+    /// Hard-deletes a session from both active and archived lists.
+    public func delete(sessionId: String) {
+        sessions.removeAll { $0.id == sessionId }
+        archivedSessions.removeAll { $0.id == sessionId }
+    }
+
+    /// Restores an archived session back to the active list.
+    public func restore(sessionId: String) {
+        guard let idx = archivedSessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        let s = archivedSessions.remove(at: idx)
+        sessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .completed, projectId: s.projectId, projectName: s.projectName))
+    }
+
+    // MARK: - Pane exit detection
+
+    /// Checks all running sessions for dead panes and auto-completes them.
+    public func pollForExitedSessions(tmuxManager: TmuxManager = TmuxManager()) {
+        for (idx, session) in sessions.enumerated() where session.state == .running {
+            if !tmuxManager.isPaneAlive(sessionName: session.id) {
+                sessions[idx] = SessionInfo(id: session.id, taskName: session.taskName, branch: session.branch, provider: session.provider, state: .completed, projectId: session.projectId, projectName: session.projectName)
+            }
+        }
+    }
+
+    // MARK: - Scrollback persistence
+
+    /// The directory where archived scrollback is stored.
+    public static var scrollbackDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("planeai", isDirectory: true)
+    }
+
+    /// Persists scrollback for a session to Application Support.
+    public func persistScrollback(sessionId: String, tmuxManager: TmuxManager = TmuxManager()) {
+        let dir = Self.scrollbackDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let path = dir.appendingPathComponent("\(sessionId).txt").path
+        tmuxManager.captureScrollback(sessionName: sessionId, to: path)
     }
 
     // MARK: - Parsing

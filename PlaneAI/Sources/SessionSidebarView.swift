@@ -5,6 +5,15 @@ struct SessionSidebarView: View {
     @Binding var selectedSessionId: String?
     let groupedSessions: [(project: String, sessions: [SessionInfo])]
     var onSelect: ((SessionInfo) -> Void)?
+    var onComplete: ((String) -> Void)?
+    var onArchive: ((String) -> Void)?
+    var onDelete: ((String) -> Void)?
+    var onRestore: ((String) -> Void)?
+    var shouldConfirmDelete: ((String) -> Bool) = { _ in false }
+    var archivedSessions: [SessionInfo] = []
+    @State private var showArchived = false
+    @State private var showDeleteConfirmation = false
+    @State private var pendingDeleteId: String?
 
     var body: some View {
         let allSessions = groupedSessions.flatMap(\.sessions)
@@ -24,8 +33,43 @@ struct SessionSidebarView: View {
                     }
                 }
             }
+
+            if !archivedSessions.isEmpty {
+                Section {
+                    HStack {
+                        Image(systemName: showArchived ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("Archived")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(archivedSessions.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .tag("__archived_header__")
+
+                    if showArchived {
+                        ForEach(archivedSessions) { session in
+                            SessionRow(session: session, position: nil)
+                                .tag(session.id)
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
+        .onKeyPress(.leftArrow) {
+            guard selectedSessionId == "__archived_header__" && showArchived else { return .ignored }
+            showArchived = false
+            return .handled
+        }
+        .onKeyPress(.rightArrow) {
+            guard selectedSessionId == "__archived_header__" && !showArchived else { return .ignored }
+            showArchived = true
+            return .handled
+        }
         .onKeyPress(.return) {
             if let id = selectedSessionId,
                let session = allSessions.first(where: { $0.id == id }) {
@@ -34,12 +78,56 @@ struct SessionSidebarView: View {
             }
             return .ignored
         }
+        .onKeyPress(characters: CharacterSet(charactersIn: "c")) { _ in
+            guard let id = selectedSessionId else { return .ignored }
+            onComplete?(id)
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "a")) { _ in
+            guard let id = selectedSessionId else { return .ignored }
+            onArchive?(id)
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "d")) { _ in
+            guard let id = selectedSessionId else { return .ignored }
+            if shouldConfirmDelete(id) {
+                pendingDeleteId = id
+                showDeleteConfirmation = true
+            } else {
+                onDelete?(id)
+                if selectedSessionId == id { selectedSessionId = nil }
+            }
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "r")) { _ in
+            guard let id = selectedSessionId else { return .ignored }
+            onRestore?(id)
+            return .handled
+        }
+        .alert("Delete Session?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                if let id = pendingDeleteId {
+                    onDelete?(id)
+                    if selectedSessionId == id { selectedSessionId = nil }
+                }
+                pendingDeleteId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteId = nil
+            }
+        } message: {
+            Text("This will remove the session, scrollback, and worktree. This cannot be undone.")
+        }
     }
 }
 
 struct SessionRow: View {
     let session: SessionInfo
     var position: Int?
+
+    private var isDimmed: Bool {
+        session.state == .completed || session.state == .archived
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -62,6 +150,7 @@ struct SessionRow: View {
             providerIcon
         }
         .padding(.vertical, 2)
+        .opacity(isDimmed ? 0.5 : 1.0)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(session.taskName), \(session.state.rawValue)")
     }
@@ -78,6 +167,7 @@ struct SessionRow: View {
         case .running: .green
         case .completed: .gray
         case .needsAttention: .orange
+        case .archived: .gray
         }
     }
 

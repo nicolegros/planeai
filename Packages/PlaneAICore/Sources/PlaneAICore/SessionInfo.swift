@@ -5,6 +5,7 @@ public enum SessionState: String, Sendable, Equatable {
     case running
     case completed
     case needsAttention
+    case archived
 }
 
 /// A snapshot of a live session for display in the sidebar.

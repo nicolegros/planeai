@@ -16,6 +16,9 @@ struct PlaneAIApp: App {
     @State private var showTabSwitcher = false
     @State private var tabSwitcherIndex = 0
     @State private var eventMonitor: Any?
+    @State private var pollTimer: Timer?
+    @State private var showArchiveWorktreePrompt = false
+    @State private var pendingArchiveId: String?
 
     var body: some Scene {
         WindowGroup {
@@ -25,7 +28,39 @@ struct PlaneAIApp: App {
                     groupedSessions: groupedSessions,
                     onSelect: { session in
                         activateSession(session)
-                    }
+                    },
+                    onComplete: { id in
+                        sessionStore.complete(sessionId: id)
+                    },
+                    onArchive: { id in
+                        sessionStore.persistScrollback(sessionId: id)
+                        pendingArchiveId = id
+                        showArchiveWorktreePrompt = true
+                    },
+                    onDelete: { id in
+                        let tmux = TmuxManager()
+                        try? tmux.killSession(named: id)
+                        // Remove scrollback file
+                        let scrollbackPath = SessionStore.scrollbackDirectory.appendingPathComponent("\(id).txt")
+                        try? FileManager.default.removeItem(at: scrollbackPath)
+                        // Remove worktree (derive path from session name)
+                        if let project = projectStore.projects.first(where: { p in id.hasPrefix("planeai-\(p.name)-") }) {
+                            let task = String(id.dropFirst("planeai-\(project.name)-".count))
+                            let worktreePath = (project.repoPath as NSString).deletingLastPathComponent + "/\(project.name)-\(task)"
+                            tmux.removeWorktree(at: worktreePath)
+                        }
+                        sessionStore.delete(sessionId: id)
+                    },
+                    onRestore: { id in
+                        sessionStore.restore(sessionId: id)
+                    },
+                    shouldConfirmDelete: { id in
+                        guard let project = projectStore.projects.first(where: { p in id.hasPrefix("planeai-\(p.name)-") }) else { return false }
+                        let task = String(id.dropFirst("planeai-\(project.name)-".count))
+                        let worktreePath = (project.repoPath as NSString).deletingLastPathComponent + "/\(project.name)-\(task)"
+                        return TmuxManager.hasUnmergedChanges(at: worktreePath)
+                    },
+                    archivedSessions: sessionStore.archivedSessions
                 )
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -62,8 +97,39 @@ struct PlaneAIApp: App {
                     }
                 )
             }
+            .alert("Archive Session", isPresented: $showArchiveWorktreePrompt) {
+                Button("Keep Worktree") {
+                    if let id = pendingArchiveId {
+                        sessionStore.archive(sessionId: id)
+                        if selectedSessionId == id { selectedSessionId = nil }
+                    }
+                    pendingArchiveId = nil
+                }
+                Button("Remove Worktree", role: .destructive) {
+                    if let id = pendingArchiveId {
+                        if let project = projectStore.projects.first(where: { p in id.hasPrefix("planeai-\(p.name)-") }) {
+                            let task = String(id.dropFirst("planeai-\(project.name)-".count))
+                            let worktreePath = (project.repoPath as NSString).deletingLastPathComponent + "/\(project.name)-\(task)"
+                            TmuxManager().removeWorktree(at: worktreePath)
+                        }
+                        sessionStore.archive(sessionId: id)
+                        if selectedSessionId == id { selectedSessionId = nil }
+                    }
+                    pendingArchiveId = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingArchiveId = nil
+                }
+            } message: {
+                Text("Do you want to keep or remove the worktree for this session?")
+            }
             .onAppear {
                 refreshSessions()
+                pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+                    DispatchQueue.main.async {
+                        sessionStore.pollForExitedSessions()
+                    }
+                }
                 eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
                     if event.type == .keyDown && event.keyCode == 48 && event.modifierFlags.contains(.control) {
                         switchToPreviousSession()
