@@ -9,7 +9,7 @@ struct SessionLifecycleTests {
         let projects = [
             Project(id: UUID(), name: "proj", repoPath: "/tmp/proj", defaultProvider: "claude", defaultAutoApprove: false, defaultBranchStrategy: .worktree)
         ]
-        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput })
+        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput }, persistsArchive: false)
         store.refresh()
         return store
     }

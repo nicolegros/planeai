@@ -9,9 +9,17 @@ public final class SessionStore {
     private let projects: [Project]
     private let tmuxListProvider: () -> String
 
-    public init(projects: [Project], tmuxListProvider: @escaping () -> String = defaultTmuxList) {
+    private static var archiveFileURL: URL {
+        scrollbackDirectory.appendingPathComponent("archived-sessions.json")
+    }
+
+    private let persistsArchive: Bool
+
+    public init(projects: [Project], tmuxListProvider: @escaping () -> String = defaultTmuxList, persistsArchive: Bool = true) {
         self.projects = projects
         self.tmuxListProvider = tmuxListProvider
+        self.persistsArchive = persistsArchive
+        if persistsArchive { loadArchivedSessions() }
     }
 
     /// Refreshes the session list from tmux.
@@ -45,13 +53,16 @@ public final class SessionStore {
         if let idx = sessions.firstIndex(where: { $0.id == sessionId }) {
             let s = sessions.remove(at: idx)
             archivedSessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .archived, projectId: s.projectId, projectName: s.projectName))
+            saveArchivedSessions()
         }
     }
 
     /// Hard-deletes a session from both active and archived lists.
     public func delete(sessionId: String) {
         sessions.removeAll { $0.id == sessionId }
+        let hadArchived = archivedSessions.contains { $0.id == sessionId }
         archivedSessions.removeAll { $0.id == sessionId }
+        if hadArchived { saveArchivedSessions() }
     }
 
     /// Restores an archived session back to the active list.
@@ -59,6 +70,24 @@ public final class SessionStore {
         guard let idx = archivedSessions.firstIndex(where: { $0.id == sessionId }) else { return }
         let s = archivedSessions.remove(at: idx)
         sessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .completed, projectId: s.projectId, projectName: s.projectName))
+        saveArchivedSessions()
+    }
+
+    // MARK: - Archive persistence
+
+    private func saveArchivedSessions() {
+        guard persistsArchive else { return }
+        let dir = Self.scrollbackDirectory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(archivedSessions) {
+            try? data.write(to: Self.archiveFileURL)
+        }
+    }
+
+    private func loadArchivedSessions() {
+        guard let data = try? Data(contentsOf: Self.archiveFileURL),
+              let loaded = try? JSONDecoder().decode([SessionInfo].self, from: data) else { return }
+        archivedSessions = loaded
     }
 
     // MARK: - Pane exit detection

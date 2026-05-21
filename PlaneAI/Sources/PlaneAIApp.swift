@@ -35,8 +35,19 @@ struct PlaneAIApp: App {
                     },
                     onArchive: { id in
                         sessionStore.persistScrollback(sessionId: id)
-                        pendingArchiveId = id
-                        showArchiveWorktreePrompt = true
+                        var worktreeExists = false
+                        if let project = projectStore.projects.first(where: { p in id.hasPrefix("planeai-\(p.name)-") }) {
+                            let task = String(id.dropFirst("planeai-\(project.name)-".count))
+                            let worktreePath = (project.repoPath as NSString).deletingLastPathComponent + "/\(project.name)-\(task)"
+                            worktreeExists = FileManager.default.fileExists(atPath: worktreePath)
+                        }
+                        if worktreeExists {
+                            pendingArchiveId = id
+                            showArchiveWorktreePrompt = true
+                        } else {
+                            sessionStore.archive(sessionId: id)
+                            if selectedSessionId == id { selectedSessionId = nil }
+                        }
                     },
                     onDelete: { id in
                         let tmux = TmuxManager()
