@@ -19,6 +19,7 @@ struct PlaneAIApp: App {
     @State private var pollTimer: Timer?
     @State private var showArchiveWorktreePrompt = false
     @State private var pendingArchiveId: String?
+    @State private var focusToken: UInt = 0
 
     var body: some Scene {
         WindowGroup {
@@ -71,7 +72,7 @@ struct PlaneAIApp: App {
                 }
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 450)
             } detail: {
-                ContentView(ghosttyManager: ghosttyManager, terminalCommand: activeTerminalCommand, sessionId: activeSessionId, activatedSessions: activatedSessions)
+                ContentView(ghosttyManager: ghosttyManager, terminalCommand: activeTerminalCommand, sessionId: activeSessionId, activatedSessions: activatedSessions, focusToken: focusToken)
             }
             .frame(minWidth: 640, minHeight: 480)
             .overlay {
@@ -189,16 +190,7 @@ struct PlaneAIApp: App {
                             window.makeFirstResponder(listView)
                         } else {
                             // Already in sidebar — focus the terminal
-                            func findSurfaceView(_ view: NSView) -> NSView? {
-                                if view is TerminalSurfaceView { return view }
-                                for sub in view.subviews.reversed() {
-                                    if let found = findSurfaceView(sub) { return found }
-                                }
-                                return nil
-                            }
-                            if let termView = findSurfaceView(window.contentView!) {
-                                window.makeFirstResponder(termView)
-                            }
+                            focusToken &+= 1
                         }
                     }
                 }
@@ -256,6 +248,7 @@ struct PlaneAIApp: App {
         }
         activeSessionId = session.id
         activeTerminalCommand = cmd
+        focusToken &+= 1
     }
 
     private var mruSessionList: [SessionInfo] {
@@ -303,6 +296,7 @@ struct ContentView: View {
     let terminalCommand: String?
     let sessionId: String?
     let activatedSessions: [(id: String, command: String)]
+    var focusToken: UInt = 0
 
     var body: some View {
         ZStack {
@@ -321,12 +315,10 @@ struct ContentView: View {
             case .ready:
                 if let app = ghosttyManager.app {
                     if activatedSessions.isEmpty {
-                        TerminalView(ghosttyApp: app)
+                        TerminalView(ghosttyApp: app, isActive: true, focusToken: focusToken)
                     } else {
                         ForEach(activatedSessions, id: \.id) { session in
-                            TerminalView(ghosttyApp: app, command: session.command)
-                                .opacity(session.id == sessionId ? 1 : 0)
-                                .allowsHitTesting(session.id == sessionId)
+                            TerminalView(ghosttyApp: app, command: session.command, isActive: session.id == sessionId, focusToken: session.id == sessionId ? focusToken : 0)
                         }
                     }
                 }

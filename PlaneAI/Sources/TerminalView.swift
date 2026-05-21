@@ -5,11 +5,8 @@ import GhosttyKit
 struct TerminalView: NSViewRepresentable {
     let ghosttyApp: ghostty_app_t
     var command: String?
-
-    init(ghosttyApp: ghostty_app_t, command: String? = nil) {
-        self.ghosttyApp = ghosttyApp
-        self.command = command
-    }
+    var isActive: Bool = true
+    var focusToken: UInt = 0
 
     func makeNSView(context: Context) -> TerminalSurfaceView {
         let view = TerminalSurfaceView()
@@ -17,7 +14,15 @@ struct TerminalView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: TerminalSurfaceView, context: Context) {}
+    func updateNSView(_ nsView: TerminalSurfaceView, context: Context) {
+        nsView.isHidden = !isActive
+        if isActive {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                nsView.window?.makeFirstResponder(nsView)
+                nsView.forceFocus()
+            }
+        }
+    }
 
     static func dismantleNSView(_ nsView: TerminalSurfaceView, coordinator: ()) {
         nsView.teardown()

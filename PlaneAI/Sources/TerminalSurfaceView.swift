@@ -70,6 +70,11 @@ final class TerminalSurfaceView: NSView {
         return super.becomeFirstResponder()
     }
 
+    /// Explicitly sets ghostty surface focus (for programmatic focus changes).
+    func forceFocus() {
+        if let surface { ghostty_surface_set_focus(surface, true) }
+    }
+
     override func resignFirstResponder() -> Bool {
         if let surface { ghostty_surface_set_focus(surface, false) }
         return super.resignFirstResponder()

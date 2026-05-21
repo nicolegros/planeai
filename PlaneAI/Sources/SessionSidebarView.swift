@@ -71,12 +71,11 @@ struct SessionSidebarView: View {
             return .handled
         }
         .onKeyPress(.return) {
-            if let id = selectedSessionId,
-               let session = allSessions.first(where: { $0.id == id }) {
+            guard let id = selectedSessionId, id != "__archived_header__" else { return .ignored }
+            if let session = allSessions.first(where: { $0.id == id }) {
                 onSelect?(session)
-                return .handled
             }
-            return .ignored
+            return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "c")) { _ in
             guard let id = selectedSessionId else { return .ignored }
