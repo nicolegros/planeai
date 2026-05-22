@@ -46,7 +46,6 @@ final class TerminalSurfaceView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil && surface == nil {
-            NSLog("PlaneAI: creating surface in viewDidMoveToWindow")
             createSurface()
         }
         guard let surface else { return }
@@ -59,9 +58,6 @@ final class TerminalSurfaceView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        if newSize.width > 0 && newSize.height > 0 {
-            NSLog("PlaneAI: setFrameSize \(newSize.width)x\(newSize.height)")
-        }
         updateSurfaceSize()
     }
 

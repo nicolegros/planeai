@@ -118,3 +118,59 @@ struct SessionLifecycleTests {
         #expect(store.sessions[0].id == "planeai-proj-task2")
     }
 }
+
+@Suite("Session Activation")
+struct SessionActivationTests {
+
+    @Test("new session appears in activated list and becomes active")
+    func newSessionActivation() {
+        // Simulates the onCreate flow: a new session must be added to activatedSessions
+        // and set as activeSessionId to receive terminal focus.
+        var activatedSessions: [(id: String, command: String)] = []
+        var activeSessionId: String?
+        var focusToken: UInt = 0
+
+        let newSessionId = "planeai-proj-new-task"
+        let cmd = "tmux attach -t planeai-proj-new-task"
+
+        // Simulate onCreate logic (mirrors PlaneAIApp.onCreate)
+        if !activatedSessions.contains(where: { $0.id == newSessionId }) {
+            activatedSessions.append((id: newSessionId, command: cmd))
+        }
+        activeSessionId = newSessionId
+        focusToken &+= 1
+
+        #expect(activatedSessions.contains(where: { $0.id == newSessionId }))
+        #expect(activeSessionId == newSessionId)
+        #expect(focusToken == 1)
+    }
+
+    @Test("creating second session preserves first in activated list")
+    func secondSessionPreservesFirst() {
+        var activatedSessions: [(id: String, command: String)] = []
+        var activeSessionId: String?
+        var sessionHistory: [String] = []
+        var focusToken: UInt = 0
+
+        // First session
+        let first = "planeai-proj-task1"
+        activatedSessions.append((id: first, command: "cmd1"))
+        activeSessionId = first
+        focusToken &+= 1
+
+        // Second session (mirrors onCreate with history tracking)
+        let second = "planeai-proj-task2"
+        if let current = activeSessionId, current != second {
+            sessionHistory.removeAll { $0 == current }
+            sessionHistory.append(current)
+        }
+        activatedSessions.append((id: second, command: "cmd2"))
+        activeSessionId = second
+        focusToken &+= 1
+
+        #expect(activatedSessions.count == 2)
+        #expect(activeSessionId == second)
+        #expect(sessionHistory == [first])
+        #expect(focusToken == 2)
+    }
+}

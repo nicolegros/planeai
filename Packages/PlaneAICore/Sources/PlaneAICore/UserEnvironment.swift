@@ -69,6 +69,12 @@ public enum UserEnvironment {
         return env
     }()
 
+    /// The user's login shell path.
+    public static let shell: String = {
+        if let s = ProcessInfo.processInfo.environment["SHELL"], !s.isEmpty { return s }
+        return "/bin/zsh"
+    }()
+
     /// Resolves the absolute path of a binary using the user's PATH.
     public static func which(_ binary: String) -> String? {
         let process = Process()

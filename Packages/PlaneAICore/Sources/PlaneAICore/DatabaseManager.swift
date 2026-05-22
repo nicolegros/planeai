@@ -29,9 +29,11 @@ public final class DatabaseManager: Sendable {
 
 private func migrate(_ db: DatabaseQueue) throws {
     var migrator = DatabaseMigrator()
+    migrator.eraseDatabaseOnSchemaChange = false
+    migrator = migrator.disablingDeferredForeignKeyChecks()
 
     migrator.registerMigration("v1") { db in
-        try db.create(table: "project") { t in
+        try db.create(table: "project", ifNotExists: true) { t in
             t.column("id", .text).primaryKey()
             t.column("name", .text).notNull().unique()
             t.column("repoPath", .text).notNull()
@@ -40,7 +42,7 @@ private func migrate(_ db: DatabaseQueue) throws {
             t.column("defaultBranchStrategy", .text).notNull()
         }
 
-        try db.create(table: "session") { t in
+        try db.create(table: "session", ifNotExists: true) { t in
             t.column("id", .text).primaryKey()
             t.column("taskName", .text).notNull()
             t.column("branch", .text).notNull()

@@ -11,6 +11,12 @@ final class GhosttyAppManager {
     private(set) var state: State = .loading
 
     init() {
+        // Set resources dir for shell integration and terminfo
+        if let resourcesPath = Bundle.main.resourcePath {
+            let ghosttyResources = resourcesPath + "/ghostty"
+            setenv("GHOSTTY_RESOURCES_DIR", ghosttyResources, 1)
+        }
+
         guard ghostty_init(0, nil) == GHOSTTY_SUCCESS else {
             NSLog("PlaneAI: ghostty_init failed")
             state = .error

@@ -36,6 +36,17 @@ public enum TmuxError: Error, Equatable, LocalizedError {
     }
 }
 
+/// Direction for splitting or navigating panes.
+public enum PaneDirection: Sendable {
+    case right, down, left, up
+}
+
+/// Info about a single tmux pane.
+public struct PaneInfo: Sendable, Equatable {
+    public let id: String       // tmux pane ID (e.g. %0, %1)
+    public let isActive: Bool
+}
+
 /// Manages tmux session lifecycle. All methods shell out to the `tmux` binary.
 public final class TmuxManager: Sendable {
     private let tmuxPath: String
@@ -172,6 +183,70 @@ public final class TmuxManager: Sendable {
         process.waitUntilExit()
     }
 
+    // MARK: - Pane Management
+
+    /// Splits the active pane in the given direction.
+    @discardableResult
+    public func splitPane(sessionName: String, direction: PaneDirection, workingDirectory: String) throws -> String {
+        let flag = direction == .right ? "-h" : "-v"
+        let result = run(["tmux", "split-window", flag, "-t", sessionName, "-c", workingDirectory])
+        guard result.status == 0 else {
+            throw TmuxError.commandFailed(result.stderr)
+        }
+        return ""
+    }
+
+    /// Lists all panes in a session.
+    public func listPanes(sessionName: String) -> [PaneInfo] {
+        let result = run(["tmux", "list-panes", "-t", sessionName, "-F", "#{pane_id}:#{pane_active}"])
+        guard result.status == 0 else { return [] }
+        return result.stdout
+            .split(separator: "\n")
+            .compactMap { line -> PaneInfo? in
+                let parts = line.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return PaneInfo(id: String(parts[0]), isActive: parts[1] == "1")
+            }
+    }
+
+    /// Returns the currently active pane ID in a session.
+    public func activePaneId(sessionName: String) -> String? {
+        listPanes(sessionName: sessionName).first(where: \.isActive)?.id
+    }
+
+    /// Moves focus to an adjacent pane in the given direction.
+    public func focusPane(sessionName: String, direction: PaneDirection) throws {
+        let flag: String
+        switch direction {
+        case .left: flag = "-L"
+        case .right: flag = "-R"
+        case .up: flag = "-U"
+        case .down: flag = "-D"
+        }
+        let result = run(["tmux", "select-pane", "-t", sessionName, flag])
+        guard result.status == 0 else {
+            throw TmuxError.commandFailed(result.stderr)
+        }
+    }
+
+    /// Closes a specific pane by ID. If it's the last pane, the session is killed.
+    public func closePane(sessionName: String, paneId: String) throws {
+        let panes = listPanes(sessionName: sessionName)
+        if panes.count <= 1 {
+            try killSession(named: sessionName)
+            return
+        }
+        let result = run(["tmux", "kill-pane", "-t", paneId])
+        guard result.status == 0 else {
+            throw TmuxError.commandFailed(result.stderr)
+        }
+    }
+
+    /// Returns the number of panes in a session.
+    public func paneCount(sessionName: String) -> Int {
+        listPanes(sessionName: sessionName).count
+    }
+
     // MARK: - Private
 
     private struct RunResult: Sendable {
@@ -192,7 +267,6 @@ public final class TmuxManager: Sendable {
         process.standardError = stderrPipe
 
         logger.debug("Running: \(arguments.joined(separator: " "))")
-        logger.debug("PATH: \(UserEnvironment.path)")
 
         do {
             try process.run()
