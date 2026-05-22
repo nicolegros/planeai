@@ -85,7 +85,7 @@ final class TerminalSurfaceView: NSView {
         return super.resignFirstResponder()
     }
 
-    // MARK: - Clipboard
+    // MARK: - Clipboard & Search
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown, event.modifierFlags.contains(.command),
@@ -159,6 +159,16 @@ final class TerminalSurfaceView: NSView {
 
     // MARK: - Mouse Input
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil))
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard let surface else { return }
         window?.makeFirstResponder(self)
@@ -184,11 +194,36 @@ final class TerminalSurfaceView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        // ghostty_input_scroll_mods_t is an int32 packed struct
-        let scrollMods: ghostty_input_scroll_mods_t = 0
-        ghostty_surface_mouse_scroll(surface,
-            event.scrollingDeltaX, event.scrollingDeltaY,
-            scrollMods)
+
+        // Report mouse position so ghostty can generate correct mouse escape sequences
+        let pt = convert(event.locationInWindow, from: nil)
+        let scale = window?.backingScaleFactor ?? 2.0
+        ghostty_surface_mouse_pos(surface, pt.x * scale, pt.y * scale, Self.translateModifiers(event.modifierFlags))
+
+        var x = event.scrollingDeltaX
+        var y = event.scrollingDeltaY
+        let precision = event.hasPreciseScrollingDeltas
+
+        if precision {
+            x *= 2
+            y *= 2
+        }
+
+        // Build scroll mods: bit 0 = precision, bits 1-3 = momentum phase
+        var mods: Int32 = 0
+        if precision { mods |= 1 }
+        let momentum: Int32 = switch event.momentumPhase {
+        case .began: 1
+        case .stationary: 2
+        case .changed: 3
+        case .ended: 4
+        case .cancelled: 5
+        case .mayBegin: 6
+        default: 0
+        }
+        mods |= momentum << 1
+
+        ghostty_surface_mouse_scroll(surface, x, y, mods)
     }
 
     private func reportMousePos(_ event: NSEvent) {

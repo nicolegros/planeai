@@ -94,6 +94,7 @@ public final class TmuxManager: Sendable {
         _ = run(["tmux", "set-option", "-t", session.name, "status", "off"])
         _ = run(["tmux", "set-option", "-t", session.name, "prefix", "None"])
         _ = run(["tmux", "set-option", "-t", session.name, "prefix2", "None"])
+        _ = run(["tmux", "set-option", "-t", session.name, "mouse", "on"])
 
         return session
     }
