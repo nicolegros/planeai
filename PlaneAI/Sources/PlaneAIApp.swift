@@ -4,8 +4,9 @@ import PlaneAICore
 @main
 struct PlaneAIApp: App {
     @State private var ghosttyManager = GhosttyAppManager()
-    @State private var projectStore = ProjectStoreViewModel()
-    @State private var sessionStore = SessionStore(projects: [])
+    @State private var dbManager: DatabaseManager? = try? DatabaseManager()
+    @State private var projectStore: ProjectStoreViewModel
+    @State private var sessionStore: SessionStore
     @State private var showNewSessionPalette = false
     @State private var sidebarVisibility: NavigationSplitViewVisibility = .automatic
     @State private var activeTerminalCommand: String?
@@ -20,6 +21,15 @@ struct PlaneAIApp: App {
     @State private var showArchiveWorktreePrompt = false
     @State private var pendingArchiveId: String?
     @State private var focusToken: UInt = 0
+
+    init() {
+        let db = try? DatabaseManager()
+        _dbManager = State(initialValue: db)
+        let store = db.map { ProjectStore(db: $0.dbQueue) } ?? ProjectStore(db: try! DatabaseManager(storage: .inMemory).dbQueue)
+        let vm = ProjectStoreViewModel(store: store)
+        _projectStore = State(initialValue: vm)
+        _sessionStore = State(initialValue: SessionStore(projects: vm.projects, db: db?.dbQueue))
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -235,7 +245,7 @@ struct PlaneAIApp: App {
     }
 
     private func refreshSessions() {
-        sessionStore = SessionStore(projects: projectStore.projects)
+        sessionStore = SessionStore(projects: projectStore.projects, db: dbManager?.dbQueue)
         sessionStore.refresh()
     }
 

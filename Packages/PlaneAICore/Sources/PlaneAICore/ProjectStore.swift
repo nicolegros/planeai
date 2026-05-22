@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 // MARK: - Model
 
@@ -7,7 +8,9 @@ public enum BranchStrategy: String, Codable, Sendable {
     case main
 }
 
-public struct Project: Identifiable, Codable, Equatable, Hashable, Sendable {
+public struct Project: Identifiable, Codable, Equatable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "project"
+
     public let id: UUID
     public var name: String
     public let repoPath: String
@@ -43,14 +46,12 @@ public enum ProjectStoreError: Error, Equatable {
 // MARK: - Store
 
 public final class ProjectStore {
-    private let filePath: String
+    private let db: DatabaseQueue
     public private(set) var projects: [Project]
 
-    public init(configDirectory: String = "~/.config/planeai") {
-        let expanded = NSString(string: configDirectory).expandingTildeInPath
-        self.filePath = (expanded as NSString).appendingPathComponent("projects.json")
-        self.projects = []
-        load()
+    public init(db: DatabaseQueue) {
+        self.db = db
+        self.projects = (try? db.read { db in try Project.fetchAll(db) }) ?? []
     }
 
     @discardableResult
@@ -72,47 +73,34 @@ public final class ProjectStore {
             defaultAutoApprove: defaultAutoApprove,
             defaultBranchStrategy: defaultBranchStrategy
         )
+        try db.write { db in try project.insert(db) }
         projects.append(project)
-        save()
         return project
     }
 
     public func rename(id: UUID, to newName: String) throws {
-        guard let idx = projects.firstIndex(where: { $0.id == id }) else {
+        guard var project = projects.first(where: { $0.id == id }) else {
             throw ProjectStoreError.projectNotFound
         }
-        projects[idx].name = newName
-        save()
+        project.name = newName
+        try db.write { db in try project.update(db) }
+        if let idx = projects.firstIndex(where: { $0.id == id }) {
+            projects[idx] = project
+        }
     }
 
     public func delete(id: UUID) throws {
-        guard let idx = projects.firstIndex(where: { $0.id == id }) else {
+        guard let project = projects.first(where: { $0.id == id }) else {
             throw ProjectStoreError.projectNotFound
         }
-        projects.remove(at: idx)
-        save()
-    }
-
-    // MARK: - Persistence
-
-    private func load() {
-        guard let data = FileManager.default.contents(atPath: filePath),
-              let decoded = try? JSONDecoder().decode([Project].self, from: data) else { return }
-        projects = decoded
-    }
-
-    private func save() {
-        let dir = (filePath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(projects) else { return }
-        FileManager.default.createFile(atPath: filePath, contents: data)
+        _ = try db.write { db in try project.delete(db) }
+        projects.removeAll { $0.id == id }
     }
 }
 
 // MARK: - Git Validation
 
 public enum GitRepoValidator {
-    /// Validates that the given path is an existing directory containing a git repository.
     public static func validate(path: String) throws {
         let expanded = NSString(string: path).expandingTildeInPath
         var isDir: ObjCBool = false

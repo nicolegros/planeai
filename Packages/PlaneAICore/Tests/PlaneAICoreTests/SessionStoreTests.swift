@@ -2,7 +2,6 @@ import Testing
 @testable import PlaneAICore
 import Foundation
 
-/// A protocol-based approach to test SessionStore without real tmux.
 @Suite("SessionStore")
 struct SessionStoreTests {
 
@@ -16,7 +15,7 @@ struct SessionStoreTests {
         planeai-myapp-add-tests:/tmp/myapp-add-tests
         unrelated-session:/tmp/other
         """
-        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput }, persistsArchive: false)
+        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput })
         store.refresh()
 
         #expect(store.sessions.count == 2)
@@ -27,7 +26,7 @@ struct SessionStoreTests {
 
     @Test("returns empty when no planeai sessions exist")
     func emptyWhenNoSessions() {
-        let store = SessionStore(projects: [], tmuxListProvider: { "" }, persistsArchive: false)
+        let store = SessionStore(projects: [], tmuxListProvider: { "" })
         store.refresh()
         #expect(store.sessions.isEmpty)
     }
@@ -43,7 +42,7 @@ struct SessionStoreTests {
         planeai-beta-task2:/tmp/beta-task2
         planeai-alpha-task3:/tmp/alpha-task3
         """
-        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput }, persistsArchive: false)
+        let store = SessionStore(projects: projects, tmuxListProvider: { tmuxOutput })
         store.refresh()
 
         let grouped = store.groupedByProject
@@ -56,7 +55,7 @@ struct SessionStoreTests {
         let projects = [
             Project(id: UUID(), name: "proj", repoPath: "/tmp/proj", defaultProvider: "", defaultAutoApprove: false, defaultBranchStrategy: .worktree)
         ]
-        let store = SessionStore(projects: projects, tmuxListProvider: { "planeai-proj-task:/tmp/proj-task" }, persistsArchive: false)
+        let store = SessionStore(projects: projects, tmuxListProvider: { "planeai-proj-task:/tmp/proj-task" })
         store.refresh()
         #expect(store.sessions.first?.state == .running)
     }

@@ -1,6 +1,6 @@
 import Foundation
+import GRDB
 
-/// The state of a running agent session.
 public enum SessionState: String, Sendable, Equatable, Codable {
     case running
     case completed
@@ -8,15 +8,19 @@ public enum SessionState: String, Sendable, Equatable, Codable {
     case archived
 }
 
-/// A snapshot of a live session for display in the sidebar.
-public struct SessionInfo: Identifiable, Sendable, Equatable, Codable {
+public struct SessionInfo: Identifiable, Sendable, Equatable, Codable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "session"
+
     public let id: String          // tmux session name
     public let taskName: String
     public let branch: String
     public let provider: String
-    public let state: SessionState
+    public var state: SessionState
     public let projectId: UUID?
     public let projectName: String
+    public var createdAt: Date
+    public var completedAt: Date?
+    public var archivedAt: Date?
 
     public init(
         id: String,
@@ -25,7 +29,10 @@ public struct SessionInfo: Identifiable, Sendable, Equatable, Codable {
         provider: String,
         state: SessionState,
         projectId: UUID?,
-        projectName: String
+        projectName: String,
+        createdAt: Date = Date(),
+        completedAt: Date? = nil,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.taskName = taskName
@@ -34,5 +41,8 @@ public struct SessionInfo: Identifiable, Sendable, Equatable, Codable {
         self.state = state
         self.projectId = projectId
         self.projectName = projectName
+        self.createdAt = createdAt
+        self.completedAt = completedAt
+        self.archivedAt = archivedAt
     }
 }

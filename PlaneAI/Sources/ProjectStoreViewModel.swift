@@ -7,7 +7,7 @@ final class ProjectStoreViewModel {
     var projects: [Project]
     var selectedProjectID: UUID?
 
-    init(store: ProjectStore = ProjectStore()) {
+    init(store: ProjectStore) {
         self.store = store
         self.projects = store.projects
     }

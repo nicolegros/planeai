@@ -1,28 +1,24 @@
 import Foundation
 import Observation
+import GRDB
 
-/// Queries tmux for live planeai sessions and maps them to SessionInfo.
 @Observable
 public final class SessionStore {
     public private(set) var sessions: [SessionInfo] = []
     public private(set) var archivedSessions: [SessionInfo] = []
     private let projects: [Project]
     private let tmuxListProvider: () -> String
+    private let db: DatabaseQueue?
 
-    private static var archiveFileURL: URL {
-        scrollbackDirectory.appendingPathComponent("archived-sessions.json")
-    }
-
-    private let persistsArchive: Bool
-
-    public init(projects: [Project], tmuxListProvider: @escaping () -> String = defaultTmuxList, persistsArchive: Bool = true) {
+    public init(projects: [Project], db: DatabaseQueue? = nil, tmuxListProvider: @escaping () -> String = defaultTmuxList) {
         self.projects = projects
+        self.db = db
         self.tmuxListProvider = tmuxListProvider
-        self.persistsArchive = persistsArchive
-        if persistsArchive { loadArchivedSessions() }
+        loadArchivedSessions()
     }
 
-    /// Refreshes the session list from tmux.
+    // MARK: - Refresh from tmux
+
     public func refresh() {
         let output = tmuxListProvider()
         sessions = output
@@ -33,83 +29,91 @@ public final class SessionStore {
             .filter { session in !archivedSessions.contains(where: { $0.id == session.id }) }
     }
 
-    /// Sessions grouped by project name, preserving order.
     public var groupedByProject: [String: [SessionInfo]] {
         Dictionary(grouping: sessions, by: \.projectName)
     }
 
     // MARK: - Lifecycle
 
-    /// Toggles a session between running and completed state.
     public func complete(sessionId: String) {
         guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
-        let s = sessions[idx]
-        let newState: SessionState = s.state == .completed ? .running : .completed
-        sessions[idx] = SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: newState, projectId: s.projectId, projectName: s.projectName)
+        var s = sessions[idx]
+        if s.state == .completed {
+            s.state = .running
+            s.completedAt = nil
+        } else {
+            s.state = .completed
+            s.completedAt = Date()
+        }
+        sessions[idx] = s
     }
 
-    /// Archives a session: removes from active list, adds to archived list.
     public func archive(sessionId: String) {
         if let idx = sessions.firstIndex(where: { $0.id == sessionId }) {
-            let s = sessions.remove(at: idx)
-            archivedSessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .archived, projectId: s.projectId, projectName: s.projectName))
-            saveArchivedSessions()
+            var s = sessions.remove(at: idx)
+            s.state = .archived
+            s.archivedAt = Date()
+            if s.completedAt == nil { s.completedAt = Date() }
+            archivedSessions.append(s)
+            saveSession(s)
         }
     }
 
-    /// Hard-deletes a session from both active and archived lists.
     public func delete(sessionId: String) {
         sessions.removeAll { $0.id == sessionId }
         let hadArchived = archivedSessions.contains { $0.id == sessionId }
         archivedSessions.removeAll { $0.id == sessionId }
-        if hadArchived { saveArchivedSessions() }
+        if hadArchived { deleteSession(sessionId) }
     }
 
-    /// Restores an archived session back to the active list.
     public func restore(sessionId: String) {
         guard let idx = archivedSessions.firstIndex(where: { $0.id == sessionId }) else { return }
-        let s = archivedSessions.remove(at: idx)
-        sessions.append(SessionInfo(id: s.id, taskName: s.taskName, branch: s.branch, provider: s.provider, state: .completed, projectId: s.projectId, projectName: s.projectName))
-        saveArchivedSessions()
+        var s = archivedSessions.remove(at: idx)
+        s.state = .completed
+        s.archivedAt = nil
+        sessions.append(s)
+        deleteSession(sessionId)
     }
 
-    // MARK: - Archive persistence
+    // MARK: - DB persistence (archived sessions only)
 
-    private func saveArchivedSessions() {
-        guard persistsArchive else { return }
-        let dir = Self.scrollbackDirectory
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(archivedSessions) {
-            try? data.write(to: Self.archiveFileURL)
-        }
+    private func saveSession(_ session: SessionInfo) {
+        guard let db else { return }
+        try? db.write { db in try session.save(db) }
+    }
+
+    private func deleteSession(_ id: String) {
+        guard let db else { return }
+        _ = try? db.write { db in try SessionInfo.deleteOne(db, key: id) }
     }
 
     private func loadArchivedSessions() {
-        guard let data = try? Data(contentsOf: Self.archiveFileURL),
-              let loaded = try? JSONDecoder().decode([SessionInfo].self, from: data) else { return }
-        archivedSessions = loaded
+        guard let db else { return }
+        archivedSessions = (try? db.read { db in
+            try SessionInfo.filter(Column("state") == SessionState.archived.rawValue).fetchAll(db)
+        }) ?? []
     }
 
     // MARK: - Pane exit detection
 
-    /// Checks all running sessions for dead panes and auto-completes them.
     public func pollForExitedSessions(tmuxManager: TmuxManager = TmuxManager()) {
         for (idx, session) in sessions.enumerated() where session.state == .running {
             if !tmuxManager.isPaneAlive(sessionName: session.id) {
-                sessions[idx] = SessionInfo(id: session.id, taskName: session.taskName, branch: session.branch, provider: session.provider, state: .completed, projectId: session.projectId, projectName: session.projectName)
+                var s = session
+                s.state = .completed
+                s.completedAt = Date()
+                sessions[idx] = s
             }
         }
     }
 
-    // MARK: - Scrollback persistence
+    // MARK: - Scrollback
 
-    /// The directory where archived scrollback is stored.
     public static var scrollbackDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("planeai", isDirectory: true)
     }
 
-    /// Persists scrollback for a session to Application Support.
     public func persistScrollback(sessionId: String, tmuxManager: TmuxManager = TmuxManager()) {
         let dir = Self.scrollbackDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -123,7 +127,6 @@ public final class SessionStore {
         let parts = line.split(separator: ":", maxSplits: 1)
         let name = String(parts[0])
 
-        // Format: planeai-<project>-<task>
         let withoutPrefix = String(name.dropFirst("planeai-".count))
         guard let dashIdx = withoutPrefix.firstIndex(of: "-") else { return nil }
         let projectName = String(withoutPrefix[..<dashIdx])

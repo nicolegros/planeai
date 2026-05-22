@@ -42,24 +42,19 @@ struct ProjectModelTests {
 
 @Suite("ProjectStore")
 struct ProjectStoreTests {
-    let tempDir: String
 
-    init() {
-        tempDir = NSTemporaryDirectory() + "planeai-test-\(UUID().uuidString)"
-        try? FileManager.default.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
+    private func makeStore() throws -> ProjectStore {
+        let db = try DatabaseManager(storage: .inMemory)
+        return ProjectStore(db: db.dbQueue)
     }
 
-    private func makeStore() -> ProjectStore {
-        ProjectStore(configDirectory: tempDir)
-    }
-
-    @Test func startsEmpty() {
-        let store = makeStore()
+    @Test func startsEmpty() throws {
+        let store = try makeStore()
         #expect(store.projects.isEmpty)
     }
 
     @Test func addProject() throws {
-        let store = makeStore()
+        let store = try makeStore()
         let project = try store.add(
             name: "my-app",
             repoPath: "/tmp/repo",
@@ -72,7 +67,7 @@ struct ProjectStoreTests {
     }
 
     @Test func renameProject() throws {
-        let store = makeStore()
+        let store = try makeStore()
         let project = try store.add(
             name: "old-name",
             repoPath: "/tmp/repo",
@@ -85,7 +80,7 @@ struct ProjectStoreTests {
     }
 
     @Test func deleteProject() throws {
-        let store = makeStore()
+        let store = try makeStore()
         let project = try store.add(
             name: "to-delete",
             repoPath: "/tmp/repo",
@@ -98,7 +93,8 @@ struct ProjectStoreTests {
     }
 
     @Test func persistsAcrossInstances() throws {
-        let store1 = makeStore()
+        let db = try DatabaseManager(storage: .inMemory)
+        let store1 = ProjectStore(db: db.dbQueue)
         try store1.add(
             name: "persisted",
             repoPath: "/tmp/repo",
@@ -107,27 +103,27 @@ struct ProjectStoreTests {
             defaultBranchStrategy: .worktree
         )
 
-        let store2 = makeStore()
+        let store2 = ProjectStore(db: db.dbQueue)
         #expect(store2.projects.count == 1)
         #expect(store2.projects[0].name == "persisted")
     }
 
-    @Test func deleteNonexistentThrows() {
-        let store = makeStore()
+    @Test func deleteNonexistentThrows() throws {
+        let store = try makeStore()
         #expect(throws: ProjectStoreError.projectNotFound) {
             try store.delete(id: UUID())
         }
     }
 
-    @Test func renameNonexistentThrows() {
-        let store = makeStore()
+    @Test func renameNonexistentThrows() throws {
+        let store = try makeStore()
         #expect(throws: ProjectStoreError.projectNotFound) {
             try store.rename(id: UUID(), to: "x")
         }
     }
 
     @Test func duplicateNameThrows() throws {
-        let store = makeStore()
+        let store = try makeStore()
         try store.add(
             name: "dup",
             repoPath: "/tmp/repo1",
@@ -171,7 +167,6 @@ struct GitRepoValidationTests {
         try FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: tmpDir) }
 
-        // Initialize a git repo
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "init", tmpDir]
@@ -180,7 +175,6 @@ struct GitRepoValidationTests {
         try process.run()
         process.waitUntilExit()
 
-        // Should not throw
         try GitRepoValidator.validate(path: tmpDir)
     }
 }
