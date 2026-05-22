@@ -36,11 +36,10 @@ final class GhosttyAppManager {
         }
         runtime.action_cb = { _, _, _ in false }
         runtime.read_clipboard_cb = { ud, loc, state in
-            guard let pasteboard = NSPasteboard.general.string(forType: .string) else { return false }
-            // Complete the clipboard request
             guard let ud else { return false }
-            let mgr = Unmanaged<GhosttyAppManager>.fromOpaque(ud).takeUnretainedValue()
-            guard let surface = mgr.currentSurface() else { return false }
+            guard let pasteboard = NSPasteboard.general.string(forType: .string) else { return false }
+            let view = Unmanaged<TerminalSurfaceView>.fromOpaque(ud).takeUnretainedValue()
+            guard let surface = view.exposedSurface else { return false }
             pasteboard.withCString { ptr in
                 ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
             }
@@ -76,8 +75,12 @@ final class GhosttyAppManager {
         ghostty_app_tick(app)
     }
 
-    /// Placeholder — returns nil until surface tracking is implemented.
-    func currentSurface() -> ghostty_surface_t? { nil }
+    /// The currently focused surface, set by TerminalSurfaceView on focus.
+    weak var focusedSurfaceView: TerminalSurfaceView?
+
+    func currentSurface() -> ghostty_surface_t? {
+        focusedSurfaceView?.exposedSurface
+    }
 
     deinit {
         tickTimer?.invalidate()

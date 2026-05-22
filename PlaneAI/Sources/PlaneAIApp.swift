@@ -1,10 +1,15 @@
 import SwiftUI
 import PlaneAICore
 
+struct ActivatedSession: Identifiable, Equatable {
+    let id: String
+    let command: String
+}
+
 @main
 struct PlaneAIApp: App {
     @State private var ghosttyManager = GhosttyAppManager()
-    @State private var dbManager: DatabaseManager? = try? DatabaseManager()
+    @State private var dbManager: DatabaseManager?
     @State private var projectStore: ProjectStoreViewModel
     @State private var sessionStore: SessionStore
     @State private var showNewSessionPalette = false
@@ -13,7 +18,7 @@ struct PlaneAIApp: App {
     @State private var activeSessionId: String?
     @State private var selectedSessionId: String?
     @State private var sessionHistory: [String] = []  // MRU stack of session IDs
-    @State private var activatedSessions: [(id: String, command: String)] = []
+    @State private var activatedSessions: [ActivatedSession] = []
     @State private var showTabSwitcher = false
     @State private var tabSwitcherIndex = 0
     @State private var eventMonitor: Any?
@@ -21,6 +26,7 @@ struct PlaneAIApp: App {
     @State private var showArchiveWorktreePrompt = false
     @State private var pendingArchiveId: String?
     @State private var focusToken: UInt = 0
+    @State private var showClosePaneConfirmation = false
 
     init() {
         let db = try? DatabaseManager()
@@ -111,9 +117,17 @@ struct PlaneAIApp: App {
                     onCreate: { session in
                         let cmd = TmuxManager().attachCommand(for: session.tmuxSession).joined(separator: " ")
                         DispatchQueue.main.async {
+                            if let current = activeSessionId, current != session.tmuxSession.name {
+                                sessionHistory.removeAll { $0 == current }
+                                sessionHistory.append(current)
+                            }
+                            if !activatedSessions.contains(where: { $0.id == session.tmuxSession.name }) {
+                                activatedSessions.append(ActivatedSession(id: session.tmuxSession.name, command: cmd))
+                            }
                             activeTerminalCommand = cmd
                             activeSessionId = session.tmuxSession.name
                             selectedSessionId = session.tmuxSession.name
+                            focusToken &+= 1
                             refreshSessions()
                         }
                     }
@@ -145,14 +159,37 @@ struct PlaneAIApp: App {
             } message: {
                 Text("Do you want to keep or remove the worktree for this session?")
             }
+            .alert("Close Agent Pane", isPresented: $showClosePaneConfirmation) {
+                Button("Close", role: .destructive) {
+                    forceCloseActivePane()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This is the primary agent pane. Closing it will end the agent process. Continue?")
+            }
             .onAppear {
                 refreshSessions()
-                pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-                    DispatchQueue.main.async {
-                        sessionStore.pollForExitedSessions()
-                    }
-                }
+                // pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+                //     DispatchQueue.main.async {
+                //         sessionStore.pollForExitedSessions()
+                //     }
+                // }
                 eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+                    // Cmd+W closes pane (intercept before system "Close Window")
+                    if event.type == .keyDown && event.keyCode == 13 && event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.option) {
+                        closeActivePane()
+                        return nil
+                    }
+                    // Cmd+Opt+h/j/k/l vim-style pane navigation
+                    if event.type == .keyDown && event.modifierFlags.contains(.command) && event.modifierFlags.contains(.option) {
+                        switch event.keyCode {
+                        case 4:  focusAdjacentPane(direction: .left); return nil   // h
+                        case 38: focusAdjacentPane(direction: .down); return nil   // j
+                        case 40: focusAdjacentPane(direction: .up); return nil     // k
+                        case 37: focusAdjacentPane(direction: .right); return nil  // l
+                        default: break
+                        }
+                    }
                     if event.type == .keyDown && event.keyCode == 48 && event.modifierFlags.contains(.control) {
                         if event.modifierFlags.contains(.shift) {
                             switchToNextSession()
@@ -231,6 +268,45 @@ struct PlaneAIApp: App {
                     .keyboardShortcut(KeyEquivalent(Character("\(idx)")), modifiers: .command)
                 }
             }
+            CommandGroup(after: .windowArrangement) {
+                Button("Split Right") {
+                    splitActivePane(direction: .right)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
+                Button("Split Down") {
+                    splitActivePane(direction: .down)
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Focus Pane Left") {
+                    focusAdjacentPane(direction: .left)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+
+                Button("Focus Pane Right") {
+                    focusAdjacentPane(direction: .right)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+
+                Button("Focus Pane Up") {
+                    focusAdjacentPane(direction: .up)
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+
+                Button("Focus Pane Down") {
+                    focusAdjacentPane(direction: .down)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+
+                Divider()
+
+                Button("Close Pane ⌘W") {
+                    closeActivePane()
+                }
+            }
         }
     }
 
@@ -269,7 +345,7 @@ struct PlaneAIApp: App {
         let cmd = TmuxManager().attachCommand(for: tmux).joined(separator: " ")
         // Add to activated list if not already there
         if !activatedSessions.contains(where: { $0.id == session.id }) {
-            activatedSessions.append((id: session.id, command: cmd))
+            activatedSessions.append(ActivatedSession(id: session.id, command: cmd))
         }
         activeSessionId = session.id
         activeTerminalCommand = cmd
@@ -326,13 +402,94 @@ struct PlaneAIApp: App {
         showTabSwitcher = false
         activateSession(mru[tabSwitcherIndex])
     }
+
+    // MARK: - Pane Management
+
+    private func splitActivePane(direction: PaneDirection) {
+        guard let sessionId = activeSessionId else { return }
+        let workDir: String
+        if let project = projectStore.projects.first(where: { p in sessionId.hasPrefix("planeai-\(p.name)-") }) {
+            let task = String(sessionId.dropFirst("planeai-\(project.name)-".count))
+            let worktreePath = (project.repoPath as NSString).deletingLastPathComponent + "/\(project.name)-\(task)"
+            workDir = FileManager.default.fileExists(atPath: worktreePath) ? worktreePath : project.repoPath
+        } else {
+            workDir = NSHomeDirectory()
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmux = TmuxManager()
+            try? tmux.splitPane(sessionName: sessionId, direction: direction, workingDirectory: workDir)
+        }
+    }
+
+    private func focusAdjacentPane(direction: PaneDirection) {
+        guard let sessionId = activeSessionId else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmux = TmuxManager()
+            try? tmux.focusPane(sessionName: sessionId, direction: direction)
+        }
+    }
+
+    private func closeActivePane() {
+        guard let sessionId = activeSessionId else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmux = TmuxManager()
+            let panes = tmux.listPanes(sessionName: sessionId)
+            guard let active = panes.first(where: \.isActive) else { return }
+
+            // If it's the first pane (primary/agent), confirm on main thread
+            if active.id == panes.first?.id && panes.count > 1 {
+                DispatchQueue.main.async { showClosePaneConfirmation = true }
+                return
+            }
+
+            if panes.count <= 1 {
+                // Last pane — kill session
+                try? tmux.killSession(named: sessionId)
+                DispatchQueue.main.async {
+                    sessionStore.complete(sessionId: sessionId)
+                    activatedSessions.removeAll { $0.id == sessionId }
+                    if activeSessionId == sessionId {
+                        activeSessionId = nil
+                        selectedSessionId = nil
+                    }
+                    refreshSessions()
+                }
+            } else {
+                try? tmux.closePane(sessionName: sessionId, paneId: active.id)
+            }
+        }
+    }
+
+    private func forceCloseActivePane() {
+        guard let sessionId = activeSessionId else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let tmux = TmuxManager()
+            let panes = tmux.listPanes(sessionName: sessionId)
+            guard let active = panes.first(where: \.isActive) else { return }
+
+            if panes.count <= 1 {
+                try? tmux.killSession(named: sessionId)
+                DispatchQueue.main.async {
+                    sessionStore.complete(sessionId: sessionId)
+                    activatedSessions.removeAll { $0.id == sessionId }
+                    if activeSessionId == sessionId {
+                        activeSessionId = nil
+                        selectedSessionId = nil
+                    }
+                    refreshSessions()
+                }
+            } else {
+                try? tmux.closePane(sessionName: sessionId, paneId: active.id)
+            }
+        }
+    }
 }
 
 struct ContentView: View {
     let ghosttyManager: GhosttyAppManager
     let terminalCommand: String?
     let sessionId: String?
-    let activatedSessions: [(id: String, command: String)]
+    let activatedSessions: [ActivatedSession]
     var focusToken: UInt = 0
 
     var body: some View {
@@ -351,12 +508,8 @@ struct ContentView: View {
                 }
             case .ready:
                 if let app = ghosttyManager.app {
-                    if activatedSessions.isEmpty {
-                        TerminalView(ghosttyApp: app, isActive: true, focusToken: focusToken)
-                    } else {
-                        ForEach(activatedSessions, id: \.id) { session in
-                            TerminalView(ghosttyApp: app, command: session.command, isActive: session.id == sessionId, focusToken: session.id == sessionId ? focusToken : 0)
-                        }
+                    ForEach(activatedSessions, id: \.id) { session in
+                        TerminalView(ghosttyApp: app, command: session.command, isActive: session.id == sessionId, focusToken: session.id == sessionId ? focusToken : 0, appManager: ghosttyManager)
                     }
                 }
             }

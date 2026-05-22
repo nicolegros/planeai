@@ -6,6 +6,10 @@ final class TerminalSurfaceView: NSView {
     private var ghosttyApp: ghostty_app_t?
     private var surface: ghostty_surface_t?
     private var command: String?
+    weak var appManager: GhosttyAppManager?
+
+    /// Exposes the surface for clipboard callbacks.
+    var exposedSurface: ghostty_surface_t? { surface }
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -42,6 +46,7 @@ final class TerminalSurfaceView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil && surface == nil {
+            NSLog("PlaneAI: creating surface in viewDidMoveToWindow")
             createSurface()
         }
         guard let surface else { return }
@@ -54,6 +59,9 @@ final class TerminalSurfaceView: NSView {
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        if newSize.width > 0 && newSize.height > 0 {
+            NSLog("PlaneAI: setFrameSize \(newSize.width)x\(newSize.height)")
+        }
         updateSurfaceSize()
     }
 
@@ -67,6 +75,7 @@ final class TerminalSurfaceView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         if let surface { ghostty_surface_set_focus(surface, true) }
+        appManager?.focusedSurfaceView = self
         return super.becomeFirstResponder()
     }
 
@@ -78,6 +87,26 @@ final class TerminalSurfaceView: NSView {
     override func resignFirstResponder() -> Bool {
         if let surface { ghostty_surface_set_focus(surface, false) }
         return super.resignFirstResponder()
+    }
+
+    // MARK: - Clipboard
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.modifierFlags.contains(.command),
+              let surface else { return super.performKeyEquivalent(with: event) }
+
+        switch event.charactersIgnoringModifiers {
+        case "v":
+            let action = "paste_from_clipboard"
+            ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+            return true
+        case "c":
+            let action = "copy_to_clipboard"
+            ghostty_surface_binding_action(surface, action, UInt(action.utf8.count))
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
     }
 
     // MARK: - Keyboard Input
