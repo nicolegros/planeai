@@ -117,6 +117,44 @@ struct SessionLifecycleTests {
         #expect(store.sessions.count == 1)
         #expect(store.sessions[0].id == "planeai-proj-task2")
     }
+    @Test("complete persists to DB and survives new store instance")
+    func completePersistsAcrossStoreInstances() throws {
+        let dbManager = try DatabaseManager(storage: .inMemory)
+        let project = Project(id: UUID(), name: "proj", repoPath: "/tmp/proj", defaultProvider: "claude", defaultAutoApprove: false, defaultBranchStrategy: .worktree)
+        try dbManager.dbQueue.write { db in try project.insert(db) }
+        let projects = [project]
+        let tmux = "planeai-proj-task:/tmp/proj-task"
+
+        let store1 = SessionStore(projects: projects, db: dbManager.dbQueue, tmuxListProvider: { tmux })
+        store1.refresh()
+        store1.complete(sessionId: "planeai-proj-task")
+        #expect(store1.sessions[0].state == .completed)
+
+        // Simulate app restart: new store, same DB
+        let store2 = SessionStore(projects: projects, db: dbManager.dbQueue, tmuxListProvider: { tmux })
+        store2.refresh()
+        #expect(store2.sessions[0].state == .completed)
+    }
+
+    @Test("complete persists even when project has no matching DB row")
+    func completePersistsWithoutProjectInDB() throws {
+        let dbManager = try DatabaseManager(storage: .inMemory)
+        // Project exists in memory but NOT in DB — simulates potential FK issue
+        let projects = [
+            Project(id: UUID(), name: "proj", repoPath: "/tmp/proj", defaultProvider: "claude", defaultAutoApprove: false, defaultBranchStrategy: .worktree)
+        ]
+        let tmux = "planeai-proj-task:/tmp/proj-task"
+
+        let store1 = SessionStore(projects: projects, db: dbManager.dbQueue, tmuxListProvider: { tmux })
+        store1.refresh()
+        store1.complete(sessionId: "planeai-proj-task")
+        #expect(store1.sessions[0].state == .completed)
+
+        // This will fail if FK constraint blocks the save
+        let store2 = SessionStore(projects: projects, db: dbManager.dbQueue, tmuxListProvider: { tmux })
+        store2.refresh()
+        #expect(store2.sessions[0].state == .completed)
+    }
 }
 
 @Suite("Session Activation")

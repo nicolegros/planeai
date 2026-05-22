@@ -15,18 +15,28 @@ public final class SessionStore {
         self.db = db
         self.tmuxListProvider = tmuxListProvider
         loadArchivedSessions()
+        loadCompletedSessions()
     }
 
     // MARK: - Refresh from tmux
 
     public func refresh() {
         let output = tmuxListProvider()
-        sessions = output
+        var refreshed = output
             .split(separator: "\n")
             .map { String($0).trimmingCharacters(in: .whitespaces) }
             .filter { $0.hasPrefix("planeai-") }
             .compactMap { parseLine($0) }
             .filter { session in !archivedSessions.contains(where: { $0.id == session.id }) }
+
+        // Restore completed state from DB
+        let completedIds = loadCompletedSessionIds()
+        for idx in refreshed.indices where completedIds.contains(refreshed[idx].id) {
+            refreshed[idx].state = .completed
+            refreshed[idx].completedAt = completedSessions[refreshed[idx].id]
+        }
+
+        sessions = refreshed
     }
 
     public var groupedByProject: [String: [SessionInfo]] {
@@ -41,9 +51,13 @@ public final class SessionStore {
         if s.state == .completed {
             s.state = .running
             s.completedAt = nil
+            completedSessions.removeValue(forKey: sessionId)
+            deleteSession(sessionId)
         } else {
             s.state = .completed
             s.completedAt = Date()
+            completedSessions[sessionId] = s.completedAt!
+            saveSession(s)
         }
         sessions[idx] = s
     }
@@ -79,7 +93,19 @@ public final class SessionStore {
 
     private func saveSession(_ session: SessionInfo) {
         guard let db else { return }
-        try? db.write { db in try session.save(db) }
+        do {
+            try db.write { db in
+                let record = SessionInfo(
+                    id: session.id, taskName: session.taskName, branch: session.branch,
+                    provider: session.provider, state: session.state, projectId: nil,
+                    projectName: session.projectName, createdAt: session.createdAt,
+                    completedAt: session.completedAt, archivedAt: session.archivedAt
+                )
+                try record.save(db)
+            }
+        } catch {
+            NSLog("PlaneAI: saveSession failed for \(session.id): \(error)")
+        }
     }
 
     private func deleteSession(_ id: String) {
@@ -94,6 +120,20 @@ public final class SessionStore {
         }) ?? []
     }
 
+    private var completedSessions: [String: Date] = [:]
+
+    private func loadCompletedSessions() {
+        guard let db else { return }
+        let rows = (try? db.read { db in
+            try SessionInfo.filter(Column("state") == SessionState.completed.rawValue).fetchAll(db)
+        }) ?? []
+        completedSessions = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.completedAt ?? Date()) })
+    }
+
+    private func loadCompletedSessionIds() -> Set<String> {
+        Set(completedSessions.keys)
+    }
+
     // MARK: - Pane exit detection
 
     public func pollForExitedSessions(tmuxManager: TmuxManager = TmuxManager()) {
@@ -103,6 +143,8 @@ public final class SessionStore {
                 s.state = .completed
                 s.completedAt = Date()
                 sessions[idx] = s
+                completedSessions[s.id] = s.completedAt!
+                saveSession(s)
             }
         }
     }
