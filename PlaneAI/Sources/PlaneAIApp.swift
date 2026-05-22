@@ -154,7 +154,11 @@ struct PlaneAIApp: App {
                 }
                 eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
                     if event.type == .keyDown && event.keyCode == 48 && event.modifierFlags.contains(.control) {
-                        switchToPreviousSession()
+                        if event.modifierFlags.contains(.shift) {
+                            switchToNextSession()
+                        } else {
+                            switchToPreviousSession()
+                        }
                         return nil
                     }
                     if event.type == .flagsChanged && showTabSwitcher && !event.modifierFlags.contains(.control) {
@@ -301,6 +305,18 @@ struct PlaneAIApp: App {
         } else {
             showTabSwitcher = true
             tabSwitcherIndex = 1
+        }
+    }
+
+    private func switchToNextSession() {
+        let mru = mruSessionList
+        guard mru.count > 1 else { return }
+
+        if showTabSwitcher {
+            tabSwitcherIndex = (tabSwitcherIndex - 1 + mru.count) % mru.count
+        } else {
+            showTabSwitcher = true
+            tabSwitcherIndex = mru.count - 1
         }
     }
 
