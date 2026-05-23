@@ -38,7 +38,16 @@ fn create_session(state: State<DbState>, project_id: String, tmux_name: String, 
 #[tauri::command]
 fn list_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::list_sessions(&conn).map_err(|e| e.to_string())
+    let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
+    let mut alive = Vec::new();
+    for s in sessions {
+        if tmux::has_session(&s.tmux_name) {
+            alive.push(s);
+        } else {
+            let _ = db::delete_session(&conn, &s.id);
+        }
+    }
+    Ok(alive)
 }
 
 #[tauri::command]
