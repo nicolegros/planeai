@@ -1,21 +1,17 @@
-# Zig
-.zig-cache/
-zig-out/
-*.o
+# Dependencies
+node_modules/
 
-# Xcode
-*.xcodeproj/xcuserdata/
-*.xcodeproj/project.xcworkspace/xcuserdata/
-DerivedData/
-build/
+# Build output
+dist/
+src-tauri/target/
 
-# Swift Package Manager
-.build/
-.swiftpm/
+# IDE
+.vscode/
+.idea/
 
-# GhosttyKit build output (built locally via scripts/build-ghostty.sh)
-vendor/ghostty/macos/GhosttyKit.xcframework/
-vendor/ghostty/zig-out/
-
-# macOS
+# OS
 .DS_Store
+
+# Env
+.env
+.env.*

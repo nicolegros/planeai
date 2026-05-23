@@ -1,0 +1,22 @@
+{
+  "productName": "planeai",
+  "version": "0.1.0",
+  "identifier": "ca.nicolegros.planeai",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "planeai",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 640,
+        "minHeight": 480
+      }
+    ]
+  }
+}
