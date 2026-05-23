@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { getActiveZone } from "./lib/focus.svelte";
+  import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
   import { Dialog } from "bits-ui";
@@ -119,6 +119,7 @@
     showSessionForm = false;
     sessions = [...sessions, session];
     selectSession(session.id);
+    focusTerminal();
   }
 
   async function confirmDelete() {

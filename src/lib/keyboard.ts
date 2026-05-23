@@ -14,6 +14,7 @@ export type KeyboardAction =
  */
 export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   const meta = e.metaKey;
+  const key = e.key.toLowerCase();
 
   // Escape — always return to terminal
   if (e.key === "Escape") {
@@ -26,12 +27,12 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Cmd/Ctrl+B — toggle sidebar
-  if (meta && e.key === "b") {
+  if (meta && key === "b") {
     return { type: "toggle_sidebar" };
   }
 
   // Cmd/Ctrl+N — new session
-  if (meta && e.key === "n") {
+  if (meta && key === "n") {
     return { type: "new_session" };
   }
 

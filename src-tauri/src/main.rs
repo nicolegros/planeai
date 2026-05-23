@@ -6,7 +6,7 @@ mod tmux;
 
 use std::sync::Mutex;
 use rusqlite::Connection;
-use tauri::{State, Manager};
+use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
 
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
@@ -114,6 +114,34 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            let menu = Menu::with_items(app, &[
+                &Submenu::with_items(app, "planeai", true, &[
+                    &PredefinedMenuItem::about(app, None, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::show_all(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ])?,
+                &Submenu::with_items(app, "Edit", true, &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ])?,
+                &Submenu::with_items(app, "Window", true, &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::maximize(app, None)?,
+                    &PredefinedMenuItem::close_window(app, None)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                ])?,
+            ])?;
+            app.set_menu(menu)?;
+
             let app_dir = app.path().app_data_dir().expect("failed to get app data dir");
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
             let db_path = app_dir.join("planeai.db");
@@ -121,6 +149,9 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
             app.manage(DbState(Mutex::new(conn)));
             app.manage(PtyState(pty::PtyManager::new()));
+
+            app.get_webview_window("main").unwrap().open_devtools();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -39,7 +39,14 @@
   const branch = $derived(branchValue || branchSearch);
   const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
 
+  let formEl: HTMLFormElement;
   let error = $state("");
+
+  function focusBranchInput() {
+    requestAnimationFrame(() => {
+      formEl?.querySelectorAll('input')?.[1]?.focus();
+    });
+  }
 
   async function submit() {
     if (!selectedProject || !branch) { error = "Select a project and enter a branch name."; return; }
@@ -53,12 +60,13 @@
   }
 </script>
 
-<form class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+<form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
   <div class="space-y-1">
     <label class="text-sm font-medium">Project</label>
-    <Combobox.Root type="single" bind:value={projectValue} onOpenChangeComplete={(o) => { if (!o) projectSearch = ""; }}>
+    <Combobox.Root type="single" bind:value={projectValue} onValueChange={focusBranchInput} onOpenChangeComplete={(o) => { if (!o) projectSearch = ""; }}>
       <Combobox.Input
         oninput={(e) => (projectSearch = e.currentTarget.value)}
+        onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
         placeholder="Search project..."
         autocomplete="off"
         autocorrect="off"
@@ -86,6 +94,7 @@
     <Combobox.Root type="single" bind:value={branchValue} onOpenChangeComplete={(o) => { if (!o && !branchValue) branchSearch = branchSearch; }}>
       <Combobox.Input
         oninput={(e) => (branchSearch = e.currentTarget.value)}
+        onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
         placeholder="main, feat/new-feature..."
         autocomplete="off"
         autocorrect="off"
