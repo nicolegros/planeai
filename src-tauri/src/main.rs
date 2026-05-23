@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod tmux;
 
 use std::sync::Mutex;
 use rusqlite::Connection;
@@ -50,6 +51,32 @@ fn validate_git_repo(path: String) -> Result<bool, String> {
     Ok(git_dir.exists())
 }
 
+#[tauri::command]
+fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
+    tmux::list_branches(&repo_path)
+}
+
+#[tauri::command]
+fn launch_session(
+    state: State<DbState>,
+    project_id: String,
+    project_name: String,
+    repo_path: String,
+    branch: String,
+    is_new_branch: bool,
+) -> Result<db::Session, String> {
+    // Checkout branch
+    tmux::checkout_branch(&repo_path, &branch, is_new_branch)?;
+
+    // Create tmux session
+    let tmux_name = tmux::session_name(&project_name);
+    tmux::create_session(&tmux_name, &repo_path)?;
+
+    // Persist to DB
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::create_session(&conn, &project_id, &tmux_name, &branch).map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -70,6 +97,8 @@ fn main() {
             list_sessions,
             delete_session,
             validate_git_repo,
+            list_branches,
+            launch_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
