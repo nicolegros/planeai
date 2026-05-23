@@ -47,7 +47,6 @@
       error = "Select a project and enter a branch name.";
       return;
     }
-
     try {
       const session = await invoke<Session>("launch_session", {
         projectId: selectedProject.id,
@@ -72,32 +71,29 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form
-  class="p-4 bg-neutral-900 border border-neutral-700 rounded-lg w-96"
+  class="card preset-outlined-surface-200-800 p-6 w-96 space-y-4"
   onsubmit={(e) => { e.preventDefault(); submit(); }}
   onkeydown={handleKeydown}
 >
-  <h2 class="text-sm font-semibold text-neutral-200 mb-3">New Session</h2>
+  <h2 class="h5">New Session</h2>
 
-  <label class="block mb-2">
-    <span class="text-xs text-neutral-400">Project</span>
-    <select
-      bind:value={selectedProjectId}
-      class="mt-1 w-full bg-neutral-800 border border-neutral-600 rounded px-2 py-1 text-sm text-neutral-100 focus:outline-none focus:border-neutral-400"
-    >
+  <label class="label">
+    <span class="label-text">Project</span>
+    <select bind:value={selectedProjectId} class="select mt-1">
       {#each projects as project (project.id)}
         <option value={project.id}>{project.name}</option>
       {/each}
     </select>
   </label>
 
-  <label class="block mb-1">
-    <span class="text-xs text-neutral-400">Branch</span>
+  <label class="label">
+    <span class="label-text">Branch</span>
     <input
       type="text"
       bind:value={branch}
       list="branch-list"
       placeholder="main, feat/new-feature..."
-      class="mt-1 w-full bg-neutral-800 border border-neutral-600 rounded px-2 py-1 text-sm text-neutral-100 focus:outline-none focus:border-neutral-400"
+      class="input mt-1"
     />
     <datalist id="branch-list">
       {#each branches as b}
@@ -107,26 +103,15 @@
   </label>
 
   {#if isNewBranch && branch}
-    <p class="text-xs text-neutral-500 mb-2">Will create new branch: <span class="text-neutral-300">{branch}</span></p>
+    <p class="text-xs text-surface-400">Will create new branch: <span class="text-surface-100">{branch}</span></p>
   {/if}
 
   {#if error}
-    <p class="text-xs text-red-400 mb-2">{error}</p>
+    <p class="text-xs text-error-500">{error}</p>
   {/if}
 
-  <div class="flex justify-end gap-2 mt-3">
-    <button
-      type="button"
-      onclick={onCancel}
-      class="px-3 py-1 text-xs text-neutral-400 hover:text-neutral-200"
-    >
-      Cancel
-    </button>
-    <button
-      type="submit"
-      class="px-3 py-1 text-xs bg-neutral-700 rounded hover:bg-neutral-600"
-    >
-      Launch
-    </button>
+  <div class="flex justify-end gap-2">
+    <button type="button" onclick={onCancel} class="btn btn-sm preset-tonal-surface">Cancel</button>
+    <button type="submit" class="btn btn-sm preset-filled-primary-500">Launch</button>
   </div>
 </form>

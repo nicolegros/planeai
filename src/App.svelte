@@ -186,7 +186,7 @@
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
-        <p class="text-neutral-500">No active session. Press <kbd class="px-1 bg-neutral-800 rounded">⌘N</kbd> to create one.</p>
+        <p class="text-surface-500">No active session. Press <kbd class="kbd">⌘N</kbd> to create one.</p>
       </div>
     {/if}
 
@@ -194,19 +194,13 @@
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
-          class="bg-neutral-900 border border-neutral-700 rounded-lg p-4 w-80"
+          class="card preset-outlined-surface-200-800 p-6 w-80 space-y-4"
           onkeydown={(e) => { if (e.key === 'Escape') sessionToDelete = null; }}
         >
-          <p class="text-sm text-neutral-200 mb-3">Delete session <strong>{sessionToDelete.branch}</strong>? This will kill the agent.</p>
+          <p class="text-sm">Delete session <strong>{sessionToDelete.branch}</strong>? This will kill the agent.</p>
           <div class="flex justify-end gap-2">
-            <button
-              class="px-3 py-1 text-xs text-neutral-400 hover:text-neutral-200"
-              onclick={() => (sessionToDelete = null)}
-            >Cancel</button>
-            <button
-              class="px-3 py-1 text-xs bg-red-900 text-red-200 rounded hover:bg-red-800"
-              onclick={confirmDelete}
-            >Delete</button>
+            <button class="btn btn-sm preset-tonal-surface" onclick={() => (sessionToDelete = null)}>Cancel</button>
+            <button class="btn btn-sm preset-filled-error-500" onclick={confirmDelete}>Delete</button>
           </div>
         </div>
       </div>
