@@ -28,6 +28,7 @@ final class AppCoordinator {
     let projectStore: ProjectStore
     var sessionStore: SessionStore
     var selectedProjectID: UUID?
+    let commandRegistry = CommandRegistry()
     private let dbManager: DatabaseManager?
     private var _projectsVersion = 0
 
@@ -40,6 +41,22 @@ final class AppCoordinator {
         self.projectStore = projectStore
         self.sessionStore = sessionStore
         self.dbManager = dbManager
+        registerDefaultCommands()
+    }
+
+    private func registerDefaultCommands() {
+        commandRegistry.register([
+            Command(id: "new-session", title: "New Session", icon: "plus.circle", keywords: ["create", "add"]) { [weak self] in
+                self?.showNewSessionPalette = true
+            },
+            Command(id: "archive-session", title: "Archive Session", icon: "archivebox", keywords: ["close", "hide"]) { [weak self] in
+                guard let self, let id = self.activeSessionId else { return }
+                self.archiveSession(id: id)
+            },
+            Command(id: "toggle-sidebar", title: "Toggle Sidebar", icon: "sidebar.left", keywords: ["show", "hide", "panel"]) { [weak self] in
+                self?.toggleSidebar()
+            },
+        ])
     }
 
     func addProject(name: String, repoPath: String, defaultProvider: String, defaultAutoApprove: Bool, defaultBranchStrategy: BranchStrategy) throws {

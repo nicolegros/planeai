@@ -63,20 +63,8 @@ struct PlaneAIApp: App {
             .sheet(isPresented: $coordinator.showCommandPalette) {
                 CommandPaletteView(
                     sessions: coordinator.sessionStore.sessions,
-                    projects: coordinator.projects,
-                    onActivateSession: { coordinator.activateSession($0) },
-                    onAction: { action in
-                        switch action {
-                        case .newSession:
-                            coordinator.showNewSessionPalette = true
-                        case .archiveSession:
-                            if let id = coordinator.activeSessionId {
-                                coordinator.archiveSession(id: id)
-                            }
-                        case .toggleSidebar:
-                            coordinator.toggleSidebar()
-                        }
-                    }
+                    registry: coordinator.commandRegistry,
+                    onActivateSession: { coordinator.activateSession($0) }
                 )
             }
             .alert("Archive Session", isPresented: $coordinator.showArchiveWorktreePrompt) {
