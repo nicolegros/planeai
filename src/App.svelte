@@ -82,13 +82,16 @@
       } else if (action.type === "tab_switch") {
         if (!tabSwitcherOpen) {
           tabSwitcherOpen = true;
-          tabSwitcherIndex = 1; // Start at second item (previous session)
+          tabSwitcherIndex = 1;
         } else {
-          tabSwitcherIndex = Math.min(tabSwitcherIndex + 1, mruList.length - 1);
+          tabSwitcherIndex = (tabSwitcherIndex + 1) % mruList.length;
         }
       } else if (action.type === "tab_switch_reverse") {
-        if (tabSwitcherOpen) {
-          tabSwitcherIndex = Math.max(tabSwitcherIndex - 1, 0);
+        if (!tabSwitcherOpen) {
+          tabSwitcherOpen = true;
+          tabSwitcherIndex = mruList.length - 1;
+        } else {
+          tabSwitcherIndex = (tabSwitcherIndex - 1 + mruList.length) % mruList.length;
         }
       } else if (action.type === "focus_terminal") {
         if (tabSwitcherOpen) {
@@ -108,6 +111,7 @@
           selectSession(mru[tabSwitcherIndex]);
         }
         tabSwitcherOpen = false;
+        focusTerminal();
       }
     }
     window.addEventListener("keyup", onKeyUp);
@@ -193,6 +197,7 @@
         sessionId={session.id}
         tmuxName={session.tmux_name}
         visible={session.id === activeSessionId}
+        focused={session.id === activeSessionId && zone === "terminal"}
       />
     {/each}
 

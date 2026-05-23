@@ -11,9 +11,10 @@
     sessionId: string;
     tmuxName: string;
     visible: boolean;
+    focused: boolean;
   }
 
-  let { sessionId, tmuxName, visible }: Props = $props();
+  let { sessionId, tmuxName, visible, focused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -84,6 +85,12 @@
     if (visible && fitAddon) {
       // Re-fit when becoming visible
       requestAnimationFrame(() => fitAddon.fit());
+    }
+  });
+
+  $effect(() => {
+    if (focused && term) {
+      term.focus();
     }
   });
 
