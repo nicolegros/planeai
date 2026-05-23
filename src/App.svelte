@@ -3,10 +3,12 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
+  import { getMruList, touchMru } from "./lib/mru.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
   import Terminal from "./components/Terminal.svelte";
+  import TabSwitcher from "./components/TabSwitcher.svelte";
 
   interface Project {
     id: string;
@@ -30,6 +32,10 @@
   let showSessionForm = $state(false);
   let sidebarVisible = $state(true);
 
+  // Tab switcher state
+  let tabSwitcherOpen = $state(false);
+  let tabSwitcherIndex = $state(0);
+
   async function loadProjects() {
     projects = await invoke<Project[]>("list_projects");
   }
@@ -40,17 +46,19 @@
 
   function selectSession(id: string) {
     activeSessionId = id;
+    touchMru(id);
   }
 
   function jumpToSession(index: number) {
     if (index < sessions.length) {
-      activeSessionId = sessions[index].id;
+      selectSession(sessions[index].id);
     }
   }
 
   onMount(() => {
     loadProjects();
     loadSessions();
+
     const cleanup = installKeyboardRouter((action) => {
       if (action.type === "new_session") {
         if (projects.length === 0) {
@@ -62,18 +70,50 @@
         sidebarVisible = !sidebarVisible;
       } else if (action.type === "jump_to_session") {
         jumpToSession(action.index);
+      } else if (action.type === "tab_switch") {
+        if (!tabSwitcherOpen) {
+          tabSwitcherOpen = true;
+          tabSwitcherIndex = 1; // Start at second item (previous session)
+        } else {
+          tabSwitcherIndex = Math.min(tabSwitcherIndex + 1, mruList.length - 1);
+        }
+      } else if (action.type === "tab_switch_reverse") {
+        if (tabSwitcherOpen) {
+          tabSwitcherIndex = Math.max(tabSwitcherIndex - 1, 0);
+        }
+      } else if (action.type === "focus_terminal") {
+        if (tabSwitcherOpen) {
+          tabSwitcherOpen = false;
+        }
       }
     });
-    return cleanup;
+
+    // Listen for Ctrl release to confirm tab switch
+    function onKeyUp(e: KeyboardEvent) {
+      if (tabSwitcherOpen && e.key === "Control") {
+        const mru = getMruList();
+        if (mru[tabSwitcherIndex]) {
+          selectSession(mru[tabSwitcherIndex]);
+        }
+        tabSwitcherOpen = false;
+      }
+    }
+    window.addEventListener("keyup", onKeyUp);
+
+    return () => {
+      cleanup();
+      window.removeEventListener("keyup", onKeyUp);
+    };
   });
 
   function onSessionCreated(session: Session) {
     showSessionForm = false;
     sessions = [...sessions, session];
-    activeSessionId = session.id;
+    selectSession(session.id);
   }
 
   const zone = $derived(getActiveZone());
+  const mruList = $derived(getMruList());
 </script>
 
 <main class="flex h-screen">
@@ -104,6 +144,15 @@
           onCancel={() => (showSessionForm = false)}
         />
       </div>
+    {/if}
+
+    {#if tabSwitcherOpen}
+      <TabSwitcher
+        mruSessionIds={mruList}
+        {sessions}
+        {projects}
+        selectedIndex={tabSwitcherIndex}
+      />
     {/if}
 
     {#each sessions as session (session.id)}
