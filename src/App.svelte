@@ -94,6 +94,9 @@
         if (tabSwitcherOpen) {
           tabSwitcherOpen = false;
         }
+        showSessionForm = false;
+        showProjectForm = false;
+        sessionToDelete = null;
       }
     });
 
