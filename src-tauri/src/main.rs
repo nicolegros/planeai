@@ -44,8 +44,15 @@ fn delete_session(state: State<DbState>, id: String) -> Result<(), String> {
     db::delete_session(&conn, &id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn validate_git_repo(path: String) -> Result<bool, String> {
+    let git_dir = std::path::Path::new(&path).join(".git");
+    Ok(git_dir.exists())
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_dir = app.path().app_data_dir().expect("failed to get app data dir");
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
@@ -62,6 +69,7 @@ fn main() {
             create_session,
             list_sessions,
             delete_session,
+            validate_git_repo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

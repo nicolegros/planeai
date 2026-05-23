@@ -1,30 +1,55 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
+  import Sidebar from "./components/Sidebar.svelte";
+  import ProjectForm from "./components/ProjectForm.svelte";
 
-  let cleanup: (() => void) | undefined;
+  interface Project {
+    id: string;
+    name: string;
+    path: string;
+  }
+
+  let projects = $state<Project[]>([]);
+  let showProjectForm = $state(false);
+
+  async function loadProjects() {
+    projects = await invoke<Project[]>("list_projects");
+  }
 
   onMount(() => {
-    cleanup = installKeyboardRouter((action) => {
-      // Future: dispatch to session store, tab switcher, etc.
-      console.debug("[keyboard]", action.type);
+    loadProjects();
+    const cleanup = installKeyboardRouter((action) => {
+      if (action.type === "new_session") {
+        // For now, open project form if no projects exist
+        if (projects.length === 0) showProjectForm = true;
+      }
     });
-    return () => cleanup?.();
+    return cleanup;
   });
 
   const zone = $derived(getActiveZone());
 </script>
 
 <main class="flex h-screen">
-  <aside
-    class="w-56 border-r border-neutral-800 p-3 {zone === 'sidebar' ? 'bg-neutral-900' : 'bg-neutral-950'}"
-  >
-    <h2 class="text-sm font-semibold text-neutral-400 mb-2">Sessions</h2>
-    <p class="text-xs text-neutral-500">No sessions yet. Press Cmd+N.</p>
-  </aside>
+  <Sidebar
+    {projects}
+    {zone}
+    onAddProject={() => (showProjectForm = true)}
+  />
 
-  <section class="flex-1 flex items-center justify-center">
-    <p class="text-neutral-500">Terminal area — zone: {zone}</p>
+  <section class="flex-1 flex items-center justify-center relative">
+    {#if showProjectForm}
+      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+        <ProjectForm
+          onCreated={() => { showProjectForm = false; loadProjects(); }}
+          onCancel={() => (showProjectForm = false)}
+        />
+      </div>
+    {:else}
+      <p class="text-neutral-500">Terminal area</p>
+    {/if}
   </section>
 </main>
