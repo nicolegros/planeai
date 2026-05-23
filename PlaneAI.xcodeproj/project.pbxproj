@@ -7,9 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		2E93378E035C164FEE3D26CB /* ProjectStoreViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */; };
+		0B24E8D9283FF5FBF2DEA979 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BDE036AA60C47822541CF3A /* CommandPaletteView.swift */; };
 		442DDB8D657A8AA6D98B895F /* SessionSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16A31DB62D6785C611B1DA31 /* SessionSidebarView.swift */; };
 		51BDE1C2C1DAC2259D37F0CE /* NewSessionPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7378366AD571318B5275A762 /* NewSessionPaletteView.swift */; };
+		5226D11C9951458420E89FD8 /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED32974A5E71B4D57BDFAC6 /* AppCoordinator.swift */; };
 		54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */; };
 		6EDF1FF57ACB5B886858F16F /* TerminalSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */; };
 		82C7B4C1217D24D9D68A076C /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2428429E5D570DEBA5C9716F /* TerminalView.swift */; };
@@ -17,6 +18,7 @@
 		A3B3D51F4DF2FB117A952429 /* PlaneAICore in Frameworks */ = {isa = PBXBuildFile; productRef = 8C59F10CA21E069C448FC0EA /* PlaneAICore */; };
 		A3F5555054C086626124584A /* ProjectSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5346FBB9C3AB7B8E4D11CAF6 /* ProjectSidebarView.swift */; };
 		A52FB7B0735EC9B974173407 /* TabSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A2BFC109DCED95555C6DE85 /* TabSwitcherView.swift */; };
+		AB31D7BFE34F341A09A34BC8 /* KeyboardRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FDB1BB5F3310A81B531CBAC /* KeyboardRouter.swift */; };
 		C7B2331C2629B273B72BDF44 /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E92F65A4D95C5CD22E86C7C1 /* GhosttyKit.xcframework */; };
 /* End PBXBuildFile section */
 
@@ -25,13 +27,15 @@
 		2428429E5D570DEBA5C9716F /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
 		30A47321B53CC8C8739BF562 /* PlaneAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlaneAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E7ADA2EDDC71D8CF3C53A7C /* PlaneAICore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = PlaneAICore; path = Packages/PlaneAICore; sourceTree = SOURCE_ROOT; };
+		4FDB1BB5F3310A81B531CBAC /* KeyboardRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardRouter.swift; sourceTree = "<group>"; };
 		5346FBB9C3AB7B8E4D11CAF6 /* ProjectSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectSidebarView.swift; sourceTree = "<group>"; };
 		6A2BFC109DCED95555C6DE85 /* TabSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSwitcherView.swift; sourceTree = "<group>"; };
 		6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceView.swift; sourceTree = "<group>"; };
 		7378366AD571318B5275A762 /* NewSessionPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionPaletteView.swift; sourceTree = "<group>"; };
+		9BDE036AA60C47822541CF3A /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaneAIApp.swift; sourceTree = "<group>"; };
 		B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyAppManager.swift; sourceTree = "<group>"; };
-		BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStoreViewModel.swift; sourceTree = "<group>"; };
+		CED32974A5E71B4D57BDFAC6 /* AppCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCoordinator.swift; sourceTree = "<group>"; };
 		E92F65A4D95C5CD22E86C7C1 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = vendor/ghostty/macos/GhosttyKit.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -85,11 +89,13 @@
 		DF0F02C4FC20E8DB908CC7E3 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				CED32974A5E71B4D57BDFAC6 /* AppCoordinator.swift */,
+				9BDE036AA60C47822541CF3A /* CommandPaletteView.swift */,
 				B63D9B49742587BA4E1DF665 /* GhosttyAppManager.swift */,
+				4FDB1BB5F3310A81B531CBAC /* KeyboardRouter.swift */,
 				7378366AD571318B5275A762 /* NewSessionPaletteView.swift */,
 				B4344CDA8F4808BE2D82BA05 /* PlaneAIApp.swift */,
 				5346FBB9C3AB7B8E4D11CAF6 /* ProjectSidebarView.swift */,
-				BD9265EFD798E96FAB1FF81E /* ProjectStoreViewModel.swift */,
 				16A31DB62D6785C611B1DA31 /* SessionSidebarView.swift */,
 				6A2BFC109DCED95555C6DE85 /* TabSwitcherView.swift */,
 				6C902F996AEF91129EC70F09 /* TerminalSurfaceView.swift */,
@@ -209,11 +215,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5226D11C9951458420E89FD8 /* AppCoordinator.swift in Sources */,
+				0B24E8D9283FF5FBF2DEA979 /* CommandPaletteView.swift in Sources */,
 				A2DAAE23F97BE53A3576D14A /* GhosttyAppManager.swift in Sources */,
+				AB31D7BFE34F341A09A34BC8 /* KeyboardRouter.swift in Sources */,
 				51BDE1C2C1DAC2259D37F0CE /* NewSessionPaletteView.swift in Sources */,
 				54EE29C6FE2FF9183F3B9692 /* PlaneAIApp.swift in Sources */,
 				A3F5555054C086626124584A /* ProjectSidebarView.swift in Sources */,
-				2E93378E035C164FEE3D26CB /* ProjectStoreViewModel.swift in Sources */,
 				442DDB8D657A8AA6D98B895F /* SessionSidebarView.swift in Sources */,
 				A52FB7B0735EC9B974173407 /* TabSwitcherView.swift in Sources */,
 				6EDF1FF57ACB5B886858F16F /* TerminalSurfaceView.swift in Sources */,

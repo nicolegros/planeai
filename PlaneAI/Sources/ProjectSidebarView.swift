@@ -2,15 +2,15 @@ import SwiftUI
 import PlaneAICore
 
 struct ProjectSidebarView: View {
-    @Bindable var store: ProjectStoreViewModel
+    @Bindable var coordinator: AppCoordinator
     @State private var showingAddSheet = false
     @State private var renamingProject: Project?
     @State private var renameText = ""
 
     var body: some View {
-        List(selection: $store.selectedProjectID) {
+        List(selection: $coordinator.selectedProjectID) {
             Section("Projects") {
-                ForEach(store.projects) { project in
+                ForEach(coordinator.projects) { project in
                     Text(project.name)
                         .tag(project.id)
                         .contextMenu {
@@ -20,7 +20,7 @@ struct ProjectSidebarView: View {
                             }
                             Divider()
                             Button("Delete", role: .destructive) {
-                                store.delete(id: project.id)
+                                try? coordinator.deleteProject(id: project.id)
                             }
                         }
                 }
@@ -37,7 +37,7 @@ struct ProjectSidebarView: View {
             }
         }
         .sheet(isPresented: $showingAddSheet) {
-            AddProjectSheet(store: store)
+            AddProjectSheet(coordinator: coordinator)
         }
         .alert("Rename Project", isPresented: .init(
             get: { renamingProject != nil },
@@ -47,7 +47,7 @@ struct ProjectSidebarView: View {
             Button("Cancel", role: .cancel) { renamingProject = nil }
             Button("Rename") {
                 if let project = renamingProject {
-                    store.rename(id: project.id, to: renameText)
+                    try? coordinator.renameProject(id: project.id, to: renameText)
                 }
                 renamingProject = nil
             }
@@ -56,7 +56,7 @@ struct ProjectSidebarView: View {
 }
 
 struct AddProjectSheet: View {
-    @Bindable var store: ProjectStoreViewModel
+    @Bindable var coordinator: AppCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var repoPath = ""
@@ -110,14 +110,13 @@ struct AddProjectSheet: View {
     private func addProject() {
         do {
             try GitRepoValidator.validate(path: repoPath)
-            try store.store.add(
+            try coordinator.addProject(
                 name: name,
                 repoPath: repoPath,
                 defaultProvider: "",
                 defaultAutoApprove: false,
                 defaultBranchStrategy: .worktree
             )
-            store.reload()
             dismiss()
         } catch ProjectStoreError.invalidGitRepo(let path) {
             errorMessage = "Not a git repository: \(path)"
