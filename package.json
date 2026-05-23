@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "run:build": "./src-tauri/target/release/planeai",
     "test": "vitest run"
   },
   "packageManager": "pnpm@10.28.2",
