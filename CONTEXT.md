@@ -1,6 +1,6 @@
 # planeai
 
-A native macOS agent session orchestrator. Manages multiple AI coding agents running in parallel, each isolated in its own git worktree, with GPU-accelerated terminal rendering via ghostty.
+A native macOS agent session orchestrator. Manages multiple AI coding agents running in parallel, each isolated in its own git worktree, with GPU-accelerated terminal rendering.
 
 ## Glossary
 
@@ -26,5 +26,4 @@ See `docs/adr/` for recorded decisions.
 - macOS 14+ (Sonoma) minimum deployment target
 - 100% keyboard-usable — all actions reachable without mouse
 - Bundle ID: `ca.nicolegros.planeai`
-- Ghostty vendored as git submodule (fork with minimal patches)
 - tmux required as a runtime dependency (validated at launch)
