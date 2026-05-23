@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod pty;
 mod tmux;
 
 use std::sync::Mutex;
@@ -8,6 +9,7 @@ use rusqlite::Connection;
 use tauri::{State, Manager};
 
 struct DbState(Mutex<Connection>);
+struct PtyState(pty::PtyManager);
 
 #[tauri::command]
 fn create_project(state: State<DbState>, name: String, path: String) -> Result<db::Project, String> {
@@ -57,6 +59,21 @@ fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn attach_session(session_id: String, tmux_name: String, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+    state.0.attach(&session_id, &tmux_name, app)
+}
+
+#[tauri::command]
+fn write_to_pty(session_id: String, data: Vec<u8>, state: State<PtyState>) -> Result<(), String> {
+    state.0.write(&session_id, &data)
+}
+
+#[tauri::command]
+fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) -> Result<(), String> {
+    state.0.resize(&session_id, rows, cols)
+}
+
+#[tauri::command]
 fn launch_session(
     state: State<DbState>,
     project_id: String,
@@ -87,6 +104,7 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
             app.manage(DbState(Mutex::new(conn)));
+            app.manage(PtyState(pty::PtyManager::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -99,6 +117,9 @@ fn main() {
             validate_git_repo,
             list_branches,
             launch_session,
+            attach_session,
+            write_to_pty,
+            resize_pty,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

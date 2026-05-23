@@ -1,0 +1,133 @@
+use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, Child};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use tauri::{AppHandle, Emitter};
+
+struct PtyHandle {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    _child: Box<dyn Child + Send + Sync>,
+}
+
+pub struct PtyManager {
+    ptys: Mutex<HashMap<String, Arc<Mutex<PtyHandle>>>>,
+}
+
+impl PtyManager {
+    pub fn new() -> Self {
+        Self {
+            ptys: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Attach to a tmux session by spawning `tmux attach-session -t <name>` in a PTY.
+    /// Streams output to the frontend via Tauri events.
+    pub fn attach(&self, session_id: &str, tmux_name: &str, app: AppHandle) -> Result<(), String> {
+        let pty_system = native_pty_system();
+
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("failed to open pty: {e}"))?;
+
+        let mut cmd = CommandBuilder::new("tmux");
+        cmd.args(["attach-session", "-t", tmux_name]);
+
+        let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
+        drop(pair.slave);
+
+        let writer = pair.master.take_writer().map_err(|e| format!("failed to get writer: {e}"))?;
+        let mut reader = pair.master.try_clone_reader().map_err(|e| format!("failed to get reader: {e}"))?;
+
+        let handle = Arc::new(Mutex::new(PtyHandle {
+            master: pair.master,
+            writer,
+            _child: child,
+        }));
+
+        {
+            let mut ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+            ptys.insert(session_id.to_string(), handle);
+        }
+
+        // Spawn reader thread that emits output to frontend
+        let event_name = format!("pty-output-{session_id}");
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = &buf[..n];
+                        // Send as base64 to avoid encoding issues
+                        let encoded = base64_encode(data);
+                        let _ = app.emit(&event_name, encoded);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Write input bytes to a session's PTY.
+    pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let handle = ptys.get(session_id).ok_or("session not attached")?;
+        let mut h = handle.lock().map_err(|e| e.to_string())?;
+        h.writer.write_all(data).map_err(|e| format!("write failed: {e}"))
+    }
+
+    /// Resize a session's PTY.
+    pub fn resize(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
+        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let handle = ptys.get(session_id).ok_or("session not attached")?;
+        let h = handle.lock().map_err(|e| e.to_string())?;
+        h.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("resize failed: {e}"))
+    }
+
+    /// Detach a session's PTY (cleanup).
+    #[allow(dead_code)]
+    pub fn detach(&self, session_id: &str) {
+        let mut ptys = self.ptys.lock().unwrap_or_else(|e| e.into_inner());
+        ptys.remove(session_id);
+    }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}

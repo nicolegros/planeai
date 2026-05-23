@@ -6,6 +6,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
+  import Terminal from "./components/Terminal.svelte";
 
   interface Project {
     id: string;
@@ -70,7 +71,7 @@
     onSelectSession={(id) => (activeSessionId = id)}
   />
 
-  <section class="flex-1 flex items-center justify-center relative">
+  <section class="flex-1 relative">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm
@@ -86,10 +87,20 @@
           onCancel={() => (showSessionForm = false)}
         />
       </div>
-    {:else if activeSessionId}
-      <p class="text-neutral-500">Terminal: {sessions.find(s => s.id === activeSessionId)?.tmux_name}</p>
-    {:else}
-      <p class="text-neutral-500">No active session. Press <kbd class="px-1 bg-neutral-800 rounded">⌘N</kbd> to create one.</p>
+    {/if}
+
+    {#each sessions as session (session.id)}
+      <Terminal
+        sessionId={session.id}
+        tmuxName={session.tmux_name}
+        visible={session.id === activeSessionId}
+      />
+    {/each}
+
+    {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
+      <div class="flex items-center justify-center h-full">
+        <p class="text-neutral-500">No active session. Press <kbd class="px-1 bg-neutral-800 rounded">⌘N</kbd> to create one.</p>
+      </div>
     {/if}
   </section>
 </main>
