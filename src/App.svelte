@@ -45,6 +45,10 @@
 
   async function loadSessions() {
     sessions = await invoke<Session[]>("list_sessions");
+    // On initial load, activate the first session (reconnection)
+    if (sessions.length > 0 && !activeSessionId) {
+      selectSession(sessions[0].id);
+    }
   }
 
   function selectSession(id: string) {

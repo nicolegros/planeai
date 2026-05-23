@@ -59,6 +59,15 @@ pub fn build_new_session_args(tmux_name: &str, working_dir: &str) -> Vec<String>
     ]
 }
 
+/// Check if a tmux session exists.
+pub fn has_session(tmux_name: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", tmux_name])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Kill a tmux session.
 pub fn kill_session(tmux_name: &str) -> Result<(), String> {
     let output = Command::new("tmux")

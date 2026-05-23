@@ -74,6 +74,11 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 }
 
 #[tauri::command]
+fn check_session_alive(tmux_name: String) -> bool {
+    tmux::has_session(&tmux_name)
+}
+
+#[tauri::command]
 fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     // Kill tmux session
     tmux::kill_session(&tmux_name)?;
@@ -131,6 +136,7 @@ fn main() {
             attach_session,
             write_to_pty,
             resize_pty,
+            check_session_alive,
             destroy_session,
         ])
         .run(tauri::generate_context!())
