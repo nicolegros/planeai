@@ -47,6 +47,8 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (zone !== "sidebar" || flatSessionIds.length === 0) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.closest("[role='combobox']"))) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       selectedIndex = Math.min(selectedIndex + 1, flatSessionIds.length - 1);
@@ -62,42 +64,42 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<aside class="w-56 border-r border-surface-800 flex flex-col bg-surface-950 {zone === 'sidebar' ? 'bg-surface-900' : ''}">
+<aside class="w-56 border-r border-gray-200 flex flex-col bg-gray-50 {zone === 'sidebar' ? 'bg-gray-100' : ''}">
   <div class="flex items-center justify-between p-3 pb-1">
-    <h2 class="text-xs font-semibold text-surface-500 uppercase tracking-wide">Sessions</h2>
-    <button onclick={onAddProject} class="btn-icon btn-icon-sm preset-tonal-surface" title="Add project">+</button>
+    <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sessions</h2>
+    <button onclick={onAddProject} class="rounded p-1 text-sm hover:bg-gray-200" title="Add project">+</button>
   </div>
 
   <div class="flex-1 overflow-y-auto p-3 pt-1">
     {#if projects.length === 0}
       <div class="mt-8 text-center space-y-2">
-        <p class="text-xs text-surface-500">No projects registered.</p>
-        <button onclick={onAddProject} class="btn btn-sm preset-tonal-primary">Add a project</button>
+        <p class="text-xs text-gray-500">No projects registered.</p>
+        <button onclick={onAddProject} class="rounded border border-gray-300 px-2 py-1 text-xs">Add a project</button>
       </div>
     {:else}
       {#each grouped as { project, sessions: projectSessions } (project.id)}
         <div class="mb-3">
-          <p class="text-xs text-surface-500 font-medium mb-1">{project.name}</p>
+          <p class="text-xs text-gray-500 font-medium mb-1">{project.name}</p>
           {#each projectSessions as session (session.id)}
             {@const globalIndex = flatSessionIds.indexOf(session.id)}
             <div class="flex items-center group">
               <button
                 class="flex-1 text-left px-2 py-1 rounded text-sm truncate
-                  {session.id === activeSessionId ? 'preset-filled-surface-500' : 'text-surface-400 hover:bg-surface-800'}
-                  {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-primary-500' : ''}"
+                  {session.id === activeSessionId ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-200'}
+                  {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-blue-500' : ''}"
                 onclick={() => onSelectSession(session.id)}
               >
                 {session.branch}
               </button>
               <button
-                class="px-1 text-surface-600 hover:text-error-400 opacity-0 group-hover:opacity-100 text-xs"
+                class="px-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 text-xs"
                 onclick={(e) => { e.stopPropagation(); onDeleteSession(session); }}
                 title="Delete session"
               >✕</button>
             </div>
           {/each}
           {#if projectSessions.length === 0}
-            <p class="text-xs text-surface-600 px-2">No sessions</p>
+            <p class="text-xs text-gray-400 px-2">No sessions</p>
           {/if}
         </div>
       {/each}

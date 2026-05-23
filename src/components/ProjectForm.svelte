@@ -47,31 +47,31 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form
-  class="card preset-outlined-surface-200-800 p-6 w-80 space-y-4"
+  class="rounded-lg border border-gray-200 bg-white p-6 w-80 space-y-4 shadow-lg"
   onsubmit={(e) => { e.preventDefault(); submit(); }}
   onkeydown={handleKeydown}
 >
-  <h2 class="h5">Add Project</h2>
+  <h2 class="text-lg font-semibold">Add Project</h2>
 
-  <label class="label">
-    <span class="label-text">Repository path</span>
-    <div class="flex gap-2 mt-1">
-      <input type="text" bind:value={path} placeholder="/path/to/repo" class="input flex-1" />
-      <button type="button" onclick={pickFolder} class="btn btn-sm preset-tonal-surface">Browse</button>
+  <label class="block space-y-1">
+    <span class="text-sm font-medium">Repository path</span>
+    <div class="flex gap-2">
+      <input type="text" bind:value={path} placeholder="/path/to/repo" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="flex-1 rounded border border-gray-300 px-3 py-2 text-sm" />
+      <button type="button" onclick={pickFolder} class="rounded border border-gray-300 px-2 py-1 text-sm">Browse</button>
     </div>
   </label>
 
-  <label class="label">
-    <span class="label-text">Name</span>
-    <input type="text" bind:value={name} placeholder="my-project" class="input mt-1" />
+  <label class="block space-y-1">
+    <span class="text-sm font-medium">Name</span>
+    <input type="text" bind:value={name} placeholder="my-project" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="w-full rounded border border-gray-300 px-3 py-2 text-sm" />
   </label>
 
   {#if error}
-    <p class="text-xs text-error-500">{error}</p>
+    <p class="text-xs text-red-500">{error}</p>
   {/if}
 
   <div class="flex justify-end gap-2">
-    <button type="button" onclick={onCancel} class="btn btn-sm preset-tonal-surface">Cancel</button>
-    <button type="submit" class="btn btn-sm preset-filled-primary-500">Add</button>
+    <button type="button" onclick={onCancel} class="rounded border border-gray-300 px-3 py-1.5 text-sm">Cancel</button>
+    <button type="submit" class="rounded bg-gray-900 px-3 py-1.5 text-sm text-white">Add</button>
   </div>
 </form>

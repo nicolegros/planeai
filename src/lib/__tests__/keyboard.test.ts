@@ -25,10 +25,8 @@ describe("matchChord", () => {
     });
   });
 
-  it("returns toggle_sidebar on Ctrl+B", () => {
-    expect(matchChord(key({ key: "b", ctrlKey: true }))).toEqual({
-      type: "toggle_sidebar",
-    });
+  it("returns null on Ctrl+B (only Cmd+B works)", () => {
+    expect(matchChord(key({ key: "b", ctrlKey: true }))).toBeNull();
   });
 
   it("returns new_session on Cmd+N", () => {

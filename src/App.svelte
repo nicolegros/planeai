@@ -4,6 +4,7 @@
   import { getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
+  import { Dialog } from "bits-ui";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
@@ -29,8 +30,9 @@
   let sessions = $state<Session[]>([]);
   let activeSessionId = $state<string | null>(null);
   let showProjectForm = $state(false);
-  let showSessionForm = $state(false);
   let sidebarVisible = $state(true);
+
+  let showSessionForm = $state(false);
 
   // Tab switcher state
   let tabSwitcherOpen = $state(false);
@@ -157,15 +159,21 @@
           onCancel={() => (showProjectForm = false)}
         />
       </div>
-    {:else if showSessionForm}
-      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-        <SessionForm
-          {projects}
-          onCreated={onSessionCreated}
-          onCancel={() => (showSessionForm = false)}
-        />
-      </div>
     {/if}
+
+    <Dialog.Root bind:open={showSessionForm}>
+      <Dialog.Portal>
+        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
+        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-gray-200 bg-white p-6 shadow-lg">
+          <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
+          <SessionForm
+            {projects}
+            onCreated={onSessionCreated}
+            onCancel={() => (showSessionForm = false)}
+          />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
 
     {#if tabSwitcherOpen}
       <TabSwitcher
@@ -186,7 +194,7 @@
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
-        <p class="text-surface-500">No active session. Press <kbd class="kbd">⌘N</kbd> to create one.</p>
+        <p class="text-gray-500">No active session. Press <kbd class="rounded border border-gray-300 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
       </div>
     {/if}
 
@@ -194,13 +202,13 @@
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
-          class="card preset-outlined-surface-200-800 p-6 w-80 space-y-4"
+          class="rounded-lg border border-gray-200 bg-white p-6 w-80 space-y-4 shadow-lg"
           onkeydown={(e) => { if (e.key === 'Escape') sessionToDelete = null; }}
         >
           <p class="text-sm">Delete session <strong>{sessionToDelete.branch}</strong>? This will kill the agent.</p>
           <div class="flex justify-end gap-2">
-            <button class="btn btn-sm preset-tonal-surface" onclick={() => (sessionToDelete = null)}>Cancel</button>
-            <button class="btn btn-sm preset-filled-error-500" onclick={confirmDelete}>Delete</button>
+            <button class="rounded border border-gray-300 px-3 py-1.5 text-sm" onclick={() => (sessionToDelete = null)}>Cancel</button>
+            <button class="rounded bg-red-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete}>Delete</button>
           </div>
         </div>
       </div>

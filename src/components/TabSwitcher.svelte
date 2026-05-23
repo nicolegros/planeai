@@ -32,14 +32,14 @@
   }
 </script>
 
-<div class="absolute inset-0 flex items-center justify-center bg-black/40 z-20">
-  <div class="card preset-outlined-surface-200-800 p-2 w-72 max-h-80 overflow-y-auto">
+<div class="absolute inset-0 flex items-center justify-center bg-black/50 z-20">
+  <div class="rounded-lg border border-gray-200 bg-white p-2 w-72 max-h-80 overflow-y-auto shadow-lg">
     {#each mruSessionIds as id, i (id)}
       {@const session = getSession(id)}
       {#if session}
-        <div class="px-3 py-2 rounded text-sm {i === selectedIndex ? 'preset-filled-surface-500' : 'text-surface-400'}">
+        <div class="px-3 py-2 rounded text-sm {i === selectedIndex ? 'bg-gray-900 text-white' : 'text-gray-600'}">
           <span class="font-medium">{session.branch}</span>
-          <span class="text-xs text-surface-500 ml-2">{getProjectName(session.project_id)}</span>
+          <span class="text-xs ml-2 {i === selectedIndex ? 'text-gray-300' : 'text-gray-400'}">{getProjectName(session.project_id)}</span>
         </div>
       {/if}
     {/each}

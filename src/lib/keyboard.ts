@@ -13,7 +13,7 @@ export type KeyboardAction =
  * Returns the action if matched, or null if the event should pass through.
  */
 export function matchChord(e: KeyboardEvent): KeyboardAction | null {
-  const meta = e.metaKey || e.ctrlKey;
+  const meta = e.metaKey;
 
   // Escape — always return to terminal
   if (e.key === "Escape") {
