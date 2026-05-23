@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
-  import { getMruList, touchMru } from "./lib/mru.svelte";
+  import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
@@ -35,6 +35,9 @@
   // Tab switcher state
   let tabSwitcherOpen = $state(false);
   let tabSwitcherIndex = $state(0);
+
+  // Delete confirmation state
+  let sessionToDelete = $state<Session | null>(null);
 
   async function loadProjects() {
     projects = await invoke<Project[]>("list_projects");
@@ -112,6 +115,19 @@
     selectSession(session.id);
   }
 
+  async function confirmDelete() {
+    if (!sessionToDelete) return;
+    const s = sessionToDelete;
+    await invoke("destroy_session", { id: s.id, tmuxName: s.tmux_name });
+    sessions = sessions.filter((x) => x.id !== s.id);
+    removeMru(s.id);
+    if (activeSessionId === s.id) {
+      activeSessionId = sessions[0]?.id ?? null;
+      if (activeSessionId) touchMru(activeSessionId);
+    }
+    sessionToDelete = null;
+  }
+
   const zone = $derived(getActiveZone());
   const mruList = $derived(getMruList());
 </script>
@@ -125,6 +141,7 @@
       {zone}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
+      onDeleteSession={(s) => (sessionToDelete = s)}
     />
   {/if}
 
@@ -166,6 +183,28 @@
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
         <p class="text-neutral-500">No active session. Press <kbd class="px-1 bg-neutral-800 rounded">⌘N</kbd> to create one.</p>
+      </div>
+    {/if}
+
+    {#if sessionToDelete}
+      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+          class="bg-neutral-900 border border-neutral-700 rounded-lg p-4 w-80"
+          onkeydown={(e) => { if (e.key === 'Escape') sessionToDelete = null; }}
+        >
+          <p class="text-sm text-neutral-200 mb-3">Delete session <strong>{sessionToDelete.branch}</strong>? This will kill the agent.</p>
+          <div class="flex justify-end gap-2">
+            <button
+              class="px-3 py-1 text-xs text-neutral-400 hover:text-neutral-200"
+              onclick={() => (sessionToDelete = null)}
+            >Cancel</button>
+            <button
+              class="px-3 py-1 text-xs bg-red-900 text-red-200 rounded hover:bg-red-800"
+              onclick={confirmDelete}
+            >Delete</button>
+          </div>
+        </div>
       </div>
     {/if}
   </section>

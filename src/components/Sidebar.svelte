@@ -23,9 +23,10 @@
     zone: FocusZone;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
+    onDeleteSession: (session: Session) => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, onAddProject, onSelectSession }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, onAddProject, onSelectSession, onDeleteSession }: Props = $props();
 
   let selectedIndex = $state(0);
 
@@ -93,14 +94,21 @@
           <p class="text-xs text-neutral-500 font-medium mb-1">{project.name}</p>
           {#each projectSessions as session, i (session.id)}
             {@const globalIndex = flatSessionIds.indexOf(session.id)}
-            <button
-              class="w-full text-left px-2 py-1 rounded text-sm truncate
-                {session.id === activeSessionId ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-800'}
-                {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-neutral-500' : ''}"
-              onclick={() => onSelectSession(session.id)}
-            >
-              {session.branch}
-            </button>
+            <div class="flex items-center group">
+              <button
+                class="flex-1 text-left px-2 py-1 rounded text-sm truncate
+                  {session.id === activeSessionId ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-800'}
+                  {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-neutral-500' : ''}"
+                onclick={() => onSelectSession(session.id)}
+              >
+                {session.branch}
+              </button>
+              <button
+                class="px-1 text-neutral-600 hover:text-red-400 opacity-0 group-hover:opacity-100 text-xs"
+                onclick={(e) => { e.stopPropagation(); onDeleteSession(session); }}
+                title="Delete session"
+              >✕</button>
+            </div>
           {/each}
           {#if projectSessions.length === 0}
             <p class="text-xs text-neutral-600 px-2">No sessions</p>

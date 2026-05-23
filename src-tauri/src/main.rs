@@ -74,6 +74,17 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 }
 
 #[tauri::command]
+fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
+    // Kill tmux session
+    tmux::kill_session(&tmux_name)?;
+    // Detach PTY
+    pty_state.0.detach(&id);
+    // Remove from DB
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    db::delete_session(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn launch_session(
     state: State<DbState>,
     project_id: String,
@@ -120,6 +131,7 @@ fn main() {
             attach_session,
             write_to_pty,
             resize_pty,
+            destroy_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

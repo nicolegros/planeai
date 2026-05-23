@@ -59,6 +59,23 @@ pub fn build_new_session_args(tmux_name: &str, working_dir: &str) -> Vec<String>
     ]
 }
 
+/// Kill a tmux session.
+pub fn kill_session(tmux_name: &str) -> Result<(), String> {
+    let output = Command::new("tmux")
+        .args(["kill-session", "-t", tmux_name])
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+
+    if !output.status.success() {
+        // Ignore "no such session" errors (already dead)
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("no such session") {
+            return Err(stderr.to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
 pub fn create_session(tmux_name: &str, working_dir: &str) -> Result<(), String> {
     let args = build_new_session_args(tmux_name, working_dir);
