@@ -27,13 +27,42 @@
 
   let { projects, sessions, activeSessionId, zone, onAddProject, onSelectSession }: Props = $props();
 
+  let selectedIndex = $state(0);
+
   const grouped = $derived(
     projects.map((p) => ({
       project: p,
       sessions: sessions.filter((s) => s.project_id === p.id),
     }))
   );
+
+  // Flat list of all session IDs for keyboard nav
+  const flatSessionIds = $derived(sessions.map((s) => s.id));
+
+  $effect(() => {
+    // Keep selectedIndex in bounds
+    if (selectedIndex >= flatSessionIds.length) {
+      selectedIndex = Math.max(0, flatSessionIds.length - 1);
+    }
+  });
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (zone !== "sidebar" || flatSessionIds.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedIndex = Math.min(selectedIndex + 1, flatSessionIds.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectedIndex = Math.max(selectedIndex - 1, 0);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onSelectSession(flatSessionIds[selectedIndex]);
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <aside
   class="w-56 border-r border-neutral-800 flex flex-col {zone === 'sidebar' ? 'bg-neutral-900' : 'bg-neutral-950'}"
@@ -62,9 +91,12 @@
       {#each grouped as { project, sessions: projectSessions } (project.id)}
         <div class="mb-3">
           <p class="text-xs text-neutral-500 font-medium mb-1">{project.name}</p>
-          {#each projectSessions as session (session.id)}
+          {#each projectSessions as session, i (session.id)}
+            {@const globalIndex = flatSessionIds.indexOf(session.id)}
             <button
-              class="w-full text-left px-2 py-1 rounded text-sm truncate {session.id === activeSessionId ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-800'}"
+              class="w-full text-left px-2 py-1 rounded text-sm truncate
+                {session.id === activeSessionId ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:bg-neutral-800'}
+                {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-neutral-500' : ''}"
               onclick={() => onSelectSession(session.id)}
             >
               {session.branch}

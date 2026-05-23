@@ -28,6 +28,7 @@
   let activeSessionId = $state<string | null>(null);
   let showProjectForm = $state(false);
   let showSessionForm = $state(false);
+  let sidebarVisible = $state(true);
 
   async function loadProjects() {
     projects = await invoke<Project[]>("list_projects");
@@ -35,6 +36,16 @@
 
   async function loadSessions() {
     sessions = await invoke<Session[]>("list_sessions");
+  }
+
+  function selectSession(id: string) {
+    activeSessionId = id;
+  }
+
+  function jumpToSession(index: number) {
+    if (index < sessions.length) {
+      activeSessionId = sessions[index].id;
+    }
   }
 
   onMount(() => {
@@ -47,6 +58,10 @@
         } else {
           showSessionForm = true;
         }
+      } else if (action.type === "toggle_sidebar") {
+        sidebarVisible = !sidebarVisible;
+      } else if (action.type === "jump_to_session") {
+        jumpToSession(action.index);
       }
     });
     return cleanup;
@@ -62,14 +77,16 @@
 </script>
 
 <main class="flex h-screen">
-  <Sidebar
-    {projects}
-    {sessions}
-    {activeSessionId}
-    {zone}
-    onAddProject={() => (showProjectForm = true)}
-    onSelectSession={(id) => (activeSessionId = id)}
-  />
+  {#if sidebarVisible}
+    <Sidebar
+      {projects}
+      {sessions}
+      {activeSessionId}
+      {zone}
+      onAddProject={() => (showProjectForm = true)}
+      onSelectSession={selectSession}
+    />
+  {/if}
 
   <section class="flex-1 relative">
     {#if showProjectForm}
