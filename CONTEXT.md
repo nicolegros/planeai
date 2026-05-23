@@ -1,29 +1,45 @@
 # planeai
 
-A native macOS agent session orchestrator. Manages multiple AI coding agents running in parallel, each isolated in its own git worktree, with GPU-accelerated terminal rendering.
+A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session backed by tmux for persistence.
 
 ## Glossary
 
 | Term | Definition |
 |------|-----------|
-| **Project** | A git repository registered with planeai. Stores a repo path, default provider, default auto-approve setting, and default branch strategy. The top-level organizational unit. |
-| **Session** | A single agent working on a single task within a project. Backed by a tmux session. Contains a primary pane (the agent) and zero or more secondary panes (manual shells). |
-| **Provider** | A CLI-based AI coding agent (e.g., Claude Code, Kiro, Codex, Copilot). Defined by a launch command, icon, auto-approve flag, and notify hook template. |
-| **Primary pane** | The terminal pane within a session that runs the agent CLI. Visually distinct from secondary panes. Its process exit triggers session completion. |
-| **Secondary pane** | A split terminal pane within a session used for manual work (running tests, git commands, etc.). Defaults to the session's working directory. |
-| **Worktree** | A git worktree created for a session to isolate its changes from other sessions. Auto-created at `../<project-name>-<branch-name>` relative to the repo root. |
-| **Template** | (v1.1) A saved session configuration (provider + branch strategy + auto-approve) for one-keystroke launch. |
-| **Notification** | A signal that an agent needs human attention. Detected via OSC 9/99/777 sequences or the `planeai notify` CLI. Manifests as sidebar badge, macOS notification, and unread queue entry. |
-| **Archive** | Soft-removing a completed session. Hides from sidebar, persists scrollback to disk, optionally prunes worktree. Restorable. |
-| **Delete** | Hard-removing a session. Scrollback purged, tmux session killed, worktree removed. Irreversible. |
+| **Project** | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit. |
+| **Session** | A single agent working on a single task within a project. Backed by a tmux session named `planeai-<project>-<8-hex-id>`. Contains one terminal pane running the agent CLI. |
+| **Provider** | A CLI-based AI coding agent (e.g., Kiro). Defined by a launch command. v1 supports Kiro only (`kiro-cli chat --trust-all-tools`). |
+| **Focus zone** | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus. |
+| **Tab switcher** | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. |
+| **Notification** | (future) A signal that an agent needs human attention. |
+
+## Session lifecycle (v1)
+
+```
+create → active → deleted
+```
+
+- **Active** — tmux session exists, agent may or may not still be running. Visible in sidebar.
+- **Deleted** — tmux session killed, removed from sidebar and DB. Irreversible.
+
+## Architecture notes
+
+- **Tauri v2** (Rust backend + webview frontend)
+- **Svelte 5** with runes for reactive UI
+- **xterm.js** for terminal rendering
+- **Tailwind CSS**, dark theme only
+- **SQLite via rusqlite** on the Rust backend for persistence
+- **tmux** for process persistence (ADR-0002)
+- **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
+- **pnpm** for package management
+
+## Key constraints
+
+- Keyboard-first — all actions reachable without mouse
+- One active session per project (no worktrees in v1)
+- DB is source of truth; orphan tmux sessions are ignored
+- macOS primary target, cross-platform future
 
 ## Architecture decisions
 
 See `docs/adr/` for recorded decisions.
-
-## Key constraints
-
-- macOS 14+ (Sonoma) minimum deployment target
-- 100% keyboard-usable — all actions reachable without mouse
-- Bundle ID: `ca.nicolegros.planeai`
-- tmux required as a runtime dependency (validated at launch)

@@ -1,33 +1,42 @@
 # planeai
 
-A native macOS app for running multiple AI coding agents in parallel. Each agent works in an isolated git worktree, backed by tmux for session persistence, with GPU-accelerated terminal rendering.
+A cross-platform app for running multiple AI coding agents in parallel. Each agent works in its own terminal session, backed by tmux for persistence.
 
-## Features
+## Features (v1)
 
-- **Project-based organization** — register git repos as projects with default settings
-- **Session management** — launch agents, split panes, archive/delete sessions
-- **Multi-provider** — Kiro, Claude Code, Codex, Copilot, and custom agents
-- **Worktree isolation** — each session gets its own git worktree automatically
+- **Keyboard-first** — every action reachable without a mouse
+- **Session management** — launch Kiro agents, switch between sessions
+- **Sidebar** — sessions grouped by project, active session highlighted
+- **Tab switcher** — Ctrl+Tab MRU overlay for fast session switching
 - **tmux persistence** — agents keep running when you quit the app
-- **Notifications** — sidebar badges, macOS notifications, and unread queue when agents need attention
-- **100% keyboard-driven** — every action reachable without a mouse
+- **SQLite storage** — projects and sessions persisted locally
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later
+- macOS (Linux/Windows planned)
 - tmux (`brew install tmux`)
-- At least one supported agent CLI on PATH
+- `kiro-cli` on PATH
+
+## Tech stack
+
+- **Tauri v2** — Rust backend, webview shell
+- **Svelte 5** — reactive UI with runes
+- **xterm.js** — terminal rendering in the browser
+- **Tailwind CSS** — utility-first styling, dark theme
+- **rusqlite** — SQLite persistence on the Rust side
+- **pnpm** — package management
 
 ## Architecture
 
-- Tauri + Typescript for the app shell and UI
-- Svelte for reactive UI components
-- xterm.js with GPU acceleration for terminal rendering
-- tmux for process persistence
-- pnpm for package management
+The Rust backend owns tmux interaction, SQLite, and PTY management. The Svelte frontend renders the UI and terminal via xterm.js. Communication is via Tauri IPC (commands for actions, event channels for streaming terminal bytes).
 
 See [CONTEXT.md](./CONTEXT.md) for domain glossary and [docs/adr/](./docs/adr/) for architecture decisions.
 
 ## Development
 
-This project uses TDD. See [AGENTS.md](./AGENTS.md) for development workflow guidelines.
+This project uses TDD. See [AGENTS.md](./AGENTS.md) for workflow guidelines.
+
+```bash
+pnpm install
+pnpm tauri dev
+```
