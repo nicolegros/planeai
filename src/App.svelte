@@ -1,16 +1,30 @@
 <script lang="ts">
-  let count = $state(0);
+  import { onMount } from "svelte";
+  import { getActiveZone } from "./lib/focus.svelte";
+  import { installKeyboardRouter } from "./lib/keyboard";
+
+  let cleanup: (() => void) | undefined;
+
+  onMount(() => {
+    cleanup = installKeyboardRouter((action) => {
+      // Future: dispatch to session store, tab switcher, etc.
+      console.debug("[keyboard]", action.type);
+    });
+    return () => cleanup?.();
+  });
+
+  const zone = $derived(getActiveZone());
 </script>
 
-<main class="flex items-center justify-center h-screen">
-  <div class="text-center">
-    <h1 class="text-2xl font-bold mb-4">planeai</h1>
-    <p class="text-neutral-400">Svelte 5 + Tauri v2</p>
-    <button
-      class="mt-4 px-4 py-2 bg-neutral-800 rounded hover:bg-neutral-700"
-      onclick={() => count++}
-    >
-      count: {count}
-    </button>
-  </div>
+<main class="flex h-screen">
+  <aside
+    class="w-56 border-r border-neutral-800 p-3 {zone === 'sidebar' ? 'bg-neutral-900' : 'bg-neutral-950'}"
+  >
+    <h2 class="text-sm font-semibold text-neutral-400 mb-2">Sessions</h2>
+    <p class="text-xs text-neutral-500">No sessions yet. Press Cmd+N.</p>
+  </aside>
+
+  <section class="flex-1 flex items-center justify-center">
+    <p class="text-neutral-500">Terminal area — zone: {zone}</p>
+  </section>
 </main>
