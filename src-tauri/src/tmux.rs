@@ -40,6 +40,37 @@ pub fn checkout_branch(repo_path: &str, branch: &str, create: bool) -> Result<()
     Ok(())
 }
 
+/// Create a git worktree with a new branch off a base branch.
+pub fn worktree_add(repo_path: &str, worktree_path: &str, new_branch: &str, base_branch: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["worktree", "add", "-b", new_branch, worktree_path, base_branch])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(())
+}
+
+/// Remove a git worktree forcefully.
+pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["worktree", "remove", "--force", worktree_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("is not a working tree") {
+            return Err(stderr.to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();

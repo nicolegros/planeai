@@ -36,9 +36,30 @@ create → active → deleted
 ## Key constraints
 
 - Keyboard-first — all actions reachable without mouse
-- One active session per project (no worktrees in v1)
+- One active non-worktree session per project; multiple worktree sessions allowed
 - DB is source of truth; orphan tmux sessions are ignored
 - macOS primary target, cross-platform future
+- Project names must be unique
+
+## Worktree support
+
+Sessions can run in two modes:
+
+- **Checkout mode** (default) — `git checkout` on the project's repo path. Only one active checkout session per project.
+- **Worktree mode** — `git worktree add` creates an isolated working copy at `~/.planeai/worktrees/<project-name>/<session-id>/`. Multiple worktree sessions can run in parallel on the same project.
+
+### Lifecycle
+
+- **Archive** — kills tmux, marks session archived. Worktree directory is preserved on disk.
+- **Destroy** — kills tmux, runs `git worktree remove --force`, deletes directory, removes from DB.
+
+### Data model
+
+Sessions table has `worktree_path TEXT NULL`. Non-null indicates worktree mode.
+
+### Form flow (worktree mode)
+
+Project → Session name → ✅ Create worktree → Base branch (existing) → New branch name (editable, defaults to session name slugified)
 
 ## Architecture decisions
 

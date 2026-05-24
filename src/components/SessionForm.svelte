@@ -3,13 +3,19 @@
   import { Combobox } from "bits-ui";
 
   interface Project { id: string; name: string; path: string; }
-  interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; }
+  interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; worktree_path: string | null; }
   interface Props { projects: Project[]; onCreated: (session: Session) => void; onCancel: () => void; }
 
   let { projects, onCreated, onCancel }: Props = $props();
 
   // Session name
   let sessionName = $state("");
+
+  // Worktree mode
+  let useWorktree = $state(false);
+  let baseBranchValue = $state("");
+  let baseBranchSearch = $state("");
+  let newBranchName = $state("");
 
   // Project combobox
   let projectValue = $state(projects[0]?.id ?? "");
@@ -39,8 +45,17 @@
     branchSearch === "" ? branches : branches.filter((b) => b.label.toLowerCase().includes(branchSearch.toLowerCase())),
   );
 
+  const filteredBaseBranches = $derived(
+    baseBranchSearch === "" ? branches : branches.filter((b) => b.label.toLowerCase().includes(baseBranchSearch.toLowerCase())),
+  );
+
   const branch = $derived(branchValue || branchSearch);
   const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
+
+  // Default new branch name from session name
+  const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
+  const worktreeBranch = $derived(newBranchName || defaultBranchName);
+  const baseBranch = $derived(baseBranchValue || baseBranchSearch || "main");
 
   let formEl: HTMLFormElement;
   let error = $state("");
@@ -52,14 +67,29 @@
   }
 
   async function submit() {
-    if (!selectedProject || !branch) { error = "Select a project and enter a branch name."; return; }
-    try {
-      const session = await invoke<Session>("launch_session", {
-        projectId: selectedProject.id, projectName: selectedProject.name,
-        repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-      });
-      onCreated(session);
-    } catch (e) { error = String(e); }
+    if (!selectedProject) { error = "Select a project."; return; }
+
+    if (useWorktree) {
+      if (!worktreeBranch) { error = "Enter a branch name."; return; }
+      try {
+        const session = await invoke<Session>("launch_session", {
+          projectId: selectedProject.id, projectName: selectedProject.name,
+          repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
+          name: sessionName, useWorktree: true, baseBranch,
+        });
+        onCreated(session);
+      } catch (e) { error = String(e); }
+    } else {
+      if (!branch) { error = "Enter a branch name."; return; }
+      try {
+        const session = await invoke<Session>("launch_session", {
+          projectId: selectedProject.id, projectName: selectedProject.name,
+          repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
+          useWorktree: false, baseBranch: null,
+        });
+        onCreated(session);
+      } catch (e) { error = String(e); }
+    }
   }
 </script>
 
@@ -103,36 +133,85 @@
     </Combobox.Root>
   </div>
 
-  <div class="space-y-1">
-    <label class="text-sm font-medium">Branch</label>
-    <Combobox.Root type="single" bind:value={branchValue} onOpenChangeComplete={(o) => { if (!o && !branchValue) branchSearch = branchSearch; }}>
-      <Combobox.Input
-        oninput={(e) => (branchSearch = e.currentTarget.value)}
-        onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
-        placeholder="main, feat/new-feature..."
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck={false}
-        data-form-type="other"
-        class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
-      />
-      <Combobox.Portal>
-        <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
-          {#each filteredBranches as item (item.value)}
-            <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
-              {item.label}
-            </Combobox.Item>
-          {:else}
-            <span class="block px-3 py-2 text-sm text-gray-400">No branches found</span>
-          {/each}
-        </Combobox.Content>
-      </Combobox.Portal>
-    </Combobox.Root>
+  <div class="flex items-center gap-2">
+    <input type="checkbox" id="use-worktree" bind:checked={useWorktree} class="rounded border-gray-300" />
+    <label for="use-worktree" class="text-sm font-medium">Create worktree</label>
   </div>
 
-  {#if isNewBranch && branch}
-    <p class="text-xs text-gray-500">Will create new branch: <span class="font-medium text-gray-900">{branch}</span></p>
+  {#if useWorktree}
+    <div class="space-y-1">
+      <label class="text-sm font-medium">Base branch</label>
+      <Combobox.Root type="single" bind:value={baseBranchValue} onOpenChangeComplete={(o) => { if (!o) baseBranchSearch = baseBranchSearch; }}>
+        <Combobox.Input
+          oninput={(e) => (baseBranchSearch = e.currentTarget.value)}
+          onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+          placeholder="main"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck={false}
+          data-form-type="other"
+          class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+        />
+        <Combobox.Portal>
+          <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
+            {#each filteredBaseBranches as item (item.value)}
+              <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
+                {item.label}
+              </Combobox.Item>
+            {:else}
+              <span class="block px-3 py-2 text-sm text-gray-400">No branches found</span>
+            {/each}
+          </Combobox.Content>
+        </Combobox.Portal>
+      </Combobox.Root>
+    </div>
+
+    <div class="space-y-1">
+      <label class="text-sm font-medium">New branch name</label>
+      <input
+        bind:value={newBranchName}
+        onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+        placeholder={defaultBranchName || "feat/my-feature"}
+        autocomplete="off"
+        class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+      />
+      {#if worktreeBranch}
+        <p class="text-xs text-gray-500">Branch: <span class="font-medium text-gray-900">{worktreeBranch}</span></p>
+      {/if}
+    </div>
+  {:else}
+    <div class="space-y-1">
+      <label class="text-sm font-medium">Branch</label>
+      <Combobox.Root type="single" bind:value={branchValue} onOpenChangeComplete={(o) => { if (!o && !branchValue) branchSearch = branchSearch; }}>
+        <Combobox.Input
+          oninput={(e) => (branchSearch = e.currentTarget.value)}
+          onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+          placeholder="main, feat/new-feature..."
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck={false}
+          data-form-type="other"
+          class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+        />
+        <Combobox.Portal>
+          <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
+            {#each filteredBranches as item (item.value)}
+              <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
+                {item.label}
+              </Combobox.Item>
+            {:else}
+              <span class="block px-3 py-2 text-sm text-gray-400">No branches found</span>
+            {/each}
+          </Combobox.Content>
+        </Combobox.Portal>
+      </Combobox.Root>
+    </div>
+
+    {#if isNewBranch && branch}
+      <p class="text-xs text-gray-500">Will create new branch: <span class="font-medium text-gray-900">{branch}</span></p>
+    {/if}
   {/if}
 
   {#if error}

@@ -14,6 +14,9 @@ struct PtyState(pty::PtyManager);
 #[tauri::command]
 fn create_project(state: State<DbState>, name: String, path: String) -> Result<db::Project, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    if db::project_name_exists(&conn, &name).map_err(|e| e.to_string())? {
+        return Err(format!("A project named '{}' already exists.", name));
+    }
     db::create_project(&conn, &name, &path).map_err(|e| e.to_string())
 }
 
@@ -32,7 +35,7 @@ fn delete_project(state: State<DbState>, id: String) -> Result<(), String> {
 #[tauri::command]
 fn create_session(state: State<DbState>, project_id: String, name: String, tmux_name: String, branch: String) -> Result<db::Session, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::create_session(&conn, &project_id, &name, &tmux_name, &branch).map_err(|e| e.to_string())
+    db::create_session(&conn, &project_id, &name, &tmux_name, &branch, None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -104,8 +107,20 @@ fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_
     tmux::kill_session(&tmux_name)?;
     // Detach PTY
     pty_state.0.detach(&id);
-    // Remove from DB
+    // Remove worktree if applicable
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        if let Some(ref wt_path) = session.worktree_path {
+            // Find project repo path for git worktree remove
+            let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+            if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
+                let _ = tmux::worktree_remove(&project.path, wt_path);
+            }
+            // Clean up directory if it still exists
+            let _ = std::fs::remove_dir_all(wt_path);
+        }
+    }
+    // Remove from DB
     db::delete_session(&conn, &id).map_err(|e| e.to_string())
 }
 
@@ -118,17 +133,37 @@ fn launch_session(
     branch: String,
     is_new_branch: bool,
     name: String,
+    use_worktree: bool,
+    base_branch: Option<String>,
 ) -> Result<db::Session, String> {
-    // Checkout branch
-    tmux::checkout_branch(&repo_path, &branch, is_new_branch)?;
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    let (working_dir, worktree_path) = if use_worktree {
+        let base = base_branch.as_deref().unwrap_or("main");
+        let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+        let sanitized_project = project_name.replace(' ', "-").to_lowercase();
+        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
+        std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
+            .map_err(|e| format!("failed to create worktree dir: {e}"))?;
+        tmux::worktree_add(&repo_path, &wt_path, &branch, base)?;
+        (wt_path.clone(), Some(wt_path))
+    } else {
+        // Guard: block if another non-worktree session is active for this project
+        if db::has_active_checkout_session(&conn, &project_id).map_err(|e| e.to_string())? {
+            return Err("Another in-repo session is already active for this project. Archive it first or use worktree mode.".to_string());
+        }
+        tmux::checkout_branch(&repo_path, &branch, is_new_branch)?;
+        (repo_path, None)
+    };
 
     // Create tmux session
     let tmux_name = tmux::session_name(&project_name);
-    tmux::create_session(&tmux_name, &repo_path)?;
+    tmux::create_session(&tmux_name, &working_dir)?;
 
     // Persist to DB
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::create_session(&conn, &project_id, &name, &tmux_name, &branch).map_err(|e| e.to_string())
+    db::create_session(&conn, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 fn main() {

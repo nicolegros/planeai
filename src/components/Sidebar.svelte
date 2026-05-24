@@ -15,6 +15,7 @@
     branch: string;
     status: string;
     created_at: string;
+    worktree_path: string | null;
   }
 
   interface Props {
@@ -90,7 +91,7 @@
                   {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-blue-500' : ''}"
                 onclick={() => onSelectSession(session.id)}
               >
-                {session.name || session.branch}
+                {#if session.worktree_path}<span class="inline-block mr-1 opacity-60" title="Worktree">⑂</span>{/if}{session.name || session.branch}
               </button>
               <button
                 class="px-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 text-xs"

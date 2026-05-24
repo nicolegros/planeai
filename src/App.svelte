@@ -26,6 +26,7 @@
     branch: string;
     status: string;
     created_at: string;
+    worktree_path: string | null;
   }
 
   let projects = $state<Project[]>([]);
