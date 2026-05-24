@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { getSettings, updateSettings, type AppearanceMode } from "../lib/settings.svelte";
   import { getThemesByVariant } from "../lib/terminal-themes";
+  import { Select } from "./ui";
 
   interface Props {
     onBack: () => void;
@@ -12,6 +15,13 @@
   const darkThemes = getThemesByVariant("dark");
   const lightThemes = getThemesByVariant("light");
 
+  let fontItems = $state<{ value: string; label: string }[]>([]);
+
+  onMount(async () => {
+    const fonts = await invoke<string[]>("list_monospace_fonts");
+    fontItems = fonts.map((f) => ({ value: f, label: f }));
+  });
+
   function setAppearance(mode: AppearanceMode) {
     updateSettings({ appearance_mode: mode });
   }
@@ -19,19 +29,6 @@
   function setFontSize(size: number) {
     if (size >= 8 && size <= 32) updateSettings({ font_size: size });
   }
-
-  const fontFamilies = [
-    { label: "Menlo", value: "Menlo, Monaco, 'Courier New', monospace" },
-    { label: "SF Mono", value: "'SF Mono', Menlo, monospace" },
-    { label: "JetBrains Mono", value: "'JetBrains Mono', monospace" },
-    { label: "Fira Code", value: "'Fira Code', monospace" },
-    { label: "Source Code Pro", value: "'Source Code Pro', monospace" },
-    { label: "IBM Plex Mono", value: "'IBM Plex Mono', monospace" },
-    { label: "Cascadia Code", value: "'Cascadia Code', monospace" },
-    { label: "Hack", value: "Hack, monospace" },
-    { label: "Inconsolata", value: "Inconsolata, monospace" },
-    { label: "Monaco", value: "Monaco, 'Courier New', monospace" },
-  ];
 </script>
 
 <div class="h-full overflow-y-auto bg-surface-50 dark:bg-surface-950 p-8">
@@ -126,16 +123,13 @@
     <!-- Font Family -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Font Family</h2>
-      <select
-        class="rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 text-surface-900 dark:text-surface-100 px-3 py-2 text-sm w-full"
+      <Select
+        items={fontItems}
         value={settings.font_family}
-        onchange={(e) => updateSettings({ font_family: e.currentTarget.value })}
-      >
-        {#each fontFamilies as font (font.value)}
-          <option value={font.value} style="font-family: {font.value}">{font.label}</option>
-        {/each}
-      </select>
-      <p class="text-xs text-surface-500" style="font-family: {settings.font_family}">The quick brown fox jumps over the lazy dog</p>
+        onValueChange={(v) => updateSettings({ font_family: v })}
+        placeholder="Search fonts…"
+      />
+      <p class="text-xs text-surface-500" style="font-family: '{settings.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
     </section>
   </div>
 </div>

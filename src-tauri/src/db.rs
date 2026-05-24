@@ -72,7 +72,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark',
             terminal_theme_light TEXT NOT NULL DEFAULT 'one-light',
             font_size INTEGER NOT NULL DEFAULT 14,
-            font_family TEXT NOT NULL DEFAULT 'Menlo, Monaco, ''Courier New'', monospace',
+            font_family TEXT NOT NULL DEFAULT 'Menlo',
             appearance_mode TEXT NOT NULL DEFAULT 'system'
         );
         INSERT OR IGNORE INTO settings (id) VALUES (1);"
@@ -82,7 +82,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Add worktree_path column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
     // Add font_family column
-    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo, Monaco, ''Courier New'', monospace'");
+    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo'");
     // Migrate old settings schema
     let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'");
     let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_light TEXT NOT NULL DEFAULT 'one-light'");

@@ -208,7 +208,7 @@
     />
   {/if}
 
-  <section class="flex-1 relative">
+  <section class="flex-1 relative p-4">
     {#if showPreferences}
       <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
     {:else}

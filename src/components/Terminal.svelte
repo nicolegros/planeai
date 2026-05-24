@@ -31,7 +31,7 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: s.font_size,
-      fontFamily: s.font_family,
+      fontFamily: `'${s.font_family}', monospace`,
       theme: theme.colors,
     });
 
@@ -114,7 +114,7 @@
     const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
     term.options.theme = getThemeById(themeId).colors;
     term.options.fontSize = s.font_size;
-    term.options.fontFamily = s.font_family;
+    term.options.fontFamily = `'${s.font_family}', monospace`;
     if (fitAddon) fitAddon.fit();
   });
 

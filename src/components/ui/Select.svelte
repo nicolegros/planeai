@@ -18,14 +18,20 @@
   let { items, value = $bindable(""), onValueChange, onInput, placeholder = "", class: className = "" }: Props = $props();
 
   let search = $state("");
+  let open = $state(false);
+
+  const inputValue = $derived(
+    open ? undefined : items.find((i) => i.value === value)?.label
+  );
 
   const filtered = $derived(
     search === "" ? items : items.filter((i) => i.label.toLowerCase().includes(search.toLowerCase()))
   );
 </script>
 
-<Combobox.Root type="single" bind:value {onValueChange} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
+<Combobox.Root type="single" bind:value bind:open {onValueChange} items={items} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
   <Combobox.Input
+    onfocus={() => { open = true; }}
     oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}
     {placeholder}
     autocomplete="off"

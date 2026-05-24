@@ -97,6 +97,27 @@ fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn list_monospace_fonts() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("fc-list")
+        .args([":spacing=100", "family"])
+        .output()
+        .map_err(|e| format!("failed to run fc-list: {e}"))?;
+
+    if !output.status.success() {
+        return Err("fc-list failed".to_string());
+    }
+
+    let mut fonts: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.split(',').next().unwrap_or("").trim().to_string())
+        .filter(|f| !f.is_empty() && !f.starts_with('.'))
+        .collect();
+    fonts.sort();
+    fonts.dedup();
+    Ok(fonts)
+}
+
+#[tauri::command]
 fn attach_session(session_id: String, tmux_name: String, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
     state.0.attach(&session_id, &tmux_name, app)
 }
@@ -240,6 +261,7 @@ fn main() {
             delete_session,
             validate_git_repo,
             list_branches,
+            list_monospace_fonts,
             get_settings,
             update_settings,
             launch_session,
