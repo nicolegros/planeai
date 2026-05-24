@@ -20,6 +20,35 @@ pub struct Session {
     pub worktree_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    pub terminal_theme_dark: String,
+    pub terminal_theme_light: String,
+    pub font_size: u32,
+    pub appearance_mode: String,
+}
+
+pub fn get_settings(conn: &Connection) -> Result<Settings> {
+    conn.query_row(
+        "SELECT terminal_theme_dark, terminal_theme_light, font_size, appearance_mode FROM settings WHERE id = 1",
+        [],
+        |row| Ok(Settings {
+            terminal_theme_dark: row.get(0)?,
+            terminal_theme_light: row.get(1)?,
+            font_size: row.get(2)?,
+            appearance_mode: row.get(3)?,
+        }),
+    )
+}
+
+pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
+    conn.execute(
+        "UPDATE settings SET terminal_theme_dark = ?1, terminal_theme_light = ?2, font_size = ?3, appearance_mode = ?4 WHERE id = 1",
+        params![settings.terminal_theme_dark, settings.terminal_theme_light, settings.font_size, settings.appearance_mode],
+    )?;
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS projects (
@@ -35,12 +64,26 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             branch TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL
-        );"
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark',
+            terminal_theme_light TEXT NOT NULL DEFAULT 'one-light',
+            font_size INTEGER NOT NULL DEFAULT 14,
+            appearance_mode TEXT NOT NULL DEFAULT 'system'
+        );
+        INSERT OR IGNORE INTO settings (id) VALUES (1);"
     )?;
     // Add name column to existing databases
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     // Add worktree_path column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
+    // Migrate old settings schema
+    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'");
+    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_light TEXT NOT NULL DEFAULT 'one-light'");
+    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN appearance_mode TEXT NOT NULL DEFAULT 'system'");
+    // Copy old terminal_theme to terminal_theme_dark if it existed
+    let _ = conn.execute_batch("UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL");
     Ok(())
 }
 

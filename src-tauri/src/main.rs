@@ -80,6 +80,18 @@ fn validate_git_repo(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn get_settings(state: State<DbState>) -> Result<db::Settings, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::get_settings(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_settings(state: State<DbState>, settings: db::Settings) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::update_settings(&conn, &settings).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
     tmux::list_branches(&repo_path)
 }
@@ -228,6 +240,8 @@ fn main() {
             delete_session,
             validate_git_repo,
             list_branches,
+            get_settings,
+            update_settings,
             launch_session,
             attach_session,
             write_to_pty,

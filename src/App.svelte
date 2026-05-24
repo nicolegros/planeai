@@ -4,6 +4,7 @@
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
+  import { loadSettings } from "./lib/settings.svelte";
   import { Dialog } from "bits-ui";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
@@ -11,6 +12,7 @@
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
+  import PreferencesPage from "./components/PreferencesPage.svelte";
 
   interface Project {
     id: string;
@@ -43,6 +45,9 @@
 
   // Command menu state
   let commandMenuOpen = $state(false);
+
+  // Preferences state
+  let showPreferences = $state(false);
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -77,6 +82,7 @@
   onMount(() => {
     loadProjects();
     loadSessions();
+    loadSettings();
 
     const cleanup = installKeyboardRouter((action) => {
       if (action.type === "new_session") {
@@ -111,10 +117,13 @@
         }
         showSessionForm = false;
         showProjectForm = false;
+        showPreferences = false;
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
+      } else if (action.type === "open_preferences") {
+        showPreferences = true;
       }
     });
 
@@ -195,10 +204,14 @@
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
+      onOpenPreferences={() => (showPreferences = true)}
     />
   {/if}
 
   <section class="flex-1 relative">
+    {#if showPreferences}
+      <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
+    {:else}
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm
@@ -277,6 +290,7 @@
           </div>
         </div>
       </div>
+    {/if}
     {/if}
   </section>
 </main>

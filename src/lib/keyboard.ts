@@ -8,7 +8,8 @@ export type KeyboardAction =
   | { type: "tab_switch" }
   | { type: "tab_switch_reverse" }
   | { type: "command_palette" }
-  | { type: "focus_terminal" };
+  | { type: "focus_terminal" }
+  | { type: "open_preferences" };
 
 /**
  * Attempt to match a keyboard event to an app-level action.
@@ -36,6 +37,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Cmd/Ctrl+K — command palette
   if (meta && key === "k") {
     return { type: "command_palette" };
+  }
+
+  // Cmd/Ctrl+, — preferences
+  if (meta && e.key === ",") {
+    return { type: "open_preferences" };
   }
 
   // Cmd/Ctrl+Shift+N — new project

@@ -6,6 +6,8 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebglAddon } from "@xterm/addon-webgl";
   import "@xterm/xterm/css/xterm.css";
+  import { getSettings, isDark } from "../lib/settings.svelte";
+  import { getThemeById } from "../lib/terminal-themes";
 
   interface Props {
     sessionId: string;
@@ -22,14 +24,15 @@
   let attached = false;
 
   onMount(() => {
+    const s = getSettings();
+    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const theme = getThemeById(themeId);
+
     term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: s.font_size,
       fontFamily: "Menlo, Monaco, 'Courier New', monospace",
-      theme: {
-        background: "#0a0a0a",
-        foreground: "#e5e5e5",
-      },
+      theme: theme.colors,
     });
 
     fitAddon = new FitAddon();
@@ -92,6 +95,15 @@
     if (focused && term) {
       term.focus();
     }
+  });
+
+  $effect(() => {
+    if (!term) return;
+    const s = getSettings();
+    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    term.options.theme = getThemeById(themeId).colors;
+    term.options.fontSize = s.font_size;
+    if (fitAddon) fitAddon.fit();
   });
 
   function base64Decode(str: string): Uint8Array {
