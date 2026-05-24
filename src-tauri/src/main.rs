@@ -11,8 +11,18 @@ use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
 
+fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") || path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return path.replacen("~", &home.to_string_lossy(), 1);
+        }
+    }
+    path.to_string()
+}
+
 #[tauri::command]
 fn create_project(state: State<DbState>, name: String, path: String) -> Result<db::Project, String> {
+    let path = expand_tilde(&path);
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     if db::project_name_exists(&conn, &name).map_err(|e| e.to_string())? {
         return Err(format!("A project named '{}' already exists.", name));
@@ -64,6 +74,7 @@ fn delete_session(state: State<DbState>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn validate_git_repo(path: String) -> Result<bool, String> {
+    let path = expand_tilde(&path);
     let git_dir = std::path::Path::new(&path).join(".git");
     Ok(git_dir.exists())
 }

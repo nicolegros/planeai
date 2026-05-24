@@ -12,7 +12,14 @@
 
   let path = $state("");
   let name = $state("");
+  let nameManuallyEdited = $state(false);
   let error = $state("");
+
+  $effect(() => {
+    if (!nameManuallyEdited && path) {
+      name = path.replace(/\/$/, "").split("/").pop() || "";
+    }
+  });
 
   async function pickFolder() {
     const selected = await open({ directory: true, multiple: false });
@@ -25,8 +32,15 @@
   }
 
   async function submit() {
-    if (!path || !name) {
-      error = "Both path and name are required.";
+    if (!path) {
+      error = "Path is required.";
+      return;
+    }
+    if (!name) {
+      name = path.replace(/\/$/, "").split("/").pop() || "";
+    }
+    if (!name) {
+      error = "Could not derive a name from the path.";
       return;
     }
     const valid = await invoke<boolean>("validate_git_repo", { path });
@@ -57,14 +71,14 @@
   <div class="space-y-1">
     <Label>Repository path</Label>
     <div class="flex gap-2">
-      <Input bind:value={path} placeholder="/path/to/repo" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="flex-1" />
+      <Input bind:value={path} placeholder="/path/to/repo" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="flex-1" autofocus />
       <Button type="button" onclick={pickFolder}>Browse</Button>
     </div>
   </div>
 
   <div class="space-y-1">
     <Label>Name</Label>
-    <Input bind:value={name} placeholder="my-project" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" />
+    <Input bind:value={name} placeholder="my-project" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" oninput={() => { nameManuallyEdited = true; }} />
   </div>
 
   {#if error}

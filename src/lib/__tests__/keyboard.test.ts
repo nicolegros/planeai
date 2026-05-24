@@ -35,6 +35,12 @@ describe("matchChord", () => {
     });
   });
 
+  it("returns new_project on Cmd+Shift+N", () => {
+    expect(matchChord(key({ key: "n", metaKey: true, shiftKey: true }))).toEqual({
+      type: "new_project",
+    });
+  });
+
   it("returns jump_to_session on Cmd+1 through Cmd+9", () => {
     for (let i = 1; i <= 9; i++) {
       expect(matchChord(key({ key: String(i), metaKey: true }))).toEqual({

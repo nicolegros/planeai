@@ -3,6 +3,7 @@ import { focusTerminal, toggleSidebar } from "./focus.svelte";
 export type KeyboardAction =
   | { type: "toggle_sidebar" }
   | { type: "new_session" }
+  | { type: "new_project" }
   | { type: "jump_to_session"; index: number }
   | { type: "tab_switch" }
   | { type: "tab_switch_reverse" }
@@ -35,6 +36,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Cmd/Ctrl+K — command palette
   if (meta && key === "k") {
     return { type: "command_palette" };
+  }
+
+  // Cmd/Ctrl+Shift+N — new project
+  if (meta && e.shiftKey && key === "n") {
+    return { type: "new_project" };
   }
 
   // Cmd/Ctrl+N — new session

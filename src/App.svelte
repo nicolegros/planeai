@@ -85,6 +85,8 @@
         } else {
           showSessionForm = true;
         }
+      } else if (action.type === "new_project") {
+        showProjectForm = true;
       } else if (action.type === "toggle_sidebar") {
         sidebarVisible = !sidebarVisible;
       } else if (action.type === "jump_to_session") {
