@@ -18,10 +18,11 @@
     onOpenChange: (open: boolean) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: () => void;
+    onDeleteSession: () => void;
     onNewSession: () => void;
   }
 
-  let { open, sessions, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onNewSession }: Props = $props();
+  let { open, sessions, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession }: Props = $props();
 
   function close() {
     onOpenChange(false);
@@ -74,6 +75,15 @@
                   onSelect={() => { onArchiveSession(); close(); }}
                 >
                   Archive current session
+                </Command.Item>
+                <Command.Item
+                  value="delete current session"
+                  keywords={["delete", "destroy", "remove", "kill"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-red-600 data-selected:bg-gray-100 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onDeleteSession(); close(); }}
+                >
+                  Delete current session
                 </Command.Item>
                 <Command.Item
                   value="create new session"

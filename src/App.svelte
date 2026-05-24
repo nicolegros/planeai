@@ -159,11 +159,23 @@
     if (!activeSessionId) return;
     const s = sessions.find((x) => x.id === activeSessionId);
     if (!s) return;
+    await archiveSession(s);
+  }
+
+  async function archiveSession(s: Session) {
     await invoke("archive_session", { id: s.id, tmuxName: s.tmux_name });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
-    activeSessionId = sessions[0]?.id ?? null;
-    if (activeSessionId) touchMru(activeSessionId);
+    if (activeSessionId === s.id) {
+      activeSessionId = sessions[0]?.id ?? null;
+      if (activeSessionId) touchMru(activeSessionId);
+    }
+  }
+
+  function deleteCurrentSession() {
+    if (!activeSessionId) return;
+    const s = sessions.find((x) => x.id === activeSessionId);
+    if (s) sessionToDelete = s;
   }
 
   const zone = $derived(getActiveZone());
@@ -179,6 +191,7 @@
       {zone}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
+      onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
     />
   {/if}
@@ -223,6 +236,7 @@
       onOpenChange={(v) => (commandMenuOpen = v)}
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
       onArchiveSession={archiveCurrentSession}
+      onDeleteSession={deleteCurrentSession}
       onNewSession={() => {
         if (projects.length === 0) {
           showProjectForm = true;
@@ -257,7 +271,7 @@
           <p class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>? This will kill the agent.</p>
           <div class="flex justify-end gap-2">
             <button class="rounded border border-gray-300 px-3 py-1.5 text-sm" onclick={() => (sessionToDelete = null)}>Cancel</button>
-            <button class="rounded bg-red-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete}>Delete</button>
+            <button class="rounded bg-red-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete} autofocus>Delete</button>
           </div>
         </div>
       </div>
