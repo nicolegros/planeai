@@ -12,6 +12,9 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Focus zone** | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus. |
 | **Tab switcher** | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. |
 | **Notification** | (future) A signal that an agent needs human attention. |
+| **Token** | A semantic CSS custom property from the Skeleton Cerberus theme (e.g., `--color-surface-200`). Referenced via Tailwind utilities like `bg-surface-200`. |
+| **Primitive** | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior with token-based styling. The building block for feature components. |
+| **Theme mode** | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active. |
 
 ## Session lifecycle (v1)
 
@@ -27,7 +30,7 @@ create → active → deleted
 - **Tauri v2** (Rust backend + webview frontend)
 - **Svelte 5** with runes for reactive UI
 - **xterm.js** for terminal rendering
-- **Tailwind CSS**, dark theme only
+- **Tailwind CSS** with Skeleton Cerberus theme tokens (light + dark)
 - **SQLite via rusqlite** on the Rust backend for persistence
 - **tmux** for process persistence (ADR-0002)
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
@@ -64,3 +67,12 @@ Project → Session name → ✅ Create worktree → Base branch (existing) → 
 ## Architecture decisions
 
 See `docs/adr/` for recorded decisions.
+
+## Adding a new ui/ primitive
+
+1. Create `src/components/ui/MyComponent.svelte`
+2. Wrap the relevant bits-ui component (or plain HTML) with Skeleton token classes
+3. Use `dark:` variants for all color utilities (e.g., `bg-surface-50 dark:bg-surface-900`)
+4. Accept a `class` prop for consumer overrides
+5. Export from `src/components/ui/index.ts`
+6. Use the primitive in feature components — never hardcode colors inline

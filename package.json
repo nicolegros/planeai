@@ -14,7 +14,6 @@
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
     "@skeletonlabs/skeleton": "^4.15.2",
-    "@skeletonlabs/skeleton-svelte": "^4.15.2",
     "@sveltejs/vite-plugin-svelte": "5.0.3",
     "@tailwindcss/vite": "4.1.7",
     "@tauri-apps/cli": "2.5.0",

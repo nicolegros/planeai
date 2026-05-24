@@ -209,7 +209,7 @@
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
         <Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
-        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-gray-200 bg-white p-6 shadow-lg">
+        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 shadow-lg dark:border-surface-700 dark:bg-surface-900">
           <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
           <SessionForm
             {projects}
@@ -257,7 +257,7 @@
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
-        <p class="text-gray-500">No active session. Press <kbd class="rounded border border-gray-300 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
+        <p class="text-surface-500">No active session. Press <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
       </div>
     {/if}
 
@@ -265,13 +265,13 @@
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div
-          class="rounded-lg border border-gray-200 bg-white p-6 w-80 space-y-4 shadow-lg"
+          class="rounded-lg border border-surface-200 bg-surface-50 p-6 w-80 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900"
           onkeydown={(e) => { if (e.key === 'Escape') sessionToDelete = null; }}
         >
           <p class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>? This will kill the agent.</p>
           <div class="flex justify-end gap-2">
-            <button class="rounded border border-gray-300 px-3 py-1.5 text-sm" onclick={() => (sessionToDelete = null)}>Cancel</button>
-            <button class="rounded bg-red-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete} autofocus>Delete</button>
+            <button class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300" onclick={() => (sessionToDelete = null)}>Cancel</button>
+            <button class="rounded bg-error-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete} autofocus>Delete</button>
           </div>
         </div>
       </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
+  import { ContextMenu } from "./ui";
 
   interface Project {
     id: string;
@@ -38,10 +39,6 @@
     contextMenu = { x: e.clientX, y: e.clientY, session };
   }
 
-  function closeContextMenu() {
-    contextMenu = null;
-  }
-
   let selectedIndex = $state(0);
 
   const grouped = $derived(
@@ -78,52 +75,78 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<aside class="w-56 border-r border-gray-200 flex flex-col bg-gray-50 {zone === 'sidebar' ? 'bg-gray-100' : ''}">
-  <div class="flex items-center justify-between p-3 pb-1">
-    <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sessions</h2>
-    <button onclick={onAddProject} class="rounded p-1 text-sm hover:bg-gray-200" title="Add project">+</button>
+<aside class="w-56 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
+    <span class="text-xs font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wider">Sessions</span>
+    <button
+      onclick={onAddProject}
+      title="Add project (⌘N)"
+      class="size-6 flex items-center justify-center rounded text-surface-400 hover:text-surface-700 hover:bg-surface-200 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+    >
+      <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>
+    </button>
   </div>
 
-  <div class="flex-1 overflow-y-auto p-3 pt-1">
+  <!-- Session list -->
+  <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-4">
     {#if projects.length === 0}
-      <div class="mt-8 text-center space-y-2">
-        <p class="text-xs text-gray-500">No projects registered.</p>
-        <button onclick={onAddProject} class="rounded border border-gray-300 px-2 py-1 text-xs">Add a project</button>
+      <div class="mt-12 text-center px-4 space-y-3">
+        <p class="text-xs text-surface-400 dark:text-surface-500">No projects yet</p>
+        <button
+          onclick={onAddProject}
+          class="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+        >Add a project →</button>
       </div>
     {:else}
       {#each grouped as { project, sessions: projectSessions } (project.id)}
-        <div class="mb-3">
-          <p class="text-xs text-gray-500 font-medium mb-1">{project.name}</p>
-          {#each projectSessions as session (session.id)}
-            {@const globalIndex = flatSessionIds.indexOf(session.id)}
-            <button
-              class="w-full text-left px-2 py-1 rounded text-sm truncate
-                {session.id === activeSessionId ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-200'}
-                {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-blue-500' : ''}"
-              onclick={() => onSelectSession(session.id)}
-              oncontextmenu={(e) => onContextMenu(e, session)}
-            >
-              {#if session.worktree_path}<span class="inline-block mr-1 opacity-60" title="Worktree">⑂</span>{/if}{session.name || session.branch}
-            </button>
-          {/each}
-          {#if projectSessions.length === 0}
-            <p class="text-xs text-gray-400 px-2">No sessions</p>
-          {/if}
+        <div>
+          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-400 dark:text-surface-500 uppercase tracking-wider truncate" title={project.path}>
+            {project.name}
+          </h3>
+          <ul class="space-y-0.5">
+            {#each projectSessions as session (session.id)}
+              {@const globalIndex = flatSessionIds.indexOf(session.id)}
+              {@const isActive = session.id === activeSessionId}
+              {@const isSelected = zone === 'sidebar' && globalIndex === selectedIndex}
+              <li>
+                <button
+                  class="w-full text-left px-2 py-1.5 rounded-md text-sm truncate flex items-center gap-1.5 transition-colors
+                    {isActive
+                      ? 'bg-primary-500/15 text-primary-700 dark:text-primary-300 font-medium'
+                      : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-800'}
+                    {isSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                  onclick={() => onSelectSession(session.id)}
+                  oncontextmenu={(e) => onContextMenu(e, session)}
+                >
+                  {#if session.worktree_path}
+                    <span class="text-surface-400 dark:text-surface-500 text-xs shrink-0" title="Worktree">⑂</span>
+                  {/if}
+                  {#if isActive}
+                    <span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>
+                  {/if}
+                  <span class="truncate">{session.name || session.branch}</span>
+                </button>
+              </li>
+            {/each}
+            {#if projectSessions.length === 0}
+              <li class="px-2 py-1 text-xs text-surface-400 dark:text-surface-600 italic">No sessions</li>
+            {/if}
+          </ul>
         </div>
       {/each}
     {/if}
-  </div>
+  </nav>
 </aside>
 
 {#if contextMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50" onclick={closeContextMenu} oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}>
-    <div
-      class="absolute rounded border border-gray-200 bg-white shadow-lg py-1 text-sm w-40"
-      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
-    >
-      <button class="w-full text-left px-3 py-1.5 hover:bg-gray-100" onclick={() => { onArchiveSession(contextMenu!.session); closeContextMenu(); }}>Archive</button>
-      <button class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-red-600" onclick={() => { onDeleteSession(contextMenu!.session); closeContextMenu(); }}>Delete</button>
-    </div>
-  </div>
+  <ContextMenu
+    x={contextMenu.x}
+    y={contextMenu.y}
+    onClose={() => (contextMenu = null)}
+    items={[
+      { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
+      { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+    ]}
+  />
 {/if}

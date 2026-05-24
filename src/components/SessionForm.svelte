@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { Combobox } from "bits-ui";
+  import { Button, Input, Label, Checkbox } from "./ui";
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; worktree_path: string | null; }
@@ -8,16 +9,12 @@
 
   let { projects, onCreated, onCancel }: Props = $props();
 
-  // Session name
   let sessionName = $state("");
-
-  // Worktree mode
   let useWorktree = $state(false);
   let baseBranchValue = $state("");
   let baseBranchSearch = $state("");
   let newBranchName = $state("");
 
-  // Project combobox
   let projectValue = $state(projects[0]?.id ?? "");
   let projectSearch = $state("");
   const projectItems = projects.map((p) => ({ value: p.id, label: p.name }));
@@ -25,7 +22,6 @@
     projectSearch === "" ? projectItems : projectItems.filter((p) => p.label.toLowerCase().includes(projectSearch.toLowerCase())),
   );
 
-  // Branch combobox
   let branchValue = $state("");
   let branchSearch = $state("");
   let branches = $state<{ value: string; label: string }[]>([]);
@@ -52,13 +48,16 @@
   const branch = $derived(branchValue || branchSearch);
   const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
 
-  // Default new branch name from session name
   const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
   const worktreeBranch = $derived(newBranchName || defaultBranchName);
   const baseBranch = $derived(baseBranchValue || baseBranchSearch || "main");
 
   let formEl: HTMLFormElement;
   let error = $state("");
+
+  const comboInputClass = "w-full rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 placeholder:text-surface-400 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50 dark:placeholder:text-surface-500";
+  const comboContentClass = "z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-900";
+  const comboItemClass = "cursor-pointer px-3 py-2 text-sm text-surface-700 data-[highlighted]:bg-surface-100 dark:text-surface-300 dark:data-[highlighted]:bg-surface-800";
 
   function focusBranchInput() {
     requestAnimationFrame(() => {
@@ -95,72 +94,60 @@
 
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
   <div class="space-y-1">
-    <label class="text-sm font-medium">Name</label>
-    <input
+    <Label>Name</Label>
+    <Input
       bind:value={sessionName}
       onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
       placeholder="My session..."
       autocomplete="off"
-      class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
     />
   </div>
 
   <div class="space-y-1">
-    <label class="text-sm font-medium">Project</label>
+    <Label>Project</Label>
     <Combobox.Root type="single" bind:value={projectValue} onValueChange={focusBranchInput} onOpenChangeComplete={(o) => { if (!o) projectSearch = ""; }}>
       <Combobox.Input
         oninput={(e) => (projectSearch = e.currentTarget.value)}
         onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
         placeholder="Search project..."
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        spellcheck={false}
-        data-form-type="other"
-        class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
+        class={comboInputClass}
       />
       <Combobox.Portal>
-        <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
+        <Combobox.Content class={comboContentClass} sideOffset={4}>
           {#each filteredProjects as item (item.value)}
-            <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
+            <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
               {item.label}
             </Combobox.Item>
           {:else}
-            <span class="block px-3 py-2 text-sm text-gray-400">No projects found</span>
+            <span class="block px-3 py-2 text-sm text-surface-400">No projects found</span>
           {/each}
         </Combobox.Content>
       </Combobox.Portal>
     </Combobox.Root>
   </div>
 
-  <div class="flex items-center gap-2">
-    <input type="checkbox" id="use-worktree" bind:checked={useWorktree} class="rounded border-gray-300" />
-    <label for="use-worktree" class="text-sm font-medium">Create worktree</label>
-  </div>
+  <Checkbox id="use-worktree" label="Create worktree" bind:checked={useWorktree} />
 
   {#if useWorktree}
     <div class="space-y-1">
-      <label class="text-sm font-medium">Base branch</label>
+      <Label>Base branch</Label>
       <Combobox.Root type="single" bind:value={baseBranchValue} onOpenChangeComplete={(o) => { if (!o) baseBranchSearch = baseBranchSearch; }}>
         <Combobox.Input
           oninput={(e) => (baseBranchSearch = e.currentTarget.value)}
           onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
           placeholder="main"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck={false}
-          data-form-type="other"
-          class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
+          class={comboInputClass}
         />
         <Combobox.Portal>
-          <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
+          <Combobox.Content class={comboContentClass} sideOffset={4}>
             {#each filteredBaseBranches as item (item.value)}
-              <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
+              <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
                 {item.label}
               </Combobox.Item>
             {:else}
-              <span class="block px-3 py-2 text-sm text-gray-400">No branches found</span>
+              <span class="block px-3 py-2 text-sm text-surface-400">No branches found</span>
             {/each}
           </Combobox.Content>
         </Combobox.Portal>
@@ -168,41 +155,36 @@
     </div>
 
     <div class="space-y-1">
-      <label class="text-sm font-medium">New branch name</label>
-      <input
+      <Label>New branch name</Label>
+      <Input
         bind:value={newBranchName}
         onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
         placeholder={defaultBranchName || "feat/my-feature"}
         autocomplete="off"
-        class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
       />
       {#if worktreeBranch}
-        <p class="text-xs text-gray-500">Branch: <span class="font-medium text-gray-900">{worktreeBranch}</span></p>
+        <p class="text-xs text-surface-500">Branch: <span class="font-medium text-surface-900 dark:text-surface-100">{worktreeBranch}</span></p>
       {/if}
     </div>
   {:else}
     <div class="space-y-1">
-      <label class="text-sm font-medium">Branch</label>
+      <Label>Branch</Label>
       <Combobox.Root type="single" bind:value={branchValue} onOpenChangeComplete={(o) => { if (!o && !branchValue) branchSearch = branchSearch; }}>
         <Combobox.Input
           oninput={(e) => (branchSearch = e.currentTarget.value)}
           onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
           placeholder="main, feat/new-feature..."
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck={false}
-          data-form-type="other"
-          class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
+          class={comboInputClass}
         />
         <Combobox.Portal>
-          <Combobox.Content class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-gray-200 bg-white shadow-lg" sideOffset={4}>
+          <Combobox.Content class={comboContentClass} sideOffset={4}>
             {#each filteredBranches as item (item.value)}
-              <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm data-[highlighted]:bg-gray-100">
+              <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
                 {item.label}
               </Combobox.Item>
             {:else}
-              <span class="block px-3 py-2 text-sm text-gray-400">No branches found</span>
+              <span class="block px-3 py-2 text-sm text-surface-400">No branches found</span>
             {/each}
           </Combobox.Content>
         </Combobox.Portal>
@@ -210,16 +192,16 @@
     </div>
 
     {#if isNewBranch && branch}
-      <p class="text-xs text-gray-500">Will create new branch: <span class="font-medium text-gray-900">{branch}</span></p>
+      <p class="text-xs text-surface-500">Will create new branch: <span class="font-medium text-surface-900 dark:text-surface-100">{branch}</span></p>
     {/if}
   {/if}
 
   {#if error}
-    <p class="text-xs text-red-500">{error}</p>
+    <p class="text-xs text-error-500">{error}</p>
   {/if}
 
   <div class="flex justify-end gap-2">
-    <button type="button" onclick={onCancel} class="rounded border border-gray-300 px-3 py-1.5 text-sm">Cancel</button>
-    <button type="submit" class="rounded bg-gray-900 px-3 py-1.5 text-sm text-white">Launch</button>
+    <Button type="button" onclick={onCancel}>Cancel</Button>
+    <Button type="submit" variant="primary">Launch</Button>
   </div>
 </form>
