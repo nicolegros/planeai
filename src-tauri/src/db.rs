@@ -25,26 +25,28 @@ pub struct Settings {
     pub terminal_theme_dark: String,
     pub terminal_theme_light: String,
     pub font_size: u32,
+    pub font_family: String,
     pub appearance_mode: String,
 }
 
 pub fn get_settings(conn: &Connection) -> Result<Settings> {
     conn.query_row(
-        "SELECT terminal_theme_dark, terminal_theme_light, font_size, appearance_mode FROM settings WHERE id = 1",
+        "SELECT terminal_theme_dark, terminal_theme_light, font_size, font_family, appearance_mode FROM settings WHERE id = 1",
         [],
         |row| Ok(Settings {
             terminal_theme_dark: row.get(0)?,
             terminal_theme_light: row.get(1)?,
             font_size: row.get(2)?,
-            appearance_mode: row.get(3)?,
+            font_family: row.get(3)?,
+            appearance_mode: row.get(4)?,
         }),
     )
 }
 
 pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
     conn.execute(
-        "UPDATE settings SET terminal_theme_dark = ?1, terminal_theme_light = ?2, font_size = ?3, appearance_mode = ?4 WHERE id = 1",
-        params![settings.terminal_theme_dark, settings.terminal_theme_light, settings.font_size, settings.appearance_mode],
+        "UPDATE settings SET terminal_theme_dark = ?1, terminal_theme_light = ?2, font_size = ?3, font_family = ?4, appearance_mode = ?5 WHERE id = 1",
+        params![settings.terminal_theme_dark, settings.terminal_theme_light, settings.font_size, settings.font_family, settings.appearance_mode],
     )?;
     Ok(())
 }
@@ -70,6 +72,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark',
             terminal_theme_light TEXT NOT NULL DEFAULT 'one-light',
             font_size INTEGER NOT NULL DEFAULT 14,
+            font_family TEXT NOT NULL DEFAULT 'Menlo, Monaco, ''Courier New'', monospace',
             appearance_mode TEXT NOT NULL DEFAULT 'system'
         );
         INSERT OR IGNORE INTO settings (id) VALUES (1);"
@@ -78,6 +81,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     // Add worktree_path column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
+    // Add font_family column
+    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo, Monaco, ''Courier New'', monospace'");
     // Migrate old settings schema
     let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'");
     let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_light TEXT NOT NULL DEFAULT 'one-light'");

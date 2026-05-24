@@ -6,6 +6,7 @@ interface Settings {
   terminal_theme_dark: string;
   terminal_theme_light: string;
   font_size: number;
+  font_family: string;
   appearance_mode: AppearanceMode;
 }
 
@@ -13,6 +14,7 @@ let settings = $state<Settings>({
   terminal_theme_dark: "one-dark",
   terminal_theme_light: "one-light",
   font_size: 14,
+  font_family: "Menlo, Monaco, 'Courier New', monospace",
   appearance_mode: "system",
 });
 

@@ -31,7 +31,7 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: s.font_size,
-      fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+      fontFamily: s.font_family,
       theme: theme.colors,
     });
 
@@ -48,6 +48,17 @@
     fitAddon.fit();
 
     // Send input to backend
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.key === "Enter" && ev.shiftKey) {
+        if (ev.type === "keydown") {
+          const bytes = Array.from(new TextEncoder().encode("\n"));
+          invoke("write_to_pty", { sessionId, data: bytes });
+        }
+        return false;
+      }
+      return true;
+    });
+
     term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
       invoke("write_to_pty", { sessionId, data: bytes });
@@ -103,6 +114,7 @@
     const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
     term.options.theme = getThemeById(themeId).colors;
     term.options.fontSize = s.font_size;
+    term.options.fontFamily = s.font_family;
     if (fitAddon) fitAddon.fit();
   });
 

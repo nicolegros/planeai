@@ -1,5 +1,18 @@
 use std::process::Command;
 
+fn tmux_bin() -> &'static str {
+    static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        // Check common Homebrew paths first, then fall back to bare name
+        for path in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
+            if std::path::Path::new(path).exists() {
+                return path.to_string();
+            }
+        }
+        "tmux".to_string()
+    })
+}
+
 /// List local branches for a git repo at the given path.
 pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
     let output = Command::new("git")
@@ -93,7 +106,7 @@ pub fn build_new_session_args(tmux_name: &str, working_dir: &str) -> Vec<String>
 
 /// Check if a tmux session exists.
 pub fn has_session(tmux_name: &str) -> bool {
-    Command::new("tmux")
+    Command::new(tmux_bin())
         .args(["has-session", "-t", tmux_name])
         .output()
         .map(|o| o.status.success())
@@ -102,7 +115,7 @@ pub fn has_session(tmux_name: &str) -> bool {
 
 /// Kill a tmux session.
 pub fn kill_session(tmux_name: &str) -> Result<(), String> {
-    let output = Command::new("tmux")
+    let output = Command::new(tmux_bin())
         .args(["kill-session", "-t", tmux_name])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
@@ -120,7 +133,7 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
 pub fn create_session(tmux_name: &str, working_dir: &str) -> Result<(), String> {
     let args = build_new_session_args(tmux_name, working_dir);
-    let output = Command::new("tmux")
+    let output = Command::new(tmux_bin())
         .args(&args)
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
@@ -130,7 +143,7 @@ pub fn create_session(tmux_name: &str, working_dir: &str) -> Result<(), String> 
     }
 
     // Set remain-on-exit so scrollback is preserved after kiro exits
-    let _ = Command::new("tmux")
+    let _ = Command::new(tmux_bin())
         .args(["set-option", "-t", tmux_name, "remain-on-exit", "on"])
         .output();
 
