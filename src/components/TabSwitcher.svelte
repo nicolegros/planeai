@@ -2,6 +2,7 @@
   interface Session {
     id: string;
     project_id: string;
+    name: string;
     tmux_name: string;
     branch: string;
     status: string;
@@ -38,7 +39,7 @@
       {@const session = getSession(id)}
       {#if session}
         <div class="px-3 py-2 rounded text-sm {i === selectedIndex ? 'bg-gray-900 text-white' : 'text-gray-600'}">
-          <span class="font-medium">{session.branch}</span>
+          <span class="font-medium">{session.name || session.branch}</span>
           <span class="text-xs ml-2 {i === selectedIndex ? 'text-gray-300' : 'text-gray-400'}">{getProjectName(session.project_id)}</span>
         </div>
       {/if}

@@ -30,9 +30,9 @@ fn delete_project(state: State<DbState>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_session(state: State<DbState>, project_id: String, tmux_name: String, branch: String) -> Result<db::Session, String> {
+fn create_session(state: State<DbState>, project_id: String, name: String, tmux_name: String, branch: String) -> Result<db::Session, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::create_session(&conn, &project_id, &tmux_name, &branch).map_err(|e| e.to_string())
+    db::create_session(&conn, &project_id, &name, &tmux_name, &branch).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -106,6 +106,7 @@ fn launch_session(
     repo_path: String,
     branch: String,
     is_new_branch: bool,
+    name: String,
 ) -> Result<db::Session, String> {
     // Checkout branch
     tmux::checkout_branch(&repo_path, &branch, is_new_branch)?;
@@ -116,7 +117,7 @@ fn launch_session(
 
     // Persist to DB
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::create_session(&conn, &project_id, &tmux_name, &branch).map_err(|e| e.to_string())
+    db::create_session(&conn, &project_id, &name, &tmux_name, &branch).map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -158,8 +159,6 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
             app.manage(DbState(Mutex::new(conn)));
             app.manage(PtyState(pty::PtyManager::new()));
-
-            app.get_webview_window("main").unwrap().open_devtools();
 
             Ok(())
         })

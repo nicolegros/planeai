@@ -3,10 +3,13 @@
   import { Combobox } from "bits-ui";
 
   interface Project { id: string; name: string; path: string; }
-  interface Session { id: string; project_id: string; tmux_name: string; branch: string; status: string; created_at: string; }
+  interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; }
   interface Props { projects: Project[]; onCreated: (session: Session) => void; onCancel: () => void; }
 
   let { projects, onCreated, onCancel }: Props = $props();
+
+  // Session name
+  let sessionName = $state("");
 
   // Project combobox
   let projectValue = $state(projects[0]?.id ?? "");
@@ -44,7 +47,7 @@
 
   function focusBranchInput() {
     requestAnimationFrame(() => {
-      formEl?.querySelectorAll('input')?.[1]?.focus();
+      formEl?.querySelectorAll('input')?.[2]?.focus();
     });
   }
 
@@ -53,7 +56,7 @@
     try {
       const session = await invoke<Session>("launch_session", {
         projectId: selectedProject.id, projectName: selectedProject.name,
-        repoPath: selectedProject.path, branch, isNewBranch,
+        repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
       });
       onCreated(session);
     } catch (e) { error = String(e); }
@@ -61,6 +64,17 @@
 </script>
 
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+  <div class="space-y-1">
+    <label class="text-sm font-medium">Name</label>
+    <input
+      bind:value={sessionName}
+      onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+      placeholder="My session..."
+      autocomplete="off"
+      class="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+    />
+  </div>
+
   <div class="space-y-1">
     <label class="text-sm font-medium">Project</label>
     <Combobox.Root type="single" bind:value={projectValue} onValueChange={focusBranchInput} onOpenChangeComplete={(o) => { if (!o) projectSearch = ""; }}>

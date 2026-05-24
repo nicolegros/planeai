@@ -12,6 +12,7 @@ pub struct Project {
 pub struct Session {
     pub id: String,
     pub project_id: String,
+    pub name: String,
     pub tmux_name: String,
     pub branch: String,
     pub status: String,
@@ -28,12 +29,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL REFERENCES projects(id),
+            name TEXT NOT NULL DEFAULT '',
             tmux_name TEXT NOT NULL,
             branch TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             created_at TEXT NOT NULL
         );"
-    )
+    )?;
+    // Add name column to existing databases
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+    Ok(())
 }
 
 // Project CRUD
@@ -70,28 +75,30 @@ pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
 pub fn create_session(
     conn: &Connection,
     project_id: &str,
+    name: &str,
     tmux_name: &str,
     branch: &str,
 ) -> Result<Session> {
     let id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO sessions (id, project_id, tmux_name, branch, status, created_at) VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
-        params![id, project_id, tmux_name, branch, created_at],
+        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6)",
+        params![id, project_id, name, tmux_name, branch, created_at],
     )?;
-    Ok(Session { id, project_id: project_id.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at })
+    Ok(Session { id, project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, tmux_name, branch, status, created_at FROM sessions")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at FROM sessions")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
             project_id: row.get(1)?,
-            tmux_name: row.get(2)?,
-            branch: row.get(3)?,
-            status: row.get(4)?,
-            created_at: row.get(5)?,
+            name: row.get(2)?,
+            tmux_name: row.get(3)?,
+            branch: row.get(4)?,
+            status: row.get(5)?,
+            created_at: row.get(6)?,
         })
     })?;
     rows.collect()
@@ -136,7 +143,7 @@ mod tests {
     fn test_delete_project_cascades_sessions() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session(&conn, &p.id, "planeai-myapp-abc123", "main").unwrap();
+        create_session(&conn, &p.id, "main session", "planeai-myapp-abc123", "main").unwrap();
         delete_project(&conn, &p.id).unwrap();
         assert_eq!(list_projects(&conn).unwrap().len(), 0);
         assert_eq!(list_sessions(&conn).unwrap().len(), 0);
@@ -146,9 +153,10 @@ mod tests {
     fn test_create_and_list_sessions() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session(&conn, &p.id, "planeai-myapp-aaa", "feat-x").unwrap();
+        create_session(&conn, &p.id, "feat session", "planeai-myapp-aaa", "feat-x").unwrap();
         let sessions = list_sessions(&conn).unwrap();
         assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "feat session");
         assert_eq!(sessions[0].branch, "feat-x");
         assert_eq!(sessions[0].status, "active");
     }
@@ -157,7 +165,7 @@ mod tests {
     fn test_delete_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session(&conn, &p.id, "planeai-myapp-bbb", "main").unwrap();
+        let s = create_session(&conn, &p.id, "to delete", "planeai-myapp-bbb", "main").unwrap();
         delete_session(&conn, &s.id).unwrap();
         assert_eq!(list_sessions(&conn).unwrap().len(), 0);
     }

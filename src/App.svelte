@@ -20,6 +20,7 @@
   interface Session {
     id: string;
     project_id: string;
+    name: string;
     tmux_name: string;
     branch: string;
     status: string;
@@ -49,6 +50,10 @@
     sessions = await invoke<Session[]>("list_sessions");
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
+      // Seed MRU with all sessions (active one first)
+      for (let i = sessions.length - 1; i >= 0; i--) {
+        touchMru(sessions[i].id);
+      }
       selectSession(sessions[0].id);
     }
   }
@@ -214,7 +219,7 @@
           class="rounded-lg border border-gray-200 bg-white p-6 w-80 space-y-4 shadow-lg"
           onkeydown={(e) => { if (e.key === 'Escape') sessionToDelete = null; }}
         >
-          <p class="text-sm">Delete session <strong>{sessionToDelete.branch}</strong>? This will kill the agent.</p>
+          <p class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>? This will kill the agent.</p>
           <div class="flex justify-end gap-2">
             <button class="rounded border border-gray-300 px-3 py-1.5 text-sm" onclick={() => (sessionToDelete = null)}>Cancel</button>
             <button class="rounded bg-red-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete}>Delete</button>

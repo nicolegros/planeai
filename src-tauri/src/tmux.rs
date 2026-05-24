@@ -43,7 +43,8 @@ pub fn checkout_branch(repo_path: &str, branch: &str, create: bool) -> Result<()
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    format!("planeai-{}-{}", project_name, hex)
+    let sanitized = project_name.replace(' ', "-");
+    format!("planeai-{}-{}", sanitized, hex)
 }
 
 /// Build the tmux command args to create a new session running kiro-cli.

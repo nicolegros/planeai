@@ -10,6 +10,7 @@
   interface Session {
     id: string;
     project_id: string;
+    name: string;
     tmux_name: string;
     branch: string;
     status: string;
@@ -89,7 +90,7 @@
                   {zone === 'sidebar' && globalIndex === selectedIndex ? 'ring-1 ring-blue-500' : ''}"
                 onclick={() => onSelectSession(session.id)}
               >
-                {session.branch}
+                {session.name || session.branch}
               </button>
               <button
                 class="px-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 text-xs"
