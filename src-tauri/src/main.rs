@@ -41,6 +41,9 @@ fn list_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
     let mut alive = Vec::new();
     for s in sessions {
+        if s.status == "archived" {
+            continue;
+        }
         if tmux::has_session(&s.tmux_name) {
             alive.push(s);
         } else {
@@ -85,6 +88,14 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 #[tauri::command]
 fn check_session_alive(tmux_name: String) -> bool {
     tmux::has_session(&tmux_name)
+}
+
+#[tauri::command]
+fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
+    tmux::kill_session(&tmux_name)?;
+    pty_state.0.detach(&id);
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    db::archive_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -176,6 +187,7 @@ fn main() {
             write_to_pty,
             resize_pty,
             check_session_alive,
+            archive_session,
             destroy_session,
         ])
         .run(tauri::generate_context!())

@@ -10,6 +10,7 @@
   import SessionForm from "./components/SessionForm.svelte";
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
+  import CommandMenu from "./components/CommandMenu.svelte";
 
   interface Project {
     id: string;
@@ -38,6 +39,9 @@
   // Tab switcher state
   let tabSwitcherOpen = $state(false);
   let tabSwitcherIndex = $state(0);
+
+  // Command menu state
+  let commandMenuOpen = $state(false);
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -105,6 +109,9 @@
         showSessionForm = false;
         showProjectForm = false;
         sessionToDelete = null;
+        commandMenuOpen = false;
+      } else if (action.type === "command_palette") {
+        commandMenuOpen = !commandMenuOpen;
       }
     });
 
@@ -145,6 +152,17 @@
       if (activeSessionId) touchMru(activeSessionId);
     }
     sessionToDelete = null;
+  }
+
+  async function archiveCurrentSession() {
+    if (!activeSessionId) return;
+    const s = sessions.find((x) => x.id === activeSessionId);
+    if (!s) return;
+    await invoke("archive_session", { id: s.id, tmuxName: s.tmux_name });
+    sessions = sessions.filter((x) => x.id !== s.id);
+    removeMru(s.id);
+    activeSessionId = sessions[0]?.id ?? null;
+    if (activeSessionId) touchMru(activeSessionId);
   }
 
   const zone = $derived(getActiveZone());
@@ -196,6 +214,22 @@
         selectedIndex={tabSwitcherIndex}
       />
     {/if}
+
+    <CommandMenu
+      open={commandMenuOpen}
+      {sessions}
+      {activeSessionId}
+      onOpenChange={(v) => (commandMenuOpen = v)}
+      onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
+      onArchiveSession={archiveCurrentSession}
+      onNewSession={() => {
+        if (projects.length === 0) {
+          showProjectForm = true;
+        } else {
+          showSessionForm = true;
+        }
+      }}
+    />
 
     {#each sessions as session (session.id)}
       <Terminal

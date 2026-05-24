@@ -104,6 +104,11 @@ pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
     rows.collect()
 }
 
+pub fn archive_session(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("UPDATE sessions SET status = 'archived' WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 pub fn delete_session(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
     Ok(())

@@ -6,6 +6,7 @@ export type KeyboardAction =
   | { type: "jump_to_session"; index: number }
   | { type: "tab_switch" }
   | { type: "tab_switch_reverse" }
+  | { type: "command_palette" }
   | { type: "focus_terminal" };
 
 /**
@@ -29,6 +30,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Cmd/Ctrl+B — toggle sidebar
   if (meta && key === "b") {
     return { type: "toggle_sidebar" };
+  }
+
+  // Cmd/Ctrl+K — command palette
+  if (meta && key === "k") {
+    return { type: "command_palette" };
   }
 
   // Cmd/Ctrl+N — new session

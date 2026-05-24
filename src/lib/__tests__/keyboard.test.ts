@@ -61,4 +61,10 @@ describe("matchChord", () => {
     expect(matchChord(key({ key: "Enter" }))).toBeNull();
     expect(matchChord(key({ key: "b" }))).toBeNull(); // no modifier
   });
+
+  it("returns command_palette on Cmd+K", () => {
+    expect(matchChord(key({ key: "k", metaKey: true }))).toEqual({
+      type: "command_palette",
+    });
+  });
 });
