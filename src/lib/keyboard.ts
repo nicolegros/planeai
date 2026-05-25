@@ -1,4 +1,4 @@
-import { focusTerminal, toggleSidebar } from "./focus.svelte";
+import { focusTerminal, getActiveZone, toggleSidebar } from "./focus.svelte";
 
 export type KeyboardAction =
   | { type: "toggle_sidebar" }
@@ -72,6 +72,11 @@ export function installKeyboardRouter(onAction: ActionHandler): () => void {
   function handler(e: KeyboardEvent) {
     const action = matchChord(e);
     if (action) {
+      // If Escape and terminal already focused, let it pass through to the terminal
+      if (action.type === "focus_terminal" && getActiveZone() === "terminal") {
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 
