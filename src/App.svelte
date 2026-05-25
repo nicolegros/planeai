@@ -4,7 +4,8 @@
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
-  import { loadSettings } from "./lib/settings.svelte";
+  import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { getThemeById } from "./lib/terminal-themes";
   import { Dialog } from "bits-ui";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
@@ -48,6 +49,12 @@
 
   // Preferences state
   let showPreferences = $state(false);
+
+  const terminalBg = $derived.by(() => {
+    const s = getSettings();
+    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    return getThemeById(themeId).colors.background;
+  });
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -208,7 +215,7 @@
     />
   {/if}
 
-  <section class="flex-1 relative p-4">
+  <section class="flex-1 relative p-4 pr-0" style="background-color: {terminalBg}">
     {#if showPreferences}
       <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
     {:else}

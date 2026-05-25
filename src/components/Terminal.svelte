@@ -23,6 +23,8 @@
   let fitAddon: FitAddon;
   let attached = false;
 
+  const termBg = $derived(getThemeById(isDark() ? getSettings().terminal_theme_dark : getSettings().terminal_theme_light).colors.background);
+
   onMount(() => {
     const s = getSettings();
     const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
@@ -112,7 +114,8 @@
     if (!term) return;
     const s = getSettings();
     const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
-    term.options.theme = getThemeById(themeId).colors;
+    const theme = getThemeById(themeId);
+    term.options.theme = theme.colors;
     term.options.fontSize = s.font_size;
     term.options.fontFamily = `'${s.font_family}', monospace`;
     if (fitAddon) fitAddon.fit();
@@ -132,4 +135,5 @@
   bind:this={containerEl}
   class="w-full h-full"
   class:hidden={!visible}
+  style="background-color: {termBg}"
 ></div>
