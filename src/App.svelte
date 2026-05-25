@@ -3,7 +3,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
-  import { getMruList, touchMru, removeMru } from "./lib/mru.svelte";
+  import { touchMru, removeMru } from "./lib/mru.svelte";
+  import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { Dialog } from "bits-ui";
@@ -39,10 +40,6 @@
   let sidebarVisible = $state(true);
 
   let showSessionForm = $state(false);
-
-  // Tab switcher state
-  let tabSwitcherOpen = $state(false);
-  let tabSwitcherIndex = $state(0);
 
   // Command menu state
   let commandMenuOpen = $state(false);
@@ -105,22 +102,25 @@
       } else if (action.type === "jump_to_session") {
         jumpToSession(action.index);
       } else if (action.type === "tab_switch") {
-        if (!tabSwitcherOpen) {
-          tabSwitcherOpen = true;
-          tabSwitcherIndex = 1;
+        const switcher = getCycleState();
+        if (!switcher.isCycling) {
+          startCycle(activeSessionId ?? undefined);
         } else {
-          tabSwitcherIndex = (tabSwitcherIndex + 1) % mruList.length;
+          advance(1);
         }
       } else if (action.type === "tab_switch_reverse") {
-        if (!tabSwitcherOpen) {
-          tabSwitcherOpen = true;
-          tabSwitcherIndex = mruList.length - 1;
+        const switcher = getCycleState();
+        if (!switcher.isCycling) {
+          startCycle(activeSessionId ?? undefined);
+          // After startCycle, index is 0 (next MRU). For reverse, go to end.
+          advance(-1);
         } else {
-          tabSwitcherIndex = (tabSwitcherIndex - 1 + mruList.length) % mruList.length;
+          advance(-1);
         }
       } else if (action.type === "focus_terminal") {
-        if (tabSwitcherOpen) {
-          tabSwitcherOpen = false;
+        const switcher = getCycleState();
+        if (switcher.isCycling) {
+          cancel();
         }
         showSessionForm = false;
         showProjectForm = false;
@@ -134,22 +134,28 @@
       }
     });
 
-    // Listen for Ctrl release to confirm tab switch
+    // Listen for Ctrl release to commit tab switch
     function onKeyUp(e: KeyboardEvent) {
-      if (tabSwitcherOpen && e.key === "Control") {
-        const mru = getMruList();
-        if (mru[tabSwitcherIndex]) {
-          selectSession(mru[tabSwitcherIndex]);
-        }
-        tabSwitcherOpen = false;
+      const switcher = getCycleState();
+      if (e.key === "Control" && switcher.isCycling) {
+        const target = commit();
+        if (target) selectSession(target);
         focusTerminal();
       }
     }
+
+    function onBlur() {
+      const switcher = getCycleState();
+      if (switcher.isCycling) cancel();
+    }
+
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
 
     return () => {
       cleanup();
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   });
 
@@ -197,7 +203,6 @@
   }
 
   const zone = $derived(getActiveZone());
-  const mruList = $derived(getMruList());
 </script>
 
 <main class="flex h-screen">
@@ -242,12 +247,12 @@
       </Dialog.Portal>
     </Dialog.Root>
 
-    {#if tabSwitcherOpen}
+    {#if getCycleState().isVisible}
       <TabSwitcher
-        mruSessionIds={mruList}
+        mruSessionIds={getCycleState().cycleList}
         {sessions}
         {projects}
-        selectedIndex={tabSwitcherIndex}
+        selectedIndex={getCycleState().index}
       />
     {/if}
 
