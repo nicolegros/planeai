@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+use crate::tmux;
+
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -36,7 +38,7 @@ impl PtyManager {
             })
             .map_err(|e| format!("failed to open pty: {e}"))?;
 
-        let mut cmd = CommandBuilder::new("tmux");
+        let mut cmd = CommandBuilder::new(tmux::tmux_bin());
         cmd.args(["attach-session", "-t", tmux_name]);
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-fn tmux_bin() -> &'static str {
+pub fn tmux_bin() -> &'static str {
     static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     BIN.get_or_init(|| {
         // Check common Homebrew paths first, then fall back to bare name
