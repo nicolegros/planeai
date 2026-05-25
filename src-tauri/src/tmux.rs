@@ -92,7 +92,12 @@ pub fn session_name(project_name: &str) -> String {
 }
 
 /// Build the tmux command args to create a new session running kiro-cli.
-pub fn build_new_session_args(tmux_name: &str, working_dir: &str) -> Vec<String> {
+pub fn build_new_session_args(tmux_name: &str, working_dir: &str, auto_approve: bool) -> Vec<String> {
+    let cmd = if auto_approve {
+        "kiro-cli chat --trust-all-tools".to_string()
+    } else {
+        "kiro-cli chat".to_string()
+    };
     vec![
         "new-session".to_string(),
         "-d".to_string(),
@@ -100,7 +105,7 @@ pub fn build_new_session_args(tmux_name: &str, working_dir: &str) -> Vec<String>
         tmux_name.to_string(),
         "-c".to_string(),
         working_dir.to_string(),
-        "kiro-cli chat --trust-all-tools".to_string(),
+        cmd,
     ]
 }
 
@@ -131,8 +136,8 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 }
 
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
-pub fn create_session(tmux_name: &str, working_dir: &str) -> Result<(), String> {
-    let args = build_new_session_args(tmux_name, working_dir);
+pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool) -> Result<(), String> {
+    let args = build_new_session_args(tmux_name, working_dir, auto_approve);
     let output = Command::new(tmux_bin())
         .args(&args)
         .output()
@@ -163,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_build_new_session_args() {
-        let args = build_new_session_args("planeai-myapp-abc12345", "/tmp/myapp");
+        let args = build_new_session_args("planeai-myapp-abc12345", "/tmp/myapp", true);
         assert_eq!(args[0], "new-session");
         assert_eq!(args[1], "-d");
         assert_eq!(args[2], "-s");
@@ -171,5 +176,8 @@ mod tests {
         assert_eq!(args[4], "-c");
         assert_eq!(args[5], "/tmp/myapp");
         assert_eq!(args[6], "kiro-cli chat --trust-all-tools");
+
+        let args_no = build_new_session_args("planeai-myapp-abc12345", "/tmp/myapp", false);
+        assert_eq!(args_no[6], "kiro-cli chat");
     }
 }

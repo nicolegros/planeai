@@ -179,6 +179,7 @@ fn launch_session(
     name: String,
     use_worktree: bool,
     base_branch: Option<String>,
+    auto_approve: bool,
 ) -> Result<db::Session, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
@@ -203,7 +204,7 @@ fn launch_session(
 
     // Create tmux session
     let tmux_name = tmux::session_name(&project_name);
-    tmux::create_session(&tmux_name, &working_dir)?;
+    tmux::create_session(&tmux_name, &working_dir, auto_approve)?;
 
     // Persist to DB
     db::create_session(&conn, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())

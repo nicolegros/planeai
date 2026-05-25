@@ -11,6 +11,7 @@
 
   let sessionName = $state("");
   let useWorktree = $state(false);
+  let autoApprove = $state(true);
   let baseBranchValue = $state("");
   let baseBranchSearch = $state("");
   let newBranchName = $state("");
@@ -74,7 +75,7 @@
         const session = await invoke<Session>("launch_session", {
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
-          name: sessionName, useWorktree: true, baseBranch,
+          name: sessionName, useWorktree: true, baseBranch, autoApprove,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -84,7 +85,7 @@
         const session = await invoke<Session>("launch_session", {
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-          useWorktree: false, baseBranch: null,
+          useWorktree: false, baseBranch: null, autoApprove,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -127,7 +128,19 @@
     </Combobox.Root>
   </div>
 
-  <Checkbox id="use-worktree" label="Create worktree" bind:checked={useWorktree} />
+  <div
+    class="flex items-center gap-4 rounded border border-transparent px-2 py-1.5 focus:border-surface-300 focus:bg-surface-50 dark:focus:border-surface-600 dark:focus:bg-surface-900 outline-none"
+    tabindex="0"
+    onkeydown={(e) => {
+      if (e.key === "w") { e.preventDefault(); useWorktree = !useWorktree; }
+      if (e.key === "a") { e.preventDefault(); autoApprove = !autoApprove; }
+    }}
+  >
+    <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
+    <span class="text-[10px] text-surface-400 dark:text-surface-500">W</span>
+    <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
+    <span class="text-[10px] text-surface-400 dark:text-surface-500">A</span>
+  </div>
 
   {#if useWorktree}
     <div class="space-y-1">
