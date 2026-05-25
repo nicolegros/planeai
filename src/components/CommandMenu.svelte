@@ -42,12 +42,12 @@
         />
         <Command.List class="max-h-72 overflow-y-auto p-2">
           <Command.Viewport>
-            <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-500">
+            <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">
               No results found.
             </Command.Empty>
 
             <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-500">Sessions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Sessions</Command.GroupHeading>
               <Command.GroupItems>
                 {#each sessions as session (session.id)}
                   <Command.Item
@@ -65,7 +65,7 @@
             <Command.Separator class="my-1 h-px bg-surface-100 dark:bg-surface-800" />
 
             <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-500">Actions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Actions</Command.GroupHeading>
               <Command.GroupItems>
                 <Command.Item
                   value="archive current session"

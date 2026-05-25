@@ -79,11 +79,11 @@
 <aside class="w-56 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}">
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
-    <span class="text-xs font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wider">Sessions</span>
+    <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Sessions</span>
     <button
       onclick={onAddProject}
       title="Add project (⌘N)"
-      class="size-6 flex items-center justify-center rounded text-surface-400 hover:text-surface-700 hover:bg-surface-200 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
     >
       <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>
     </button>
@@ -93,7 +93,7 @@
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-4">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
-        <p class="text-xs text-surface-400 dark:text-surface-500">No projects yet</p>
+        <p class="text-xs text-surface-600 dark:text-surface-400">No projects yet</p>
         <button
           onclick={onAddProject}
           class="text-xs text-primary-600 dark:text-primary-400 hover:underline"
@@ -102,7 +102,7 @@
     {:else}
       {#each grouped as { project, sessions: projectSessions } (project.id)}
         <div>
-          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-400 dark:text-surface-500 uppercase tracking-wider truncate" title={project.path}>
+          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate" title={project.path}>
             {project.name}
           </h3>
           <ul class="space-y-0.5">
@@ -115,13 +115,13 @@
                   class="w-full text-left px-2 py-1.5 rounded-md text-sm truncate flex items-center gap-1.5 transition-colors
                     {isActive
                       ? 'bg-primary-500/15 text-primary-700 dark:text-primary-300 font-medium'
-                      : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-800'}
+                      : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
                     {isSelected ? 'ring-1 ring-primary-500/50' : ''}"
                   onclick={() => onSelectSession(session.id)}
                   oncontextmenu={(e) => onContextMenu(e, session)}
                 >
                   {#if session.worktree_path}
-                    <span class="text-surface-400 dark:text-surface-500 text-xs shrink-0" title="Worktree">⑂</span>
+                    <span class="text-surface-600 dark:text-surface-400 text-xs shrink-0" title="Worktree">⑂</span>
                   {/if}
                   {#if isActive}
                     <span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>
@@ -131,7 +131,7 @@
               </li>
             {/each}
             {#if projectSessions.length === 0}
-              <li class="px-2 py-1 text-xs text-surface-400 dark:text-surface-600 italic">No sessions</li>
+              <li class="px-2 py-1 text-xs text-surface-600 dark:text-surface-400 italic">No sessions</li>
             {/if}
           </ul>
         </div>
@@ -144,7 +144,7 @@
     <button
       onclick={onOpenPreferences}
       title="Preferences (⌘,)"
-      class="size-7 flex items-center justify-center rounded text-surface-400 hover:text-surface-700 hover:bg-surface-200 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      class="size-7 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
     >
       <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
     </button>

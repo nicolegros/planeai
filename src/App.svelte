@@ -8,6 +8,7 @@
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { Dialog } from "bits-ui";
+  import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
@@ -203,9 +204,24 @@
   }
 
   const zone = $derived(getActiveZone());
+
+  const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activeProjectName = $derived(
+    activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null
+  );
+  const activeSessionName = $derived(
+    activeSession ? (activeSession.name || activeSession.branch) : null
+  );
 </script>
 
-<main class="flex h-screen">
+<main class="flex flex-col h-screen">
+  <Titlebar
+    projectName={activeProjectName}
+    sessionName={activeSessionName}
+    {sidebarVisible}
+  />
+
+  <div class="flex flex-1 min-h-0">
   {#if sidebarVisible}
     <Sidebar
       {projects}
@@ -284,7 +300,7 @@
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
-        <p class="text-surface-500">No active session. Press <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
+        <p class="text-surface-700 dark:text-surface-300">No active session. Press <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
       </div>
     {/if}
 
@@ -305,4 +321,5 @@
     {/if}
     {/if}
   </section>
+  </div>
 </main>

@@ -48,7 +48,7 @@
           {item.label}
         </Combobox.Item>
       {:else}
-        <span class="block px-3 py-2 text-sm text-surface-400">No results</span>
+        <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No results</span>
       {/each}
     </Combobox.Content>
   </Combobox.Portal>

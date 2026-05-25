@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "@skeletonlabs/skeleton";
-@import "../node_modules/@skeletonlabs/skeleton/src/themes/cerberus.css";
+@import "./themes/planeai.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 

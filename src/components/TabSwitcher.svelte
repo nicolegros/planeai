@@ -40,7 +40,7 @@
       {#if session}
         <div class="px-3 py-2 rounded text-sm {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
           <span class="font-medium">{session.name || session.branch}</span>
-          <span class="text-xs ml-2 {i === selectedIndex ? 'text-surface-200' : 'text-surface-400 dark:text-surface-500'}">{getProjectName(session.project_id)}</span>
+          <span class="text-xs ml-2 {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
         </div>
       {/if}
     {/each}

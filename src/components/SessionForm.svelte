@@ -121,7 +121,7 @@
               {item.label}
             </Combobox.Item>
           {:else}
-            <span class="block px-3 py-2 text-sm text-surface-400">No projects found</span>
+            <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No projects found</span>
           {/each}
         </Combobox.Content>
       </Combobox.Portal>
@@ -137,9 +137,9 @@
     }}
   >
     <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
-    <span class="text-[10px] text-surface-400 dark:text-surface-500">W</span>
+    <span class="text-[10px] text-surface-600 dark:text-surface-400">W</span>
     <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
-    <span class="text-[10px] text-surface-400 dark:text-surface-500">A</span>
+    <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
   </div>
 
   {#if useWorktree}
@@ -160,7 +160,7 @@
                 {item.label}
               </Combobox.Item>
             {:else}
-              <span class="block px-3 py-2 text-sm text-surface-400">No branches found</span>
+              <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
             {/each}
           </Combobox.Content>
         </Combobox.Portal>
@@ -197,7 +197,7 @@
                 {item.label}
               </Combobox.Item>
             {:else}
-              <span class="block px-3 py-2 text-sm text-surface-400">No branches found</span>
+              <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
             {/each}
           </Combobox.Content>
         </Combobox.Portal>

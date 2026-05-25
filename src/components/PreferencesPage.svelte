@@ -35,7 +35,7 @@
   <div class="max-w-2xl mx-auto space-y-8">
     <div class="flex items-center gap-3">
       <button
-        class="rounded p-1.5 text-surface-500 hover:text-surface-900 dark:hover:text-surface-100 hover:bg-surface-200 dark:hover:bg-surface-800"
+        class="rounded p-1.5 text-surface-700 hover:text-surface-900 dark:text-surface-300 dark:hover:text-surface-100 hover:bg-surface-200 dark:hover:bg-surface-800"
         onclick={onBack}
         aria-label="Back"
       >
@@ -46,7 +46,7 @@
 
     <!-- Appearance Mode -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Appearance</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Appearance</h2>
       <div class="flex gap-2">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
@@ -59,7 +59,7 @@
 
     <!-- Dark Terminal Theme -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Dark Terminal Theme</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Terminal Theme</h2>
       <div class="grid grid-cols-3 gap-3">
         {#each darkThemes as theme (theme.id)}
           <button
@@ -82,7 +82,7 @@
 
     <!-- Light Terminal Theme -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Light Terminal Theme</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Terminal Theme</h2>
       <div class="grid grid-cols-3 gap-3">
         {#each lightThemes as theme (theme.id)}
           <button
@@ -105,7 +105,7 @@
 
     <!-- Font Size -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Font Size</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Font Size</h2>
       <div class="flex items-center gap-3">
         <button
           class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800"
@@ -116,20 +116,20 @@
           class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800"
           onclick={() => setFontSize(settings.font_size + 1)}
         >+</button>
-        <span class="text-xs text-surface-500">px (8–32)</span>
+        <span class="text-xs text-surface-700 dark:text-surface-300">px (8–32)</span>
       </div>
     </section>
 
     <!-- Font Family -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-400 uppercase tracking-wide">Font Family</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Font Family</h2>
       <Select
         items={fontItems}
         value={settings.font_family}
         onValueChange={(v) => updateSettings({ font_family: v })}
         placeholder="Search fonts…"
       />
-      <p class="text-xs text-surface-500" style="font-family: '{settings.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
+      <p class="text-xs text-surface-700 dark:text-surface-300" style="font-family: '{settings.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
     </section>
   </div>
 </div>
