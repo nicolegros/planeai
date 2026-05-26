@@ -9,11 +9,19 @@
     branch: string;
     status: string;
     created_at: string;
+    worktree_path: string | null;
+  }
+
+  interface Project {
+    id: string;
+    name: string;
+    path: string;
   }
 
   interface Props {
     open: boolean;
     sessions: Session[];
+    projects: Project[];
     activeSessionId: string | null;
     onOpenChange: (open: boolean) => void;
     onSelectSession: (id: string) => void;
@@ -22,10 +30,24 @@
     onNewSession: () => void;
   }
 
-  let { open, sessions, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession }: Props = $props();
 
   function close() {
     onOpenChange(false);
+  }
+
+  function getActiveRootPath(): string | null {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    if (!session) return null;
+    if (session.worktree_path) return session.worktree_path;
+    const project = projects.find((p) => p.id === session.project_id);
+    return project?.path ?? null;
+  }
+
+  function copyRootPath() {
+    const path = getActiveRootPath();
+    if (path) navigator.clipboard.writeText(path).catch(() => {});
+    close();
   }
 </script>
 
@@ -67,6 +89,15 @@
             <Command.Group>
               <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Actions</Command.GroupHeading>
               <Command.GroupItems>
+                <Command.Item
+                  value="copy project root path"
+                  keywords={["copy", "path", "root", "directory", "cwd"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={copyRootPath}
+                >
+                  Copy project root path
+                </Command.Item>
                 <Command.Item
                   value="archive current session"
                   keywords={["archive", "close", "stop"]}

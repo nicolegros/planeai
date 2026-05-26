@@ -278,6 +278,7 @@
     <CommandMenu
       open={commandMenuOpen}
       {sessions}
+      {projects}
       {activeSessionId}
       onOpenChange={(v) => (commandMenuOpen = v)}
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
