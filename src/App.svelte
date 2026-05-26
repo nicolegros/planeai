@@ -84,6 +84,10 @@
   function selectSession(id: string) {
     activeSessionId = id;
     touchMru(id);
+    // Clear idle state when user focuses this session
+    if (agentStates[id] === "Idle") {
+      agentStates = { ...agentStates, [id]: "Busy" };
+    }
   }
 
   function jumpToSession(index: number) {
