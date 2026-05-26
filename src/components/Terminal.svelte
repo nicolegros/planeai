@@ -5,6 +5,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { getThemeById } from "../lib/terminal-themes";
@@ -57,14 +58,22 @@
     // WebLinksAddon — clickable URLs
     term.loadAddon(
       new WebLinksAddon((_event, uri) => {
-        // Open in default browser via Tauri shell
-        window.open(uri, "_blank");
+        openUrl(uri).catch(() => {});
       })
     );
 
     term.open(containerEl);
 
     fitAddon.fit();
+
+    // ── Paste via native event (avoids clipboard permission prompt) ──────
+    containerEl.addEventListener("paste", (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text");
+      if (text) {
+        const bytes = Array.from(new TextEncoder().encode(text));
+        invoke("write_to_pty", { sessionId, data: bytes });
+      }
+    });
 
     // ── DECRQM workaround (xterm bug: host queries mode status) ──────────
     try {
@@ -124,19 +133,9 @@
         return true;
       }
 
-      // Cmd+V → paste
+      // Cmd+V → let it fall through to native paste event
       if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "v") {
-        ev.preventDefault();
-        navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) {
-              const bytes = Array.from(new TextEncoder().encode(text));
-              invoke("write_to_pty", { sessionId, data: bytes });
-            }
-          })
-          .catch(() => {});
-        return false;
+        return true;
       }
 
       // Shift+Enter → Ctrl+J (newline without submit)

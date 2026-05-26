@@ -85,7 +85,7 @@
         const session = await invoke<Session>("launch_session", {
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
-          useWorktree: false, baseBranch: null, autoApprove,
+          useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -205,7 +205,30 @@
     </div>
 
     {#if isNewBranch && branch}
-      <p class="text-xs text-surface-500">Will create new branch: <span class="font-medium text-surface-900 dark:text-surface-100">{branch}</span></p>
+      <div class="space-y-1">
+        <Label>Base branch</Label>
+        <Combobox.Root type="single" bind:value={baseBranchValue} onOpenChangeComplete={(o) => { if (!o) baseBranchSearch = baseBranchSearch; }}>
+          <Combobox.Input
+            oninput={(e) => (baseBranchSearch = e.currentTarget.value)}
+            onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+            placeholder="main"
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
+            class={comboInputClass}
+          />
+          <Combobox.Portal>
+            <Combobox.Content class={comboContentClass} sideOffset={4}>
+              {#each filteredBaseBranches as item (item.value)}
+                <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
+                  {item.label}
+                </Combobox.Item>
+              {:else}
+                <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
+              {/each}
+            </Combobox.Content>
+          </Combobox.Portal>
+        </Combobox.Root>
+      </div>
+      <p class="text-xs text-surface-500">Will create new branch: <span class="font-medium text-surface-900 dark:text-surface-100">{branch}</span> from <span class="font-medium text-surface-900 dark:text-surface-100">{baseBranch}</span></p>
     {/if}
   {/if}
 

@@ -33,13 +33,18 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
-/// Checkout an existing branch or create a new one.
-pub fn checkout_branch(repo_path: &str, branch: &str, create: bool) -> Result<(), String> {
-    let args = if create {
+/// Checkout an existing branch or create a new one (optionally from a start point).
+pub fn checkout_branch(repo_path: &str, branch: &str, create: bool, start_point: Option<&str>) -> Result<(), String> {
+    let mut args = if create {
         vec!["checkout", "-b", branch]
     } else {
         vec!["checkout", branch]
     };
+    if let Some(base) = start_point {
+        if create {
+            args.push(base);
+        }
+    }
 
     let output = Command::new("git")
         .args(&args)

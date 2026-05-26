@@ -198,7 +198,7 @@ fn launch_session(
         if db::has_active_checkout_session(&conn, &project_id).map_err(|e| e.to_string())? {
             return Err("Another in-repo session is already active for this project. Archive it first or use worktree mode.".to_string());
         }
-        tmux::checkout_branch(&repo_path, &branch, is_new_branch)?;
+        tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
         (repo_path, None)
     };
 
@@ -214,6 +214,7 @@ fn launch_session(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let menu = Menu::with_items(app, &[
                 &Submenu::with_items(app, "planeai", true, &[
