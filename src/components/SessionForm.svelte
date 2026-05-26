@@ -154,7 +154,8 @@
     <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
     <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
     {#if providerKeys.length > 1}
-      <span class="ml-auto text-xs text-surface-700 dark:text-surface-300 font-medium">{selectedProvider || config.default_provider}</span>
+      <span class="ml-auto text-[10px] text-surface-500 dark:text-surface-400">Provider</span>
+      <span class="text-xs text-surface-700 dark:text-surface-300 font-medium">{selectedProvider || config.default_provider}</span>
       <span class="text-[10px] text-surface-600 dark:text-surface-400">P</span>
     {/if}
   </div>
