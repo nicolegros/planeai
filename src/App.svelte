@@ -8,6 +8,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { getThemeById } from "./lib/terminal-themes";
+  import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -104,6 +105,7 @@
     // Listen for agent state changes from backend
     const unlistenState = listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+      if (event.payload.state === "Idle") playTaskComplete();
     });
 
     const cleanup = installKeyboardRouter(

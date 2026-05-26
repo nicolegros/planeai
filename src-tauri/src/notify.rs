@@ -183,15 +183,8 @@ fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
     );
 }
 
-/// Fire sound + native notification.
+/// Fire native notification.
 fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
-    // Play system sound
-    std::process::Command::new("afplay")
-        .arg("/System/Library/Sounds/Pop.aiff")
-        .spawn()
-        .ok();
-
-    // Look up session metadata for the notification text
     let (title, body) = {
         let s = state.lock().unwrap();
         match s.get_meta(session_id) {
