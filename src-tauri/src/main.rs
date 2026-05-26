@@ -231,6 +231,12 @@ fn install_notify_hook() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
+    let mut ns = notify.0.lock().unwrap();
+    ns.acknowledge(&session_id);
+}
+
+#[tauri::command]
 fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     tmux::kill_session(&tmux_name)?;
     pty_state.0.detach(&id);
@@ -405,6 +411,7 @@ fn main() {
             check_session_alive,
             is_notify_hook_installed,
             install_notify_hook,
+            acknowledge_session,
             archive_session,
             destroy_session,
         ])

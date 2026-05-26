@@ -21,6 +21,8 @@ pub struct NotifyState {
     states: HashMap<String, AgentState>,
     last_output: HashMap<String, Instant>,
     meta: HashMap<String, SessionMeta>,
+    /// Sessions that have already fired a notification and are waiting for user focus.
+    notified: std::collections::HashSet<String>,
     #[cfg(test)]
     time_offset: HashMap<String, Duration>,
 }
@@ -31,6 +33,7 @@ impl NotifyState {
             states: HashMap::new(),
             last_output: HashMap::new(),
             meta: HashMap::new(),
+            notified: std::collections::HashSet::new(),
             #[cfg(test)]
             time_offset: HashMap::new(),
         }
@@ -53,12 +56,22 @@ impl NotifyState {
             return false;
         }
         self.states.insert(session_id.to_string(), AgentState::Idle);
+        // Only fire notification if we haven't already notified for this idle period
+        if self.notified.contains(session_id) {
+            return false;
+        }
+        self.notified.insert(session_id.to_string());
         true
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output.insert(session_id.to_string(), Instant::now());
+    }
+
+    /// Clear the notified flag when the user focuses/acknowledges a session.
+    pub fn acknowledge(&mut self, session_id: &str) {
+        self.notified.remove(session_id);
     }
 
     pub fn check_silence(&mut self, session_id: &str) -> bool {
@@ -73,6 +86,10 @@ impl NotifyState {
             let elapsed = self.elapsed_since(session_id, last);
             if elapsed >= SILENCE_THRESHOLD {
                 self.states.insert(session_id.to_string(), AgentState::Idle);
+                if self.notified.contains(session_id) {
+                    return false;
+                }
+                self.notified.insert(session_id.to_string());
                 return true;
             }
         }
@@ -254,10 +271,20 @@ mod tests {
         let mut state = NotifyState::new();
         let session_id = "test-session-1";
 
+        // First stop fires notification
         assert!(state.notify_stop(session_id));
+        // Second stop does not (already idle)
         assert!(!state.notify_stop(session_id));
 
+        // Output transitions to busy, but notified flag persists
         state.notify_output(session_id);
+        // Stop again — notified flag blocks it
+        assert!(!state.notify_stop(session_id));
+
+        // User acknowledges (focuses session) — clears flag
+        state.acknowledge(session_id);
+        state.notify_output(session_id);
+        // Now stop fires again
         assert!(state.notify_stop(session_id));
     }
 

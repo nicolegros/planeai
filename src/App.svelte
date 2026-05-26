@@ -88,6 +88,8 @@
     if (agentStates[id] === "Idle") {
       agentStates = { ...agentStates, [id]: "Busy" };
     }
+    // Tell backend to allow future notifications for this session
+    invoke("acknowledge_session", { sessionId: id });
   }
 
   function jumpToSession(index: number) {
