@@ -68,12 +68,19 @@ export type ActionHandler = (action: KeyboardAction) => void;
  * Install the top-level keyboard router on the window.
  * Returns a cleanup function to remove the listener.
  */
-export function installKeyboardRouter(onAction: ActionHandler): () => void {
+export function installKeyboardRouter(
+  onAction: ActionHandler,
+  shouldPassEscape?: () => boolean
+): () => void {
   function handler(e: KeyboardEvent) {
     const action = matchChord(e);
     if (action) {
-      // If Escape and terminal already focused, let it pass through to the terminal
-      if (action.type === "focus_terminal" && getActiveZone() === "terminal") {
+      // If Escape and terminal already focused with no overlays, let it pass through
+      if (
+        action.type === "focus_terminal" &&
+        getActiveZone() === "terminal" &&
+        (!shouldPassEscape || shouldPassEscape())
+      ) {
         return;
       }
 

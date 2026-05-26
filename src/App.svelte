@@ -89,7 +89,8 @@
     loadSessions();
     loadSettings();
 
-    const cleanup = installKeyboardRouter((action) => {
+    const cleanup = installKeyboardRouter(
+      (action) => {
       if (action.type === "new_session") {
         if (projects.length === 0) {
           showProjectForm = true;
@@ -131,9 +132,11 @@
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
-        showPreferences = true;
+        showPreferences = !showPreferences;
       }
-    });
+    },
+    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen
+    );
 
     // Listen for Ctrl release to commit tab switch
     function onKeyUp(e: KeyboardEvent) {
