@@ -36,10 +36,11 @@ impl NotifyState {
         }
     }
 
-    pub fn register_session(&mut self, session_id: &str, name: &str, project_name: &str) {
+    pub fn register_session(&mut self, session_id: &str, name: &str, project_name: &str, hook_enabled: bool) {
         self.meta.insert(session_id.to_string(), SessionMeta {
             name: name.to_string(),
             project_name: project_name.to_string(),
+            hook_enabled,
         });
     }
 
@@ -62,6 +63,10 @@ impl NotifyState {
 
     pub fn check_silence(&mut self, session_id: &str) -> bool {
         if self.get_state(session_id) != Some(AgentState::Busy) {
+            return false;
+        }
+        // Skip silence-based detection for sessions with a working hook
+        if self.meta.get(session_id).map_or(false, |m| m.hook_enabled) {
             return false;
         }
         if let Some(&last) = self.last_output.get(session_id) {
@@ -112,6 +117,7 @@ pub type SharedNotifyState = Arc<Mutex<NotifyState>>;
 pub struct SessionMeta {
     pub name: String,
     pub project_name: String,
+    pub hook_enabled: bool,
 }
 
 /// Returns the socket path inside the given app data directory.
@@ -253,5 +259,23 @@ mod tests {
 
         state.notify_output(session_id);
         assert!(state.notify_stop(session_id));
+    }
+
+    #[test]
+    fn silence_check_skipped_for_hook_enabled_sessions() {
+        let mut state = NotifyState::new();
+        let session_id = "test-session-hook";
+
+        state.register_session(session_id, "test", "project", true);
+        state.notify_output(session_id);
+        state.advance_time(session_id, Duration::from_secs(10));
+
+        // Should NOT transition to idle via silence
+        assert!(!state.check_silence(session_id));
+        assert_eq!(state.get_state(session_id), Some(AgentState::Busy));
+
+        // But hook can still transition it
+        assert!(state.notify_stop(session_id));
+        assert_eq!(state.get_state(session_id), Some(AgentState::Idle));
     }
 }

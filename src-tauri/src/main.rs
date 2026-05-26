@@ -25,6 +25,21 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+/// Check if a provider has hook-based idle detection (currently Kiro only).
+fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
+    let Some(provider) = cfg.providers.get(provider_key) else { return false };
+    provider.command.contains("kiro-cli") && is_notify_hook_installed_check()
+}
+
+fn is_notify_hook_installed_check() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.kiro/agents/default.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content.contains("planeai-stop-notify"),
+        Err(_) => false,
+    }
+}
+
 #[tauri::command]
 fn create_project(state: State<DbState>, name: String, path: String) -> Result<db::Project, String> {
     let path = expand_tilde(&path);
@@ -54,8 +69,9 @@ fn create_session(state: State<DbState>, project_id: String, name: String, tmux_
 }
 
 #[tauri::command]
-fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>) -> Result<Vec<db::Session>, String> {
+fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>) -> Result<Vec<db::Session>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
     let mut alive = Vec::new();
@@ -70,9 +86,12 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>) -> Result<V
                 .map(|p| p.name.as_str())
                 .unwrap_or("unknown");
             let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
+            let hook_enabled = s.provider.as_deref()
+                .map(|pk| provider_has_hook(pk, &cfg))
+                .unwrap_or(false);
             {
                 let mut ns = notify.0.lock().unwrap();
-                ns.register_session(&s.id, display_name, project_name);
+                ns.register_session(&s.id, display_name, project_name, hook_enabled);
             }
             alive.push(s);
         } else {
@@ -158,12 +177,7 @@ fn check_session_alive(tmux_name: String) -> bool {
 
 #[tauri::command]
 fn is_notify_hook_installed() -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{home}/.kiro/agents/default.json");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content.contains("planeai-stop-notify"),
-        Err(_) => false,
-    }
+    is_notify_hook_installed_check()
 }
 
 #[tauri::command]
@@ -268,6 +282,7 @@ fn launch_session(
     let provider_def = cfg.providers.get(&provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let cmd = config::launch_command(provider_def, auto_approve);
+    let hook_enabled = provider_def.command.contains("kiro-cli") && is_notify_hook_installed_check();
     drop(cfg);
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -300,7 +315,7 @@ fn launch_session(
     {
         let mut ns = notify.0.lock().unwrap();
         let display_name = if name.is_empty() { &branch } else { &name };
-        ns.register_session(&session_id, display_name, &project_name);
+        ns.register_session(&session_id, display_name, &project_name, hook_enabled);
     }
 
     // Persist to DB
