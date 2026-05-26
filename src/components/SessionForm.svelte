@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Combobox } from "bits-ui";
   import { Button, Input, Label, Checkbox } from "./ui";
+  import { getSettings } from "../lib/settings.svelte";
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; worktree_path: string | null; }
@@ -9,9 +10,13 @@
 
   let { projects, onCreated, onCancel }: Props = $props();
 
+  const config = $derived(getSettings());
+  const providerKeys = $derived(Object.keys(config.providers));
+
   let sessionName = $state("");
   let useWorktree = $state(false);
   let autoApprove = $state(true);
+  let selectedProvider = $state("");
   let baseBranchValue = $state("");
   let baseBranchSearch = $state("");
   let newBranchName = $state("");
@@ -76,6 +81,7 @@
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
           name: sessionName, useWorktree: true, baseBranch, autoApprove,
+          provider: selectedProvider || config.default_provider,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -86,6 +92,7 @@
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
           useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
+          provider: selectedProvider || config.default_provider,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -140,6 +147,16 @@
     <span class="text-[10px] text-surface-600 dark:text-surface-400">W</span>
     <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
     <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
+    {#if providerKeys.length > 1}
+      <select
+        bind:value={selectedProvider}
+        class="ml-auto rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-2 py-1 text-xs text-surface-700 dark:text-surface-300"
+      >
+        {#each providerKeys as key (key)}
+          <option value={key} selected={key === config.default_provider}>{key}</option>
+        {/each}
+      </select>
+    {/if}
   </div>
 
   {#if useWorktree}
