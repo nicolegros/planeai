@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
 mod db;
 mod notify;
 mod pty;
@@ -13,6 +14,7 @@ use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
 struct NotifyHandle(notify::SharedNotifyState);
+struct ConfigState(Mutex<config::Config>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
@@ -94,15 +96,18 @@ fn validate_git_repo(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_settings(state: State<DbState>) -> Result<db::Settings, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::get_settings(&conn).map_err(|e| e.to_string())
+fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(cfg.clone())
 }
 
 #[tauri::command]
-fn update_settings(state: State<DbState>, settings: db::Settings) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::update_settings(&conn, &settings).map_err(|e| e.to_string())
+fn update_config(state: State<ConfigState>, new_config: config::Config) -> Result<(), String> {
+    let config_dir = config::config_dir();
+    config::save(&config_dir, &new_config)?;
+    let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
+    *cfg = new_config;
+    Ok(())
 }
 
 #[tauri::command]
@@ -246,6 +251,7 @@ fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_
 fn launch_session(
     state: State<DbState>,
     notify: State<NotifyHandle>,
+    config_state: State<ConfigState>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -255,7 +261,15 @@ fn launch_session(
     use_worktree: bool,
     base_branch: Option<String>,
     auto_approve: bool,
+    provider: Option<String>,
 ) -> Result<db::Session, String> {
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let provider_key = provider.unwrap_or_else(|| cfg.default_provider.clone());
+    let provider_def = cfg.providers.get(&provider_key)
+        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+    let cmd = config::launch_command(provider_def, auto_approve);
+    drop(cfg);
+
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
     let (working_dir, worktree_path) = if use_worktree {
@@ -280,7 +294,7 @@ fn launch_session(
     // Create tmux session
     let tmux_name = tmux::session_name(&project_name);
     let session_id = uuid::Uuid::new_v4().to_string();
-    tmux::create_session(&tmux_name, &working_dir, auto_approve, &session_id)?;
+    tmux::create_session_with_cmd(&tmux_name, &working_dir, &cmd, &session_id)?;
 
     // Register with notification system
     {
@@ -290,7 +304,7 @@ fn launch_session(
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref(), Some(&provider_key))
         .map_err(|e| e.to_string())
 }
 
@@ -333,6 +347,15 @@ fn main() {
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
+
+            // Config: migrate from DB if needed, then load
+            let config_dir = config::config_dir();
+            if let Ok(settings) = db::get_settings(&conn) {
+                let _ = config::migrate_from_db(&config_dir, &settings);
+            }
+            let (cfg, _warnings) = config::load(&config_dir);
+            app.manage(ConfigState(Mutex::new(cfg)));
+
             app.manage(DbState(Mutex::new(conn)));
 
             // Notification system
@@ -358,8 +381,8 @@ fn main() {
             validate_git_repo,
             list_branches,
             list_monospace_fonts,
-            get_settings,
-            update_settings,
+            get_config,
+            update_config,
             launch_session,
             attach_session,
             write_to_pty,

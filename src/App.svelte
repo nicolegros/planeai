@@ -58,7 +58,7 @@
 
   const terminalBg = $derived.by(() => {
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     return getThemeById(themeId).colors.background;
   });
 

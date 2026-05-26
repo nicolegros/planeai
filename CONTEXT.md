@@ -8,7 +8,9 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 |------|-----------|
 | **Project** | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit. |
 | **Session** | A single agent working on a single task within a project. Backed by a tmux session named `planeai-<project>-<8-hex-id>`. Contains one terminal pane running the agent CLI. |
-| **Provider** | A CLI-based AI coding agent (e.g., Kiro). Defined by a launch command. v1 supports Kiro only (`kiro-cli chat --trust-all-tools`). |
+| **Provider** | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`. |
+| **Config file** | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
+| **Yolo mode** | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`. |
 | **Focus zone** | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus. |
 | **Tab switcher** | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. |
 | **Notification** | (future) A signal that an agent needs human attention. |

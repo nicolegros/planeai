@@ -18,6 +18,7 @@ pub struct Session {
     pub status: String,
     pub created_at: String,
     pub worktree_path: Option<String>,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +90,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN appearance_mode TEXT NOT NULL DEFAULT 'system'");
     // Copy old terminal_theme to terminal_theme_dark if it existed
     let _ = conn.execute_batch("UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL");
+    // Add provider column to sessions
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
     Ok(())
 }
 
@@ -132,7 +135,7 @@ pub fn create_session(
     worktree_path: Option<&str>,
 ) -> Result<Session> {
     let id = uuid::Uuid::new_v4().to_string();
-    create_session_with_id(conn, &id, project_id, name, tmux_name, branch, worktree_path)
+    create_session_with_id(conn, &id, project_id, name, tmux_name, branch, worktree_path, None)
 }
 
 pub fn create_session_with_id(
@@ -143,17 +146,18 @@ pub fn create_session_with_id(
     tmux_name: &str,
     branch: &str,
     worktree_path: Option<&str>,
+    provider: Option<&str>,
 ) -> Result<Session> {
     let created_at = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7)",
-        params![id, project_id, name, tmux_name, branch, created_at, worktree_path],
+        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8)",
+        params![id, project_id, name, tmux_name, branch, created_at, worktree_path, provider],
     )?;
-    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()) })
+    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()), provider: provider.map(|s| s.to_string()) })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path FROM sessions")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider FROM sessions")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -164,6 +168,7 @@ pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
             status: row.get(5)?,
             created_at: row.get(6)?,
             worktree_path: row.get(7)?,
+            provider: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -198,7 +203,7 @@ pub fn project_name_exists(conn: &Connection, name: &str) -> Result<bool> {
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path FROM sessions WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider FROM sessions WHERE id = ?1")?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -209,6 +214,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
             status: row.get(5)?,
             created_at: row.get(6)?,
             worktree_path: row.get(7)?,
+            provider: row.get(8)?,
         })
     })?;
     Ok(rows.next().transpose()?)

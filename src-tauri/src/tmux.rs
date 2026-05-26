@@ -142,7 +142,19 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
 pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, session_id: &str) -> Result<(), String> {
-    let args = build_new_session_args(tmux_name, working_dir, auto_approve);
+    let cmd = if auto_approve {
+        "kiro-cli chat --trust-all-tools".to_string()
+    } else {
+        "kiro-cli chat".to_string()
+    };
+    create_session_with_cmd(tmux_name, working_dir, &cmd, session_id)
+}
+
+/// Create a tmux session with remain-on-exit and a custom command.
+pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, session_id: &str) -> Result<(), String> {
+    let args = vec![
+        "new-session", "-d", "-s", tmux_name, "-c", working_dir, cmd,
+    ];
     let output = Command::new(tmux_bin())
         .args(&args)
         .output()
@@ -152,7 +164,7 @@ pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, se
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
 
-    // Set remain-on-exit so scrollback is preserved after kiro exits
+    // Set remain-on-exit so scrollback is preserved after agent exits
     let _ = Command::new(tmux_bin())
         .args(["set-option", "-t", tmux_name, "remain-on-exit", "on"])
         .output();

@@ -32,20 +32,20 @@
   const termBg = $derived(
     getThemeById(
       isDark()
-        ? getSettings().terminal_theme_dark
-        : getSettings().terminal_theme_light
+        ? getSettings().appearance.terminal_theme_dark
+        : getSettings().appearance.terminal_theme_light
     ).colors.background
   );
 
   onMount(() => {
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     const theme = getThemeById(themeId);
 
     term = new Terminal({
       cursorBlink: true,
-      fontSize: s.font_size,
-      fontFamily: `'${s.font_family}', monospace`,
+      fontSize: s.terminal.font_size,
+      fontFamily: `'${s.terminal.font_family}', monospace`,
       theme: theme.colors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
@@ -249,11 +249,11 @@
   $effect(() => {
     if (!term) return;
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     const theme = getThemeById(themeId);
     term.options.theme = theme.colors;
-    term.options.fontSize = s.font_size;
-    term.options.fontFamily = `'${s.font_family}', monospace`;
+    term.options.fontSize = s.terminal.font_size;
+    term.options.fontFamily = `'${s.terminal.font_family}', monospace`;
     if (fitAddon) fitAddon.fit();
   });
 

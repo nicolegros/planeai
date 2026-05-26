@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { getSettings, updateSettings, type AppearanceMode } from "../lib/settings.svelte";
+  import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider } from "../lib/settings.svelte";
   import { getThemesByVariant } from "../lib/terminal-themes";
   import { Select } from "./ui";
 
@@ -11,11 +11,16 @@
 
   let { onBack }: Props = $props();
 
-  const settings = $derived(getSettings());
+  const config = $derived(getSettings());
   const darkThemes = getThemesByVariant("dark");
   const lightThemes = getThemesByVariant("light");
 
   let fontItems = $state<{ value: string; label: string }[]>([]);
+  let editingProvider = $state<string | null>(null);
+  let newProviderName = $state("");
+  let newProviderCommand = $state("");
+  let newProviderYoloFlag = $state("");
+  let showAddProvider = $state(false);
 
   onMount(async () => {
     const fonts = await invoke<string[]>("list_monospace_fonts");
@@ -23,11 +28,45 @@
   });
 
   function setAppearance(mode: AppearanceMode) {
-    updateSettings({ appearance_mode: mode });
+    updateSettings({ appearance: { ...config.appearance, mode } });
   }
 
   function setFontSize(size: number) {
-    if (size >= 8 && size <= 32) updateSettings({ font_size: size });
+    if (size >= 8 && size <= 32) updateSettings({ terminal: { ...config.terminal, font_size: size } });
+  }
+
+  function setDefaultProvider(key: string) {
+    updateSettings({ default_provider: key } as Partial<AppConfig>);
+  }
+
+  function addProvider() {
+    if (!newProviderName || !newProviderCommand) return;
+    const providers = { ...config.providers };
+    providers[newProviderName] = {
+      command: newProviderCommand,
+      yolo_flag: newProviderYoloFlag || null,
+    };
+    updateSettings({ providers } as Partial<AppConfig>);
+    newProviderName = "";
+    newProviderCommand = "";
+    newProviderYoloFlag = "";
+    showAddProvider = false;
+  }
+
+  function removeProvider(key: string) {
+    const providers = { ...config.providers };
+    delete providers[key];
+    const patch: Partial<AppConfig> = { providers };
+    if (config.default_provider === key) {
+      patch.default_provider = Object.keys(providers)[0] || "";
+    }
+    updateSettings(patch);
+  }
+
+  function updateProvider(key: string, field: keyof Provider, value: string) {
+    const providers = { ...config.providers };
+    providers[key] = { ...providers[key], [field]: value || null };
+    updateSettings({ providers } as Partial<AppConfig>);
   }
 </script>
 
@@ -50,7 +89,7 @@
       <div class="flex gap-2">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
-            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {settings.appearance_mode === mode ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => setAppearance(mode as AppearanceMode)}
           >{mode}</button>
         {/each}
@@ -63,8 +102,8 @@
       <div class="grid grid-cols-3 gap-3">
         {#each darkThemes as theme (theme.id)}
           <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {settings.terminal_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ terminal_theme_dark: theme.id })}
+            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
+            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_dark: theme.id } })}
           >
             <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
               <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
@@ -86,8 +125,8 @@
       <div class="grid grid-cols-3 gap-3">
         {#each lightThemes as theme (theme.id)}
           <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {settings.terminal_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ terminal_theme_light: theme.id })}
+            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
+            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_light: theme.id } })}
           >
             <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
               <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
@@ -109,12 +148,12 @@
       <div class="flex items-center gap-3">
         <button
           class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800"
-          onclick={() => setFontSize(settings.font_size - 1)}
+          onclick={() => setFontSize(config.terminal.font_size - 1)}
         >−</button>
-        <span class="text-lg font-mono text-surface-900 dark:text-surface-50 w-8 text-center">{settings.font_size}</span>
+        <span class="text-lg font-mono text-surface-900 dark:text-surface-50 w-8 text-center">{config.terminal.font_size}</span>
         <button
           class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800"
-          onclick={() => setFontSize(settings.font_size + 1)}
+          onclick={() => setFontSize(config.terminal.font_size + 1)}
         >+</button>
         <span class="text-xs text-surface-700 dark:text-surface-300">px (8–32)</span>
       </div>
@@ -125,11 +164,107 @@
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Font Family</h2>
       <Select
         items={fontItems}
-        value={settings.font_family}
-        onValueChange={(v) => updateSettings({ font_family: v })}
+        value={config.terminal.font_family}
+        onValueChange={(v) => updateSettings({ terminal: { ...config.terminal, font_family: v } })}
         placeholder="Search fonts…"
       />
-      <p class="text-xs text-surface-700 dark:text-surface-300" style="font-family: '{settings.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
+      <p class="text-xs text-surface-700 dark:text-surface-300" style="font-family: '{config.terminal.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
+    </section>
+
+    <!-- Providers -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Providers</h2>
+      <div class="space-y-3">
+        {#each Object.entries(config.providers) as [key, provider] (key)}
+          <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-surface-900 dark:text-surface-50">{key}</span>
+                {#if config.default_provider === key}
+                  <span class="text-xs bg-primary-500/20 text-primary-700 dark:text-primary-300 px-2 py-0.5 rounded">default</span>
+                {:else}
+                  <button
+                    class="text-xs text-surface-500 hover:text-primary-500"
+                    onclick={() => setDefaultProvider(key)}
+                  >set as default</button>
+                {/if}
+              </div>
+              <button
+                class="text-xs text-red-500 hover:text-red-700"
+                onclick={() => removeProvider(key)}
+                disabled={Object.keys(config.providers).length <= 1}
+              >Remove</button>
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
+              <input
+                type="text"
+                value={provider.command}
+                onchange={(e) => updateProvider(key, "command", e.currentTarget.value)}
+                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+              />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
+              <input
+                type="text"
+                value={provider.yolo_flag || ""}
+                onchange={(e) => updateProvider(key, "yolo_flag", e.currentTarget.value)}
+                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+                placeholder="e.g. --trust-all-tools"
+              />
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      {#if showAddProvider}
+        <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
+            <input
+              type="text"
+              bind:value={newProviderName}
+              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50"
+              placeholder="e.g. claude-code"
+            />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
+            <input
+              type="text"
+              bind:value={newProviderCommand}
+              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+              placeholder="e.g. claude"
+            />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
+            <input
+              type="text"
+              bind:value={newProviderYoloFlag}
+              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+              placeholder="e.g. --dangerously-skip-permissions"
+            />
+          </div>
+          <div class="flex gap-2">
+            <button
+              class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50"
+              onclick={addProvider}
+              disabled={!newProviderName || !newProviderCommand}
+            >Add</button>
+            <button
+              class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700"
+              onclick={() => { showAddProvider = false; }}
+            >Cancel</button>
+          </div>
+        </div>
+      {:else}
+        <button
+          class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700"
+          onclick={() => { showAddProvider = true; }}
+        >+ Add Provider</button>
+      {/if}
     </section>
   </div>
 </div>
