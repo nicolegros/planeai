@@ -132,12 +132,24 @@ pub fn create_session(
     worktree_path: Option<&str>,
 ) -> Result<Session> {
     let id = uuid::Uuid::new_v4().to_string();
+    create_session_with_id(conn, &id, project_id, name, tmux_name, branch, worktree_path)
+}
+
+pub fn create_session_with_id(
+    conn: &Connection,
+    id: &str,
+    project_id: &str,
+    name: &str,
+    tmux_name: &str,
+    branch: &str,
+    worktree_path: Option<&str>,
+) -> Result<Session> {
     let created_at = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7)",
         params![id, project_id, name, tmux_name, branch, created_at, worktree_path],
     )?;
-    Ok(Session { id, project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()) })
+    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.to_string(), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()) })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {

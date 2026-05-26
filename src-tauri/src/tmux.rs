@@ -141,7 +141,7 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 }
 
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
-pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool) -> Result<(), String> {
+pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, session_id: &str) -> Result<(), String> {
     let args = build_new_session_args(tmux_name, working_dir, auto_approve);
     let output = Command::new(tmux_bin())
         .args(&args)
@@ -155,6 +155,11 @@ pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool) ->
     // Set remain-on-exit so scrollback is preserved after kiro exits
     let _ = Command::new(tmux_bin())
         .args(["set-option", "-t", tmux_name, "remain-on-exit", "on"])
+        .output();
+
+    // Set PLANEAI_SESSION_ID so the stop hook can identify this session
+    let _ = Command::new(tmux_bin())
+        .args(["set-environment", "-t", tmux_name, "PLANEAI_SESSION_ID", session_id])
         .output();
 
     Ok(())

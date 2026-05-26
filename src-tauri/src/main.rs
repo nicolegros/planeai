@@ -1,15 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod db;
+mod notify;
 mod pty;
 mod tmux;
 
 use std::sync::Mutex;
+use std::sync::Arc;
 use rusqlite::Connection;
 use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
 
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
+struct NotifyHandle(notify::SharedNotifyState);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
@@ -49,15 +52,26 @@ fn create_session(state: State<DbState>, project_id: String, name: String, tmux_
 }
 
 #[tauri::command]
-fn list_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
+fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>) -> Result<Vec<db::Session>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
+    let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
     let mut alive = Vec::new();
     for s in sessions {
         if s.status == "archived" {
             continue;
         }
         if tmux::has_session(&s.tmux_name) {
+            // Register with notification system
+            let project_name = projects.iter()
+                .find(|p| p.id == s.project_id)
+                .map(|p| p.name.as_str())
+                .unwrap_or("unknown");
+            let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
+            {
+                let mut ns = notify.0.lock().unwrap();
+                ns.register_session(&s.id, display_name, project_name);
+            }
             alive.push(s);
         } else {
             let _ = db::delete_session(&conn, &s.id);
@@ -138,6 +152,66 @@ fn check_session_alive(tmux_name: String) -> bool {
 }
 
 #[tauri::command]
+fn is_notify_hook_installed() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.kiro/agents/default.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content.contains("planeai-stop-notify"),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+fn install_notify_hook() -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+
+    // Write the hook script
+    let hooks_dir = format!("{home}/.kiro/hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+    let script_path = format!("{hooks_dir}/planeai-stop-notify.sh");
+    let script = include_str!("../resources/planeai-stop-notify.sh");
+    std::fs::write(&script_path, script).map_err(|e| format!("failed to write hook script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    // Patch the default agent config to add our stop hook
+    let agents_dir = format!("{home}/.kiro/agents");
+    std::fs::create_dir_all(&agents_dir).map_err(|e| format!("failed to create agents dir: {e}"))?;
+    let config_path = format!("{agents_dir}/default.json");
+
+    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse default.json: {e}"))?
+    } else {
+        serde_json::json!({ "name": "default", "tools": ["*"] })
+    };
+
+    // Ensure hooks.stop array exists and add our entry
+    let hooks = config.as_object_mut().unwrap()
+        .entry("hooks").or_insert_with(|| serde_json::json!({}));
+    let stop_hooks = hooks.as_object_mut().unwrap()
+        .entry("stop").or_insert_with(|| serde_json::json!([]));
+    let stop_arr = stop_hooks.as_array_mut().unwrap();
+
+    // Check if already present
+    let already = stop_arr.iter().any(|h| {
+        h.get("command").and_then(|c| c.as_str()).map_or(false, |c| c.contains("planeai-stop-notify"))
+    });
+    if !already {
+        stop_arr.push(serde_json::json!({
+            "command": format!("{hooks_dir}/planeai-stop-notify.sh")
+        }));
+    }
+
+    let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, output).map_err(|e| format!("failed to write default.json: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     tmux::kill_session(&tmux_name)?;
     pty_state.0.detach(&id);
@@ -171,6 +245,7 @@ fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_
 #[tauri::command]
 fn launch_session(
     state: State<DbState>,
+    notify: State<NotifyHandle>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -204,16 +279,25 @@ fn launch_session(
 
     // Create tmux session
     let tmux_name = tmux::session_name(&project_name);
-    tmux::create_session(&tmux_name, &working_dir, auto_approve)?;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    tmux::create_session(&tmux_name, &working_dir, auto_approve, &session_id)?;
+
+    // Register with notification system
+    {
+        let mut ns = notify.0.lock().unwrap();
+        let display_name = if name.is_empty() { &branch } else { &name };
+        ns.register_session(&session_id, display_name, &project_name);
+    }
 
     // Persist to DB
-    db::create_session(&conn, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())
         .map_err(|e| e.to_string())
 }
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let menu = Menu::with_items(app, &[
@@ -250,7 +334,17 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
             app.manage(DbState(Mutex::new(conn)));
-            app.manage(PtyState(pty::PtyManager::new()));
+
+            // Notification system
+            let notify_state: notify::SharedNotifyState = Arc::new(Mutex::new(notify::NotifyState::new()));
+            notify::start_socket_listener(&app_dir, notify_state.clone(), app.handle().clone());
+            notify::start_silence_checker(notify_state.clone(), app.handle().clone());
+            app.manage(NotifyHandle(notify_state.clone()));
+
+            // PTY manager with notify wired in
+            let pty_mgr = pty::PtyManager::new();
+            pty_mgr.set_notify_state(notify_state);
+            app.manage(PtyState(pty_mgr));
 
             Ok(())
         })
@@ -271,6 +365,8 @@ fn main() {
             write_to_pty,
             resize_pty,
             check_session_alive,
+            is_notify_hook_installed,
+            install_notify_hook,
             archive_session,
             destroy_session,
         ])

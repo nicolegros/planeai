@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { touchMru, removeMru } from "./lib/mru.svelte";
@@ -45,8 +46,14 @@
   // Command menu state
   let commandMenuOpen = $state(false);
 
+  // Agent state tracking (Busy/Idle per session)
+  let agentStates = $state<Record<string, string>>({});
+
   // Preferences state
   let showPreferences = $state(false);
+
+  // Hook install prompt
+  let showHookPrompt = $state(false);
 
   const terminalBg = $derived.by(() => {
     const s = getSettings();
@@ -88,6 +95,16 @@
     loadProjects();
     loadSessions();
     loadSettings();
+
+    // Check if notification hook is installed
+    invoke<boolean>("is_notify_hook_installed").then((installed) => {
+      if (!installed) showHookPrompt = true;
+    });
+
+    // Listen for agent state changes from backend
+    const unlistenState = listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
+      agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+    });
 
     const cleanup = installKeyboardRouter(
       (action) => {
@@ -158,6 +175,7 @@
 
     return () => {
       cleanup();
+      unlistenState.then((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
@@ -231,6 +249,7 @@
       {sessions}
       {activeSessionId}
       {zone}
+      {agentStates}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
@@ -299,12 +318,32 @@
         tmuxName={session.tmux_name}
         visible={session.id === activeSessionId}
         focused={session.id === activeSessionId && zone === "terminal"}
+        onUserInput={() => {
+          if (agentStates[session.id]) {
+            const { [session.id]: _, ...rest } = agentStates;
+            agentStates = rest;
+          }
+        }}
       />
     {/each}
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
         <p class="text-surface-700 dark:text-surface-300">No active session. Press <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">⌘N</kbd> to create one.</p>
+      </div>
+    {/if}
+
+    {#if showHookPrompt}
+      <div class="absolute top-2 left-4 right-4 z-20 flex items-center gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-2.5 shadow-sm">
+        <span class="text-sm text-amber-800 dark:text-amber-200">Install notification hook for instant agent-done alerts?</span>
+        <button
+          class="ml-auto rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
+          onclick={async () => { await invoke("install_notify_hook"); showHookPrompt = false; }}
+        >Install</button>
+        <button
+          class="rounded px-2 py-1 text-xs text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200"
+          onclick={() => (showHookPrompt = false)}
+        >Dismiss</button>
       </div>
     {/if}
 

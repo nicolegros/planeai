@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+use crate::notify;
 use crate::tmux;
 
 struct PtyHandle {
@@ -15,13 +16,19 @@ struct PtyHandle {
 
 pub struct PtyManager {
     ptys: Mutex<HashMap<String, Arc<Mutex<PtyHandle>>>>,
+    notify_state: Mutex<Option<notify::SharedNotifyState>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self {
             ptys: Mutex::new(HashMap::new()),
+            notify_state: Mutex::new(None),
         }
+    }
+
+    pub fn set_notify_state(&self, state: notify::SharedNotifyState) {
+        *self.notify_state.lock().unwrap() = Some(state);
     }
 
     /// Attach to a tmux session by spawning `tmux attach-session -t <name>` in a PTY.
@@ -60,16 +67,31 @@ impl PtyManager {
 
         // Spawn reader thread that emits output to frontend
         let event_name = format!("pty-output-{session_id}");
+        let notify_clone = self.notify_state.lock().unwrap().clone();
+        let sid = session_id.to_string();
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
+            let mut was_busy = false;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = &buf[..n];
-                        // Send as base64 to avoid encoding issues
                         let encoded = base64_encode(data);
                         let _ = app.emit(&event_name, encoded);
+                        if let Some(ref ns) = notify_clone {
+                            let mut s = ns.lock().unwrap();
+                            let was_idle = s.get_state(&sid) != Some(crate::notify::AgentState::Busy);
+                            s.notify_output(&sid);
+                            if was_idle && !was_busy {
+                                drop(s);
+                                let _ = app.emit("agent-state-change", serde_json::json!({
+                                    "session_id": &sid,
+                                    "state": "Busy"
+                                }));
+                            }
+                            was_busy = true;
+                        }
                     }
                     Err(_) => break,
                 }

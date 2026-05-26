@@ -15,9 +15,10 @@
     tmuxName: string;
     visible: boolean;
     focused: boolean;
+    onUserInput?: () => void;
   }
 
-  let { sessionId, tmuxName, visible, focused }: Props = $props();
+  let { sessionId, tmuxName, visible, focused, onUserInput }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -190,6 +191,7 @@
       if (!filtered) return;
       const bytes = Array.from(new TextEncoder().encode(filtered));
       invoke("write_to_pty", { sessionId, data: bytes });
+      onUserInput?.();
     });
 
     // ── Listen for PTY output ────────────────────────────────────────────
