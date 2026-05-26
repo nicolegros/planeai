@@ -4,7 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
-  import { WebglAddon } from "@xterm/addon-webgl";
+  import { WebLinksAddon } from "@xterm/addon-web-links";
   import "@xterm/xterm/css/xterm.css";
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { getThemeById } from "../lib/terminal-themes";
@@ -23,7 +23,17 @@
   let fitAddon: FitAddon;
   let attached = false;
 
-  const termBg = $derived(getThemeById(isDark() ? getSettings().terminal_theme_dark : getSettings().terminal_theme_light).colors.background);
+  const SCROLLBACK_LINES = 100_000;
+  const RESIZE_DEBOUNCE_MS = 120;
+  const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
+  const termBg = $derived(
+    getThemeById(
+      isDark()
+        ? getSettings().terminal_theme_dark
+        : getSettings().terminal_theme_light
+    ).colors.background
+  );
 
   onMount(() => {
     const s = getSettings();
@@ -35,62 +45,188 @@
       fontSize: s.font_size,
       fontFamily: `'${s.font_family}', monospace`,
       theme: theme.colors,
+      scrollback: SCROLLBACK_LINES,
+      convertEol: true,
+      scrollOnUserInput: false,
+      allowProposedApi: true,
     });
 
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
-    term.open(containerEl);
 
-    try {
-      term.loadAddon(new WebglAddon());
-    } catch {
-      // WebGL not available, fall back to canvas
-    }
+    // WebLinksAddon — clickable URLs
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        // Open in default browser via Tauri shell
+        window.open(uri, "_blank");
+      })
+    );
+
+    term.open(containerEl);
 
     fitAddon.fit();
 
-    // Send input to backend
-    term.attachCustomKeyEventHandler((ev) => {
-      if (ev.key === "Enter" && ev.shiftKey) {
-        if (ev.type === "keydown") {
-          const bytes = Array.from(new TextEncoder().encode("\n"));
-          invoke("write_to_pty", { sessionId, data: bytes });
+    // ── DECRQM workaround (xterm bug: host queries mode status) ──────────
+    try {
+      const parser = (
+        term as unknown as {
+          parser?: {
+            registerCsiHandler?: (
+              id: { prefix?: string; intermediates?: string; final: string },
+              cb: (params: (number | number[])[]) => boolean
+            ) => { dispose(): void };
+          };
         }
+      ).parser;
+      if (parser?.registerCsiHandler) {
+        parser.registerCsiHandler(
+          { intermediates: "$", final: "p" },
+          (params) => {
+            const mode = (params[0] as number) ?? 0;
+            const bytes = Array.from(
+              new TextEncoder().encode(`\x1b[${mode};0$y`)
+            );
+            invoke("write_to_pty", { sessionId, data: bytes });
+            return true;
+          }
+        );
+        parser.registerCsiHandler(
+          { prefix: "?", intermediates: "$", final: "p" },
+          (params) => {
+            const mode = (params[0] as number) ?? 0;
+            const bytes = Array.from(
+              new TextEncoder().encode(`\x1b[?${mode};0$y`)
+            );
+            invoke("write_to_pty", { sessionId, data: bytes });
+            return true;
+          }
+        );
+      }
+    } catch {
+      // Ignore if parser API unavailable
+    }
+
+    // ── Focus-report filtering ───────────────────────────────────────────
+    let ptyStarted = false;
+
+    // ── Keyboard shortcuts ───────────────────────────────────────────────
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown") return true;
+
+      // Cmd+C → copy selection (if any)
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "c") {
+        if (term.hasSelection()) {
+          ev.preventDefault();
+          navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+          return false;
+        }
+        // No selection: let it pass through as Ctrl+C interrupt
+        return true;
+      }
+
+      // Cmd+V → paste
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "v") {
+        ev.preventDefault();
+        navigator.clipboard
+          .readText()
+          .then((text) => {
+            if (text) {
+              const bytes = Array.from(new TextEncoder().encode(text));
+              invoke("write_to_pty", { sessionId, data: bytes });
+            }
+          })
+          .catch(() => {});
         return false;
       }
+
+      // Shift+Enter → Ctrl+J (newline without submit)
+      if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.key === "Enter") {
+        ev.preventDefault();
+        const bytes = [0x0a]; // Ctrl+J
+        invoke("write_to_pty", { sessionId, data: bytes });
+        return false;
+      }
+
+      // Cmd+Backspace → Ctrl+U (kill line)
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "Backspace") {
+        ev.preventDefault();
+        const bytes = [0x15]; // Ctrl+U
+        invoke("write_to_pty", { sessionId, data: bytes });
+        return false;
+      }
+
+      // Cmd+Left → Ctrl+A (beginning of line)
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const bytes = [0x01]; // Ctrl+A
+        invoke("write_to_pty", { sessionId, data: bytes });
+        return false;
+      }
+
+      // Cmd+Right → Ctrl+E (end of line)
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "ArrowRight") {
+        ev.preventDefault();
+        const bytes = [0x05]; // Ctrl+E
+        invoke("write_to_pty", { sessionId, data: bytes });
+        return false;
+      }
+
+      // Escape → send Ctrl+C (interrupt)
+      if (ev.key === "Escape" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        ev.preventDefault();
+        const bytes = [0x03]; // Ctrl+C
+        invoke("write_to_pty", { sessionId, data: bytes });
+        return false;
+      }
+
       return true;
     });
 
+    // ── Terminal input with focus-report filtering ────────────────────────
     term.onData((data) => {
-      const bytes = Array.from(new TextEncoder().encode(data));
+      let filtered = data;
+      if (!ptyStarted) {
+        filtered = data.replace(/\x1b\[I|\x1b\[O/g, "");
+      }
+      if (!filtered) return;
+      const bytes = Array.from(new TextEncoder().encode(filtered));
       invoke("write_to_pty", { sessionId, data: bytes });
     });
 
-    // Listen for PTY output
+    // ── Listen for PTY output ────────────────────────────────────────────
     const unlisten = listen<string>(`pty-output-${sessionId}`, (event) => {
+      ptyStarted = true;
       const bytes = base64Decode(event.payload);
       term.write(bytes);
     });
 
-    // Attach to the tmux session
+    // ── Attach to the tmux session ───────────────────────────────────────
     invoke("attach_session", { sessionId, tmuxName }).then(() => {
       attached = true;
-      // Send initial size
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });
     });
 
-    // Resize observer
+    // ── Resize observer with debouncing ──────────────────────────────────
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastSentDims: { cols: number; rows: number } | null = null;
+
     const resizeObserver = new ResizeObserver(() => {
-      if (visible) {
+      if (!visible) return;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
         fitAddon.fit();
         const { rows, cols } = term;
+        if (lastSentDims?.cols === cols && lastSentDims?.rows === rows) return;
+        lastSentDims = { cols, rows };
         invoke("resize_pty", { sessionId, rows, cols });
-      }
+      }, RESIZE_DEBOUNCE_MS);
     });
     resizeObserver.observe(containerEl);
 
     return () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       unlisten.then((fn) => fn());
       term.dispose();
@@ -99,7 +235,6 @@
 
   $effect(() => {
     if (visible && fitAddon) {
-      // Re-fit when becoming visible
       requestAnimationFrame(() => fitAddon.fit());
     }
   });
