@@ -136,7 +136,7 @@
   </div>
 
   <div
-    class="flex items-center gap-4 rounded border border-transparent px-2 py-1.5 focus:border-surface-300 focus:bg-surface-50 dark:focus:border-surface-600 dark:focus:bg-surface-900 outline-none"
+    class="flex flex-col gap-2 rounded border border-transparent px-2 py-1.5 focus:border-surface-300 focus:bg-surface-50 dark:focus:border-surface-600 dark:focus:bg-surface-900 outline-none"
     tabindex="0"
     onkeydown={(e) => {
       if (e.key === "w") { e.preventDefault(); useWorktree = !useWorktree; }
@@ -149,14 +149,18 @@
       }
     }}
   >
-    <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
-    <span class="text-[10px] text-surface-600 dark:text-surface-400">W</span>
-    <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
-    <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
+    <div class="flex items-center gap-4">
+      <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
+      <span class="text-[10px] text-surface-600 dark:text-surface-400">W</span>
+      <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
+      <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
+    </div>
     {#if providerKeys.length > 1}
-      <span class="ml-auto text-[10px] text-surface-500 dark:text-surface-400">Provider</span>
-      <span class="text-xs text-surface-700 dark:text-surface-300 font-medium">{selectedProvider || config.default_provider}</span>
-      <span class="text-[10px] text-surface-600 dark:text-surface-400">P</span>
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-surface-500 dark:text-surface-400">Provider</span>
+        <span class="text-xs text-surface-700 dark:text-surface-300 font-medium">{selectedProvider || config.default_provider}</span>
+        <span class="text-[10px] text-surface-600 dark:text-surface-400">P</span>
+      </div>
     {/if}
   </div>
 
