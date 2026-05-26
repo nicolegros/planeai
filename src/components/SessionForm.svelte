@@ -154,15 +154,7 @@
     <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
     <span class="text-[10px] text-surface-600 dark:text-surface-400">A</span>
     {#if providerKeys.length > 1}
-      <select
-        bind:value={selectedProvider}
-        class="ml-auto rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-2 py-1 text-xs text-surface-700 dark:text-surface-300"
-        tabindex={-1}
-      >
-        {#each providerKeys as key (key)}
-          <option value={key} selected={key === config.default_provider}>{key}</option>
-        {/each}
-      </select>
+      <span class="ml-auto text-xs text-surface-700 dark:text-surface-300 font-medium">{selectedProvider || config.default_provider}</span>
       <span class="text-[10px] text-surface-600 dark:text-surface-400">P</span>
     {/if}
   </div>
