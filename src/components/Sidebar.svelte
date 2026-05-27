@@ -141,7 +141,7 @@
                   />
                 {:else}
                 <button
-                  class="w-full text-left px-2 py-1.5 rounded-md text-sm truncate flex items-center gap-1.5 transition-colors
+                  class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
                     {isActive
                       ? 'bg-primary-500/15 text-primary-700 dark:text-primary-300 font-medium'
                       : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
@@ -149,12 +149,8 @@
                   onclick={() => onSelectSession(session.id)}
                   oncontextmenu={(e) => onContextMenu(e, session)}
                 >
-                  {#if session.worktree_path}
-                    <span class="text-surface-600 dark:text-surface-400 text-xs shrink-0" title="Worktree">⑂</span>
-                  {/if}
-                  {#if isActive}
-                    <span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>
-                  {/if}
+                  <span class="w-3 shrink-0 text-center text-[10px] text-surface-600 dark:text-surface-400" title={session.worktree_path ? "Worktree" : ""}>{session.worktree_path ? '⎇' : ''}</span>
+                  {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
                   {#if agentStates[session.id] === 'Busy'}
                     <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
