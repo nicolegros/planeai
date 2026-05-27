@@ -79,7 +79,7 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_stat
         if s.status == "archived" {
             continue;
         }
-        if tmux::has_session(&s.tmux_name) {
+        if s.tmux_name.as_ref().map_or(false, |name| tmux::has_session(name)) {
             // Register with notification system
             let project_name = projects.iter()
                 .find(|p| p.id == s.project_id)
@@ -191,7 +191,7 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn attach_session(session_id: String, tmux_name: String, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
-    state.0.attach(&session_id, &tmux_name, app)
+    state.0.attach(&session_id, pty::PtyTarget::TmuxAttach { tmux_name }, app)
 }
 
 #[tauri::command]
@@ -352,7 +352,7 @@ fn launch_session(
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref(), Some(&provider_key))
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, Some(&tmux_name), &branch, worktree_path.as_deref(), Some(&provider_key), "tmux")
         .map_err(|e| e.to_string())
 }
 

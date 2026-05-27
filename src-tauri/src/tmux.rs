@@ -150,7 +150,7 @@ pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, se
     create_session_with_cmd(tmux_name, working_dir, &cmd, session_id)
 }
 
-/// Create a tmux session with remain-on-exit and a custom command.
+/// Create a tmux session with a custom command.
 pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, session_id: &str) -> Result<(), String> {
     let args = vec![
         "new-session", "-d", "-s", tmux_name, "-c", working_dir, cmd,
@@ -163,11 +163,6 @@ pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, se
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
-
-    // Set remain-on-exit so scrollback is preserved after agent exits
-    let _ = Command::new(tmux_bin())
-        .args(["set-option", "-t", tmux_name, "remain-on-exit", "on"])
-        .output();
 
     // Set PLANEAI_SESSION_ID so the stop hook can identify this session
     let _ = Command::new(tmux_bin())

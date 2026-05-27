@@ -8,6 +8,8 @@ pub struct Config {
     pub terminal: Terminal,
     pub providers: HashMap<String, Provider>,
     pub default_provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,6 +67,7 @@ impl Default for Config {
             },
             providers,
             default_provider: "kiro".to_string(),
+            session_backend: None,
         }
     }
 }
@@ -119,6 +122,25 @@ pub fn launch_command(provider: &Provider, yolo: bool) -> String {
         (true, Some(flag)) => format!("{} {}", provider.command, flag),
         _ => provider.command.clone(),
     }
+}
+
+/// Resolve the effective session backend: use config value if set, otherwise auto-detect.
+pub fn resolve_backend(config: &Config) -> &str {
+    match &config.session_backend {
+        Some(b) => b.as_str(),
+        None => {
+            if tmux_available() { "tmux" } else { "direct" }
+        }
+    }
+}
+
+/// Check if tmux binary is available on PATH.
+pub fn tmux_available() -> bool {
+    std::process::Command::new("which")
+        .arg("tmux")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Merge user config over defaults. Struct-like top-level keys (appearance, terminal)
@@ -188,6 +210,7 @@ mod tests {
                 m
             },
             default_provider: "claude".to_string(),
+            session_backend: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -366,5 +389,52 @@ mod tests {
             yolo_flag: None,
         };
         assert_eq!(launch_command(&provider, true), "aider");
+    }
+
+    #[test]
+    fn resolve_backend_returns_config_value_when_set() {
+        let mut config = Config::default();
+        config.session_backend = Some("direct".to_string());
+        assert_eq!(resolve_backend(&config), "direct");
+
+        config.session_backend = Some("tmux".to_string());
+        assert_eq!(resolve_backend(&config), "tmux");
+    }
+
+    #[test]
+    fn resolve_backend_falls_back_to_tmux_detection_when_unset() {
+        let config = Config::default();
+        assert!(config.session_backend.is_none());
+        let result = resolve_backend(&config);
+        // On this machine tmux is available, so should resolve to "tmux"
+        // The key behavior: it returns either "tmux" or "direct", never panics
+        assert!(result == "tmux" || result == "direct");
+        // And it matches tmux_available()
+        if tmux_available() {
+            assert_eq!(result, "tmux");
+        } else {
+            assert_eq!(result, "direct");
+        }
+    }
+
+    #[test]
+    fn session_backend_round_trips_through_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        // Save with session_backend = Some("direct")
+        let mut config = Config::default();
+        config.session_backend = Some("direct".to_string());
+        save(config_dir, &config).unwrap();
+        let (loaded, _) = load(config_dir);
+        assert_eq!(loaded.session_backend, Some("direct".to_string()));
+
+        // Save with session_backend = None (should be absent from JSON)
+        config.session_backend = None;
+        save(config_dir, &config).unwrap();
+        let content = fs::read_to_string(config_dir.join("config.json")).unwrap();
+        assert!(!content.contains("session_backend"));
+        let (loaded, _) = load(config_dir);
+        assert_eq!(loaded.session_backend, None);
     }
 }
