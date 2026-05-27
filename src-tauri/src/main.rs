@@ -2,6 +2,7 @@
 
 mod config;
 mod db;
+mod git;
 mod notify;
 mod pty;
 mod tmux;
@@ -159,7 +160,7 @@ fn update_config(state: State<ConfigState>, new_config: config::Config) -> Resul
 
 #[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
-    tmux::list_branches(&repo_path)
+    git::list_branches(&repo_path)
 }
 
 #[tauri::command]
@@ -369,7 +370,7 @@ fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
         if let Some(ref wt_path) = session.worktree_path {
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
             if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
-                let _ = tmux::worktree_remove(&project.path, wt_path);
+                let _ = git::worktree_remove(&project.path, wt_path);
             }
             let _ = std::fs::remove_dir_all(wt_path);
         }
@@ -413,10 +414,10 @@ fn launch_session(
         let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
         std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
             .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        tmux::worktree_add(&repo_path, &wt_path, &branch, base)?;
+        git::worktree_add(&repo_path, &wt_path, &branch, base)?;
         (wt_path.clone(), Some(wt_path))
     } else {
-        tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
+        git::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
         (repo_path.clone(), None)
     };
 
