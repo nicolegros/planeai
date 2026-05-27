@@ -21,6 +21,12 @@ pub struct Appearance {
 pub struct Terminal {
     pub font_family: String,
     pub font_size: u32,
+    #[serde(default = "default_option_as_meta")]
+    pub option_as_meta: bool,
+}
+
+fn default_option_as_meta() -> bool {
+    cfg!(target_os = "macos")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,6 +61,7 @@ impl Default for Config {
             terminal: Terminal {
                 font_family: "Menlo".to_string(),
                 font_size: 14,
+                option_as_meta: default_option_as_meta(),
             },
             providers,
             default_provider: "kiro".to_string(),
@@ -170,6 +177,7 @@ mod tests {
             terminal: Terminal {
                 font_family: "JetBrains Mono".to_string(),
                 font_size: 16,
+                option_as_meta: true,
             },
             providers: {
                 let mut m = HashMap::new();

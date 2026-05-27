@@ -22,6 +22,8 @@
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
 
+  const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
   onMount(async () => {
     const fonts = await invoke<string[]>("list_monospace_fonts");
     fontItems = fonts.map((f) => ({ value: f, label: f }));
@@ -170,6 +172,22 @@
       />
       <p class="text-xs text-surface-700 dark:text-surface-300" style="font-family: '{config.terminal.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
     </section>
+
+    <!-- Option as Meta (macOS only) -->
+    {#if IS_MAC}
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Option as Meta</h2>
+      <label class="flex items-center gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={config.terminal.option_as_meta}
+          onchange={(e) => updateSettings({ terminal: { ...config.terminal, option_as_meta: e.currentTarget.checked } })}
+          class="w-4 h-4 rounded border-surface-300 dark:border-surface-600 text-primary-500 focus:ring-primary-500"
+        />
+        <span class="text-sm text-surface-700 dark:text-surface-300">Send Option key as Meta/Escape (required for tmux Alt-key bindings)</span>
+      </label>
+    </section>
+    {/if}
 
     <!-- Providers -->
     <section class="space-y-3">

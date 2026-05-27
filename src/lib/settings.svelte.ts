@@ -16,6 +16,7 @@ export interface AppConfig {
   terminal: {
     font_family: string;
     font_size: number;
+    option_as_meta: boolean;
   };
   providers: Record<string, Provider>;
   default_provider: string;
@@ -30,6 +31,7 @@ let config = $state<AppConfig>({
   terminal: {
     font_family: "Menlo",
     font_size: 14,
+    option_as_meta: true,
   },
   providers: {
     kiro: { command: "kiro-cli chat", yolo_flag: "--trust-all-tools" },

@@ -51,6 +51,7 @@
       convertEol: true,
       scrollOnUserInput: false,
       allowProposedApi: true,
+      macOptionIsMeta: s.terminal.option_as_meta,
     });
 
     fitAddon = new FitAddon();
@@ -254,6 +255,7 @@
     term.options.theme = theme.colors;
     term.options.fontSize = s.terminal.font_size;
     term.options.fontFamily = `'${s.terminal.font_family}', monospace`;
+    term.options.macOptionIsMeta = s.terminal.option_as_meta;
     if (fitAddon) fitAddon.fit();
   });
 
