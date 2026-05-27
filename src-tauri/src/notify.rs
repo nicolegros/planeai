@@ -21,6 +21,8 @@ pub struct NotifyState {
     states: HashMap<String, AgentState>,
     last_output: HashMap<String, Instant>,
     meta: HashMap<String, SessionMeta>,
+    /// Sessions that have already fired a notification and are waiting for user focus.
+    notified: std::collections::HashSet<String>,
     #[cfg(test)]
     time_offset: HashMap<String, Duration>,
 }
@@ -31,15 +33,17 @@ impl NotifyState {
             states: HashMap::new(),
             last_output: HashMap::new(),
             meta: HashMap::new(),
+            notified: std::collections::HashSet::new(),
             #[cfg(test)]
             time_offset: HashMap::new(),
         }
     }
 
-    pub fn register_session(&mut self, session_id: &str, name: &str, project_name: &str) {
+    pub fn register_session(&mut self, session_id: &str, name: &str, project_name: &str, hook_enabled: bool) {
         self.meta.insert(session_id.to_string(), SessionMeta {
             name: name.to_string(),
             project_name: project_name.to_string(),
+            hook_enabled,
         });
     }
 
@@ -52,22 +56,45 @@ impl NotifyState {
             return false;
         }
         self.states.insert(session_id.to_string(), AgentState::Idle);
+        // Only fire notification if we haven't already notified for this idle period
+        if self.notified.contains(session_id) {
+            return false;
+        }
+        self.notified.insert(session_id.to_string());
         true
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
+        let was = self.get_state(session_id);
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output.insert(session_id.to_string(), Instant::now());
+        let had_notified = self.notified.remove(session_id);
+        if was != Some(AgentState::Busy) || had_notified {
+            eprintln!("[notify] output for {session_id} | was={was:?} | cleared_notified={had_notified}");
+        }
+    }
+
+    /// Clear the notified flag when the user focuses/acknowledges a session.
+    pub fn acknowledge(&mut self, session_id: &str) {
+        self.notified.remove(session_id);
     }
 
     pub fn check_silence(&mut self, session_id: &str) -> bool {
         if self.get_state(session_id) != Some(AgentState::Busy) {
             return false;
         }
+        // Skip silence-based detection for sessions with a working hook
+        if self.meta.get(session_id).map_or(false, |m| m.hook_enabled) {
+            return false;
+        }
         if let Some(&last) = self.last_output.get(session_id) {
             let elapsed = self.elapsed_since(session_id, last);
             if elapsed >= SILENCE_THRESHOLD {
                 self.states.insert(session_id.to_string(), AgentState::Idle);
+                if self.notified.contains(session_id) {
+                    return false;
+                }
+                self.notified.insert(session_id.to_string());
                 return true;
             }
         }
@@ -112,6 +139,7 @@ pub type SharedNotifyState = Arc<Mutex<NotifyState>>;
 pub struct SessionMeta {
     pub name: String,
     pub project_name: String,
+    pub hook_enabled: bool,
 }
 
 /// Returns the socket path inside the given app data directory.
@@ -138,7 +166,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                 }
                 let fired = {
                     let mut s = state.lock().unwrap();
-                    s.notify_stop(&session_id)
+                    let current_state = s.get_state(&session_id);
+                    let result = s.notify_stop(&session_id);
+                    eprintln!("[notify] socket received stop for {session_id} | was={current_state:?} | fired={result}");
+                    result
                 };
                 if fired {
                     emit_state_change(&app, &session_id, AgentState::Idle);
@@ -161,6 +192,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                 .collect()
         };
         for session_id in timed_out {
+            eprintln!("[notify] silence timeout fired for {session_id}");
             emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }
@@ -183,15 +215,8 @@ fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
     );
 }
 
-/// Fire sound + native notification.
+/// Fire native notification.
 fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
-    // Play system sound
-    std::process::Command::new("afplay")
-        .arg("/System/Library/Sounds/Pop.aiff")
-        .spawn()
-        .ok();
-
-    // Look up session metadata for the notification text
     let (title, body) = {
         let s = state.lock().unwrap();
         match s.get_meta(session_id) {
@@ -255,10 +280,32 @@ mod tests {
         let mut state = NotifyState::new();
         let session_id = "test-session-1";
 
+        // First stop fires notification
         assert!(state.notify_stop(session_id));
+        // Second stop does not (already idle)
         assert!(!state.notify_stop(session_id));
 
+        // Output transitions to busy and clears notified flag
         state.notify_output(session_id);
+        // Stop fires again since output cleared the flag
         assert!(state.notify_stop(session_id));
+    }
+
+    #[test]
+    fn silence_check_skipped_for_hook_enabled_sessions() {
+        let mut state = NotifyState::new();
+        let session_id = "test-session-hook";
+
+        state.register_session(session_id, "test", "project", true);
+        state.notify_output(session_id);
+        state.advance_time(session_id, Duration::from_secs(10));
+
+        // Should NOT transition to idle via silence
+        assert!(!state.check_silence(session_id));
+        assert_eq!(state.get_state(session_id), Some(AgentState::Busy));
+
+        // But hook can still transition it
+        assert!(state.notify_stop(session_id));
+        assert_eq!(state.get_state(session_id), Some(AgentState::Idle));
     }
 }

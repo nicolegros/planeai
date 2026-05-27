@@ -2,12 +2,14 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { touchMru, removeMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { getThemeById } from "./lib/terminal-themes";
+  import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -28,11 +30,12 @@
     id: string;
     project_id: string;
     name: string;
-    tmux_name: string;
+    tmux_name: string | null;
     branch: string;
     status: string;
     created_at: string;
     worktree_path: string | null;
+    backend: string;
   }
 
   let projects = $state<Project[]>([]);
@@ -55,14 +58,27 @@
   // Hook install prompt
   let showHookPrompt = $state(false);
 
+  // Quit confirmation
+  let showQuitConfirm = $state(false);
+  let quitDirectCount = $state(0);
+
   const terminalBg = $derived.by(() => {
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     return getThemeById(themeId).colors.background;
   });
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
+
+  // Rename state
+  let renamingSessionId = $state<string | null>(null);
+
+  async function doRename(id: string, name: string) {
+    await invoke("rename_session", { id, name });
+    sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
+    renamingSessionId = null;
+  }
 
   async function loadProjects() {
     projects = await invoke<Project[]>("list_projects");
@@ -70,6 +86,7 @@
 
   async function loadSessions() {
     sessions = await invoke<Session[]>("list_sessions");
+    listenForExits();
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
       // Seed MRU with all sessions (active one first)
@@ -80,9 +97,30 @@
     }
   }
 
+  // Listen for pty-exited events (session process terminated)
+  let exitUnlisteners: Array<() => void> = [];
+  function listenForExits() {
+    exitUnlisteners.forEach((fn) => fn());
+    exitUnlisteners = [];
+    for (const s of sessions) {
+      if (s.status === "active") {
+        listen(`pty-exited-${s.id}`, () => {
+          sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
+          invoke("mark_exited", { sessionId: s.id });
+        }).then((unlisten) => exitUnlisteners.push(unlisten));
+      }
+    }
+  }
+
   function selectSession(id: string) {
     activeSessionId = id;
     touchMru(id);
+    // Clear idle state when user focuses this session
+    if (agentStates[id] === "Idle") {
+      agentStates = { ...agentStates, [id]: "Busy" };
+    }
+    // Tell backend to allow future notifications for this session
+    invoke("acknowledge_session", { sessionId: id });
   }
 
   function jumpToSession(index: number) {
@@ -101,9 +139,26 @@
       if (!installed) showHookPrompt = true;
     });
 
+    // Quit confirmation for active direct sessions
+    const unlistenClose = getCurrentWindow().onCloseRequested(async (event) => {
+      const activeDirectCount = sessions.filter(
+        (s) => s.status === "active" && s.backend === "direct"
+      ).length;
+      if (activeDirectCount > 0) {
+        event.preventDefault();
+        quitDirectCount = activeDirectCount;
+        showQuitConfirm = true;
+      }
+    });
+
     // Listen for agent state changes from backend
     const unlistenState = listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
+      console.log("[notify] agent-state-change:", event.payload.session_id, "→", event.payload.state);
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
+      if (event.payload.state === "Idle") {
+        console.log("[notify] playing task complete sound");
+        playTaskComplete();
+      }
     });
 
     const cleanup = installKeyboardRouter(
@@ -152,7 +207,7 @@
         showPreferences = !showPreferences;
       }
     },
-    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen
+    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !getCycleState().isCycling
     );
 
     // Listen for Ctrl release to commit tab switch
@@ -176,6 +231,8 @@
     return () => {
       cleanup();
       unlistenState.then((fn) => fn());
+      unlistenClose.then((fn) => fn());
+      exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
@@ -186,19 +243,24 @@
     sessions = [...sessions, session];
     selectSession(session.id);
     focusTerminal();
+    listenForExits();
   }
 
-  async function confirmDelete() {
-    if (!sessionToDelete) return;
-    const s = sessionToDelete;
-    await invoke("destroy_session", { id: s.id, tmuxName: s.tmux_name });
+  async function doDelete(s: Session) {
+    await invoke("destroy_session", { id: s.id });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
       activeSessionId = sessions[0]?.id ?? null;
       if (activeSessionId) touchMru(activeSessionId);
     }
+  }
+
+  async function confirmDelete() {
+    if (!sessionToDelete) return;
+    const s = sessionToDelete;
     sessionToDelete = null;
+    await doDelete(s);
   }
 
   async function archiveCurrentSession() {
@@ -209,13 +271,20 @@
   }
 
   async function archiveSession(s: Session) {
-    await invoke("archive_session", { id: s.id, tmuxName: s.tmux_name });
+    await invoke("archive_session", { id: s.id });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
       activeSessionId = sessions[0]?.id ?? null;
       if (activeSessionId) touchMru(activeSessionId);
     }
+  }
+
+  async function restartSession(s: Session) {
+    const updated = await invoke<Session>("restart_session", { sessionId: s.id });
+    sessions = sessions.map((x) => x.id === s.id ? updated : x);
+    selectSession(s.id);
+    listenForExits();
   }
 
   function deleteCurrentSession() {
@@ -250,11 +319,15 @@
       {activeSessionId}
       {zone}
       {agentStates}
+      {renamingSessionId}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
+      onRestartSession={restartSession}
       onOpenPreferences={() => (showPreferences = true)}
+      onRenameSession={doRename}
+      onStartRename={(id) => (renamingSessionId = id || null)}
     />
   {/if}
 
@@ -278,6 +351,7 @@
           <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
           <SessionForm
             {projects}
+            {sessions}
             onCreated={onSessionCreated}
             onCancel={() => (showSessionForm = false)}
           />
@@ -291,6 +365,7 @@
         {sessions}
         {projects}
         selectedIndex={getCycleState().index}
+        {agentStates}
       />
     {/if}
 
@@ -303,6 +378,19 @@
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
       onArchiveSession={archiveCurrentSession}
       onDeleteSession={deleteCurrentSession}
+      onRenameSession={() => {
+        if (!activeSessionId) return;
+        sidebarVisible = true;
+        const s = sessions.find((x) => x.id === activeSessionId);
+        if (s) renamingSessionId = s.id;
+      }}
+      onRestoreSession={async (id) => {
+        await invoke("restore_session", { id });
+        await loadSessions();
+      }}
+      onDestroyArchivedSession={async (id) => {
+        await invoke("destroy_session", { id });
+      }}
       onNewSession={() => {
         if (projects.length === 0) {
           showProjectForm = true;
@@ -310,14 +398,25 @@
           showSessionForm = true;
         }
       }}
+      onResetTerminal={() => {
+        if (activeSessionId) {
+          invoke("write_to_pty", { sessionId: activeSessionId, data: [0x0c] });
+        }
+      }}
     />
 
     {#each sessions as session (session.id)}
       <Terminal
         sessionId={session.id}
-        tmuxName={session.tmux_name}
         visible={session.id === activeSessionId}
         focused={session.id === activeSessionId && zone === "terminal"}
+        exited={session.status === "exited"}
+        onAttached={() => {
+          if (session.status === "exited") {
+            sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
+            listenForExits();
+          }
+        }}
         onUserInput={() => {
           if (agentStates[session.id]) {
             const { [session.id]: _, ...rest } = agentStates;
@@ -348,19 +447,41 @@
     {/if}
 
     {#if sessionToDelete}
-      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-          class="rounded-lg border border-surface-200 bg-surface-50 p-6 w-80 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900"
-          onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') confirmDelete(); }}
-        >
-          <p class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>? This will kill the agent.</p>
-          <div class="flex justify-end gap-2">
-            <button class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300" onclick={() => (sessionToDelete = null)}>Cancel</button>
-            <button class="rounded bg-error-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete} autofocus>Delete</button>
-          </div>
-        </div>
-      </div>
+      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }}>
+        <Dialog.Portal>
+          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <Dialog.Content
+            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+            onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) doDelete(s); } }}
+          >
+            <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
+            <div class="flex justify-between">
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    {/if}
+    {#if showQuitConfirm}
+      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }}>
+        <Dialog.Portal>
+          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <Dialog.Content
+            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+            onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}
+          >
+            <Dialog.Title class="text-sm font-medium">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</Dialog.Title>
+            <p class="text-xs text-surface-500 dark:text-surface-400">Direct sessions don't survive app quit.</p>
+            <div class="flex justify-between">
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd> cancel</span>
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">q</kbd> quit</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     {/if}
     {/if}
   </section>

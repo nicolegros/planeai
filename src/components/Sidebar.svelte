@@ -12,11 +12,12 @@
     id: string;
     project_id: string;
     name: string;
-    tmux_name: string;
+    tmux_name: string | null;
     branch: string;
     status: string;
     created_at: string;
     worktree_path: string | null;
+    backend: string;
   }
 
   interface Props {
@@ -25,14 +26,33 @@
     activeSessionId: string | null;
     zone: FocusZone;
     agentStates: Record<string, string>;
+    renamingSessionId: string | null;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
     onDeleteSession: (session: Session) => void;
+    onRestartSession: (session: Session) => void;
     onOpenPreferences: () => void;
+    onRenameSession: (id: string, name: string) => void;
+    onStartRename: (id: string) => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onOpenPreferences }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename }: Props = $props();
+
+  let renameValue = $state("");
+
+  function startRename(session: Session) {
+    renameValue = session.name || session.branch;
+    onStartRename(session.id);
+  }
+
+  function commitRename(id: string) {
+    const trimmed = renameValue.trim();
+    if (trimmed) {
+      onRenameSession(id, trimmed);
+    }
+    onStartRename(""); // clear
+  }
 
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
 
@@ -112,23 +132,32 @@
               {@const isActive = session.id === activeSessionId}
               {@const isSelected = zone === 'sidebar' && globalIndex === selectedIndex}
               <li>
+                {#if renamingSessionId === session.id}
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input
+                    autofocus
+                    class="w-full px-2 py-1.5 rounded-md text-sm bg-surface-50 dark:bg-surface-800 border border-primary-500 outline-none"
+                    bind:value={renameValue}
+                    onkeydown={(e) => { if (e.key === 'Enter') commitRename(session.id); if (e.key === 'Escape') onStartRename(""); }}
+                    onblur={() => commitRename(session.id)}
+                  />
+                {:else}
                 <button
-                  class="w-full text-left px-2 py-1.5 rounded-md text-sm truncate flex items-center gap-1.5 transition-colors
+                  class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
                     {isActive
                       ? 'bg-primary-500/15 text-primary-700 dark:text-primary-300 font-medium'
                       : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                    {isSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                    {isSelected ? 'ring-1 ring-primary-500/50' : ''}
+                    {session.status === 'exited' ? 'opacity-60' : ''}"
                   onclick={() => onSelectSession(session.id)}
                   oncontextmenu={(e) => onContextMenu(e, session)}
                 >
-                  {#if session.worktree_path}
-                    <span class="text-surface-600 dark:text-surface-400 text-xs shrink-0" title="Worktree">⑂</span>
-                  {/if}
-                  {#if isActive}
-                    <span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>
-                  {/if}
+                  <span class="w-3 shrink-0 text-center text-[10px] text-surface-600 dark:text-surface-400" title={session.worktree_path ? "Worktree" : ""}>{session.worktree_path ? '⎇' : ''}</span>
+                  {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
-                  {#if agentStates[session.id] === 'Busy'}
+                  {#if session.status === 'exited'}
+                    <span class="ml-auto shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
+                  {:else if agentStates[session.id] === 'Busy'}
                     <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>
                     </span>
@@ -138,6 +167,7 @@
                     </span>
                   {/if}
                 </button>
+                {/if}
               </li>
             {/each}
             {#if projectSessions.length === 0}
@@ -166,9 +196,15 @@
     x={contextMenu.x}
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
-    items={[
-      { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
-      { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
-    ]}
+    items={contextMenu.session.status === 'exited'
+      ? [
+          { label: "Restart", onSelect: () => onRestartSession(contextMenu!.session) },
+          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+        ]
+      : [
+          { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
+          { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
+          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+        ]}
   />
 {/if}

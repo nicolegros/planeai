@@ -8,6 +8,15 @@ use tauri::{AppHandle, Emitter};
 use crate::notify;
 use crate::tmux;
 
+/// Describes what command to run inside the PTY.
+#[allow(dead_code)]
+pub enum PtyTarget {
+    /// Attach to an existing tmux session.
+    TmuxAttach { tmux_name: String },
+    /// Spawn a command directly (no tmux).
+    Direct { command: String, args: Vec<String>, cwd: String },
+}
+
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -31,9 +40,8 @@ impl PtyManager {
         *self.notify_state.lock().unwrap() = Some(state);
     }
 
-    /// Attach to a tmux session by spawning `tmux attach-session -t <name>` in a PTY.
-    /// Streams output to the frontend via Tauri events.
-    pub fn attach(&self, session_id: &str, tmux_name: &str, app: AppHandle) -> Result<(), String> {
+    /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
+    pub fn attach(&self, session_id: &str, target: PtyTarget, app: AppHandle) -> Result<(), String> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -45,8 +53,19 @@ impl PtyManager {
             })
             .map_err(|e| format!("failed to open pty: {e}"))?;
 
-        let mut cmd = CommandBuilder::new(tmux::tmux_bin());
-        cmd.args(["attach-session", "-t", tmux_name]);
+        let cmd = match &target {
+            PtyTarget::TmuxAttach { tmux_name } => {
+                let mut c = CommandBuilder::new(tmux::tmux_bin());
+                c.args(["attach-session", "-t", tmux_name]);
+                c
+            }
+            PtyTarget::Direct { command, args, cwd } => {
+                let mut c = CommandBuilder::new(command);
+                c.args(args);
+                c.cwd(cwd);
+                c
+            }
+        };
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
         drop(pair.slave);
@@ -67,6 +86,7 @@ impl PtyManager {
 
         // Spawn reader thread that emits output to frontend
         let event_name = format!("pty-output-{session_id}");
+        let exit_event_name = format!("pty-exited-{session_id}");
         let notify_clone = self.notify_state.lock().unwrap().clone();
         let sid = session_id.to_string();
         thread::spawn(move || {
@@ -96,6 +116,8 @@ impl PtyManager {
                     Err(_) => break,
                 }
             }
+            // EOF — process exited
+            let _ = app.emit(&exit_event_name, ());
         });
 
         Ok(())

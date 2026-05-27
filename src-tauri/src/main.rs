@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
 mod db;
 mod notify;
 mod pty;
@@ -13,6 +14,7 @@ use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
 struct NotifyHandle(notify::SharedNotifyState);
+struct ConfigState(Mutex<config::Config>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
@@ -21,6 +23,21 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Check if a provider has hook-based idle detection (currently Kiro only).
+fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
+    let Some(provider) = cfg.providers.get(provider_key) else { return false };
+    provider.command.contains("kiro-cli") && is_notify_hook_installed_check()
+}
+
+fn is_notify_hook_installed_check() -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.kiro/agents/default.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content.contains("planeai-stop-notify"),
+        Err(_) => false,
+    }
 }
 
 #[tauri::command]
@@ -52,32 +69,64 @@ fn create_session(state: State<DbState>, project_id: String, name: String, tmux_
 }
 
 #[tauri::command]
-fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>) -> Result<Vec<db::Session>, String> {
+fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>) -> Result<Vec<db::Session>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-    let mut alive = Vec::new();
-    for s in sessions {
-        if s.status == "archived" {
+
+    // Register active sessions with notification system
+    for s in &sessions {
+        if s.status != "active" {
             continue;
         }
-        if tmux::has_session(&s.tmux_name) {
-            // Register with notification system
-            let project_name = projects.iter()
-                .find(|p| p.id == s.project_id)
-                .map(|p| p.name.as_str())
-                .unwrap_or("unknown");
-            let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
-            {
-                let mut ns = notify.0.lock().unwrap();
-                ns.register_session(&s.id, display_name, project_name);
-            }
-            alive.push(s);
-        } else {
-            let _ = db::delete_session(&conn, &s.id);
-        }
+        let project_name = projects.iter()
+            .find(|p| p.id == s.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
+        let hook_enabled = s.provider.as_deref()
+            .map(|pk| provider_has_hook(pk, &cfg))
+            .unwrap_or(false);
+        let mut ns = notify.0.lock().unwrap();
+        ns.register_session(&s.id, display_name, project_name, hook_enabled);
     }
-    Ok(alive)
+
+    Ok(sessions)
+}
+
+#[tauri::command]
+fn rename_session(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>, id: String, name: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::rename_session(&conn, &id, &name).map_err(|e| e.to_string())?;
+    // Update notify display name
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_name = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if name.is_empty() { &session.branch } else { &name };
+        let hook_enabled = session.provider.as_deref()
+            .map(|pk| provider_has_hook(pk, &cfg))
+            .unwrap_or(false);
+        let mut ns = notify.0.lock().unwrap();
+        ns.register_session(&id, display_name, project_name, hook_enabled);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_archived_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::list_archived_sessions(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restore_session(state: State<DbState>, id: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::restore_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -94,15 +143,18 @@ fn validate_git_repo(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_settings(state: State<DbState>) -> Result<db::Settings, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::get_settings(&conn).map_err(|e| e.to_string())
+fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?;
+    Ok(cfg.clone())
 }
 
 #[tauri::command]
-fn update_settings(state: State<DbState>, settings: db::Settings) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::update_settings(&conn, &settings).map_err(|e| e.to_string())
+fn update_config(state: State<ConfigState>, new_config: config::Config) -> Result<(), String> {
+    let config_dir = config::config_dir();
+    config::save(&config_dir, &new_config)?;
+    let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
+    *cfg = new_config;
+    Ok(())
 }
 
 #[tauri::command]
@@ -132,8 +184,42 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn attach_session(session_id: String, tmux_name: String, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
-    state.0.attach(&session_id, &tmux_name, app)
+fn attach_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+
+    let pty_target = if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
+        pty::PtyTarget::TmuxAttach { tmux_name }
+    } else {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+        let provider_def = cfg.providers.get(provider_key)
+            .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+        let cmd = config::launch_command(provider_def, false);
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let command = parts[0].to_string();
+        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        // Resolve cwd from worktree or project path
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_path = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.path.as_str())
+            .unwrap_or("/");
+        let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
+        pty::PtyTarget::Direct { command, args, cwd }
+    };
+
+    state.0.attach(&session_id, pty_target, app)?;
+
+    // If session was exited, mark it active again (auto-restart on reopen)
+    if session.status == "exited" {
+        db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -153,12 +239,7 @@ fn check_session_alive(tmux_name: String) -> bool {
 
 #[tauri::command]
 fn is_notify_hook_installed() -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = format!("{home}/.kiro/agents/default.json");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content.contains("planeai-stop-notify"),
-        Err(_) => false,
-    }
+    is_notify_hook_installed_check()
 }
 
 #[tauri::command]
@@ -212,40 +293,96 @@ fn install_notify_hook() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
-    tmux::kill_session(&tmux_name)?;
+fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
+    let mut ns = notify.0.lock().unwrap();
+    ns.acknowledge(&session_id);
+}
+
+#[tauri::command]
+fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn check_tmux_available() -> bool {
+    config::tmux_available()
+}
+
+#[tauri::command]
+fn restart_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>) -> Result<db::Session, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+
+    if session.status != "exited" {
+        return Err("can only restart exited sessions".to_string());
+    }
+
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+    let provider_def = cfg.providers.get(provider_key)
+        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+    let cmd = config::launch_command(provider_def, false);
+    drop(cfg);
+
+    if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_path = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.path.as_str())
+            .unwrap_or("/");
+        let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+        tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+    }
+
+    db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    let updated = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found after restore")?;
+    Ok(updated)
+}
+
+#[tauri::command]
+fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     db::archive_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
-    // Kill tmux session
-    tmux::kill_session(&tmux_name)?;
+fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     // Detach PTY
     pty_state.0.detach(&id);
-    // Remove worktree if applicable
+
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        // Only kill tmux if this is a tmux-backed session
+        if session.backend == "tmux" {
+            if let Some(ref tn) = session.tmux_name {
+                let _ = tmux::kill_session(tn);
+            }
+        }
+        // Remove worktree if applicable
         if let Some(ref wt_path) = session.worktree_path {
-            // Find project repo path for git worktree remove
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
             if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
                 let _ = tmux::worktree_remove(&project.path, wt_path);
             }
-            // Clean up directory if it still exists
             let _ = std::fs::remove_dir_all(wt_path);
         }
     }
-    // Remove from DB
-    db::delete_session(&conn, &id).map_err(|e| e.to_string())
+    // Soft-delete
+    db::destroy_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn launch_session(
     state: State<DbState>,
     notify: State<NotifyHandle>,
+    config_state: State<ConfigState>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -255,7 +392,17 @@ fn launch_session(
     use_worktree: bool,
     base_branch: Option<String>,
     auto_approve: bool,
+    provider: Option<String>,
 ) -> Result<db::Session, String> {
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let provider_key = provider.unwrap_or_else(|| cfg.default_provider.clone());
+    let provider_def = cfg.providers.get(&provider_key)
+        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+    let cmd = config::launch_command(provider_def, auto_approve);
+    let hook_enabled = provider_def.command.contains("kiro-cli") && is_notify_hook_installed_check();
+    let backend = config::resolve_backend(&cfg).to_string();
+    drop(cfg);
+
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
     let (working_dir, worktree_path) = if use_worktree {
@@ -269,28 +416,29 @@ fn launch_session(
         tmux::worktree_add(&repo_path, &wt_path, &branch, base)?;
         (wt_path.clone(), Some(wt_path))
     } else {
-        // Guard: block if another non-worktree session is active for this project
-        if db::has_active_checkout_session(&conn, &project_id).map_err(|e| e.to_string())? {
-            return Err("Another in-repo session is already active for this project. Archive it first or use worktree mode.".to_string());
-        }
         tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
-        (repo_path, None)
+        (repo_path.clone(), None)
     };
 
-    // Create tmux session
-    let tmux_name = tmux::session_name(&project_name);
     let session_id = uuid::Uuid::new_v4().to_string();
-    tmux::create_session(&tmux_name, &working_dir, auto_approve, &session_id)?;
+
+    let tmux_name = if backend == "tmux" {
+        let tn = tmux::session_name(&project_name);
+        tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
+        Some(tn)
+    } else {
+        None
+    };
 
     // Register with notification system
     {
         let mut ns = notify.0.lock().unwrap();
         let display_name = if name.is_empty() { &branch } else { &name };
-        ns.register_session(&session_id, display_name, &project_name);
+        ns.register_session(&session_id, display_name, &project_name, hook_enabled);
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, &tmux_name, &branch, worktree_path.as_deref())
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend)
         .map_err(|e| e.to_string())
 }
 
@@ -333,6 +481,18 @@ fn main() {
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
+
+            // Startup reconciliation: mark stale sessions as exited
+            let _ = db::reconcile_sessions(&conn, |name| tmux::has_session(name));
+
+            // Config: migrate from DB if needed, then load
+            let config_dir = config::config_dir();
+            if let Ok(settings) = db::get_settings(&conn) {
+                let _ = config::migrate_from_db(&config_dir, &settings);
+            }
+            let (cfg, _warnings) = config::load(&config_dir);
+            app.manage(ConfigState(Mutex::new(cfg)));
+
             app.manage(DbState(Mutex::new(conn)));
 
             // Notification system
@@ -355,11 +515,14 @@ fn main() {
             create_session,
             list_sessions,
             delete_session,
+            rename_session,
+            list_archived_sessions,
+            restore_session,
             validate_git_repo,
             list_branches,
             list_monospace_fonts,
-            get_settings,
-            update_settings,
+            get_config,
+            update_config,
             launch_session,
             attach_session,
             write_to_pty,
@@ -367,6 +530,10 @@ fn main() {
             check_session_alive,
             is_notify_hook_installed,
             install_notify_hook,
+            acknowledge_session,
+            mark_exited,
+            check_tmux_available,
+            restart_session,
             archive_session,
             destroy_session,
         ])

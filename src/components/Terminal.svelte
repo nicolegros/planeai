@@ -12,13 +12,14 @@
 
   interface Props {
     sessionId: string;
-    tmuxName: string;
     visible: boolean;
     focused: boolean;
+    exited?: boolean;
     onUserInput?: () => void;
+    onAttached?: () => void;
   }
 
-  let { sessionId, tmuxName, visible, focused, onUserInput }: Props = $props();
+  let { sessionId, visible, focused, exited = false, onUserInput, onAttached }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -32,25 +33,26 @@
   const termBg = $derived(
     getThemeById(
       isDark()
-        ? getSettings().terminal_theme_dark
-        : getSettings().terminal_theme_light
+        ? getSettings().appearance.terminal_theme_dark
+        : getSettings().appearance.terminal_theme_light
     ).colors.background
   );
 
   onMount(() => {
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     const theme = getThemeById(themeId);
 
     term = new Terminal({
       cursorBlink: true,
-      fontSize: s.font_size,
-      fontFamily: `'${s.font_family}', monospace`,
+      fontSize: s.terminal.font_size,
+      fontFamily: `'${s.terminal.font_family}', monospace`,
       theme: theme.colors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
       scrollOnUserInput: false,
       allowProposedApi: true,
+      macOptionIsMeta: s.terminal.option_as_meta,
     });
 
     fitAddon = new FitAddon();
@@ -184,6 +186,7 @@
 
     // ── Terminal input with focus-report filtering ────────────────────────
     term.onData((data) => {
+      if (exited) return;
       let filtered = data;
       if (!ptyStarted) {
         filtered = data.replace(/\x1b\[I|\x1b\[O/g, "");
@@ -201,9 +204,10 @@
       term.write(bytes);
     });
 
-    // ── Attach to the tmux session ───────────────────────────────────────
-    invoke("attach_session", { sessionId, tmuxName }).then(() => {
+    // ── Attach to the session ─────────────────────────────────────────────
+    invoke("attach_session", { sessionId }).then(() => {
       attached = true;
+      onAttached?.();
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });
     });
@@ -249,11 +253,12 @@
   $effect(() => {
     if (!term) return;
     const s = getSettings();
-    const themeId = isDark() ? s.terminal_theme_dark : s.terminal_theme_light;
+    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
     const theme = getThemeById(themeId);
     term.options.theme = theme.colors;
-    term.options.fontSize = s.font_size;
-    term.options.fontFamily = `'${s.font_family}', monospace`;
+    term.options.fontSize = s.terminal.font_size;
+    term.options.fontFamily = `'${s.terminal.font_family}', monospace`;
+    term.options.macOptionIsMeta = s.terminal.option_as_meta;
     if (fitAddon) fitAddon.fit();
   });
 
