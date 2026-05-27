@@ -141,6 +141,16 @@
         return true;
       }
 
+      // Cmd+K → clear terminal and force redraw
+      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "k") {
+        ev.preventDefault();
+        term.clear();
+        // Send clear screen + tmux refresh
+        const clear = Array.from(new TextEncoder().encode("\x0c"));
+        invoke("write_to_pty", { sessionId, data: clear });
+        return false;
+      }
+
       // Shift+Enter → Ctrl+J (newline without submit)
       if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.key === "Enter") {
         ev.preventDefault();
