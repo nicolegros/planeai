@@ -16,9 +16,10 @@
     focused: boolean;
     exited?: boolean;
     onUserInput?: () => void;
+    onAttached?: () => void;
   }
 
-  let { sessionId, visible, focused, exited = false, onUserInput }: Props = $props();
+  let { sessionId, visible, focused, exited = false, onUserInput, onAttached }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -203,14 +204,13 @@
       term.write(bytes);
     });
 
-    // ── Attach to the session (skip if already exited) ─────────────────────
-    if (!exited) {
-      invoke("attach_session", { sessionId }).then(() => {
-        attached = true;
-        const { rows, cols } = term;
-        invoke("resize_pty", { sessionId, rows, cols });
-      });
-    }
+    // ── Attach to the session ─────────────────────────────────────────────
+    invoke("attach_session", { sessionId }).then(() => {
+      attached = true;
+      onAttached?.();
+      const { rows, cols } = term;
+      invoke("resize_pty", { sessionId, rows, cols });
+    });
 
     // ── Resize observer with debouncing ──────────────────────────────────
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;

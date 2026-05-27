@@ -411,6 +411,12 @@
         visible={session.id === activeSessionId}
         focused={session.id === activeSessionId && zone === "terminal"}
         exited={session.status === "exited"}
+        onAttached={() => {
+          if (session.status === "exited") {
+            sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
+            listenForExits();
+          }
+        }}
         onUserInput={() => {
           if (agentStates[session.id]) {
             const { [session.id]: _, ...rest } = agentStates;

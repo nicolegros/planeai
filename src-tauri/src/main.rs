@@ -212,7 +212,14 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
         pty::PtyTarget::Direct { command, args, cwd }
     };
 
-    state.0.attach(&session_id, pty_target, app)
+    state.0.attach(&session_id, pty_target, app)?;
+
+    // If session was exited, mark it active again (auto-restart on reopen)
+    if session.status == "exited" {
+        db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
