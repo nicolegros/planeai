@@ -157,7 +157,25 @@ pub fn create_session_with_id(
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider FROM sessions")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider FROM sessions WHERE status = 'active'")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Session {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            name: row.get(2)?,
+            tmux_name: row.get(3)?,
+            branch: row.get(4)?,
+            status: row.get(5)?,
+            created_at: row.get(6)?,
+            worktree_path: row.get(7)?,
+            provider: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider FROM sessions WHERE status = 'archived'")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -184,6 +202,16 @@ pub fn delete_session(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn destroy_session(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("UPDATE sessions SET status = 'destroyed' WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn restore_session(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("UPDATE sessions SET status = 'active' WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 pub fn has_active_checkout_session(conn: &Connection, project_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND status = 'active' AND worktree_path IS NULL",
@@ -200,6 +228,11 @@ pub fn project_name_exists(conn: &Connection, name: &str) -> Result<bool> {
         |r| r.get(0),
     )?;
     Ok(count > 0)
+}
+
+pub fn rename_session(conn: &Connection, id: &str, name: &str) -> Result<()> {
+    conn.execute("UPDATE sessions SET name = ?2 WHERE id = ?1", params![id, name])?;
+    Ok(())
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
@@ -312,5 +345,68 @@ mod tests {
         assert!(!project_name_exists(&conn, "myapp").unwrap());
         create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         assert!(project_name_exists(&conn, "myapp").unwrap());
+    }
+
+    #[test]
+    fn test_rename_session() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let s = create_session(&conn, &p.id, "old name", "planeai-myapp-aaa", "main", None).unwrap();
+        rename_session(&conn, &s.id, "new name").unwrap();
+        let updated = get_session(&conn, &s.id).unwrap().unwrap();
+        assert_eq!(updated.name, "new name");
+    }
+
+    #[test]
+    fn test_list_archived_sessions() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(&conn, &p.id, "active one", "planeai-myapp-aaa", "main", None).unwrap();
+        let s2 = create_session(&conn, &p.id, "archived one", "planeai-myapp-bbb", "feat", None).unwrap();
+        archive_session(&conn, &s2.id).unwrap();
+        let archived = list_archived_sessions(&conn).unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].name, "archived one");
+    }
+
+    #[test]
+    fn test_list_sessions_excludes_archived_and_destroyed() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(&conn, &p.id, "active", "planeai-myapp-aaa", "main", None).unwrap();
+        let s2 = create_session(&conn, &p.id, "archived", "planeai-myapp-bbb", "feat", None).unwrap();
+        archive_session(&conn, &s2.id).unwrap();
+        let s3 = create_session(&conn, &p.id, "destroyed", "planeai-myapp-ccc", "fix", None).unwrap();
+        destroy_session(&conn, &s3.id).unwrap();
+        let sessions = list_sessions(&conn).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].name, "active");
+    }
+
+    #[test]
+    fn test_orphan_cleanup_soft_deletes() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let s = create_session(&conn, &p.id, "orphan", "planeai-myapp-dead", "main", None).unwrap();
+        // Simulate orphan cleanup: tmux is dead, so we destroy
+        destroy_session(&conn, &s.id).unwrap();
+        // Not in active list
+        assert_eq!(list_sessions(&conn).unwrap().len(), 0);
+        // Still in DB
+        let row = get_session(&conn, &s.id).unwrap().unwrap();
+        assert_eq!(row.status, "destroyed");
+    }
+
+    #[test]
+    fn test_restore_session() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let s = create_session(&conn, &p.id, "to restore", "planeai-myapp-aaa", "main", None).unwrap();
+        archive_session(&conn, &s.id).unwrap();
+        assert_eq!(list_sessions(&conn).unwrap().len(), 0);
+        restore_session(&conn, &s.id).unwrap();
+        let sessions = list_sessions(&conn).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].status, "active");
     }
 }

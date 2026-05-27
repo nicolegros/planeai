@@ -65,6 +65,15 @@
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
 
+  // Rename state
+  let renamingSessionId = $state<string | null>(null);
+
+  async function doRename(id: string, name: string) {
+    await invoke("rename_session", { id, name });
+    sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
+    renamingSessionId = null;
+  }
+
   async function loadProjects() {
     projects = await invoke<Project[]>("list_projects");
   }
@@ -225,7 +234,7 @@
   }
 
   async function archiveSession(s: Session) {
-    await invoke("archive_session", { id: s.id, tmuxName: s.tmux_name });
+    await invoke("archive_session", { id: s.id });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -266,11 +275,14 @@
       {activeSessionId}
       {zone}
       {agentStates}
+      {renamingSessionId}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
       onOpenPreferences={() => (showPreferences = true)}
+      onRenameSession={doRename}
+      onStartRename={(id) => (renamingSessionId = id || null)}
     />
   {/if}
 
@@ -294,6 +306,7 @@
           <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
           <SessionForm
             {projects}
+            {sessions}
             onCreated={onSessionCreated}
             onCancel={() => (showSessionForm = false)}
           />
@@ -319,6 +332,19 @@
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
       onArchiveSession={archiveCurrentSession}
       onDeleteSession={deleteCurrentSession}
+      onRenameSession={() => {
+        if (!activeSessionId) return;
+        sidebarVisible = true;
+        const s = sessions.find((x) => x.id === activeSessionId);
+        if (s) renamingSessionId = s.id;
+      }}
+      onRestoreSession={async (id) => {
+        await invoke("restore_session", { id });
+        await loadSessions();
+      }}
+      onDestroyArchivedSession={async (id, tmuxName) => {
+        await invoke("destroy_session", { id, tmuxName });
+      }}
       onNewSession={() => {
         if (projects.length === 0) {
           showProjectForm = true;

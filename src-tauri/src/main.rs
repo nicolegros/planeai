@@ -95,10 +95,44 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_stat
             }
             alive.push(s);
         } else {
-            let _ = db::delete_session(&conn, &s.id);
+            let _ = db::destroy_session(&conn, &s.id);
         }
     }
     Ok(alive)
+}
+
+#[tauri::command]
+fn rename_session(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>, id: String, name: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::rename_session(&conn, &id, &name).map_err(|e| e.to_string())?;
+    // Update notify display name
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_name = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if name.is_empty() { &session.branch } else { &name };
+        let hook_enabled = session.provider.as_deref()
+            .map(|pk| provider_has_hook(pk, &cfg))
+            .unwrap_or(false);
+        let mut ns = notify.0.lock().unwrap();
+        ns.register_session(&id, display_name, project_name, hook_enabled);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_archived_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::list_archived_sessions(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restore_session(state: State<DbState>, id: String) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::restore_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -237,8 +271,7 @@ fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 }
 
 #[tauri::command]
-fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
-    tmux::kill_session(&tmux_name)?;
+fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     db::archive_session(&conn, &id).map_err(|e| e.to_string())
@@ -247,24 +280,22 @@ fn archive_session(id: String, tmux_name: String, db_state: State<DbState>, pty_
 #[tauri::command]
 fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     // Kill tmux session
-    tmux::kill_session(&tmux_name)?;
+    let _ = tmux::kill_session(&tmux_name);
     // Detach PTY
     pty_state.0.detach(&id);
     // Remove worktree if applicable
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
         if let Some(ref wt_path) = session.worktree_path {
-            // Find project repo path for git worktree remove
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
             if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
                 let _ = tmux::worktree_remove(&project.path, wt_path);
             }
-            // Clean up directory if it still exists
             let _ = std::fs::remove_dir_all(wt_path);
         }
     }
-    // Remove from DB
-    db::delete_session(&conn, &id).map_err(|e| e.to_string())
+    // Soft-delete
+    db::destroy_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -304,10 +335,6 @@ fn launch_session(
         tmux::worktree_add(&repo_path, &wt_path, &branch, base)?;
         (wt_path.clone(), Some(wt_path))
     } else {
-        // Guard: block if another non-worktree session is active for this project
-        if db::has_active_checkout_session(&conn, &project_id).map_err(|e| e.to_string())? {
-            return Err("Another in-repo session is already active for this project. Archive it first or use worktree mode.".to_string());
-        }
         tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
         (repo_path, None)
     };
@@ -399,6 +426,9 @@ fn main() {
             create_session,
             list_sessions,
             delete_session,
+            rename_session,
+            list_archived_sessions,
+            restore_session,
             validate_git_repo,
             list_branches,
             list_monospace_fonts,
