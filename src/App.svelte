@@ -320,6 +320,7 @@
         {sessions}
         {projects}
         selectedIndex={getCycleState().index}
+        {agentStates}
       />
     {/if}
 
