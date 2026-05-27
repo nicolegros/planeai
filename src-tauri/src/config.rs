@@ -31,6 +31,10 @@ fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
 }
 
+fn default_font_family() -> &'static str {
+    if cfg!(windows) { "Cascadia Mono" } else { "Menlo" }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Provider {
     pub command: String,
@@ -76,7 +80,7 @@ impl Default for Config {
                 terminal_theme_light: "one-light".to_string(),
             },
             terminal: Terminal {
-                font_family: "Menlo".to_string(),
+                font_family: default_font_family().to_string(),
                 font_size: 14,
                 option_as_meta: default_option_as_meta(),
             },
@@ -457,6 +461,16 @@ mod tests {
         assert!(!content.contains("session_backend"));
         let (loaded, _) = load(config_dir);
         assert_eq!(loaded.session_backend, None);
+    }
+
+    #[test]
+    fn default_font_is_platform_appropriate() {
+        let config = Config::default();
+        if cfg!(windows) {
+            assert_eq!(config.terminal.font_family, "Cascadia Mono");
+        } else {
+            assert_eq!(config.terminal.font_family, "Menlo");
+        }
     }
 
     #[test]
