@@ -12,18 +12,13 @@
 
   interface Props {
     sessionId: string;
-    tmuxName: string | null;
-    backend: string;
-    command?: string;
-    args?: string[];
-    cwd?: string;
     visible: boolean;
     focused: boolean;
     exited?: boolean;
     onUserInput?: () => void;
   }
 
-  let { sessionId, tmuxName, backend, command, args, cwd, visible, focused, exited = false, onUserInput }: Props = $props();
+  let { sessionId, visible, focused, exited = false, onUserInput }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -209,10 +204,7 @@
     });
 
     // ── Attach to the session ─────────────────────────────────────────────
-    const target = backend === "tmux"
-      ? { type: "tmux", tmux_name: tmuxName! }
-      : { type: "direct", command: command!, args: args ?? [], cwd: cwd ?? "" };
-    invoke("attach_session", { sessionId, target }).then(() => {
+    invoke("attach_session", { sessionId }).then(() => {
       attached = true;
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });

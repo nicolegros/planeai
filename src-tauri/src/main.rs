@@ -183,21 +183,35 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
     Ok(fonts)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(tag = "type")]
-enum AttachTarget {
-    #[serde(rename = "tmux")]
-    Tmux { tmux_name: String },
-    #[serde(rename = "direct")]
-    Direct { command: String, args: Vec<String>, cwd: String },
-}
-
 #[tauri::command]
-fn attach_session(session_id: String, target: AttachTarget, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
-    let pty_target = match target {
-        AttachTarget::Tmux { tmux_name } => pty::PtyTarget::TmuxAttach { tmux_name },
-        AttachTarget::Direct { command, args, cwd } => pty::PtyTarget::Direct { command, args, cwd },
+fn attach_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+
+    let pty_target = if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
+        pty::PtyTarget::TmuxAttach { tmux_name }
+    } else {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+        let provider_def = cfg.providers.get(provider_key)
+            .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+        let cmd = config::launch_command(provider_def, false);
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let command = parts[0].to_string();
+        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        // Resolve cwd from worktree or project path
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_path = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.path.as_str())
+            .unwrap_or("/");
+        let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
+        pty::PtyTarget::Direct { command, args, cwd }
     };
+
     state.0.attach(&session_id, pty_target, app)
 }
 

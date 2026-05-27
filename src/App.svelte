@@ -97,6 +97,21 @@
     }
   }
 
+  // Listen for pty-exited events (session process terminated)
+  let exitUnlisteners: Array<() => void> = [];
+  function listenForExits() {
+    exitUnlisteners.forEach((fn) => fn());
+    exitUnlisteners = [];
+    for (const s of sessions) {
+      if (s.status === "active") {
+        listen(`pty-exited-${s.id}`, () => {
+          sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
+          invoke("mark_exited", { sessionId: s.id });
+        }).then((unlisten) => exitUnlisteners.push(unlisten));
+      }
+    }
+  }
+
   function selectSession(id: string) {
     activeSessionId = id;
     touchMru(id);
@@ -145,22 +160,6 @@
         playTaskComplete();
       }
     });
-
-    // Listen for pty-exited events (session process terminated)
-    let exitUnlisteners: Array<() => void> = [];
-    function listenForExits() {
-      // Clean up previous listeners
-      exitUnlisteners.forEach((fn) => fn());
-      exitUnlisteners = [];
-      for (const s of sessions) {
-        if (s.status === "active") {
-          listen(`pty-exited-${s.id}`, () => {
-            sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
-            invoke("mark_exited", { sessionId: s.id });
-          }).then((unlisten) => exitUnlisteners.push(unlisten));
-        }
-      }
-    }
 
     const cleanup = installKeyboardRouter(
       (action) => {
@@ -404,8 +403,6 @@
     {#each sessions as session (session.id)}
       <Terminal
         sessionId={session.id}
-        tmuxName={session.tmux_name}
-        backend={session.backend}
         visible={session.id === activeSessionId}
         focused={session.id === activeSessionId && zone === "terminal"}
         exited={session.status === "exited"}
