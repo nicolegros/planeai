@@ -5,6 +5,7 @@ mod db;
 mod git;
 mod notify;
 mod pty;
+#[cfg(not(windows))]
 mod tmux;
 
 use std::sync::Mutex;
@@ -236,7 +237,10 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 
 #[tauri::command]
 fn check_session_alive(tmux_name: String) -> bool {
-    tmux::has_session(&tmux_name)
+    #[cfg(not(windows))]
+    { tmux::has_session(&tmux_name) }
+    #[cfg(windows)]
+    { false }
 }
 
 #[tauri::command]
@@ -330,14 +334,19 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     drop(cfg);
 
     if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
-        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_path = projects.iter()
-            .find(|p| p.id == session.project_id)
-            .map(|p| p.path.as_str())
-            .unwrap_or("/");
-        let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
-        tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+        #[cfg(not(windows))]
+        {
+            let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
+            let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+            let project_path = projects.iter()
+                .find(|p| p.id == session.project_id)
+                .map(|p| p.path.as_str())
+                .unwrap_or("/");
+            let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+            tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+        }
+        #[cfg(windows)]
+        return Err("tmux backend not available on Windows".to_string());
     }
 
     db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
@@ -363,6 +372,7 @@ fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
         // Only kill tmux if this is a tmux-backed session
         if session.backend == "tmux" {
+            #[cfg(not(windows))]
             if let Some(ref tn) = session.tmux_name {
                 let _ = tmux::kill_session(tn);
             }
@@ -425,9 +435,14 @@ fn launch_session(
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let tmux_name = if backend == "tmux" {
-        let tn = tmux::session_name(&project_name);
-        tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
-        Some(tn)
+        #[cfg(not(windows))]
+        {
+            let tn = tmux::session_name(&project_name);
+            tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
+            Some(tn)
+        }
+        #[cfg(windows)]
+        return Err("tmux backend not available on Windows".to_string());
     } else {
         None
     };
@@ -485,7 +500,10 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
 
             // Startup reconciliation: mark stale sessions as exited
+            #[cfg(not(windows))]
             let _ = db::reconcile_sessions(&conn, |name| tmux::has_session(name));
+            #[cfg(windows)]
+            let _ = db::reconcile_sessions(&conn, |_| false);
 
             // Config: migrate from DB if needed, then load
             let config_dir = config::config_dir();

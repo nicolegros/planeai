@@ -6,6 +6,7 @@ use std::thread;
 use tauri::{AppHandle, Emitter};
 
 use crate::notify;
+#[cfg(not(windows))]
 use crate::tmux;
 
 /// Describes what command to run inside the PTY.
@@ -55,9 +56,14 @@ impl PtyManager {
 
         let cmd = match &target {
             PtyTarget::TmuxAttach { tmux_name } => {
-                let mut c = CommandBuilder::new(tmux::tmux_bin());
-                c.args(["attach-session", "-t", tmux_name]);
-                c
+                #[cfg(not(windows))]
+                {
+                    let mut c = CommandBuilder::new(tmux::tmux_bin());
+                    c.args(["attach-session", "-t", tmux_name]);
+                    c
+                }
+                #[cfg(windows)]
+                return Err("tmux not available on Windows".to_string());
             }
             PtyTarget::Direct { command, args, cwd } => {
                 let mut c = CommandBuilder::new(command);

@@ -141,12 +141,18 @@ pub fn resolve_backend(config: &Config) -> &str {
 }
 
 /// Check if tmux binary is available on PATH.
+#[cfg(not(windows))]
 pub fn tmux_available() -> bool {
     std::process::Command::new("which")
         .arg("tmux")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+pub fn tmux_available() -> bool {
+    false
 }
 
 /// Merge user config over defaults. Struct-like top-level keys (appearance, terminal)
