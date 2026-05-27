@@ -19,8 +19,9 @@ struct ConfigState(Mutex<config::Config>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return path.replacen("~", &home.to_string_lossy(), 1);
+        let home = config::home_dir();
+        if !home.is_empty() {
+            return path.replacen("~", &home, 1);
         }
     }
     path.to_string()
@@ -33,7 +34,7 @@ fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
 }
 
 fn is_notify_hook_installed_check() -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = config::home_dir();
     let path = format!("{home}/.kiro/agents/default.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => content.contains("planeai-stop-notify"),
@@ -245,7 +246,7 @@ fn is_notify_hook_installed() -> bool {
 
 #[tauri::command]
 fn install_notify_hook() -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let home = config::home_dir();
 
     // Write the hook script
     let hooks_dir = format!("{home}/.kiro/hooks");
@@ -410,7 +411,7 @@ fn launch_session(
         let base = base_branch.as_deref().unwrap_or("main");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = project_name.replace(' ', "-").to_lowercase();
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        let home = config::home_dir();
         let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
         std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
             .map_err(|e| format!("failed to create worktree dir: {e}"))?;
