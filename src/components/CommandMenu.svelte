@@ -33,9 +33,10 @@
     onRenameSession: () => void;
     onRestoreSession: (id: string) => void;
     onDestroyArchivedSession: (id: string) => void;
+    onResetTerminal: () => void;
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
   let showArchived = $state(false);
@@ -198,6 +199,15 @@
                   onSelect={() => { onNewSession(); close(); }}
                 >
                   New session
+                </Command.Item>
+                <Command.Item
+                  value="reset terminal"
+                  keywords={["reset", "clear", "redraw", "refresh", "fix"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onResetTerminal(); close(); }}
+                >
+                  Reset terminal
                 </Command.Item>
                 <Command.Item
                   value="archived sessions"

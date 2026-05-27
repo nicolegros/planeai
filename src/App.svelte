@@ -398,6 +398,11 @@
           showSessionForm = true;
         }
       }}
+      onResetTerminal={() => {
+        if (activeSessionId) {
+          invoke("write_to_pty", { sessionId: activeSessionId, data: [0x0c] });
+        }
+      }}
     />
 
     {#each sessions as session (session.id)}
