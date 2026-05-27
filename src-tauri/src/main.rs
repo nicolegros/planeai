@@ -167,19 +167,24 @@ fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 fn list_monospace_fonts() -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("fc-list")
-        .args([":spacing=100", "family"])
-        .output()
-        .map_err(|e| format!("failed to run fc-list: {e}"))?;
+    use font_kit::source::SystemSource;
+    use font_kit::properties::Properties;
+    use font_kit::family_name::FamilyName;
 
-    if !output.status.success() {
-        return Err("fc-list failed".to_string());
-    }
+    let source = SystemSource::new();
+    let all_families = source.all_families().map_err(|e| format!("font enumeration failed: {e}"))?;
 
-    let mut fonts: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|f| !f.is_empty() && !f.starts_with('.'))
+    let mut fonts: Vec<String> = all_families
+        .into_iter()
+        .filter(|name| !name.starts_with('.'))
+        .filter(|name| {
+            source
+                .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
+                .ok()
+                .and_then(|handle| handle.load().ok())
+                .map(|font| font.is_monospace())
+                .unwrap_or(false)
+        })
         .collect();
     fonts.sort();
     fonts.dedup();
