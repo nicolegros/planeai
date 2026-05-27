@@ -1,13 +1,14 @@
 # planeai
 
-A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session backed by tmux for persistence.
+A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session. Supports two session backends: tmux (persistent) and direct PTY (ephemeral).
 
 ## Glossary
 
 | Term | Definition |
 |------|-----------|
 | **Project** | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit. |
-| **Session** | A single agent working on a single task within a project. Backed by a tmux session named `planeai-<project>-<8-hex-id>`. Contains one terminal pane running the agent CLI. |
+| **Session** | A single agent working on a single task within a project. Backed by either a tmux session (persistent) or a direct PTY (ephemeral). Contains one terminal pane running the agent CLI. |
+| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `direct` (PTY spawns agent directly, dies on app quit). Resolved at session creation from the global setting. |
 | **Provider** | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`. |
 | **Config file** | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
 | **Yolo mode** | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`. |
@@ -21,11 +22,12 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 ## Session lifecycle (v1)
 
 ```
-create → active → deleted
+create → active → exited → deleted
 ```
 
-- **Active** — tmux session exists, agent may or may not still be running. Visible in sidebar.
-- **Deleted** — tmux session killed, removed from sidebar and DB. Irreversible.
+- **Active** — PTY is connected and the agent process is running. Visible in sidebar.
+- **Exited** — agent process terminated. Terminal buffer is frozen (read-only). User can restart or delete. Detected via PTY EOF (unified for both backends).
+- **Deleted** — session removed from sidebar and DB. For tmux sessions, the tmux session is killed. Irreversible.
 
 ## Architecture notes
 
@@ -34,7 +36,8 @@ create → active → deleted
 - **xterm.js** for terminal rendering
 - **Tailwind CSS** with Skeleton Cerberus theme tokens (light + dark)
 - **SQLite via rusqlite** on the Rust backend for persistence
-- **tmux** for process persistence (ADR-0002)
+- **tmux** for optional process persistence (auto-detected; see Session backend)
+- **portable-pty** for PTY management (both tmux-attach and direct-spawn go through a local PTY)
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
 - **pnpm** for package management
 
@@ -43,8 +46,68 @@ create → active → deleted
 - Keyboard-first — all actions reachable without mouse
 - Multiple sessions allowed per project in both checkout and worktree modes; inline warning shown when creating additional checkout sessions
 - DB is source of truth; orphan tmux sessions are ignored
+- tmux is optional — app works without it (direct PTY fallback)
 - macOS primary target, cross-platform future
 - Project names must be unique
+
+## Session backend
+
+### Resolution
+
+The effective backend is resolved once at app startup:
+
+```
+config.session_backend ?? (tmux_on_path ? "tmux" : "direct")
+```
+
+- Config field absent → auto-detect (tmux if available, otherwise direct)
+- `"session_backend": "tmux"` → force tmux (warn if not found)
+- `"session_backend": "direct"` → force direct PTY
+
+Setting changes affect new sessions only. Existing sessions keep their backend.
+
+### PTY architecture
+
+Both backends spawn a local PTY via `portable-pty`. The only difference is the command inside:
+
+- **tmux backend:** PTY runs `tmux attach-session -t <name>` (tmux session created beforehand with the agent command)
+- **direct backend:** PTY runs the agent command directly (e.g., `kiro-cli chat`)
+
+The `PtyManager.attach()` method accepts a `PtyTarget` enum:
+
+```rust
+enum PtyTarget {
+    TmuxAttach { tmux_name: String },
+    Direct { command: String, args: Vec<String>, cwd: String },
+}
+```
+
+### Exit detection
+
+Unified for both backends: PTY reader thread gets EOF → emit `pty-exited-{session_id}` → mark session as `exited` in DB. For tmux, this works because `remain-on-exit` is disabled — when the agent exits, the tmux session dies, `tmux attach` exits, PTY gets EOF.
+
+### Startup reconciliation (one-time, not polling)
+
+- Direct sessions that were `active` at last quit → mark `exited`
+- Tmux sessions that were `active` → check `tmux has-session`; if false → mark `exited`; if true → reattach
+
+### Quit confirmation
+
+When the user quits (Cmd+Q / window close) and at least one `active` direct session exists, show an in-app confirmation modal: "N active session(s) will be terminated. Quit anyway?" with Quit / Cancel. If all active sessions are tmux-backed (will survive) or no active sessions exist, quit immediately.
+
+### Restart
+
+Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For direct, spawns a new PTY.
+
+### DB columns
+
+- `backend TEXT NOT NULL DEFAULT 'tmux' CHECK(backend IN ('tmux', 'direct'))` — set at creation time
+- `status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'exited', 'deleted'))` — updated on exit/delete
+- `tmux_name TEXT` — NULL for direct sessions, populated for tmux sessions
+
+### Preferences UI
+
+Dropdown: Auto (default) / tmux / Direct. "Auto" maps to absent in config file. Inline warning if user selects tmux but binary not found.
 
 ## Worktree support
 
