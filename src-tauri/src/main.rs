@@ -252,12 +252,22 @@ fn is_notify_hook_installed() -> bool {
 fn install_notify_hook() -> Result<(), String> {
     let home = config::home_dir();
 
-    // Write the hook script
+    // Write the hook script (platform-specific)
     let hooks_dir = format!("{home}/.kiro/hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-    let script_path = format!("{hooks_dir}/planeai-stop-notify.sh");
-    let script = include_str!("../resources/planeai-stop-notify.sh");
-    std::fs::write(&script_path, script).map_err(|e| format!("failed to write hook script: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.sh"),
+        include_str!("../resources/planeai-stop-notify.sh"),
+    );
+    #[cfg(windows)]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.ps1"),
+        include_str!("../resources/planeai-stop-notify.ps1"),
+    );
+
+    std::fs::write(&script_path, script_content).map_err(|e| format!("failed to write hook script: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -288,8 +298,12 @@ fn install_notify_hook() -> Result<(), String> {
         h.get("command").and_then(|c| c.as_str()).map_or(false, |c| c.contains("planeai-stop-notify"))
     });
     if !already {
+        #[cfg(not(windows))]
+        let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
+        #[cfg(windows)]
+        let hook_command = format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
         stop_arr.push(serde_json::json!({
-            "command": format!("{hooks_dir}/planeai-stop-notify.sh")
+            "command": hook_command
         }));
     }
 
