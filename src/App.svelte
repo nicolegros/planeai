@@ -173,7 +173,7 @@
         showPreferences = !showPreferences;
       }
     },
-    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen
+    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !getCycleState().isCycling
     );
 
     // Listen for Ctrl release to commit tab switch
