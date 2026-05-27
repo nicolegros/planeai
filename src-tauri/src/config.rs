@@ -44,13 +44,22 @@ pub fn home_dir() -> String {
         .unwrap_or_default()
 }
 
-/// Returns the config directory: $XDG_CONFIG_HOME/planeai or ~/.config/planeai
+/// Returns the config directory.
+/// - Windows: %APPDATA%\planeai
+/// - Others: $XDG_CONFIG_HOME/planeai or ~/.config/planeai
 pub fn config_dir() -> PathBuf {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| {
-            format!("{}/.config", home_dir())
-        });
-    PathBuf::from(base).join("planeai")
+    #[cfg(windows)]
+    {
+        let base = std::env::var("APPDATA")
+            .unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home_dir()));
+        PathBuf::from(base).join("planeai")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_CONFIG_HOME")
+            .unwrap_or_else(|_| format!("{}/.config", home_dir()));
+        PathBuf::from(base).join("planeai")
+    }
 }
 
 impl Default for Config {
