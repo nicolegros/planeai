@@ -31,12 +31,13 @@
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
     onDeleteSession: (session: Session) => void;
+    onRestartSession: (session: Session) => void;
     onOpenPreferences: () => void;
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onOpenPreferences, onRenameSession, onStartRename }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename }: Props = $props();
 
   let renameValue = $state("");
 
@@ -149,7 +150,7 @@
                     {isSelected ? 'ring-1 ring-primary-500/50' : ''}
                     {session.status === 'exited' ? 'opacity-60' : ''}"
                   onclick={() => onSelectSession(session.id)}
-                  oncontextmenu={(e) => { if (session.status !== 'exited') onContextMenu(e, session); }}
+                  oncontextmenu={(e) => onContextMenu(e, session)}
                 >
                   <span class="w-3 shrink-0 text-center text-[10px] text-surface-600 dark:text-surface-400" title={session.worktree_path ? "Worktree" : ""}>{session.worktree_path ? '⎇' : ''}</span>
                   {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
@@ -195,10 +196,15 @@
     x={contextMenu.x}
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
-    items={[
-      { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
-      { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
-      { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
-    ]}
+    items={contextMenu.session.status === 'exited'
+      ? [
+          { label: "Restart", onSelect: () => onRestartSession(contextMenu!.session) },
+          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+        ]
+      : [
+          { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
+          { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
+          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+        ]}
   />
 {/if}

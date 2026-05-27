@@ -289,6 +289,42 @@ fn check_tmux_available() -> bool {
 }
 
 #[tauri::command]
+fn restart_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>) -> Result<db::Session, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+
+    if session.status != "exited" {
+        return Err("can only restart exited sessions".to_string());
+    }
+
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+    let provider_def = cfg.providers.get(provider_key)
+        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
+    let cmd = config::launch_command(provider_def, false);
+    drop(cfg);
+
+    if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_path = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.path.as_str())
+            .unwrap_or("/");
+        let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+        tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+    }
+
+    db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    let updated = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found after restore")?;
+    Ok(updated)
+}
+
+#[tauri::command]
 fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
@@ -476,6 +512,7 @@ fn main() {
             acknowledge_session,
             mark_exited,
             check_tmux_available,
+            restart_session,
             archive_session,
             destroy_session,
         ])

@@ -21,13 +21,22 @@
   let newProviderCommand = $state("");
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
+  let tmuxAvailable = $state(true);
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
   onMount(async () => {
     const fonts = await invoke<string[]>("list_monospace_fonts");
     fontItems = fonts.map((f) => ({ value: f, label: f }));
+    tmuxAvailable = await invoke<boolean>("check_tmux_available");
   });
+
+  const backendValue = $derived(config.session_backend ?? "auto");
+
+  function setSessionBackend(value: string) {
+    const backend = value === "auto" ? null : value;
+    updateSettings({ session_backend: backend } as Partial<AppConfig>);
+  }
 
   function setAppearance(mode: AppearanceMode) {
     updateSettings({ appearance: { ...config.appearance, mode } });
@@ -188,6 +197,29 @@
       </label>
     </section>
     {/if}
+
+    <!-- Session Backend -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
+      <div class="flex gap-2">
+        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "direct", label: "Direct" }] as opt (opt.value)}
+          <button
+            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            onclick={() => setSessionBackend(opt.value)}
+          >{opt.label}</button>
+        {/each}
+      </div>
+      {#if backendValue === "tmux" && !tmuxAvailable}
+        <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
+      {/if}
+      <p class="text-xs text-surface-500 dark:text-surface-400">
+        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise direct PTY.
+        {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
+        {:else}Sessions are ephemeral — terminated on app quit.
+        {/if}
+        Changes apply to new sessions only.
+      </p>
+    </section>
 
     <!-- Providers -->
     <section class="space-y-3">

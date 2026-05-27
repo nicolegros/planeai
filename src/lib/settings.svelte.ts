@@ -20,6 +20,7 @@ export interface AppConfig {
   };
   providers: Record<string, Provider>;
   default_provider: string;
+  session_backend?: string | null;
 }
 
 let config = $state<AppConfig>({
