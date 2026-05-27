@@ -41,7 +41,7 @@ create → active → deleted
 ## Key constraints
 
 - Keyboard-first — all actions reachable without mouse
-- One active non-worktree session per project; multiple worktree sessions allowed
+- Multiple sessions allowed per project in both checkout and worktree modes; inline warning shown when creating additional checkout sessions
 - DB is source of truth; orphan tmux sessions are ignored
 - macOS primary target, cross-platform future
 - Project names must be unique

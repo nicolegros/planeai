@@ -6,9 +6,13 @@
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; worktree_path: string | null; }
-  interface Props { projects: Project[]; onCreated: (session: Session) => void; onCancel: () => void; }
+  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; }
 
-  let { projects, onCreated, onCancel }: Props = $props();
+  let { projects, sessions, onCreated, onCancel }: Props = $props();
+
+  const hasActiveCheckoutSession = $derived(
+    !useWorktree && projectValue && sessions.some(s => s.project_id === projectValue && s.status === "active" && !s.worktree_path)
+  );
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
@@ -252,6 +256,10 @@
       </div>
       <p class="text-xs text-surface-500">Will create new branch: <span class="font-medium text-surface-900 dark:text-surface-100">{branch}</span> from <span class="font-medium text-surface-900 dark:text-surface-100">{baseBranch}</span></p>
     {/if}
+  {/if}
+
+  {#if hasActiveCheckoutSession}
+    <p class="text-xs text-warning-500">Another session is using this repo — switching branches will affect it.</p>
   {/if}
 
   {#if error}
