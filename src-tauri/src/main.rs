@@ -74,31 +74,25 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_stat
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-    let mut alive = Vec::new();
-    for s in sessions {
-        if s.status == "archived" {
+
+    // Register active sessions with notification system
+    for s in &sessions {
+        if s.status != "active" {
             continue;
         }
-        if s.tmux_name.as_ref().map_or(false, |name| tmux::has_session(name)) {
-            // Register with notification system
-            let project_name = projects.iter()
-                .find(|p| p.id == s.project_id)
-                .map(|p| p.name.as_str())
-                .unwrap_or("unknown");
-            let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
-            let hook_enabled = s.provider.as_deref()
-                .map(|pk| provider_has_hook(pk, &cfg))
-                .unwrap_or(false);
-            {
-                let mut ns = notify.0.lock().unwrap();
-                ns.register_session(&s.id, display_name, project_name, hook_enabled);
-            }
-            alive.push(s);
-        } else {
-            let _ = db::destroy_session(&conn, &s.id);
-        }
+        let project_name = projects.iter()
+            .find(|p| p.id == s.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
+        let hook_enabled = s.provider.as_deref()
+            .map(|pk| provider_has_hook(pk, &cfg))
+            .unwrap_or(false);
+        let mut ns = notify.0.lock().unwrap();
+        ns.register_session(&s.id, display_name, project_name, hook_enabled);
     }
-    Ok(alive)
+
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -189,9 +183,22 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
     Ok(fonts)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "type")]
+enum AttachTarget {
+    #[serde(rename = "tmux")]
+    Tmux { tmux_name: String },
+    #[serde(rename = "direct")]
+    Direct { command: String, args: Vec<String>, cwd: String },
+}
+
 #[tauri::command]
-fn attach_session(session_id: String, tmux_name: String, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
-    state.0.attach(&session_id, pty::PtyTarget::TmuxAttach { tmux_name }, app)
+fn attach_session(session_id: String, target: AttachTarget, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+    let pty_target = match target {
+        AttachTarget::Tmux { tmux_name } => pty::PtyTarget::TmuxAttach { tmux_name },
+        AttachTarget::Direct { command, args, cwd } => pty::PtyTarget::Direct { command, args, cwd },
+    };
+    state.0.attach(&session_id, pty_target, app)
 }
 
 #[tauri::command]
@@ -271,6 +278,17 @@ fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 }
 
 #[tauri::command]
+fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn check_tmux_available() -> bool {
+    config::tmux_available()
+}
+
+#[tauri::command]
 fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
@@ -278,14 +296,19 @@ fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
 }
 
 #[tauri::command]
-fn destroy_session(id: String, tmux_name: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
-    // Kill tmux session
-    let _ = tmux::kill_session(&tmux_name);
+fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
     // Detach PTY
     pty_state.0.detach(&id);
-    // Remove worktree if applicable
+
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        // Only kill tmux if this is a tmux-backed session
+        if session.backend == "tmux" {
+            if let Some(ref tn) = session.tmux_name {
+                let _ = tmux::kill_session(tn);
+            }
+        }
+        // Remove worktree if applicable
         if let Some(ref wt_path) = session.worktree_path {
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
             if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
@@ -320,6 +343,7 @@ fn launch_session(
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let cmd = config::launch_command(provider_def, auto_approve);
     let hook_enabled = provider_def.command.contains("kiro-cli") && is_notify_hook_installed_check();
+    let backend = config::resolve_backend(&cfg).to_string();
     drop(cfg);
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -336,13 +360,18 @@ fn launch_session(
         (wt_path.clone(), Some(wt_path))
     } else {
         tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
-        (repo_path, None)
+        (repo_path.clone(), None)
     };
 
-    // Create tmux session
-    let tmux_name = tmux::session_name(&project_name);
     let session_id = uuid::Uuid::new_v4().to_string();
-    tmux::create_session_with_cmd(&tmux_name, &working_dir, &cmd, &session_id)?;
+
+    let tmux_name = if backend == "tmux" {
+        let tn = tmux::session_name(&project_name);
+        tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
+        Some(tn)
+    } else {
+        None
+    };
 
     // Register with notification system
     {
@@ -352,7 +381,7 @@ fn launch_session(
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, Some(&tmux_name), &branch, worktree_path.as_deref(), Some(&provider_key), "tmux")
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend)
         .map_err(|e| e.to_string())
 }
 
@@ -395,6 +424,9 @@ fn main() {
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
+
+            // Startup reconciliation: mark stale sessions as exited
+            let _ = db::reconcile_sessions(&conn, |name| tmux::has_session(name));
 
             // Config: migrate from DB if needed, then load
             let config_dir = config::config_dir();
@@ -442,6 +474,8 @@ fn main() {
             is_notify_hook_installed,
             install_notify_hook,
             acknowledge_session,
+            mark_exited,
+            check_tmux_available,
             archive_session,
             destroy_session,
         ])
