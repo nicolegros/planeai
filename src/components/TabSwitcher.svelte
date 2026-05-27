@@ -3,10 +3,11 @@
     id: string;
     project_id: string;
     name: string;
-    tmux_name: string;
+    tmux_name: string | null;
     branch: string;
     status: string;
     created_at: string;
+    backend: string;
   }
 
   interface Project {

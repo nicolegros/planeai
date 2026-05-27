@@ -29,11 +29,12 @@
     id: string;
     project_id: string;
     name: string;
-    tmux_name: string;
+    tmux_name: string | null;
     branch: string;
     status: string;
     created_at: string;
     worktree_path: string | null;
+    backend: string;
   }
 
   let projects = $state<Project[]>([]);
@@ -80,6 +81,7 @@
 
   async function loadSessions() {
     sessions = await invoke<Session[]>("list_sessions");
+    listenForExits();
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
       // Seed MRU with all sessions (active one first)
@@ -126,6 +128,22 @@
         playTaskComplete();
       }
     });
+
+    // Listen for pty-exited events (session process terminated)
+    let exitUnlisteners: Array<() => void> = [];
+    function listenForExits() {
+      // Clean up previous listeners
+      exitUnlisteners.forEach((fn) => fn());
+      exitUnlisteners = [];
+      for (const s of sessions) {
+        if (s.status === "active") {
+          listen(`pty-exited-${s.id}`, () => {
+            sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
+            invoke("mark_exited", { sessionId: s.id });
+          }).then((unlisten) => exitUnlisteners.push(unlisten));
+        }
+      }
+    }
 
     const cleanup = installKeyboardRouter(
       (action) => {
@@ -197,6 +215,7 @@
     return () => {
       cleanup();
       unlistenState.then((fn) => fn());
+      exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
@@ -207,10 +226,11 @@
     sessions = [...sessions, session];
     selectSession(session.id);
     focusTerminal();
+    listenForExits();
   }
 
   async function doDelete(s: Session) {
-    await invoke("destroy_session", { id: s.id, tmuxName: s.tmux_name });
+    await invoke("destroy_session", { id: s.id });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -343,8 +363,8 @@
         await invoke("restore_session", { id });
         await loadSessions();
       }}
-      onDestroyArchivedSession={async (id, tmuxName) => {
-        await invoke("destroy_session", { id, tmuxName });
+      onDestroyArchivedSession={async (id) => {
+        await invoke("destroy_session", { id });
       }}
       onNewSession={() => {
         if (projects.length === 0) {
@@ -359,8 +379,10 @@
       <Terminal
         sessionId={session.id}
         tmuxName={session.tmux_name}
+        backend={session.backend}
         visible={session.id === activeSessionId}
         focused={session.id === activeSessionId && zone === "terminal"}
+        exited={session.status === "exited"}
         onUserInput={() => {
           if (agentStates[session.id]) {
             const { [session.id]: _, ...rest } = agentStates;

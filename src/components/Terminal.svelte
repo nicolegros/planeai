@@ -12,13 +12,18 @@
 
   interface Props {
     sessionId: string;
-    tmuxName: string;
+    tmuxName: string | null;
+    backend: string;
+    command?: string;
+    args?: string[];
+    cwd?: string;
     visible: boolean;
     focused: boolean;
+    exited?: boolean;
     onUserInput?: () => void;
   }
 
-  let { sessionId, tmuxName, visible, focused, onUserInput }: Props = $props();
+  let { sessionId, tmuxName, backend, command, args, cwd, visible, focused, exited = false, onUserInput }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -185,6 +190,7 @@
 
     // ── Terminal input with focus-report filtering ────────────────────────
     term.onData((data) => {
+      if (exited) return;
       let filtered = data;
       if (!ptyStarted) {
         filtered = data.replace(/\x1b\[I|\x1b\[O/g, "");
@@ -202,8 +208,11 @@
       term.write(bytes);
     });
 
-    // ── Attach to the tmux session ───────────────────────────────────────
-    invoke("attach_session", { sessionId, tmuxName }).then(() => {
+    // ── Attach to the session ─────────────────────────────────────────────
+    const target = backend === "tmux"
+      ? { type: "tmux", tmux_name: tmuxName! }
+      : { type: "direct", command: command!, args: args ?? [], cwd: cwd ?? "" };
+    invoke("attach_session", { sessionId, target }).then(() => {
       attached = true;
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });

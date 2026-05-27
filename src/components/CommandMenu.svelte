@@ -6,11 +6,12 @@
     id: string;
     project_id: string;
     name: string;
-    tmux_name: string;
+    tmux_name: string | null;
     branch: string;
     status: string;
     created_at: string;
     worktree_path: string | null;
+    backend: string;
   }
 
   interface Project {
@@ -31,7 +32,7 @@
     onNewSession: () => void;
     onRenameSession: () => void;
     onRestoreSession: (id: string) => void;
-    onDestroyArchivedSession: (id: string, tmuxName: string) => void;
+    onDestroyArchivedSession: (id: string) => void;
   }
 
   let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession }: Props = $props();
@@ -110,7 +111,7 @@
                       value="delete {session.name || session.branch} {projectName(session.project_id)}"
                       keywords={[session.name, session.branch, "delete", "destroy"]}
                       class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
-                      onSelect={() => { onDestroyArchivedSession(session.id, session.tmux_name); archivedSessions = archivedSessions.filter(s => s.id !== session.id); }}
+                      onSelect={() => { onDestroyArchivedSession(session.id); archivedSessions = archivedSessions.filter(s => s.id !== session.id); }}
                     >
                       <span class="truncate">{session.name || session.branch} <span class="text-xs opacity-70">({projectName(session.project_id)})</span></span>
                       <span class="text-xs shrink-0 ml-2">Delete</span>

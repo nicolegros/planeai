@@ -5,7 +5,7 @@
   import { getSettings } from "../lib/settings.svelte";
 
   interface Project { id: string; name: string; path: string; }
-  interface Session { id: string; project_id: string; name: string; tmux_name: string; branch: string; status: string; created_at: string; worktree_path: string | null; }
+  interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; }
   interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; }
 
   let { projects, sessions, onCreated, onCancel }: Props = $props();
