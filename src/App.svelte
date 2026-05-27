@@ -110,8 +110,12 @@
 
     // Listen for agent state changes from backend
     const unlistenState = listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
+      console.log("[notify] agent-state-change:", event.payload.session_id, "→", event.payload.state);
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
-      if (event.payload.state === "Idle") playTaskComplete();
+      if (event.payload.state === "Idle") {
+        console.log("[notify] playing task complete sound");
+        playTaskComplete();
+      }
     });
 
     const cleanup = installKeyboardRouter(
@@ -196,9 +200,7 @@
     focusTerminal();
   }
 
-  async function confirmDelete() {
-    if (!sessionToDelete) return;
-    const s = sessionToDelete;
+  async function doDelete(s: Session) {
     await invoke("destroy_session", { id: s.id, tmuxName: s.tmux_name });
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
@@ -206,7 +208,13 @@
       activeSessionId = sessions[0]?.id ?? null;
       if (activeSessionId) touchMru(activeSessionId);
     }
+  }
+
+  async function confirmDelete() {
+    if (!sessionToDelete) return;
+    const s = sessionToDelete;
     sessionToDelete = null;
+    await doDelete(s);
   }
 
   async function archiveCurrentSession() {
@@ -356,19 +364,22 @@
     {/if}
 
     {#if sessionToDelete}
-      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-30">
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div
-          class="rounded-lg border border-surface-200 bg-surface-50 p-6 w-80 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900"
-          onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') confirmDelete(); }}
-        >
-          <p class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>? This will kill the agent.</p>
-          <div class="flex justify-end gap-2">
-            <button class="rounded border border-surface-300 dark:border-surface-600 px-3 py-1.5 text-sm text-surface-700 dark:text-surface-300" onclick={() => (sessionToDelete = null)}>Cancel</button>
-            <button class="rounded bg-error-600 px-3 py-1.5 text-sm text-white" onclick={confirmDelete} autofocus>Delete</button>
-          </div>
-        </div>
-      </div>
+      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }}>
+        <Dialog.Portal>
+          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <Dialog.Content
+            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+            onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) doDelete(s); } }}
+          >
+            <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
+            <div class="flex justify-between">
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     {/if}
     {/if}
   </section>

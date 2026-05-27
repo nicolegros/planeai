@@ -65,8 +65,13 @@ impl NotifyState {
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
+        let was = self.get_state(session_id);
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output.insert(session_id.to_string(), Instant::now());
+        let had_notified = self.notified.remove(session_id);
+        if was != Some(AgentState::Busy) || had_notified {
+            eprintln!("[notify] output for {session_id} | was={was:?} | cleared_notified={had_notified}");
+        }
     }
 
     /// Clear the notified flag when the user focuses/acknowledges a session.
@@ -161,7 +166,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                 }
                 let fired = {
                     let mut s = state.lock().unwrap();
-                    s.notify_stop(&session_id)
+                    let current_state = s.get_state(&session_id);
+                    let result = s.notify_stop(&session_id);
+                    eprintln!("[notify] socket received stop for {session_id} | was={current_state:?} | fired={result}");
+                    result
                 };
                 if fired {
                     emit_state_change(&app, &session_id, AgentState::Idle);
@@ -184,6 +192,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                 .collect()
         };
         for session_id in timed_out {
+            eprintln!("[notify] silence timeout fired for {session_id}");
             emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }
@@ -276,15 +285,9 @@ mod tests {
         // Second stop does not (already idle)
         assert!(!state.notify_stop(session_id));
 
-        // Output transitions to busy, but notified flag persists
+        // Output transitions to busy and clears notified flag
         state.notify_output(session_id);
-        // Stop again — notified flag blocks it
-        assert!(!state.notify_stop(session_id));
-
-        // User acknowledges (focuses session) — clears flag
-        state.acknowledge(session_id);
-        state.notify_output(session_id);
-        // Now stop fires again
+        // Stop fires again since output cleared the flag
         assert!(state.notify_stop(session_id));
     }
 
