@@ -8,7 +8,7 @@
   import { touchMru, removeMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
-  import { getSnackbarMessage, dismissSnackbar } from "./lib/snackbar.svelte";
+  import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
@@ -97,7 +97,10 @@
         // Spawn helper tabs for restored sessions
         if (s.status === "active") {
           for (let i = 1; i < s.tab_count; i++) {
-            invoke("spawn_tab", { sessionId: s.id, tabIndex: i });
+            invoke("spawn_tab", { sessionId: s.id, tabIndex: i }).catch((e) => {
+              removeTab(s.id, i);
+              showSnackbar(String(e));
+            });
             listenForTabExit(s.id, i);
           }
         }
@@ -151,9 +154,13 @@
     const tabIndex = addTab(activeSessionId);
     if (tabIndex === -1) return;
     setActiveTab(activeSessionId, tabIndex);
-    await invoke("spawn_tab", { sessionId: activeSessionId, tabIndex });
-    // Listen for this tab's exit
-    listenForTabExit(activeSessionId, tabIndex);
+    try {
+      await invoke("spawn_tab", { sessionId: activeSessionId, tabIndex });
+      listenForTabExit(activeSessionId, tabIndex);
+    } catch (e) {
+      removeTab(activeSessionId, tabIndex);
+      showSnackbar(String(e));
+    }
   }
 
   async function handleCloseTab() {
