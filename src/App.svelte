@@ -125,6 +125,8 @@
     for (const s of sessions) {
       if (s.status === "active") {
         listen(`pty-exited-${s.id}`, () => {
+          // Skip if session was already removed (e.g., deleted by user)
+          if (!sessions.find((x) => x.id === s.id)) return;
           sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
           invoke("mark_exited", { sessionId: s.id });
         }).then((unlisten) => exitUnlisteners.push(unlisten));
