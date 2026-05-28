@@ -20,7 +20,11 @@ export type KeyboardAction =
   | { type: "tab_switch_reverse" }
   | { type: "command_palette" }
   | { type: "focus_terminal" }
-  | { type: "open_preferences" };
+  | { type: "open_preferences" }
+  | { type: "new_tab" }
+  | { type: "close_tab" }
+  | { type: "next_tab" }
+  | { type: "prev_tab" };
 
 /**
  * Attempt to match a keyboard event to an app-level action.
@@ -53,6 +57,26 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+, — preferences
   if (mod && e.key === ",") {
     return { type: "open_preferences" };
+  }
+
+  // Mod+T — new tab
+  if (mod && !e.shiftKey && key === "t") {
+    return { type: "new_tab" };
+  }
+
+  // Mod+W — close tab
+  if (mod && !e.shiftKey && key === "w") {
+    return { type: "close_tab" };
+  }
+
+  // Mod+Shift+] — next tab
+  if (mod && e.shiftKey && e.key === "]") {
+    return { type: "next_tab" };
+  }
+
+  // Mod+Shift+[ — prev tab
+  if (mod && e.shiftKey && e.key === "[") {
+    return { type: "prev_tab" };
   }
 
   // Mod+Shift+N — new project

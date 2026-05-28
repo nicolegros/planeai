@@ -78,4 +78,28 @@ describe("matchChord", () => {
       type: "command_palette",
     });
   });
+
+  it("returns new_tab on platform mod+T", () => {
+    expect(matchChord(key({ key: "t", [modKey]: true }))).toEqual({
+      type: "new_tab",
+    });
+  });
+
+  it("returns close_tab on platform mod+W", () => {
+    expect(matchChord(key({ key: "w", [modKey]: true }))).toEqual({
+      type: "close_tab",
+    });
+  });
+
+  it("returns next_tab on platform mod+Shift+]", () => {
+    expect(matchChord(key({ key: "]", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "next_tab",
+    });
+  });
+
+  it("returns prev_tab on platform mod+Shift+[", () => {
+    expect(matchChord(key({ key: "[", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "prev_tab",
+    });
+  });
 });
