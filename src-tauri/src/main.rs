@@ -297,11 +297,9 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
 
         let list_cmd = provider_def.list_sessions_command.clone();
         let pattern = provider_def.session_id_pattern.clone();
-        // Don't resume if session was exited — old process may still hold the lock
-        let resume_id = if session.status == "exited" { None } else { session.provider_session_id.as_deref() };
-        let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
+        let is_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
 
-        let cmd = config::restart_command_for_provider(provider_def, resume_id);
+        let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         let command = resolve_command(parts[0]);
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
