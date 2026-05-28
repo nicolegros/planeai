@@ -297,9 +297,19 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
 
         let list_cmd = provider_def.list_sessions_command.clone();
         let pattern = provider_def.session_id_pattern.clone();
-        let is_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
 
-        let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
+        // Don't resume if another active session already holds this provider_session_id
+        let resume_id = session.provider_session_id.as_deref().and_then(|pid| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE provider_session_id = ?1 AND status = 'active' AND id != ?2",
+                rusqlite::params![pid, &session_id],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            if count > 0 { None } else { Some(pid) }
+        });
+        let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
+
+        let cmd = config::restart_command_for_provider(provider_def, resume_id);
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         let command = resolve_command(parts[0]);
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
