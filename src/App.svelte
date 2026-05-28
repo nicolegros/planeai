@@ -496,6 +496,7 @@
           visible={session.id === activeSessionId && tab.index === activeTab}
           focused={session.id === activeSessionId && tab.index === activeTab && zone === "terminal"}
           exited={tab.index === 0 && session.status === "exited"}
+          skipAttach={tab.index !== 0}
           onAttached={() => {
             if (tab.index === 0 && session.status === "exited") {
               sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);

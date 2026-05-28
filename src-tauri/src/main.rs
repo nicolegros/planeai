@@ -667,7 +667,6 @@ fn main() {
                 &Submenu::with_items(app, "Window", true, &[
                     &PredefinedMenuItem::minimize(app, None)?,
                     &PredefinedMenuItem::maximize(app, None)?,
-                    &PredefinedMenuItem::close_window(app, None)?,
                     &PredefinedMenuItem::fullscreen(app, None)?,
                 ])?,
             ])?;

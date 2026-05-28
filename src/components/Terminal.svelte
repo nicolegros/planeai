@@ -16,11 +16,12 @@
     visible: boolean;
     focused: boolean;
     exited?: boolean;
+    skipAttach?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
   }
 
-  let { sessionId, visible, focused, exited = false, onUserInput, onAttached }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -206,14 +207,21 @@
     });
 
     // ── Attach to the session ─────────────────────────────────────────────
-    invoke("attach_session", { sessionId }).then(() => {
+    if (skipAttach) {
       attached = true;
       onAttached?.();
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });
+    } else {
+      invoke("attach_session", { sessionId }).then(() => {
+        attached = true;
+        onAttached?.();
+        const { rows, cols } = term;
+        invoke("resize_pty", { sessionId, rows, cols });
     }).catch((e) => {
       showSnackbar(String(e));
     });
+    }
 
     // ── Resize observer with debouncing ──────────────────────────────────
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
