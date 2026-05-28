@@ -43,7 +43,7 @@ describe("session tabs", () => {
     removeTab("s1", 1);
     expect(getTabs("s1")).toEqual([
       { index: 0, label: "Agent" },
-      { index: 2, label: "Shell 2" },
+      { index: 2, label: "Shell 1" },
     ]);
   });
 

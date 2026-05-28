@@ -11,6 +11,11 @@ interface SessionTabState {
 
 let state = $state<Record<string, SessionTabState>>({});
 
+function relabel(tabs: Tab[]): Tab[] {
+  let shellNum = 1;
+  return tabs.map((t) => t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}` });
+}
+
 export function initSession(sessionId: string, tabCount = 1): void {
   const tabs: Tab[] = [{ index: 0, label: "Agent" }];
   for (let i = 1; i < tabCount; i++) {
@@ -27,7 +32,7 @@ export function addTab(sessionId: string): number {
   const s = state[sessionId];
   if (!s) return -1;
   const index = s.nextIndex;
-  s.tabs = [...s.tabs, { index, label: `Shell ${index}` }];
+  s.tabs = relabel([...s.tabs, { index, label: "" }]);
   s.nextIndex = index + 1;
   return index;
 }
@@ -38,7 +43,7 @@ export function removeTab(sessionId: string, tabIndex: number): void {
   if (!s) return;
   const pos = s.tabs.findIndex((t) => t.index === tabIndex);
   if (pos === -1) return;
-  s.tabs = s.tabs.filter((t) => t.index !== tabIndex);
+  s.tabs = relabel(s.tabs.filter((t) => t.index !== tabIndex));
   if (s.activeTab === tabIndex) {
     const prev = s.tabs[pos - 1] ?? s.tabs[0];
     s.activeTab = prev?.index ?? 0;
