@@ -166,7 +166,11 @@
   async function handleCloseTab() {
     if (!activeSessionId) return;
     const active = getActiveTabIndex(activeSessionId);
-    if (active === 0) return; // Can't close agent tab
+    if (active === 0) {
+      // No helper tab active — close window (original Cmd+W behavior)
+      getCurrentWindow().close();
+      return;
+    }
     removeTab(activeSessionId, active);
     await invoke("close_tab", { sessionId: activeSessionId, tabIndex: active });
   }
