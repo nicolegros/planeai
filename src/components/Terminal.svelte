@@ -7,6 +7,7 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
+  import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { getThemeById } from "../lib/terminal-themes";
 
@@ -210,6 +211,8 @@
       onAttached?.();
       const { rows, cols } = term;
       invoke("resize_pty", { sessionId, rows, cols });
+    }).catch((e) => {
+      showSnackbar(String(e));
     });
 
     // ── Resize observer with debouncing ──────────────────────────────────

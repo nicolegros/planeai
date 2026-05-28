@@ -11,7 +11,7 @@ mod tmux;
 use std::sync::Mutex;
 use std::sync::Arc;
 use rusqlite::Connection;
-use tauri::{State, Manager, menu::{Menu, Submenu, PredefinedMenuItem}};
+use tauri::{State, Manager, Emitter, menu::{Menu, Submenu, PredefinedMenuItem}};
 
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
@@ -26,6 +26,96 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Resolve a command name to its full path, checking user-local bin directories
+/// that may not be in PATH when launched from a GUI app.
+fn resolve_command(cmd: &str) -> String {
+    // If already absolute, return as-is
+    if cmd.starts_with('/') {
+        return cmd.to_string();
+    }
+    let home = config::home_dir();
+    let extra_dirs = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.cargo/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ];
+    for dir in &extra_dirs {
+        let full = format!("{dir}/{cmd}");
+        if std::path::Path::new(&full).exists() {
+            return full;
+        }
+    }
+    // Try resolving via login shell (picks up user's full PATH)
+    if let Ok(output) = std::process::Command::new("/bin/bash")
+        .args(["-lc", &format!("which {cmd}")])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return path;
+            }
+        }
+    }
+    cmd.to_string()
+}
+
+/// Background discovery of provider session ID with retry-backoff.
+/// Runs list_sessions_command in the session's cwd, parses the output, and stores the result.
+fn discover_provider_session_id(
+    session_id: &str,
+    list_cmd: &str,
+    pattern: &str,
+    cwd: &str,
+    previous_id: Option<&str>,
+    is_resume: bool,
+    db_path: &std::path::Path,
+    app: &tauri::AppHandle,
+) {
+    let delays = [1, 2, 4];
+    for delay in &delays {
+        std::thread::sleep(std::time::Duration::from_secs(*delay));
+        let parts: Vec<&str> = list_cmd.split_whitespace().collect();
+        let resolved = resolve_command(parts[0]);
+        eprintln!("[DEBUG-disc] attempt after {delay}s: running '{resolved}' with args {:?} in cwd '{cwd}'", &parts[1..]);
+        let output = std::process::Command::new(&resolved)
+            .args(&parts[1..])
+            .current_dir(cwd)
+            .output();
+        match &output {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                eprintln!("[DEBUG-disc] exit={}, stdout_len={}, stderr_len={}", o.status, stdout.len(), stderr.len());
+                if !o.status.success() { continue; }
+                // Try stdout first, then stderr (some providers write to stderr)
+                let combined = if stdout.is_empty() { stderr.to_string() } else { stdout.to_string() };
+                let discovered = config::parse_provider_session_id(&combined, pattern);
+                eprintln!("[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}", discovered, previous_id, is_resume);
+                if config::should_accept_provider_session_id(discovered.as_deref(), previous_id, is_resume) {
+                    eprintln!("[DEBUG-disc] accepted! storing provider_session_id={:?}", discovered);
+                    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                        let _ = db::set_provider_session_id(&conn, session_id, discovered.as_ref().unwrap());
+                    }
+                    return;
+                } else {
+                    eprintln!("[DEBUG-disc] rejected (stale or no match)");
+                }
+            }
+            Err(e) => {
+                eprintln!("[DEBUG-disc] command failed to execute: {e}");
+                continue;
+            }
+        }
+    }
+    // Discovery failed — emit event to notify frontend
+    let _ = app.emit("provider-session-id-failed", serde_json::json!({
+        "session_id": session_id,
+        "reason": "Could not discover provider session ID after retries"
+    }));
 }
 
 /// Check if a provider has hook-based idle detection (currently Kiro only).
@@ -198,33 +288,60 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
-    let pty_target = if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
-        pty::PtyTarget::TmuxAttach { tmux_name }
-    } else {
+    // Capture discovery info before moving session fields
+    let discovery_info = if session.backend != "tmux" {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let provider_def = cfg.providers.get(provider_key)
             .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-        let cmd = config::launch_command(provider_def, false);
+
+        let list_cmd = provider_def.list_sessions_command.clone();
+        let pattern = provider_def.session_id_pattern.clone();
+        let is_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
+
+        let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
         let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let command = parts[0].to_string();
+        let command = resolve_command(parts[0]);
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-        // Resolve cwd from worktree or project path
+
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
         let project_path = projects.iter()
             .find(|p| p.id == session.project_id)
             .map(|p| p.path.as_str())
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
-        pty::PtyTarget::Direct { command, args, cwd }
+
+        Some((list_cmd, pattern, is_resume, session.provider_session_id.clone(), cwd.clone(), command, args, cwd))
+    } else {
+        None
     };
 
-    state.0.attach(&session_id, pty_target, app)?;
+    let pty_target = if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
+        pty::PtyTarget::TmuxAttach { tmux_name }
+    } else {
+        let (_, _, _, _, _, ref command, ref args, ref cwd) = discovery_info.as_ref().unwrap();
+        pty::PtyTarget::Direct { command: command.clone(), args: args.clone(), cwd: cwd.clone() }
+    };
+
+    state.0.attach(&session_id, pty_target, app.clone())?;
 
     // If session was exited, mark it active again (auto-restart on reopen)
     if session.status == "exited" {
         db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
+    }
+    drop(conn);
+
+    // Spawn background discovery thread for direct sessions
+    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd, _, _, _)) = discovery_info {
+        eprintln!("[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'", &session_id, &list_cmd, &cwd);
+        let sid = session_id.clone();
+        let db_path = app.path().app_data_dir().expect("app data dir").join("planeai.db");
+        std::thread::spawn(move || {
+            discover_provider_session_id(&sid, &list_cmd, &pattern, &cwd, previous_id.as_deref(), is_resume, &db_path, &app);
+        });
+    } else {
+        eprintln!("[DEBUG-disc] skipping discovery: discovery_info={:?}", discovery_info.as_ref().map(|(a, b, _, _, _, _, _, _)| (a.is_some(), b.is_some())));
     }
 
     Ok(())
@@ -349,7 +466,7 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
     let provider_def = cfg.providers.get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let cmd = config::launch_command(provider_def, false);
+    let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
     drop(cfg);
 
     if session.backend == "tmux" {

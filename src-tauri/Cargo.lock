@@ -2751,6 +2751,7 @@ dependencies = [
  "font-kit",
  "json_comments",
  "portable-pty",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

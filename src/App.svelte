@@ -8,6 +8,7 @@
   import { touchMru, removeMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { getSnackbarMessage, dismissSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
@@ -487,3 +488,16 @@
   </section>
   </div>
 </main>
+
+{#if getSnackbarMessage()}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] max-w-lg cursor-pointer rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950 px-4 py-3 shadow-lg"
+    onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }}
+    title="Click to copy and dismiss"
+  >
+    <p class="text-sm text-red-800 dark:text-red-200 font-mono break-all">{getSnackbarMessage()}</p>
+    <p class="text-xs text-red-600 dark:text-red-400 mt-1">Click to copy & dismiss</p>
+  </div>
+{/if}
