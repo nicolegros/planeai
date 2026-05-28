@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { Button, Input, Label } from "./ui";
@@ -14,6 +15,11 @@
   let name = $state("");
   let nameManuallyEdited = $state(false);
   let error = $state("");
+  let formEl: HTMLFormElement;
+
+  onMount(() => {
+    formEl?.querySelector<HTMLInputElement>("input")?.focus();
+  });
 
   $effect(() => {
     if (!nameManuallyEdited && path) {
@@ -62,6 +68,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form
+  bind:this={formEl}
   class="rounded-lg border border-surface-200 bg-surface-50 p-6 w-80 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900"
   onsubmit={(e) => { e.preventDefault(); submit(); }}
   onkeydown={handleKeydown}
@@ -71,7 +78,7 @@
   <div class="space-y-1">
     <Label>Repository path</Label>
     <div class="flex gap-2">
-      <Input bind:value={path} placeholder="/path/to/repo" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="flex-1" autofocus />
+      <Input bind:value={path} placeholder="/path/to/repo" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other" class="flex-1" />
       <Button type="button" onclick={pickFolder}>Browse</Button>
     </div>
   </div>

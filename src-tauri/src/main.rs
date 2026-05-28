@@ -297,9 +297,19 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
 
         let list_cmd = provider_def.list_sessions_command.clone();
         let pattern = provider_def.session_id_pattern.clone();
-        let is_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
 
-        let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
+        // Don't resume if another active session already holds this provider_session_id
+        let resume_id = session.provider_session_id.as_deref().and_then(|pid| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE provider_session_id = ?1 AND status = 'active' AND id != ?2",
+                rusqlite::params![pid, &session_id],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            if count > 0 { None } else { Some(pid) }
+        });
+        let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
+
+        let cmd = config::restart_command_for_provider(provider_def, resume_id);
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         let command = resolve_command(parts[0]);
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
@@ -444,6 +454,50 @@ fn acknowledge_session(session_id: String, notify: State<NotifyHandle>) {
 fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     db::mark_session_exited(&conn, &session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn spawn_tab(session_id: String, tab_index: u32, db_state: State<DbState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+    let project_path = projects.iter()
+        .find(|p| p.id == session.project_id)
+        .map(|p| p.path.as_str())
+        .unwrap_or("/");
+    let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(windows) { "cmd.exe".to_string() } else { "/bin/zsh".to_string() }
+    });
+
+    let pty_key = format!("{}:{}", session_id, tab_index);
+    let target = pty::PtyTarget::Direct {
+        command: shell,
+        args: vec!["-l".to_string()],
+        cwd,
+    };
+    state.0.attach(&pty_key, target, app)?;
+
+    let new_count = session.tab_count + 1;
+    db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_tab(session_id: String, tab_index: u32, db_state: State<DbState>, state: State<PtyState>) -> Result<(), String> {
+    let pty_key = format!("{}:{}", session_id, tab_index);
+    state.0.detach(&pty_key);
+
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let new_count = (session.tab_count - 1).max(1);
+    db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -623,7 +677,6 @@ fn main() {
                 &Submenu::with_items(app, "Window", true, &[
                     &PredefinedMenuItem::minimize(app, None)?,
                     &PredefinedMenuItem::maximize(app, None)?,
-                    &PredefinedMenuItem::close_window(app, None)?,
                     &PredefinedMenuItem::fullscreen(app, None)?,
                 ])?,
             ])?;
@@ -688,6 +741,8 @@ fn main() {
             install_notify_hook,
             acknowledge_session,
             mark_exited,
+            spawn_tab,
+            close_tab,
             check_tmux_available,
             restart_session,
             archive_session,

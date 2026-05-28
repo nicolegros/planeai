@@ -8,7 +8,7 @@
   import { touchMru, removeMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
-  import { getSnackbarMessage, dismissSnackbar } from "./lib/snackbar.svelte";
+  import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
@@ -20,6 +20,8 @@
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
   import PreferencesPage from "./components/PreferencesPage.svelte";
+  import TabBar from "./components/TabBar.svelte";
+  import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
 
   interface Project {
     id: string;
@@ -37,6 +39,7 @@
     created_at: string;
     worktree_path: string | null;
     backend: string;
+    tab_count: number;
   }
 
   let projects = $state<Project[]>([]);
@@ -87,6 +90,22 @@
 
   async function loadSessions() {
     sessions = await invoke<Session[]>("list_sessions");
+    // Initialize tab state for each session
+    for (const s of sessions) {
+      if (getTabCount(s.id) === 0) {
+        initSession(s.id, s.tab_count);
+        // Spawn helper tabs for restored sessions
+        if (s.status === "active") {
+          for (let i = 1; i < s.tab_count; i++) {
+            invoke("spawn_tab", { sessionId: s.id, tabIndex: i }).catch((e) => {
+              removeTab(s.id, i);
+              showSnackbar(String(e));
+            });
+            listenForTabExit(s.id, i);
+          }
+        }
+      }
+    }
     listenForExits();
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
@@ -106,6 +125,8 @@
     for (const s of sessions) {
       if (s.status === "active") {
         listen(`pty-exited-${s.id}`, () => {
+          // Skip if session was already removed (e.g., deleted by user)
+          if (!sessions.find((x) => x.id === s.id)) return;
           sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
           invoke("mark_exited", { sessionId: s.id });
         }).then((unlisten) => exitUnlisteners.push(unlisten));
@@ -128,6 +149,60 @@
     if (index < sessions.length) {
       selectSession(sessions[index].id);
     }
+  }
+
+  async function handleNewTab() {
+    if (!activeSessionId) return;
+    const tabIndex = addTab(activeSessionId);
+    if (tabIndex === -1) return;
+    setActiveTab(activeSessionId, tabIndex);
+    try {
+      await invoke("spawn_tab", { sessionId: activeSessionId, tabIndex });
+      listenForTabExit(activeSessionId, tabIndex);
+    } catch (e) {
+      removeTab(activeSessionId, tabIndex);
+      showSnackbar(String(e));
+    }
+  }
+
+  async function handleCloseTab() {
+    if (!activeSessionId) return;
+    const active = getActiveTabIndex(activeSessionId);
+    if (active === 0) {
+      // No helper tab active — close window (original Cmd+W behavior)
+      getCurrentWindow().close();
+      return;
+    }
+    removeTab(activeSessionId, active);
+    await invoke("close_tab", { sessionId: activeSessionId, tabIndex: active });
+  }
+
+  function handleNextTab() {
+    if (!activeSessionId) return;
+    const tabs = getTabs(activeSessionId);
+    if (tabs.length <= 1) return;
+    const active = getActiveTabIndex(activeSessionId);
+    const currentPos = tabs.findIndex((t) => t.index === active);
+    const nextPos = (currentPos + 1) % tabs.length;
+    setActiveTab(activeSessionId, tabs[nextPos].index);
+  }
+
+  function handlePrevTab() {
+    if (!activeSessionId) return;
+    const tabs = getTabs(activeSessionId);
+    if (tabs.length <= 1) return;
+    const active = getActiveTabIndex(activeSessionId);
+    const currentPos = tabs.findIndex((t) => t.index === active);
+    const prevPos = (currentPos - 1 + tabs.length) % tabs.length;
+    setActiveTab(activeSessionId, tabs[prevPos].index);
+  }
+
+  function listenForTabExit(sessionId: string, tabIndex: number) {
+    const ptyKey = `${sessionId}:${tabIndex}`;
+    listen(`pty-exited-${ptyKey}`, () => {
+      removeTab(sessionId, tabIndex);
+      invoke("close_tab", { sessionId, tabIndex });
+    }).then((unlisten) => exitUnlisteners.push(unlisten));
   }
 
   onMount(() => {
@@ -206,6 +281,14 @@
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
         showPreferences = !showPreferences;
+      } else if (action.type === "new_tab") {
+        handleNewTab();
+      } else if (action.type === "close_tab") {
+        handleCloseTab();
+      } else if (action.type === "next_tab") {
+        handleNextTab();
+      } else if (action.type === "prev_tab") {
+        handlePrevTab();
       }
     },
     () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !getCycleState().isCycling
@@ -242,6 +325,7 @@
   function onSessionCreated(session: Session) {
     showSessionForm = false;
     sessions = [...sessions, session];
+    initSession(session.id, 1);
     selectSession(session.id);
     focusTerminal();
     listenForExits();
@@ -249,6 +333,7 @@
 
   async function doDelete(s: Session) {
     await invoke("destroy_session", { id: s.id });
+    destroyTabState(s.id);
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -407,24 +492,38 @@
     />
 
     {#each sessions as session (session.id)}
-      <Terminal
-        sessionId={session.id}
-        visible={session.id === activeSessionId}
-        focused={session.id === activeSessionId && zone === "terminal"}
-        exited={session.status === "exited"}
-        onAttached={() => {
-          if (session.status === "exited") {
-            sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
-            listenForExits();
-          }
-        }}
-        onUserInput={() => {
-          if (agentStates[session.id]) {
-            const { [session.id]: _, ...rest } = agentStates;
-            agentStates = rest;
-          }
-        }}
-      />
+      {@const tabs = getTabs(session.id)}
+      {@const activeTab = getActiveTabIndex(session.id)}
+      {#if session.id === activeSessionId && tabs.length > 1}
+        <TabBar
+          {tabs}
+          activeTabIndex={activeTab}
+          onSelect={(idx) => setActiveTab(session.id, idx)}
+          onClose={async (idx) => { removeTab(session.id, idx); await invoke("close_tab", { sessionId: session.id, tabIndex: idx }); }}
+        />
+      {/if}
+      {#each tabs as tab (tab.index)}
+        {@const ptyKey = tab.index === 0 ? session.id : `${session.id}:${tab.index}`}
+        <Terminal
+          sessionId={ptyKey}
+          visible={session.id === activeSessionId && tab.index === activeTab}
+          focused={session.id === activeSessionId && tab.index === activeTab && zone === "terminal"}
+          exited={tab.index === 0 && session.status === "exited"}
+          skipAttach={tab.index !== 0}
+          onAttached={() => {
+            if (tab.index === 0 && session.status === "exited") {
+              sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
+              listenForExits();
+            }
+          }}
+          onUserInput={() => {
+            if (agentStates[session.id]) {
+              const { [session.id]: _, ...rest } = agentStates;
+              agentStates = rest;
+            }
+          }}
+        />
+      {/each}
     {/each}
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
@@ -493,11 +592,11 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] max-w-lg cursor-pointer rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950 px-4 py-3 shadow-lg"
+    class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg bg-red-600 px-4 py-3 shadow-lg"
     onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }}
     title="Click to copy and dismiss"
   >
-    <p class="text-sm text-red-800 dark:text-red-200 font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs text-red-600 dark:text-red-400 mt-1">Click to copy & dismiss</p>
+    <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
+    <p class="text-xs text-red-200 mt-1">Click to copy & dismiss</p>
   </div>
 {/if}
