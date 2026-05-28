@@ -30,7 +30,7 @@
             role="button"
             tabindex="-1"
             aria-label="Close {tab.label}"
-            onclick|stopPropagation={() => onClose(tab.index)}
+            onclick={(e: MouseEvent) => { e.stopPropagation(); onClose(tab.index); }}
           >×</span>
         {/if}
       </button>
