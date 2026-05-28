@@ -224,7 +224,7 @@ pub fn destroy_session(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn mark_session_exited(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'exited' WHERE id = ?1", params![id])?;
+    conn.execute("UPDATE sessions SET status = 'exited' WHERE id = ?1 AND status = 'active'", params![id])?;
     Ok(())
 }
 
