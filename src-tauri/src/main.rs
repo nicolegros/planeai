@@ -2,8 +2,10 @@
 
 mod config;
 mod db;
+mod git;
 mod notify;
 mod pty;
+#[cfg(not(windows))]
 mod tmux;
 
 use std::sync::Mutex;
@@ -18,8 +20,9 @@ struct ConfigState(Mutex<config::Config>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return path.replacen("~", &home.to_string_lossy(), 1);
+        let home = config::home_dir();
+        if !home.is_empty() {
+            return path.replacen("~", &home, 1);
         }
     }
     path.to_string()
@@ -32,7 +35,7 @@ fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
 }
 
 fn is_notify_hook_installed_check() -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = config::home_dir();
     let path = format!("{home}/.kiro/agents/default.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => content.contains("planeai-stop-notify"),
@@ -159,24 +162,29 @@ fn update_config(state: State<ConfigState>, new_config: config::Config) -> Resul
 
 #[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
-    tmux::list_branches(&repo_path)
+    git::list_branches(&repo_path)
 }
 
 #[tauri::command]
 fn list_monospace_fonts() -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("fc-list")
-        .args([":spacing=100", "family"])
-        .output()
-        .map_err(|e| format!("failed to run fc-list: {e}"))?;
+    use font_kit::source::SystemSource;
+    use font_kit::properties::Properties;
+    use font_kit::family_name::FamilyName;
 
-    if !output.status.success() {
-        return Err("fc-list failed".to_string());
-    }
+    let source = SystemSource::new();
+    let all_families = source.all_families().map_err(|e| format!("font enumeration failed: {e}"))?;
 
-    let mut fonts: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|f| !f.is_empty() && !f.starts_with('.'))
+    let mut fonts: Vec<String> = all_families
+        .into_iter()
+        .filter(|name| !name.starts_with('.'))
+        .filter(|name| {
+            source
+                .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
+                .ok()
+                .and_then(|handle| handle.load().ok())
+                .map(|font| font.is_monospace())
+                .unwrap_or(false)
+        })
         .collect();
     fonts.sort();
     fonts.dedup();
@@ -234,7 +242,10 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 
 #[tauri::command]
 fn check_session_alive(tmux_name: String) -> bool {
-    tmux::has_session(&tmux_name)
+    #[cfg(not(windows))]
+    { tmux::has_session(&tmux_name) }
+    #[cfg(windows)]
+    { false }
 }
 
 #[tauri::command]
@@ -244,14 +255,24 @@ fn is_notify_hook_installed() -> bool {
 
 #[tauri::command]
 fn install_notify_hook() -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let home = config::home_dir();
 
-    // Write the hook script
+    // Write the hook script (platform-specific)
     let hooks_dir = format!("{home}/.kiro/hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
-    let script_path = format!("{hooks_dir}/planeai-stop-notify.sh");
-    let script = include_str!("../resources/planeai-stop-notify.sh");
-    std::fs::write(&script_path, script).map_err(|e| format!("failed to write hook script: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.sh"),
+        include_str!("../resources/planeai-stop-notify.sh"),
+    );
+    #[cfg(windows)]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.ps1"),
+        include_str!("../resources/planeai-stop-notify.ps1"),
+    );
+
+    std::fs::write(&script_path, script_content).map_err(|e| format!("failed to write hook script: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -282,8 +303,12 @@ fn install_notify_hook() -> Result<(), String> {
         h.get("command").and_then(|c| c.as_str()).map_or(false, |c| c.contains("planeai-stop-notify"))
     });
     if !already {
+        #[cfg(not(windows))]
+        let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
+        #[cfg(windows)]
+        let hook_command = format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
         stop_arr.push(serde_json::json!({
-            "command": format!("{hooks_dir}/planeai-stop-notify.sh")
+            "command": hook_command
         }));
     }
 
@@ -328,14 +353,19 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     drop(cfg);
 
     if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
-        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_path = projects.iter()
-            .find(|p| p.id == session.project_id)
-            .map(|p| p.path.as_str())
-            .unwrap_or("/");
-        let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
-        tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+        #[cfg(not(windows))]
+        {
+            let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
+            let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+            let project_path = projects.iter()
+                .find(|p| p.id == session.project_id)
+                .map(|p| p.path.as_str())
+                .unwrap_or("/");
+            let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+            tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+        }
+        #[cfg(windows)]
+        return Err("tmux backend not available on Windows".to_string());
     }
 
     db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
@@ -361,6 +391,7 @@ fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
         // Only kill tmux if this is a tmux-backed session
         if session.backend == "tmux" {
+            #[cfg(not(windows))]
             if let Some(ref tn) = session.tmux_name {
                 let _ = tmux::kill_session(tn);
             }
@@ -369,7 +400,7 @@ fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
         if let Some(ref wt_path) = session.worktree_path {
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
             if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
-                let _ = tmux::worktree_remove(&project.path, wt_path);
+                let _ = git::worktree_remove(&project.path, wt_path);
             }
             let _ = std::fs::remove_dir_all(wt_path);
         }
@@ -409,23 +440,28 @@ fn launch_session(
         let base = base_branch.as_deref().unwrap_or("main");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = project_name.replace(' ', "-").to_lowercase();
-        let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+        let home = config::home_dir();
         let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
         std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
             .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        tmux::worktree_add(&repo_path, &wt_path, &branch, base)?;
+        git::worktree_add(&repo_path, &wt_path, &branch, base)?;
         (wt_path.clone(), Some(wt_path))
     } else {
-        tmux::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
+        git::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
         (repo_path.clone(), None)
     };
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let tmux_name = if backend == "tmux" {
-        let tn = tmux::session_name(&project_name);
-        tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
-        Some(tn)
+        #[cfg(not(windows))]
+        {
+            let tn = tmux::session_name(&project_name);
+            tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
+            Some(tn)
+        }
+        #[cfg(windows)]
+        return Err("tmux backend not available on Windows".to_string());
     } else {
         None
     };
@@ -483,7 +519,10 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
 
             // Startup reconciliation: mark stale sessions as exited
+            #[cfg(not(windows))]
             let _ = db::reconcile_sessions(&conn, |name| tmux::has_session(name));
+            #[cfg(windows)]
+            let _ = db::reconcile_sessions(&conn, |_| false);
 
             // Config: migrate from DB if needed, then load
             let config_dir = config::config_dir();

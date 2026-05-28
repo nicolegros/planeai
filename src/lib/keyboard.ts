@@ -1,5 +1,16 @@
 import { focusTerminal, getActiveZone, toggleSidebar } from "./focus.svelte";
 
+/** True on macOS/iOS, false on Windows/Linux */
+export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
+/** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
+export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
+
+/** Check if the platform modifier key is pressed (Cmd on macOS, Ctrl on Windows/Linux) */
+function isPlatformMod(e: KeyboardEvent): boolean {
+  return IS_MAC ? e.metaKey : e.ctrlKey;
+}
+
 export type KeyboardAction =
   | { type: "toggle_sidebar" }
   | { type: "new_session" }
@@ -16,7 +27,7 @@ export type KeyboardAction =
  * Returns the action if matched, or null if the event should pass through.
  */
 export function matchChord(e: KeyboardEvent): KeyboardAction | null {
-  const meta = e.metaKey;
+  const mod = isPlatformMod(e);
   const key = e.key.toLowerCase();
 
   // Escape — always return to terminal
@@ -29,33 +40,33 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return e.shiftKey ? { type: "tab_switch_reverse" } : { type: "tab_switch" };
   }
 
-  // Cmd/Ctrl+B — toggle sidebar
-  if (meta && key === "b") {
+  // Mod+B — toggle sidebar
+  if (mod && key === "b") {
     return { type: "toggle_sidebar" };
   }
 
-  // Cmd/Ctrl+K — command palette
-  if (meta && key === "k") {
+  // Mod+K — command palette
+  if (mod && key === "k") {
     return { type: "command_palette" };
   }
 
-  // Cmd/Ctrl+, — preferences
-  if (meta && e.key === ",") {
+  // Mod+, — preferences
+  if (mod && e.key === ",") {
     return { type: "open_preferences" };
   }
 
-  // Cmd/Ctrl+Shift+N — new project
-  if (meta && e.shiftKey && key === "n") {
+  // Mod+Shift+N — new project
+  if (mod && e.shiftKey && key === "n") {
     return { type: "new_project" };
   }
 
-  // Cmd/Ctrl+N — new session
-  if (meta && key === "n") {
+  // Mod+N — new session
+  if (mod && key === "n") {
     return { type: "new_session" };
   }
 
-  // Cmd/Ctrl+1-9 — jump to session
-  if (meta && e.key >= "1" && e.key <= "9") {
+  // Mod+1-9 — jump to session
+  if (mod && e.key >= "1" && e.key <= "9") {
     return { type: "jump_to_session", index: parseInt(e.key) - 1 };
   }
 

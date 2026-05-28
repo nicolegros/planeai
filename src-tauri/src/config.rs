@@ -31,20 +31,39 @@ fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
 }
 
+fn default_font_family() -> &'static str {
+    if cfg!(windows) { "Cascadia Mono" } else { "Menlo" }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Provider {
     pub command: String,
     pub yolo_flag: Option<String>,
 }
 
-/// Returns the config directory: $XDG_CONFIG_HOME/planeai or ~/.config/planeai
+/// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
+pub fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
+
+/// Returns the config directory.
+/// - Windows: %APPDATA%\planeai
+/// - Others: $XDG_CONFIG_HOME/planeai or ~/.config/planeai
 pub fn config_dir() -> PathBuf {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            format!("{home}/.config")
-        });
-    PathBuf::from(base).join("planeai")
+    #[cfg(windows)]
+    {
+        let base = std::env::var("APPDATA")
+            .unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home_dir()));
+        PathBuf::from(base).join("planeai")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_CONFIG_HOME")
+            .unwrap_or_else(|_| format!("{}/.config", home_dir()));
+        PathBuf::from(base).join("planeai")
+    }
 }
 
 impl Default for Config {
@@ -61,7 +80,7 @@ impl Default for Config {
                 terminal_theme_light: "one-light".to_string(),
             },
             terminal: Terminal {
-                font_family: "Menlo".to_string(),
+                font_family: default_font_family().to_string(),
                 font_size: 14,
                 option_as_meta: default_option_as_meta(),
             },
@@ -135,12 +154,18 @@ pub fn resolve_backend(config: &Config) -> &str {
 }
 
 /// Check if tmux binary is available on PATH.
+#[cfg(not(windows))]
 pub fn tmux_available() -> bool {
     std::process::Command::new("which")
         .arg("tmux")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+pub fn tmux_available() -> bool {
+    false
 }
 
 /// Merge user config over defaults. Struct-like top-level keys (appearance, terminal)
@@ -436,5 +461,34 @@ mod tests {
         assert!(!content.contains("session_backend"));
         let (loaded, _) = load(config_dir);
         assert_eq!(loaded.session_backend, None);
+    }
+
+    #[test]
+    fn default_font_is_platform_appropriate() {
+        let config = Config::default();
+        if cfg!(windows) {
+            assert_eq!(config.terminal.font_family, "Cascadia Mono");
+        } else {
+            assert_eq!(config.terminal.font_family, "Menlo");
+        }
+    }
+
+    #[test]
+    fn home_dir_prefers_home_and_falls_back_to_userprofile() {
+        let original_home = std::env::var("HOME").ok();
+
+        // When HOME is set, it's returned
+        std::env::set_var("HOME", "/mock/home");
+        assert_eq!(home_dir(), "/mock/home");
+
+        // When HOME is absent, falls back to USERPROFILE
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", "C:\\Users\\test");
+        assert_eq!(home_dir(), "C:\\Users\\test");
+
+        // Restore
+        if let Some(h) = original_home {
+            std::env::set_var("HOME", h);
+        }
     }
 }

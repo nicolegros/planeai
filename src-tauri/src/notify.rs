@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -9,7 +10,10 @@ use tauri::{AppHandle, Emitter};
 
 const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(unix)]
 const SOCK_NAME: &str = "notify.sock";
+#[cfg(windows)]
+pub const PIPE_NAME: &str = r"\\.\pipe\planeai-notify";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AgentState {
@@ -143,12 +147,14 @@ pub struct SessionMeta {
 }
 
 /// Returns the socket path inside the given app data directory.
+#[cfg(unix)]
 pub fn socket_path(app_dir: &Path) -> PathBuf {
     app_dir.join(SOCK_NAME)
 }
 
 /// Start the Unix socket listener thread. Incoming lines are treated as session IDs
 /// that just finished a turn (stop hook fired).
+#[cfg(unix)]
 pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
     let sock = socket_path(app_dir);
     // Remove stale socket
@@ -176,6 +182,71 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     fire_notification(&app, &session_id, &state);
                 }
             }
+        }
+    });
+}
+
+/// Start the named pipe listener thread (Windows).
+#[cfg(windows)]
+pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
+    use std::io::Read;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::ReadFile;
+    use windows_sys::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_ACCESS_INBOUND,
+        PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+
+    thread::spawn(move || {
+        let pipe_name: Vec<u16> = PIPE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+        loop {
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    pipe_name.as_ptr(),
+                    PIPE_ACCESS_INBOUND,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                    PIPE_UNLIMITED_INSTANCES,
+                    512,
+                    512,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                eprintln!("[notify] failed to create named pipe");
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+
+            // Wait for a client to connect
+            let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
+            if connected == 0 {
+                // Check if client connected between Create and Connect (ERROR_PIPE_CONNECTED)
+                // This is fine — proceed anyway
+            }
+
+            // Read lines from the pipe
+            let file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
+            let reader = BufReader::new(file);
+            for line in reader.lines().map_while(Result::ok) {
+                let session_id = line.trim().to_string();
+                if session_id.is_empty() {
+                    continue;
+                }
+                let fired = {
+                    let mut s = state.lock().unwrap();
+                    let current_state = s.get_state(&session_id);
+                    let result = s.notify_stop(&session_id);
+                    eprintln!("[notify] pipe received stop for {session_id} | was={current_state:?} | fired={result}");
+                    result
+                };
+                if fired {
+                    emit_state_change(&app, &session_id, AgentState::Idle);
+                    fire_notification(&app, &session_id, &state);
+                }
+            }
+            // Client disconnected, loop to accept next
         }
     });
 }

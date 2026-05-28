@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchChord } from "../keyboard";
+import { matchChord, IS_MAC } from "../keyboard";
 
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -12,6 +12,10 @@ function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   } as KeyboardEvent;
 }
 
+// In test environment (jsdom), navigator.platform is empty so IS_MAC is false.
+// Platform mod is ctrlKey in tests.
+const modKey = IS_MAC ? "metaKey" : "ctrlKey";
+
 describe("matchChord", () => {
   it("returns focus_terminal on Escape", () => {
     expect(matchChord(key({ key: "Escape" }))).toEqual({
@@ -19,31 +23,32 @@ describe("matchChord", () => {
     });
   });
 
-  it("returns toggle_sidebar on Cmd+B", () => {
-    expect(matchChord(key({ key: "b", metaKey: true }))).toEqual({
+  it("returns toggle_sidebar on platform mod+B", () => {
+    expect(matchChord(key({ key: "b", [modKey]: true }))).toEqual({
       type: "toggle_sidebar",
     });
   });
 
-  it("returns null on Ctrl+B (only Cmd+B works)", () => {
-    expect(matchChord(key({ key: "b", ctrlKey: true }))).toBeNull();
+  it("returns null when wrong modifier is used", () => {
+    const wrongMod = IS_MAC ? "ctrlKey" : "metaKey";
+    expect(matchChord(key({ key: "b", [wrongMod]: true }))).toBeNull();
   });
 
-  it("returns new_session on Cmd+N", () => {
-    expect(matchChord(key({ key: "n", metaKey: true }))).toEqual({
+  it("returns new_session on platform mod+N", () => {
+    expect(matchChord(key({ key: "n", [modKey]: true }))).toEqual({
       type: "new_session",
     });
   });
 
-  it("returns new_project on Cmd+Shift+N", () => {
-    expect(matchChord(key({ key: "n", metaKey: true, shiftKey: true }))).toEqual({
+  it("returns new_project on platform mod+Shift+N", () => {
+    expect(matchChord(key({ key: "n", [modKey]: true, shiftKey: true }))).toEqual({
       type: "new_project",
     });
   });
 
-  it("returns jump_to_session on Cmd+1 through Cmd+9", () => {
+  it("returns jump_to_session on platform mod+1 through mod+9", () => {
     for (let i = 1; i <= 9; i++) {
-      expect(matchChord(key({ key: String(i), metaKey: true }))).toEqual({
+      expect(matchChord(key({ key: String(i), [modKey]: true }))).toEqual({
         type: "jump_to_session",
         index: i - 1,
       });
@@ -68,8 +73,8 @@ describe("matchChord", () => {
     expect(matchChord(key({ key: "b" }))).toBeNull(); // no modifier
   });
 
-  it("returns command_palette on Cmd+K", () => {
-    expect(matchChord(key({ key: "k", metaKey: true }))).toEqual({
+  it("returns command_palette on platform mod+K", () => {
+    expect(matchChord(key({ key: "k", [modKey]: true }))).toEqual({
       type: "command_palette",
     });
   });

@@ -47,8 +47,23 @@ create → active → exited → deleted
 - Multiple sessions allowed per project in both checkout and worktree modes; inline warning shown when creating additional checkout sessions
 - DB is source of truth; orphan tmux sessions are ignored
 - tmux is optional — app works without it (direct PTY fallback)
-- macOS primary target, cross-platform future
+- Cross-platform: macOS and Windows (core functionality parity; tmux gracefully unavailable on Windows)
 - Project names must be unique
+
+## Cross-platform strategy
+
+| Concern | macOS | Windows |
+|---------|-------|---------|
+| **Session backend** | tmux (persistent) or direct PTY | direct PTY only (tmux unavailable) |
+| **Notification IPC** | Unix socket (`notify.sock`) | Named pipe (`\\.\pipe\planeai-notify`) |
+| **Stop hook** | Bash script (`.sh`) via `nc -U` | PowerShell script (`.ps1`) via `NamedPipeClientStream` |
+| **Config dir** | `$XDG_CONFIG_HOME/planeai` or `~/.config/planeai` | `%APPDATA%\planeai` |
+| **Home dir** | `$HOME` | `$HOME` or `%USERPROFILE%` |
+| **Platform modifier** | Cmd (⌘) | Ctrl |
+| **Default font** | Menlo | Cascadia Mono |
+| **Title bar padding** | Left (traffic lights) | Right (caption buttons) |
+| **Font enumeration** | font-kit (cross-platform) | font-kit (cross-platform) |
+| **Window style** | Overlay title bar | Overlay title bar (Tauri handles caption buttons) |
 
 ## Session backend
 
