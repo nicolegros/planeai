@@ -1,7 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Combobox } from "bits-ui";
-  import { Button, Input, Label, Checkbox } from "./ui";
+  import { Button, Input, Label, Select, Checkbox } from "./ui";
   import { getSettings } from "../lib/settings.svelte";
 
   interface Project { id: string; name: string; path: string; }
@@ -10,10 +9,6 @@
 
   let { projects, sessions, onCreated, onCancel }: Props = $props();
 
-  const branchAlreadyUsed = $derived(
-    !useWorktree && projectValue && branch && sessions.some(s => s.project_id === projectValue && s.status === "active" && s.branch === branch && !s.worktree_path)
-  );
-
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
 
@@ -21,28 +16,16 @@
   let useWorktree = $state(false);
   let autoApprove = $state(true);
   let selectedProvider = $state("");
-  let baseBranchValue = $state("");
-  let baseBranchSearch = $state("");
   let newBranchName = $state("");
 
   let projectValue = $state(projects[0]?.id ?? "");
-  let projectSearch = $state("");
-  let projectOpen = $state(false);
   const projectItems = projects.map((p) => ({ value: p.id, label: p.name }));
-  const filteredProjects = $derived(
-    projectSearch === "" ? projectItems : projectItems.filter((p) => p.label.toLowerCase().includes(projectSearch.toLowerCase())),
-  );
-  const projectInputValue = $derived(
-    projectOpen ? undefined : projectItems.find((i) => i.value === projectValue)?.label
-  );
 
   let branchValue = $state("");
   let branchSearch = $state("");
-  let branchOpen = $state(false);
   let branches = $state<{ value: string; label: string }[]>([]);
 
-  let baseBranchOpen = $state(false);
-  let baseBranchOpen2 = $state(false);
+  let baseBranchValue = $state("");
 
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
@@ -55,38 +38,28 @@
     }
   });
 
-  const filteredBranches = $derived(
-    branchSearch === "" ? branches : branches.filter((b) => b.label.toLowerCase().includes(branchSearch.toLowerCase())),
-  );
-  const branchInputValue = $derived(
-    branchOpen ? undefined : branches.find((i) => i.value === branchValue)?.label
-  );
-
-  const filteredBaseBranches = $derived(
-    baseBranchSearch === "" ? branches : branches.filter((b) => b.label.toLowerCase().includes(baseBranchSearch.toLowerCase())),
-  );
-  const baseBranchInputValue = $derived(
-    (baseBranchOpen || baseBranchOpen2) ? undefined : branches.find((i) => i.value === baseBranchValue)?.label
-  );
-
   const branch = $derived(branchValue || branchSearch);
   const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
 
   const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
   const worktreeBranch = $derived(newBranchName || defaultBranchName);
-  const baseBranch = $derived(baseBranchValue || baseBranchSearch || "main");
+  const baseBranch = $derived(baseBranchValue || "main");
+
+  const branchAlreadyUsed = $derived(
+    !useWorktree && projectValue && branch && sessions.some(s => s.project_id === projectValue && s.status === "active" && s.branch === branch && !s.worktree_path)
+  );
 
   let formEl: HTMLFormElement;
   let error = $state("");
-
-  const comboInputClass = "w-full rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 placeholder:text-surface-400 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50 dark:placeholder:text-surface-500";
-  const comboContentClass = "z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-900";
-  const comboItemClass = "cursor-pointer px-3 py-2 text-sm text-surface-700 data-[highlighted]:bg-surface-100 dark:text-surface-300 dark:data-[highlighted]:bg-surface-800";
 
   function focusBranchInput() {
     requestAnimationFrame(() => {
       formEl?.querySelectorAll('input')?.[2]?.focus();
     });
+  }
+
+  function metaEnter(e: KeyboardEvent) {
+    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
   }
 
   async function submit() {
@@ -123,7 +96,7 @@
     <Label>Name</Label>
     <Input
       bind:value={sessionName}
-      onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+      onkeydown={metaEnter}
       placeholder="My session..."
       autocomplete="off"
     />
@@ -131,30 +104,7 @@
 
   <div class="space-y-1">
     <Label>Project</Label>
-    <Combobox.Root type="single" allowDeselect={false} bind:value={projectValue} bind:open={projectOpen} inputValue={projectInputValue} onValueChange={focusBranchInput} onOpenChangeComplete={(o) => { if (!o) projectSearch = ""; }}>
-      <Combobox.Input
-        onfocus={() => { projectOpen = true; }}
-        oninput={(e) => { projectSearch = e.currentTarget.value; }}
-        onkeydown={(e) => {
-          if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
-          else if (e.key === "Enter" && filteredProjects.length === 1) { e.preventDefault(); projectValue = filteredProjects[0].value; projectOpen = false; }
-        }}
-        placeholder="Search project..."
-        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
-        class={comboInputClass}
-      />
-      <Combobox.Portal>
-        <Combobox.Content loop class={comboContentClass} sideOffset={4}>
-          {#each filteredProjects as item (item.value)}
-            <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
-              {item.label}
-            </Combobox.Item>
-          {:else}
-            <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No projects found</span>
-          {/each}
-        </Combobox.Content>
-      </Combobox.Portal>
-    </Combobox.Root>
+    <Select items={projectItems} bind:value={projectValue} onValueChange={focusBranchInput} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
   </div>
 
   <div
@@ -189,37 +139,14 @@
   {#if useWorktree}
     <div class="space-y-1">
       <Label>Base branch</Label>
-      <Combobox.Root type="single" allowDeselect={false} bind:value={baseBranchValue} bind:open={baseBranchOpen} inputValue={baseBranchInputValue} onOpenChangeComplete={(o) => { if (!o) baseBranchSearch = baseBranchSearch; }}>
-        <Combobox.Input
-          onfocus={() => { baseBranchOpen = true; }}
-          oninput={(e) => (baseBranchSearch = e.currentTarget.value)}
-          onkeydown={(e) => {
-            if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
-            else if (e.key === "Enter" && filteredBaseBranches.length === 1) { e.preventDefault(); baseBranchValue = filteredBaseBranches[0].value; baseBranchOpen = false; }
-          }}
-          placeholder="main"
-          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
-          class={comboInputClass}
-        />
-        <Combobox.Portal>
-          <Combobox.Content loop class={comboContentClass} sideOffset={4}>
-            {#each filteredBaseBranches as item (item.value)}
-              <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
-                {item.label}
-              </Combobox.Item>
-            {:else}
-              <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
-            {/each}
-          </Combobox.Content>
-        </Combobox.Portal>
-      </Combobox.Root>
+      <Select items={branches} bind:value={baseBranchValue} onkeydown={metaEnter} placeholder="main" emptyText="No branches found" />
     </div>
 
     <div class="space-y-1">
       <Label>New branch name</Label>
       <Input
         bind:value={newBranchName}
-        onkeydown={(e) => { if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); } }}
+        onkeydown={metaEnter}
         placeholder={defaultBranchName || "feat/my-feature"}
         autocomplete="off"
       />
@@ -230,59 +157,13 @@
   {:else}
     <div class="space-y-1">
       <Label>Branch</Label>
-      <Combobox.Root type="single" allowDeselect={false} bind:value={branchValue} bind:open={branchOpen} inputValue={branchInputValue} onOpenChangeComplete={(o) => { if (!o && !branchValue) branchSearch = branchSearch; }}>
-        <Combobox.Input
-          onfocus={() => { branchOpen = true; }}
-          oninput={(e) => (branchSearch = e.currentTarget.value)}
-          onkeydown={(e) => {
-            if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
-            else if (e.key === "Enter" && filteredBranches.length === 1) { e.preventDefault(); branchValue = filteredBranches[0].value; branchOpen = false; }
-          }}
-          placeholder="main, feat/new-feature..."
-          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
-          class={comboInputClass}
-        />
-        <Combobox.Portal>
-          <Combobox.Content loop class={comboContentClass} sideOffset={4}>
-            {#each filteredBranches as item (item.value)}
-              <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
-                {item.label}
-              </Combobox.Item>
-            {:else}
-              <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
-            {/each}
-          </Combobox.Content>
-        </Combobox.Portal>
-      </Combobox.Root>
+      <Select items={branches} bind:value={branchValue} onInput={(s) => { branchSearch = s; }} onkeydown={metaEnter} placeholder="main, feat/new-feature..." emptyText="No branches found" />
     </div>
 
     {#if isNewBranch && branch}
       <div class="space-y-1">
         <Label>Base branch</Label>
-        <Combobox.Root type="single" allowDeselect={false} bind:value={baseBranchValue} bind:open={baseBranchOpen2} inputValue={baseBranchInputValue} onOpenChangeComplete={(o) => { if (!o) baseBranchSearch = baseBranchSearch; }}>
-          <Combobox.Input
-            onfocus={() => { baseBranchOpen2 = true; }}
-            oninput={(e) => (baseBranchSearch = e.currentTarget.value)}
-            onkeydown={(e) => {
-              if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
-              else if (e.key === "Enter" && filteredBaseBranches.length === 1) { e.preventDefault(); baseBranchValue = filteredBaseBranches[0].value; baseBranchOpen2 = false; }
-            }}
-            placeholder="main"
-            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} data-form-type="other"
-            class={comboInputClass}
-          />
-          <Combobox.Portal>
-            <Combobox.Content loop class={comboContentClass} sideOffset={4}>
-              {#each filteredBaseBranches as item (item.value)}
-                <Combobox.Item value={item.value} label={item.label} class={comboItemClass}>
-                  {item.label}
-                </Combobox.Item>
-              {:else}
-                <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No branches found</span>
-              {/each}
-            </Combobox.Content>
-          </Combobox.Portal>
-        </Combobox.Root>
+        <Select items={branches} bind:value={baseBranchValue} onkeydown={metaEnter} placeholder="main" emptyText="No branches found" />
       </div>
       <p class="text-xs text-surface-500">Will create new branch: <span class="font-medium text-surface-900 dark:text-surface-100">{branch}</span> from <span class="font-medium text-surface-900 dark:text-surface-100">{baseBranch}</span></p>
     {/if}

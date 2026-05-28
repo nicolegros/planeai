@@ -11,11 +11,13 @@
     value?: string;
     onValueChange?: (value: string) => void;
     onInput?: (search: string) => void;
+    onkeydown?: (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => void;
     placeholder?: string;
+    emptyText?: string;
     class?: string;
   }
 
-  let { items, value = $bindable(""), onValueChange, onInput, placeholder = "", class: className = "" }: Props = $props();
+  let { items, value = $bindable(""), onValueChange, onInput, onkeydown, placeholder = "", emptyText = "No results", class: className = "" }: Props = $props();
 
   let search = $state("");
   let open = $state(false);
@@ -29,11 +31,14 @@
   );
 </script>
 
-<Combobox.Root type="single" allowDeselect={false} bind:value bind:open {onValueChange} items={items} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
+<Combobox.Root type="single" allowDeselect={false} bind:value bind:open {onValueChange} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
   <Combobox.Input
     onfocus={() => { open = true; }}
     oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}
-    onkeydown={(e) => { if (e.key === "Enter" && filtered.length === 1) { e.preventDefault(); value = filtered[0].value; onValueChange?.(value); open = false; } }}
+    onkeydown={(e) => {
+      if (e.key === "Enter" && filtered.length === 1) { e.preventDefault(); value = filtered[0].value; onValueChange?.(value); open = false; }
+      onkeydown?.(e);
+    }}
     {placeholder}
     autocomplete="off"
     autocorrect="off"
@@ -49,7 +54,7 @@
           {item.label}
         </Combobox.Item>
       {:else}
-        <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">No results</span>
+        <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">{emptyText}</span>
       {/each}
     </Combobox.Content>
   </Combobox.Portal>
