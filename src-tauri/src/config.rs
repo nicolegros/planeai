@@ -211,7 +211,8 @@ pub fn should_accept_provider_session_id(discovered: Option<&str>, previous: Opt
     match discovered {
         None => false,
         Some(id) => match (previous, is_resume) {
-            (_, true) => true,
+            (Some(prev), true) => id == prev,
+            (None, true) => true,
             (None, false) => true,
             (Some(prev), false) => id != prev,
         },
@@ -710,6 +711,12 @@ mod tests {
         // No ID discovered → reject regardless
         assert!(!should_accept_provider_session_id(None, None, false));
         assert!(!should_accept_provider_session_id(None, Some("old-id"), true));
+    }
+
+    #[test]
+    fn should_reject_session_id_resume_with_different_id() {
+        // Resume, different ID returned → reject (belongs to another session)
+        assert!(!should_accept_provider_session_id(Some("other-id"), Some("old-id"), true));
     }
 
     #[test]
