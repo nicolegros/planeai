@@ -21,7 +21,13 @@ pub enum PtyTarget {
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
-    _child: Box<dyn Child + Send + Sync>,
+    child: Box<dyn Child + Send + Sync>,
+}
+
+impl Drop for PtyHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
 }
 
 pub struct PtyManager {
@@ -82,7 +88,7 @@ impl PtyManager {
         let handle = Arc::new(Mutex::new(PtyHandle {
             master: pair.master,
             writer,
-            _child: child,
+            child,
         }));
 
         {
