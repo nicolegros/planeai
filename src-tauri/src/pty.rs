@@ -60,7 +60,7 @@ impl PtyManager {
             })
             .map_err(|e| format!("failed to open pty: {e}"))?;
 
-        let cmd = match &target {
+        let mut cmd = match &target {
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
@@ -78,6 +78,7 @@ impl PtyManager {
                 c
             }
         };
+        cmd.env("TERM", "xterm-256color");
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
         drop(pair.slave);
