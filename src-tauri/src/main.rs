@@ -260,25 +260,30 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::source::SystemSource;
     use font_kit::properties::Properties;
     use font_kit::family_name::FamilyName;
+    use std::sync::OnceLock;
 
-    let source = SystemSource::new();
-    let all_families = source.all_families().map_err(|e| format!("font enumeration failed: {e}"))?;
+    static CACHE: OnceLock<Vec<String>> = OnceLock::new();
 
-    let mut fonts: Vec<String> = all_families
-        .into_iter()
-        .filter(|name| !name.starts_with('.'))
-        .filter(|name| {
-            source
-                .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
-                .ok()
-                .and_then(|handle| handle.load().ok())
-                .map(|font| font.is_monospace())
-                .unwrap_or(false)
-        })
-        .collect();
-    fonts.sort();
-    fonts.dedup();
-    Ok(fonts)
+    Ok(CACHE.get_or_init(|| {
+        let source = SystemSource::new();
+        let all_families = source.all_families().unwrap_or_default();
+
+        let mut fonts: Vec<String> = all_families
+            .into_iter()
+            .filter(|name| !name.starts_with('.'))
+            .filter(|name| {
+                source
+                    .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
+                    .ok()
+                    .and_then(|handle| handle.load().ok())
+                    .map(|font| font.is_monospace())
+                    .unwrap_or(false)
+            })
+            .collect();
+        fonts.sort();
+        fonts.dedup();
+        fonts
+    }).clone())
 }
 
 #[tauri::command]
@@ -723,6 +728,9 @@ fn main() {
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_notify_state(notify_state);
             app.manage(PtyState(pty_mgr));
+
+            // Warm font cache in background so preferences page opens instantly
+            std::thread::spawn(|| { let _ = list_monospace_fonts(); });
 
             Ok(())
         })
