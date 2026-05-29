@@ -79,6 +79,7 @@ impl PtyManager {
             }
         };
         cmd.env("TERM", "xterm-256color");
+        cmd.env("PLANEAI_SESSION_ID", session_id);
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
         drop(pair.slave);

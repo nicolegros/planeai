@@ -287,7 +287,7 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn attach_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+fn attach_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, notify: State<NotifyHandle>, app: tauri::AppHandle) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -344,6 +344,22 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
     };
 
     state.0.attach(&session_id, pty_target, app.clone())?;
+
+    // Register with notification system
+    {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+        let project_name = projects.iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if session.name.is_empty() { &session.branch } else { &session.name };
+        let hook_enabled = session.provider.as_deref()
+            .map(|pk| provider_has_hook(pk, &cfg))
+            .unwrap_or(false);
+        let mut ns = notify.0.lock().unwrap();
+        ns.register_session(&session_id, display_name, project_name, hook_enabled);
+    }
 
     // If session was exited, mark it active again (auto-restart on reopen)
     if session.status == "exited" {
