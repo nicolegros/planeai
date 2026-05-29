@@ -101,6 +101,36 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
     // Add tab_count column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
+
+    // Migrate tmux_name from NOT NULL to nullable for existing databases created before dual-backend.
+    // SQLite doesn't support ALTER COLUMN, so we rebuild the table.
+    let has_not_null: bool = conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+        .and_then(|mut s| s.query_row([], |r| r.get::<_, String>(0)))
+        .map(|sql| sql.contains("tmux_name TEXT NOT NULL"))
+        .unwrap_or(false);
+    if has_not_null {
+        conn.execute_batch(
+            "ALTER TABLE sessions RENAME TO sessions_old;
+             CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL REFERENCES projects(id),
+                 name TEXT NOT NULL DEFAULT '',
+                 tmux_name TEXT,
+                 branch TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active',
+                 created_at TEXT NOT NULL,
+                 worktree_path TEXT,
+                 provider TEXT,
+                 backend TEXT NOT NULL DEFAULT 'tmux',
+                 provider_session_id TEXT,
+                 tab_count INTEGER NOT NULL DEFAULT 1
+             );
+             INSERT INTO sessions SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count FROM sessions_old;
+             DROP TABLE sessions_old;"
+        )?;
+    }
+
     Ok(())
 }
 
@@ -553,5 +583,35 @@ mod tests {
         assert_eq!(get_session(&conn, &s1.id).unwrap().unwrap().status, "exited");
         assert_eq!(get_session(&conn, &s2.id).unwrap().unwrap().status, "exited");
         assert_eq!(get_session(&conn, &s3.id).unwrap().unwrap().status, "active");
+    }
+
+    #[test]
+    fn test_migrate_relaxes_tmux_name_not_null() {
+        // Simulate old schema with tmux_name NOT NULL
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL);
+             CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL REFERENCES projects(id),
+                 tmux_name TEXT NOT NULL,
+                 branch TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active',
+                 created_at TEXT NOT NULL
+             );"
+        ).unwrap();
+        // Insert a row with the old schema
+        conn.execute_batch(
+            "INSERT INTO projects VALUES ('p1', 'myapp', '/tmp/myapp');
+             INSERT INTO sessions VALUES ('s1', 'p1', 'planeai-myapp-old', 'main', 'active', '2024-01-01');"
+        ).unwrap();
+        // Run migration — should rebuild table with nullable tmux_name
+        migrate(&conn).unwrap();
+        // Now inserting NULL tmux_name should work
+        let s = create_session_with_id(&conn, "s2", "p1", "direct", None, "feat", None, None, "direct").unwrap();
+        assert!(s.tmux_name.is_none());
+        // Old data preserved
+        let old = get_session(&conn, "s1").unwrap().unwrap();
+        assert_eq!(old.tmux_name, Some("planeai-myapp-old".to_string()));
     }
 }
