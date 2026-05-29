@@ -242,8 +242,8 @@ fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
 }
 
 #[tauri::command]
-fn update_config(state: State<ConfigState>, new_config: config::Config) -> Result<(), String> {
-    let config_dir = config::config_dir();
+fn update_config(state: State<ConfigState>, new_config: config::Config, app: tauri::AppHandle) -> Result<(), String> {
+    let config_dir = config::config_dir(&app.package_info().name);
     config::save(&config_dir, &new_config)?;
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
     *cfg = new_config;
@@ -709,7 +709,7 @@ fn main() {
             let _ = db::reconcile_sessions(&conn, |_| false);
 
             // Config: migrate from DB if needed, then load
-            let config_dir = config::config_dir();
+            let config_dir = config::config_dir(&app.package_info().name);
             if let Ok(settings) = db::get_settings(&conn) {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }

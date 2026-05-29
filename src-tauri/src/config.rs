@@ -56,20 +56,20 @@ pub fn home_dir() -> String {
 }
 
 /// Returns the config directory.
-/// - Windows: %APPDATA%\planeai
-/// - Others: $XDG_CONFIG_HOME/planeai or ~/.config/planeai
-pub fn config_dir() -> PathBuf {
+/// - Windows: %APPDATA%\<app_name>
+/// - Others: $XDG_CONFIG_HOME/<app_name> or ~/.config/<app_name>
+pub fn config_dir(app_name: &str) -> PathBuf {
     #[cfg(windows)]
     {
         let base = std::env::var("APPDATA")
             .unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home_dir()));
-        PathBuf::from(base).join("planeai")
+        PathBuf::from(base).join(app_name)
     }
     #[cfg(not(windows))]
     {
         let base = std::env::var("XDG_CONFIG_HOME")
             .unwrap_or_else(|_| format!("{}/.config", home_dir()));
-        PathBuf::from(base).join("planeai")
+        PathBuf::from(base).join(app_name)
     }
 }
 
@@ -797,6 +797,34 @@ mod tests {
         assert_eq!(home_dir(), "C:\\Users\\test");
 
         // Restore
+        if let Some(h) = original_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    #[test]
+    fn config_dir_uses_app_name_for_directory() {
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", "/mock/home");
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let path = config_dir("planeai");
+        assert_eq!(path, PathBuf::from("/mock/home/.config/planeai"));
+
+        if let Some(h) = original_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    #[test]
+    fn config_dir_isolates_dev_bundle_by_name() {
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", "/mock/home");
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let path = config_dir("planeai-feat-foo");
+        assert_eq!(path, PathBuf::from("/mock/home/.config/planeai-feat-foo"));
+
         if let Some(h) = original_home {
             std::env::set_var("HOME", h);
         }
