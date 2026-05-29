@@ -36,9 +36,11 @@
     onOpenPreferences: () => void;
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
+    onArchiveProject: (project: Project) => void;
+    onDeleteProject: (project: Project) => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject }: Props = $props();
 
   let renameValue = $state("");
 
@@ -56,10 +58,16 @@
   }
 
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
+  let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
 
   function onContextMenu(e: MouseEvent, session: Session) {
     e.preventDefault();
     contextMenu = { x: e.clientX, y: e.clientY, session };
+  }
+
+  function onProjectContextMenu(e: MouseEvent, project: Project) {
+    e.preventDefault();
+    projectContextMenu = { x: e.clientX, y: e.clientY, project };
   }
 
   let selectedIndex = $state(0);
@@ -124,7 +132,7 @@
     {:else}
       {#each grouped as { project, sessions: projectSessions } (project.id)}
         <div>
-          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate" title={project.path}>
+          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate" title={project.path} oncontextmenu={(e) => onProjectContextMenu(e, project)}>
             {project.name}
           </h3>
           <ul class="space-y-0.5">
@@ -207,5 +215,17 @@
           { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
           { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
         ]}
+  />
+{/if}
+
+{#if projectContextMenu}
+  <ContextMenu
+    x={projectContextMenu.x}
+    y={projectContextMenu.y}
+    onClose={() => (projectContextMenu = null)}
+    items={[
+      { label: "Archive project", onSelect: () => onArchiveProject(projectContextMenu!.project) },
+      { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
+    ]}
   />
 {/if}

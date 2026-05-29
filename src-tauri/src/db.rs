@@ -136,6 +136,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Add status column to projects
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
     Ok(())
 }
 
@@ -151,7 +153,7 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path FROM projects")?;
+    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE status = 'active'")?;
     let rows = stmt.query_map([], |row| {
         Ok(Project {
             id: row.get(0)?,
@@ -162,10 +164,63 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     rows.collect()
 }
 
+pub fn archive_project(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("UPDATE sessions SET status = 'archived' WHERE project_id = ?1", params![id])?;
+    conn.execute("UPDATE projects SET status = 'archived' WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn list_archived_projects(conn: &Connection) -> Result<Vec<Project>> {
+    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE status = 'archived'")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Project {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            path: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("UPDATE projects SET status = 'active' WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM sessions WHERE project_id = ?1", params![id])?;
     conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
+    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE id = ?1")?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        Ok(Project { id: row.get(0)?, name: row.get(1)?, path: row.get(2)? })
+    })?;
+    Ok(rows.next().transpose()?)
+}
+
+pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve FROM sessions WHERE project_id = ?1")?;
+    let rows = stmt.query_map(params![project_id], |row| {
+        Ok(Session {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            name: row.get(2)?,
+            tmux_name: row.get(3)?,
+            branch: row.get(4)?,
+            status: row.get(5)?,
+            created_at: row.get(6)?,
+            worktree_path: row.get(7)?,
+            provider: row.get(8)?,
+            backend: row.get(9)?,
+            provider_session_id: row.get(10)?,
+            tab_count: row.get(11)?,
+            auto_approve: row.get(12)?,
+        })
+    })?;
+    rows.collect()
 }
 
 // Session CRUD
@@ -573,6 +628,77 @@ mod tests {
         set_provider_session_id(&conn, "s1", "f4165541-f370-4fdd-9ccd-14b103a4f712").unwrap();
         let loaded = get_session(&conn, "s1").unwrap().unwrap();
         assert_eq!(loaded.provider_session_id, Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string()));
+    }
+
+    #[test]
+    fn test_archive_project_hides_from_list_projects() {
+        let conn = setup();
+        let p1 = create_project(&conn, "keep", "/tmp/keep").unwrap();
+        let p2 = create_project(&conn, "hide", "/tmp/hide").unwrap();
+        archive_project(&conn, &p2.id).unwrap();
+        let projects = list_projects(&conn).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, p1.id);
+    }
+
+    #[test]
+    fn test_list_archived_projects_returns_only_archived() {
+        let conn = setup();
+        create_project(&conn, "active", "/tmp/active").unwrap();
+        let p2 = create_project(&conn, "archived", "/tmp/archived").unwrap();
+        archive_project(&conn, &p2.id).unwrap();
+        let archived = list_archived_projects(&conn).unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].name, "archived");
+    }
+
+    #[test]
+    fn test_restore_project_sessions_stay_archived() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let s = create_session(&conn, &p.id, "sess", "planeai-myapp-aaa", "main", None).unwrap();
+        archive_session(&conn, &s.id).unwrap();
+        archive_project(&conn, &p.id).unwrap();
+        restore_project(&conn, &p.id).unwrap();
+        // Project is visible again
+        assert_eq!(list_projects(&conn).unwrap().len(), 1);
+        // Session stays archived
+        assert_eq!(list_sessions(&conn).unwrap().len(), 0);
+        assert_eq!(list_archived_sessions(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_project_sessions_for_deletion() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(&conn, &p.id, "s1", "planeai-myapp-aaa", "main", None).unwrap();
+        create_session(&conn, &p.id, "s2", "planeai-myapp-bbb", "feat", Some("/tmp/wt/feat")).unwrap();
+        let s3 = create_session(&conn, &p.id, "s3", "planeai-myapp-ccc", "fix", None).unwrap();
+        archive_session(&conn, &s3.id).unwrap();
+        // get_project_sessions returns ALL sessions regardless of status
+        let sessions = get_project_sessions(&conn, &p.id).unwrap();
+        assert_eq!(sessions.len(), 3);
+        let wt_sessions: Vec<_> = sessions.iter().filter(|s| s.worktree_path.is_some()).collect();
+        assert_eq!(wt_sessions.len(), 1);
+        assert_eq!(wt_sessions[0].worktree_path.as_deref(), Some("/tmp/wt/feat"));
+    }
+
+    #[test]
+    fn test_archive_project_archives_sessions_without_killing() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(&conn, &p.id, "active", "planeai-myapp-aaa", "main", None).unwrap();
+        create_session(&conn, &p.id, "exited", "planeai-myapp-bbb", "feat", None).unwrap();
+        mark_session_exited(&conn, &list_sessions(&conn).unwrap()[1].id).unwrap();
+        archive_project(&conn, &p.id).unwrap();
+        // Sessions are archived in DB (not visible in list_sessions)
+        assert_eq!(list_sessions(&conn).unwrap().len(), 0);
+        // But sessions still exist (not deleted)
+        let all = get_project_sessions(&conn, &p.id).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|s| s.status == "archived"));
+        // tmux_name preserved (caller can check if tmux is still running)
+        assert!(all.iter().all(|s| s.tmux_name.is_some()));
     }
 
     #[test]
