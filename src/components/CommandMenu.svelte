@@ -34,16 +34,33 @@
     onRestoreSession: (id: string) => void;
     onDestroyArchivedSession: (id: string) => void;
     onResetTerminal: () => void;
+    onArchiveProject: (id: string) => void;
+    onDeleteProject: (id: string) => void;
+    onRestoreProject: (id: string) => void;
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
-  let showArchived = $state(false);
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject">("none");
+  let archivedProjects = $state<Project[]>([]);
 
   async function openArchived() {
     archivedSessions = await invoke<Session[]>("list_archived_sessions");
-    showArchived = true;
+    subMenu = "archivedSessions";
+  }
+
+  async function openArchivedProjects() {
+    archivedProjects = await invoke<Project[]>("list_archived_projects");
+    subMenu = "restoreProject";
+  }
+
+  function openArchiveProject() {
+    subMenu = "archiveProject";
+  }
+
+  function openDeleteProject() {
+    subMenu = "deleteProject";
   }
 
   function projectName(projectId: string): string {
@@ -51,9 +68,13 @@
   }
 
   function close() {
-    showArchived = false;
+    subMenu = "none";
     onOpenChange(false);
   }
+
+  $effect(() => {
+    if (open) subMenu = "none";
+  });
 
   function getActiveRootPath(): string | null {
     const session = sessions.find((s) => s.id === activeSessionId);
@@ -73,10 +94,12 @@
 <Dialog.Root {open} onOpenChange={(v) => { if (!v) close(); else onOpenChange(v); }}>
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
-    <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 shadow-lg overflow-hidden dark:border-surface-700 dark:bg-surface-900">
+    <Dialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 shadow-lg overflow-hidden dark:border-surface-700 dark:bg-surface-900"
+    >
       <Dialog.Title class="sr-only">Command Menu</Dialog.Title>
       <Dialog.Description class="sr-only">Search sessions, archive, or create new.</Dialog.Description>
-      {#if showArchived}
+      {#if subMenu === "archivedSessions"}
         <Command.Root class="flex flex-col" loop>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
@@ -116,6 +139,82 @@
                     >
                       <span class="truncate">{session.name || session.branch} <span class="text-xs opacity-70">({projectName(session.project_id)})</span></span>
                       <span class="text-xs shrink-0 ml-2">Delete</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "archiveProject"}
+        <Command.Root class="flex flex-col" loop>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Archive which project..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects as project (project.id)}
+                    <Command.Item
+                      value="archive {project.name}"
+                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={() => { onArchiveProject(project.id); close(); }}
+                    >
+                      {project.name}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "deleteProject"}
+        <Command.Root class="flex flex-col" loop>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Delete which project..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects as project (project.id)}
+                    <Command.Item
+                      value="delete {project.name}"
+                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={() => { onDeleteProject(project.id); close(); }}
+                    >
+                      {project.name}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "restoreProject"}
+        <Command.Root class="flex flex-col" loop>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Restore which project..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No archived projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each archivedProjects as project (project.id)}
+                    <Command.Item
+                      value="restore {project.name}"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={() => { onRestoreProject(project.id); archivedProjects = archivedProjects.filter(p => p.id !== project.id); }}
+                    >
+                      <span>{project.name}</span>
+                      <span class="text-xs text-primary-600 dark:text-primary-400 shrink-0 ml-2">Restore</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
@@ -216,6 +315,32 @@
                   onSelect={openArchived}
                 >
                   Archived sessions
+                </Command.Item>
+                <Command.Item
+                  value="archive project"
+                  keywords={["archive", "hide", "project"]}
+                  disabled={projects.length === 0}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openArchiveProject}
+                >
+                  Archive project…
+                </Command.Item>
+                <Command.Item
+                  value="delete project"
+                  keywords={["delete", "remove", "project"]}
+                  disabled={projects.length === 0}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openDeleteProject}
+                >
+                  Delete project…
+                </Command.Item>
+                <Command.Item
+                  value="restore project"
+                  keywords={["restore", "unarchive", "project"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  onSelect={openArchivedProjects}
+                >
+                  Restore project…
                 </Command.Item>
               </Command.GroupItems>
             </Command.Group>

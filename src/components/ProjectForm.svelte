@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { showSnackbar } from "../lib/snackbar.svelte";
   import { Button, Input, Label } from "./ui";
 
   interface Props {
@@ -54,7 +55,12 @@
       error = "Not a valid git repository (no .git found).";
       return;
     }
-    await invoke("create_project", { name, path });
+    try {
+      await invoke("create_project", { name, path });
+    } catch (e) {
+      showSnackbar(String(e));
+      return;
+    }
     onCreated();
   }
 

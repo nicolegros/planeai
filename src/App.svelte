@@ -5,7 +5,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
-  import { touchMru, removeMru } from "./lib/mru.svelte";
+  import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -74,6 +74,7 @@
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
+  let projectToDelete = $state<Project | null>(null);
 
   // Rename state
   let renamingSessionId = $state<string | null>(null);
@@ -366,6 +367,34 @@
     }
   }
 
+  async function archiveProject(p: Project) {
+    await invoke("archive_project", { id: p.id });
+    const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
+    for (const id of projectSessionIds) removeMru(id);
+    sessions = sessions.filter((s) => s.project_id !== p.id);
+    projects = projects.filter((x) => x.id !== p.id);
+    if (activeSessionId && projectSessionIds.includes(activeSessionId)) {
+      activeSessionId = getMruList()[0] ?? null;
+      if (activeSessionId) touchMru(activeSessionId);
+    }
+  }
+
+  async function deleteProject(p: Project) {
+    await invoke("delete_project", { id: p.id });
+    const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
+    for (const id of projectSessionIds) {
+      removeMru(id);
+      destroyTabState(id);
+    }
+    sessions = sessions.filter((s) => s.project_id !== p.id);
+    projects = projects.filter((x) => x.id !== p.id);
+    if (activeSessionId && projectSessionIds.includes(activeSessionId)) {
+      activeSessionId = getMruList()[0] ?? null;
+      if (activeSessionId) touchMru(activeSessionId);
+    }
+    projectToDelete = null;
+  }
+
   async function restartSession(s: Session) {
     const updated = await invoke<Session>("restart_session", { sessionId: s.id });
     sessions = sessions.map((x) => x.id === s.id ? updated : x);
@@ -414,6 +443,8 @@
       onOpenPreferences={() => (showPreferences = true)}
       onRenameSession={doRename}
       onStartRename={(id) => (renamingSessionId = id || null)}
+      onArchiveProject={archiveProject}
+      onDeleteProject={(p) => (projectToDelete = p)}
     />
   {/if}
 
@@ -489,6 +520,18 @@
           invoke("write_to_pty", { sessionId: activeSessionId, data: [0x0c] });
         }
       }}
+      onArchiveProject={async (id) => {
+        const p = projects.find((x) => x.id === id);
+        if (p) await archiveProject(p);
+      }}
+      onDeleteProject={(id) => {
+        const p = projects.find((x) => x.id === id);
+        if (p) projectToDelete = p;
+      }}
+      onRestoreProject={async (id) => {
+        await invoke("restore_project", { id });
+        await loadProjects();
+      }}
     />
 
     {#each sessions as session (session.id)}
@@ -556,6 +599,30 @@
             onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) doDelete(s); } }}
           >
             <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
+            <div class="flex justify-between">
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
+              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    {/if}
+    {#if projectToDelete}
+      {@const ptd = projectToDelete}
+      {@const projSessions = sessions.filter((s) => s.project_id === ptd.id)}
+      {@const worktreeCount = projSessions.filter((s) => s.worktree_path).length}
+      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) projectToDelete = null; }}>
+        <Dialog.Portal>
+          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <Dialog.Content
+            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+            onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') { deleteProject(ptd); } }}
+          >
+            <Dialog.Title class="text-sm">Delete project <strong>{ptd.name}</strong>?</Dialog.Title>
+            <p class="text-xs text-surface-500 dark:text-surface-400">
+              This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.
+            </p>
             <div class="flex justify-between">
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
