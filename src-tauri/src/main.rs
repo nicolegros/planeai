@@ -309,7 +309,11 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
         });
         let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
 
-        let cmd = config::restart_command_for_provider(provider_def, resume_id);
+        let cmd = if is_resume {
+            config::restart_command_for_provider(provider_def, resume_id)
+        } else {
+            config::launch_command(provider_def, session.auto_approve)
+        };
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         let command = resolve_command(parts[0]);
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
@@ -520,7 +524,12 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
     let provider_def = cfg.providers.get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let cmd = config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref());
+    let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
+    let cmd = if has_resume {
+        config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref())
+    } else {
+        config::launch_command(provider_def, session.auto_approve)
+    };
     drop(cfg);
 
     if session.backend == "tmux" {
@@ -645,7 +654,7 @@ fn launch_session(
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend)
+    db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve)
         .map_err(|e| e.to_string())
 }
 
