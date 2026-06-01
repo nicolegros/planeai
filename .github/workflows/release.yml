@@ -36,8 +36,12 @@ jobs:
       - name: Check version
         id: version
         run: |
-          VERSION=$(pnpm exec auto version 2>/dev/null || echo "")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          VERSION=$(pnpm exec auto version 2>&1 | tail -1)
+          if [[ "$VERSION" == "patch" || "$VERSION" == "minor" || "$VERSION" == "major" ]]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
