@@ -36,10 +36,15 @@ jobs:
       - name: Check version
         id: version
         run: |
-          VERSION=$(pnpm exec auto version 2>&1 | tail -1)
+          echo "--- auto version raw output ---"
+          pnpm exec auto version 2>&1 | tee /tmp/auto-output.txt || true
+          echo "--- end raw output ---"
+          VERSION=$(tail -1 /tmp/auto-output.txt)
+          echo "Parsed VERSION=$VERSION"
           if [[ "$VERSION" == "patch" || "$VERSION" == "minor" || "$VERSION" == "major" ]]; then
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           else
+            echo "No valid version bump detected, skipping release"
             echo "version=" >> "$GITHUB_OUTPUT"
           fi
         env:
