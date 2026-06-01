@@ -89,22 +89,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate changelog
-        run: pnpm exec auto changelog --no-git-commit
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create tag
         run: |
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          NOTES=$(pnpm exec auto changelog --dry-run 2>/dev/null || echo "")
+          echo "$NOTES" > /tmp/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create draft release
         run: |
           gh release create ${{ steps.tag.outputs.tag }} \
             --draft \
             --title "${{ steps.tag.outputs.tag }}" \
-            --notes-file CHANGELOG.md
+            --notes-file /tmp/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
