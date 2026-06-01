@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+  pull-requests: read
+
 concurrency:
   group: release
   cancel-in-progress: false
@@ -24,15 +28,15 @@ jobs:
         with:
           node-version: 20
 
-      - run: npx -y auto version
-        id: version-check
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Set output
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check version
         id: version
         run: |
-          VERSION=$(npx -y auto version 2>/dev/null || echo "")
+          VERSION=$(pnpm exec auto version 2>/dev/null || echo "")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,6 +56,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Install pnpm
+        run: npm install -g pnpm
 
       - run: pnpm install --frozen-lockfile
 
@@ -73,7 +80,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate changelog
-        run: npx auto changelog --no-git-commit
+        run: pnpm exec auto changelog --no-git-commit
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
