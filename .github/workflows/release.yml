@@ -113,12 +113,15 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x86_64
+            bundles: deb,appimage
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x86_64
+            bundles: nsis
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macos-aarch64
+            bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +177,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
