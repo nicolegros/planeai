@@ -189,12 +189,11 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
 /// Start the named pipe listener thread (Windows).
 #[cfg(windows)]
 pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
-    use std::io::Read;
     use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::ReadFile;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{ReadFile, PIPE_ACCESS_INBOUND};
     use windows_sys::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_ACCESS_INBOUND,
+        ConnectNamedPipe, CreateNamedPipeW,
         PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
 
