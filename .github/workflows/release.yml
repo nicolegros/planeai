@@ -172,9 +172,10 @@ jobs:
         run: |
           VERSION="${{ needs.release.outputs.tag }}"
           VERSION="${VERSION#v}"
-          sed -i.bak "s/0\.0\.0/$VERSION/g" package.json
-          sed -i.bak "s/0\.0\.0/$VERSION/g" src-tauri/tauri.conf.json
-          sed -i.bak "s/0\.0\.0/$VERSION/g" src-tauri/Cargo.toml
+          sed -i.bak "s/\"version\": \"0\.0\.0\"/\"version\": \"$VERSION\"/g" package.json
+          sed -i.bak "s/\"version\": \"0\.0\.0\"/\"version\": \"$VERSION\"/g" src-tauri/tauri.conf.json
+          sed -i.bak "s/^version = \"0\.0\.0\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i.bak "/^name = \"planeai\"/{n;s/^version = \"0\.0\.0\"/version = \"$VERSION\"/;}" src-tauri/Cargo.lock
 
       - run: pnpm install --frozen-lockfile
 
