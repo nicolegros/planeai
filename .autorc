@@ -1,5 +1,7 @@
 {
   "baseBranch": "main",
+  "name": "github-actions[bot]",
+  "email": "github-actions[bot]@users.noreply.github.com",
   "plugins": [
     "git-tag",
     "conventional-commits",
