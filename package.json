@@ -1,6 +1,6 @@
 {
   "name": "planeai",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,10 +13,14 @@
   },
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
+    "@auto-it/conventional-commits": "^11.3.6",
+    "@auto-it/git-tag": "^11.3.6",
+    "@auto-it/upload-assets": "^11.3.6",
     "@skeletonlabs/skeleton": "^4.15.2",
     "@sveltejs/vite-plugin-svelte": "5.0.3",
     "@tailwindcss/vite": "4.1.7",
     "@tauri-apps/cli": "2.5.0",
+    "auto": "^11.3.6",
     "jsdom": "26.1.0",
     "svelte": "5.55.9",
     "svelte-check": "4.2.1",
