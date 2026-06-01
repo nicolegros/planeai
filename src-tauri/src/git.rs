@@ -1,9 +1,10 @@
 use std::process::Command;
 
-/// List local branches for a git repo at the given path.
+/// List local and remote branches for a git repo at the given path.
+/// Remote-only branches are prefixed with "remote:" to distinguish them.
 pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
     let output = Command::new("git")
-        .args(["branch", "--list", "--format=%(refname:short)"])
+        .args(["branch", "--all", "--format=%(refname:short) %(refname)"])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -12,12 +13,30 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
 
-    let branches = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    Ok(branches)
+    let mut local = Vec::new();
+    let mut remote = Vec::new();
+    let mut local_names = std::collections::HashSet::new();
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((short, full)) = line.split_once(' ') else { continue };
+        let short = short.trim();
+        if short.is_empty() || full.contains("HEAD") {
+            continue;
+        }
+        if full.starts_with("refs/remotes/") {
+            let name = short.splitn(2, '/').nth(1).unwrap_or(short);
+            remote.push(name.to_string());
+        } else {
+            local_names.insert(short.to_string());
+            local.push(short.to_string());
+        }
+    }
+
+    for name in remote {
+        local.push(format!("remote:{name}"));
+    }
+
+    Ok(local)
 }
 
 /// Checkout an existing branch or create a new one (optionally from a start point).

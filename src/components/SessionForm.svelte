@@ -32,14 +32,18 @@
   $effect(() => {
     if (selectedProject) {
       invoke<string[]>("list_branches", { repoPath: selectedProject.path }).then(
-        (b) => (branches = b.map((name) => ({ value: name, label: name }))),
+        (b) => (branches = b.map((s) => {
+          const remote = s.startsWith("remote:");
+          const name = remote ? s.slice(7) : s;
+          return { value: remote ? `remote:${name}` : name, label: name, remote };
+        })),
         () => (branches = []),
       );
     }
   });
 
-  const branch = $derived(branchValue || branchSearch);
-  const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
+  const branch = $derived((branchValue || branchSearch).replace(/^remote:/, ""));
+  const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branchValue || b.value === `remote:${branch}`));
 
   const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
   const worktreeBranch = $derived(newBranchName || defaultBranchName);
