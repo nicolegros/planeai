@@ -1,0 +1,12 @@
+{
+  "baseBranch": "main",
+  "plugins": [
+    "git-tag",
+    "conventional-commits",
+    ["upload-assets", ["./artifacts/**/*"]]
+  ],
+  "labels": [
+    { "name": "skip-release", "releaseType": "skip" }
+  ],
+  "noDefaultLabels": true
+}
