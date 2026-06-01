@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle windows
+.PHONY: dev build bundle open test dev-bundle
 
 dev:
 	pnpm tauri dev
@@ -27,6 +27,3 @@ dev-bundle:
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
-
-windows:
-	cd src-tauri && cargo check
