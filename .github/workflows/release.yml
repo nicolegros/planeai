@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  issues: read
 
 concurrency:
   group: release
