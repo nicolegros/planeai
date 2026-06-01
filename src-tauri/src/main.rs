@@ -690,7 +690,7 @@ fn launch_session(
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    let tmux_name = if backend == "tmux" {
+    let tmux_name: Option<String> = if backend == "tmux" {
         #[cfg(not(windows))]
         {
             let tn = tmux::session_name(&project_name);
