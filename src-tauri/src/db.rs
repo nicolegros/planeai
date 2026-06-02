@@ -23,6 +23,7 @@ pub struct Session {
     pub provider_session_id: Option<String>,
     pub tab_count: i64,
     pub auto_approve: bool,
+    pub task_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +139,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 
     // Add status column to projects
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+
+    // Add task_key column to sessions (nullable — only set for task-linked sessions)
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
+
     Ok(())
 }
 
@@ -202,7 +207,7 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve FROM sessions WHERE project_id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key FROM sessions WHERE project_id = ?1")?;
     let rows = stmt.query_map(params![project_id], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -218,6 +223,7 @@ pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<S
             provider_session_id: row.get(10)?,
             tab_count: row.get(11)?,
             auto_approve: row.get(12)?,
+            task_key: row.get(13)?,
         })
     })?;
     rows.collect()
@@ -234,7 +240,7 @@ pub fn create_session(
     worktree_path: Option<&str>,
 ) -> Result<Session> {
     let id = uuid::Uuid::new_v4().to_string();
-    create_session_with_id(conn, &id, project_id, name, Some(tmux_name), branch, worktree_path, None, "tmux", true)
+    create_session_with_id(conn, &id, project_id, name, Some(tmux_name), branch, worktree_path, None, "tmux", true, None)
 }
 
 pub fn create_session_with_id(
@@ -248,17 +254,18 @@ pub fn create_session_with_id(
     provider: Option<&str>,
     backend: &str,
     auto_approve: bool,
+    task_key: Option<&str>,
 ) -> Result<Session> {
     let created_at = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10)",
-        params![id, project_id, name, tmux_name, branch, created_at, worktree_path, provider, backend, auto_approve],
+        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![id, project_id, name, tmux_name, branch, created_at, worktree_path, provider, backend, auto_approve, task_key],
     )?;
-    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.map(|s| s.to_string()), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()), provider: provider.map(|s| s.to_string()), backend: backend.to_string(), provider_session_id: None, tab_count: 1, auto_approve })
+    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.map(|s| s.to_string()), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()), provider: provider.map(|s| s.to_string()), backend: backend.to_string(), provider_session_id: None, tab_count: 1, auto_approve, task_key: task_key.map(|s| s.to_string()) })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve FROM sessions WHERE status IN ('active', 'exited')")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key FROM sessions WHERE status IN ('active', 'exited')")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -274,13 +281,14 @@ pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
             provider_session_id: row.get(10)?,
             tab_count: row.get(11)?,
             auto_approve: row.get(12)?,
+            task_key: row.get(13)?,
         })
     })?;
     rows.collect()
 }
 
 pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve FROM sessions WHERE status = 'archived'")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key FROM sessions WHERE status = 'archived'")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -296,6 +304,7 @@ pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
             provider_session_id: row.get(10)?,
             tab_count: row.get(11)?,
             auto_approve: row.get(12)?,
+            task_key: row.get(13)?,
         })
     })?;
     rows.collect()
@@ -394,7 +403,7 @@ pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<(
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve FROM sessions WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key FROM sessions WHERE id = ?1")?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -410,6 +419,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
             provider_session_id: row.get(10)?,
             tab_count: row.get(11)?,
             auto_approve: row.get(12)?,
+            task_key: row.get(13)?,
         })
     })?;
     Ok(rows.next().transpose()?)
@@ -447,7 +457,7 @@ mod tests {
     fn test_create_direct_session_with_null_tmux_name() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session_with_id(&conn, "sess-1", &p.id, "direct session", None, "main", None, None, "direct", true).unwrap();
+        let s = create_session_with_id(&conn, "sess-1", &p.id, "direct session", None, "main", None, None, "direct", true, None).unwrap();
         assert_eq!(s.backend, "direct");
         assert!(s.tmux_name.is_none());
         // Verify round-trip through DB
@@ -621,7 +631,7 @@ mod tests {
     fn test_provider_session_id_round_trips_through_create_and_get() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session_with_id(&conn, "s1", &p.id, "test", None, "main", None, Some("kiro"), "direct", true).unwrap();
+        let s = create_session_with_id(&conn, "s1", &p.id, "test", None, "main", None, Some("kiro"), "direct", true, None).unwrap();
         // Initially null
         assert_eq!(s.provider_session_id, None);
         // Set it
@@ -706,11 +716,11 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         // Active direct session → should be marked exited (process died with app)
-        let s1 = create_session_with_id(&conn, "s1", &p.id, "direct", None, "main", None, None, "direct", true).unwrap();
+        let s1 = create_session_with_id(&conn, "s1", &p.id, "direct", None, "main", None, None, "direct", true, None).unwrap();
         // Active tmux session with dead tmux → should be marked exited
-        let s2 = create_session_with_id(&conn, "s2", &p.id, "tmux dead", Some("planeai-dead"), "main", None, None, "tmux", true).unwrap();
+        let s2 = create_session_with_id(&conn, "s2", &p.id, "tmux dead", Some("planeai-dead"), "main", None, None, "tmux", true, None).unwrap();
         // Active tmux session with alive tmux → should stay active
-        let s3 = create_session_with_id(&conn, "s3", &p.id, "tmux alive", Some("planeai-alive"), "main", None, None, "tmux", true).unwrap();
+        let s3 = create_session_with_id(&conn, "s3", &p.id, "tmux alive", Some("planeai-alive"), "main", None, None, "tmux", true, None).unwrap();
 
         // Reconcile: mock tmux checker that only knows "planeai-alive"
         reconcile_sessions(&conn, |name| name == "planeai-alive").unwrap();
@@ -743,7 +753,7 @@ mod tests {
         // Run migration — should rebuild table with nullable tmux_name
         migrate(&conn).unwrap();
         // Now inserting NULL tmux_name should work
-        let s = create_session_with_id(&conn, "s2", "p1", "direct", None, "feat", None, None, "direct", true).unwrap();
+        let s = create_session_with_id(&conn, "s2", "p1", "direct", None, "feat", None, None, "direct", true, None).unwrap();
         assert!(s.tmux_name.is_none());
         // Old data preserved
         let old = get_session(&conn, "s1").unwrap().unwrap();

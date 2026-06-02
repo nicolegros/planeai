@@ -5,14 +5,17 @@
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; }
-  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; }
+  interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
+  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; }
 
-  let { projects, sessions, onCreated, onCancel }: Props = $props();
+  let { projects, sessions, onCreated, onCancel, taskPrefill = null }: Props = $props();
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
 
-  let sessionName = $state("");
+  let sessionName = $state(taskPrefill?.name ?? "");
+  let taskKey = $state(taskPrefill?.key ?? "");
+  let taskPrompt = $state(taskPrefill?.prompt ?? "");
   let useWorktree = $state(false);
   let autoApprove = $state(true);
   let selectedProvider = $state("");
@@ -69,6 +72,9 @@
   async function submit() {
     if (!selectedProject) { error = "Select a project."; return; }
 
+    const taskKeyParam = taskKey || null;
+    const taskPromptParam = taskPrompt || null;
+
     if (useWorktree) {
       if (!worktreeBranch) { error = "Enter a branch name."; return; }
       try {
@@ -77,6 +83,7 @@
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
           name: sessionName, useWorktree: true, baseBranch, autoApprove,
           provider: selectedProvider || config.default_provider,
+          taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -88,6 +95,7 @@
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
           useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
           provider: selectedProvider || config.default_provider,
+          taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -96,6 +104,16 @@
 </script>
 
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+  <div class="space-y-1">
+    <Label>Task key</Label>
+    <Input
+      bind:value={taskKey}
+      onkeydown={metaEnter}
+      placeholder="KAN-3..."
+      autocomplete="off"
+    />
+  </div>
+
   <div class="space-y-1">
     <Label>Name</Label>
     <Input

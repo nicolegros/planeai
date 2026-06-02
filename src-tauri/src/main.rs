@@ -5,6 +5,8 @@ mod db;
 mod git;
 mod notify;
 mod pty;
+mod task_manager;
+mod template;
 #[cfg(not(windows))]
 mod tmux;
 
@@ -26,6 +28,11 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Shell-escape a string by wrapping in single quotes, escaping any internal single quotes.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// Resolve a command name to its full path, checking user-local bin directories
@@ -609,23 +616,51 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     let updated = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found after restore")?;
+
+    // Fire on_restart lifecycle hook
+    if updated.task_key.is_some() {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(cwd) = session_cwd(&conn, &updated) {
+            fire_task_hook(&cfg, &updated, "on_restart", &cwd);
+        }
+    }
+
     Ok(updated)
 }
 
 #[tauri::command]
-fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
+fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>, config_state: State<ConfigState>) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+
+    // Fire on_complete before archiving
+    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        if session.task_key.is_some() {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            if let Some(cwd) = session_cwd(&conn, &session) {
+                fire_task_hook(&cfg, &session, "on_complete", &cwd);
+            }
+        }
+    }
+
     db::archive_session(&conn, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>) -> Result<(), String> {
+fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>, config_state: State<ConfigState>) -> Result<(), String> {
     // Detach PTY
     pty_state.0.detach(&id);
 
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
+        // Fire on_complete before destroying
+        if session.task_key.is_some() {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            if let Some(cwd) = session_cwd(&conn, &session) {
+                fire_task_hook(&cfg, &session, "on_complete", &cwd);
+            }
+        }
+
         // Only kill tmux if this is a tmux-backed session
         if session.backend == "tmux" {
             #[cfg(not(windows))]
@@ -661,12 +696,24 @@ fn launch_session(
     base_branch: Option<String>,
     auto_approve: bool,
     provider: Option<String>,
+    task_key: Option<String>,
+    task_prompt: Option<String>,
 ) -> Result<db::Session, String> {
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let provider_key = provider.unwrap_or_else(|| cfg.default_provider.clone());
     let provider_def = cfg.providers.get(&provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let cmd = config::launch_command(provider_def, auto_approve);
+    let mut cmd = config::launch_command(provider_def, auto_approve);
+
+    // Append prompt_command if task prompt is provided
+    if let (Some(prompt), Some(prompt_cmd_template)) = (&task_prompt, &provider_def.prompt_command) {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("prompt", prompt.as_str());
+        let rendered = template::render(prompt_cmd_template, &vars);
+        let escaped = shell_escape(&rendered);
+        cmd = format!("{cmd} {escaped}");
+    }
+
     let hook_enabled = provider_def.command.contains("kiro-cli") && is_notify_hook_installed_check();
     let backend = config::resolve_backend(&cfg).to_string();
     drop(cfg);
@@ -711,8 +758,97 @@ fn launch_session(
     }
 
     // Persist to DB
-    db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve)
-        .map_err(|e| e.to_string())
+    let session = db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve, task_key.as_deref())
+        .map_err(|e| e.to_string())?;
+
+    // Fire on_start lifecycle hook
+    if session.task_key.is_some() {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        fire_task_hook(&cfg, &session, "on_start", &repo_path);
+    }
+
+    Ok(session)
+}
+
+/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
+/// If the session has a task_key and the configured task manager has the hook, executes move_task.
+fn fire_task_hook(cfg: &config::Config, session: &db::Session, hook_name: &str, cwd: &str) {
+    let task_key = match &session.task_key {
+        Some(k) => k,
+        None => return,
+    };
+    let tm = match resolve_task_manager(cfg) {
+        Ok(tm) => tm,
+        Err(_) => return,
+    };
+    let hook = match hook_name {
+        "on_start" => tm.on_start.as_ref(),
+        "on_notify" => tm.on_notify.as_ref(),
+        "on_restart" => tm.on_restart.as_ref(),
+        "on_complete" => tm.on_complete.as_ref(),
+        _ => None,
+    };
+    if let Some(h) = hook {
+        let _ = task_manager::move_task(tm, task_key, &h.move_to, std::path::Path::new(cwd));
+    }
+}
+
+/// Resolve the working directory for a session's project.
+fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
+    if let Some(ref wt) = session.worktree_path {
+        return Some(wt.clone());
+    }
+    db::list_projects(conn).ok()
+        .and_then(|ps| ps.into_iter().find(|p| p.id == session.project_id))
+        .map(|p| p.path)
+}
+
+#[tauri::command]
+fn get_task_details(
+    config_state: State<ConfigState>,
+    key: String,
+    repo_path: String,
+) -> Result<task_manager::TaskItem, String> {
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let tm = resolve_task_manager(&cfg)?;
+    task_manager::get_task(tm, &key, std::path::Path::new(&repo_path))
+}
+
+#[tauri::command]
+fn fire_task_notify_hook(
+    session_id: String,
+    db_state: State<DbState>,
+    config_state: State<ConfigState>,
+) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    if session.task_key.is_some() {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(cwd) = session_cwd(&conn, &session) {
+            fire_task_hook(&cfg, &session, "on_notify", &cwd);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_task_items(
+    config_state: State<ConfigState>,
+    repo_path: String,
+) -> Result<Vec<task_manager::TaskItem>, String> {
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    let tm = resolve_task_manager(&cfg)?;
+    task_manager::list_tasks(tm, std::path::Path::new(&repo_path))
+}
+
+fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
+    let key = cfg.default_task_manager.as_deref()
+        .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))
+        .ok_or("No task manager configured")?;
+    cfg.task_managers.get(key)
+        .ok_or_else(|| format!("Task manager '{}' not found in config", key))
 }
 
 fn main() {
@@ -819,6 +955,9 @@ fn main() {
             restart_session,
             archive_session,
             destroy_session,
+            get_task_details,
+            list_task_items,
+            fire_task_notify_hook,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

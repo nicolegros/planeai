@@ -37,13 +37,24 @@
     onArchiveProject: (id: string) => void;
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
+    onPickTask: (task: TaskItem) => void;
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject }: Props = $props();
+  interface TaskItem {
+    key: string;
+    title: string;
+    status: string;
+    description: string;
+    priority: number;
+    blocked_by: string[];
+  }
+
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask">("none");
   let archivedProjects = $state<Project[]>([]);
+  let taskItems = $state<TaskItem[]>([]);
 
   async function openArchived() {
     archivedSessions = await invoke<Session[]>("list_archived_sessions");
@@ -53,6 +64,19 @@
   async function openArchivedProjects() {
     archivedProjects = await invoke<Project[]>("list_archived_projects");
     subMenu = "restoreProject";
+  }
+
+  async function openTaskPicker() {
+    const session = sessions.find((s) => s.id === activeSessionId);
+    const project = session ? projects.find((p) => p.id === session.project_id) : projects[0];
+    const repoPath = project?.path;
+    if (!repoPath) { close(); return; }
+    try {
+      taskItems = await invoke<TaskItem[]>("list_task_items", { repoPath });
+    } catch {
+      taskItems = [];
+    }
+    subMenu = "pickTask";
   }
 
   function openArchiveProject() {
@@ -222,6 +246,33 @@
             </Command.Viewport>
           </Command.List>
         </Command.Root>
+      {:else if subMenu === "pickTask"}
+        <Command.Root class="flex flex-col" loop>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Search tasks..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No tasks found.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each taskItems as task (task.key)}
+                    <Command.Item
+                      value="{task.key}: {task.title}"
+                      keywords={[task.key, task.title]}
+                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={() => { onPickTask(task); close(); }}
+                    >
+                      <span class="font-medium text-primary-600 dark:text-primary-400 mr-2">{task.key}</span>
+                      <span class="truncate">{task.title}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
       {:else}
       <Command.Root class="flex flex-col" loop>
         <Command.Input
@@ -298,6 +349,14 @@
                   onSelect={() => { onNewSession(); close(); }}
                 >
                   New session
+                </Command.Item>
+                <Command.Item
+                  value="pick task"
+                  keywords={["task", "kanban", "issue", "ticket", "pick"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  onSelect={openTaskPicker}
+                >
+                  Pick task…
                 </Command.Item>
                 <Command.Item
                   value="reset terminal"

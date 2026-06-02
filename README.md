@@ -40,3 +40,104 @@ This project uses TDD. See [AGENTS.md](./AGENTS.md) for workflow guidelines.
 pnpm install
 pnpm tauri dev
 ```
+
+## Task Manager Integration
+
+planeai integrates with external task manager CLIs (kanban, Jira wrappers, etc.) to automatically start sessions from tasks, pre-fill session details, and manage task status through the session lifecycle.
+
+### Configuration
+
+Add a `task_managers` section to `~/.config/planeai/config.json`:
+
+```jsonc
+{
+  "task_managers": {
+    "kanban": {
+      "get_task": "kanban show {key}",
+      "move_task": "kanban move {key} {status}",
+      "list_tasks": "kanban list --status todo",
+      "templates": {
+        "branch": "{key:lower}/{title:slug}",
+        "name": "{key:upper}: {title}",
+        "prompt": "Implement task {key}: {title}\n\n{description}"
+      },
+      "on_start": { "move_to": "in_progress" },
+      "on_notify": { "move_to": "in_review" },
+      "on_restart": { "move_to": "in_progress" },
+      "on_complete": { "move_to": "done" }
+    }
+  },
+  "default_task_manager": "kanban"
+}
+```
+
+### Provider prompt_command
+
+To inject the task prompt into the agent CLI, add `prompt_command` to your provider:
+
+```jsonc
+{
+  "providers": {
+    "kiro": {
+      "command": "kiro-cli chat",
+      "prompt_command": "{prompt}",  // positional arg
+      "yolo_flag": "--trust-all-tools"
+    },
+    "claude": {
+      "command": "claude",
+      "prompt_command": "--prompt {prompt}",  // flag-based
+      "yolo_flag": "--dangerously-skip-permissions"
+    }
+  }
+}
+```
+
+When a session is launched from a task, the rendered prompt template is substituted into `prompt_command` and appended to the launch command. If no task is linked, `prompt_command` is omitted.
+
+### Fixed JSON contract
+
+Task manager commands must output JSON matching this structure:
+
+```json
+{
+  "key": "KAN-3",
+  "title": "Add dark mode support",
+  "status": "todo",
+  "description": "Implement dark mode for accessibility.",
+  "priority": 1,
+  "blocked_by": ["KAN-1"]
+}
+```
+
+`list_tasks` returns an array of the same shape. If your tool outputs a different format, wrap it in a script that normalizes the output.
+
+### Template syntax
+
+Templates use `{variable}` with optional transforms via `{variable:transform}`:
+
+| Transform | Effect | Example |
+|-----------|--------|---------|
+| (none) | Raw value | `{key}` → `KAN-3` |
+| `lower` | Lowercase | `{key:lower}` → `kan-3` |
+| `upper` | Uppercase | `{key:upper}` → `KAN-3` |
+| `slug` | Slugify | `{title:slug}` → `add-dark-mode-support` |
+
+Available variables: `key`, `title`, `status`, `description`, `priority`, `blocked_by`.
+
+### Lifecycle hooks
+
+Each hook is optional. When configured, it calls `move_task` with the specified status:
+
+| Hook | Fires when |
+|------|-----------|
+| `on_start` | Session is created from a task |
+| `on_notify` | Agent signals idle (notification received) |
+| `on_restart` | An exited task-linked session is restarted |
+| `on_complete` | Task-linked session is archived or deleted |
+
+### Usage
+
+1. **Command menu** — Press `Cmd+K`, select "Pick task…", choose from the list. Session form opens pre-filled.
+2. **Session form** — Type a task key directly in the "Task key" field. The form pre-fills name from the configured template.
+
+Task-linked sessions display their task key as a badge in the sidebar.

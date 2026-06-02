@@ -49,6 +49,7 @@
   let sidebarVisible = $state(true);
 
   let showSessionForm = $state(false);
+  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string } | null>(null);
 
   // Command menu state
   let commandMenuOpen = $state(false);
@@ -235,6 +236,7 @@
       if (event.payload.state === "Idle") {
         console.log("[notify] playing task complete sound");
         playTaskComplete();
+        invoke("fire_task_notify_hook", { sessionId: event.payload.session_id }).catch(() => {});
       }
     });
 
@@ -469,8 +471,9 @@
           <SessionForm
             {projects}
             {sessions}
+            {taskPrefill}
             onCreated={onSessionCreated}
-            onCancel={() => (showSessionForm = false)}
+            onCancel={() => { showSessionForm = false; taskPrefill = null; }}
           />
         </Dialog.Content>
       </Dialog.Portal>
@@ -531,6 +534,10 @@
       onRestoreProject={async (id) => {
         await invoke("restore_project", { id });
         await loadProjects();
+      }}
+      onPickTask={(task) => {
+        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
+        showSessionForm = true;
       }}
     />
 
