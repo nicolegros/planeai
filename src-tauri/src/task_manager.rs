@@ -53,11 +53,12 @@ fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, String> {
     if parts.is_empty() {
         return Err("Empty command".to_string());
     }
-    let output = Command::new(parts[0])
+    let resolved = crate::command::resolve(parts[0]);
+    let output = Command::new(&resolved)
         .args(&parts[1..])
         .current_dir(cwd)
         .output()
-        .map_err(|e| format!("Failed to execute '{}': {e}", parts[0]))?;
+        .map_err(|e| format!("Failed to execute '{}': {e}", resolved))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

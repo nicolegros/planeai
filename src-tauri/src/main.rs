@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod command;
 mod config;
 mod db;
 mod git;
@@ -38,36 +39,7 @@ fn shell_escape(s: &str) -> String {
 /// Resolve a command name to its full path, checking user-local bin directories
 /// that may not be in PATH when launched from a GUI app.
 fn resolve_command(cmd: &str) -> String {
-    // If already absolute, return as-is
-    if cmd.starts_with('/') {
-        return cmd.to_string();
-    }
-    let home = config::home_dir();
-    let extra_dirs = [
-        format!("{home}/.local/bin"),
-        format!("{home}/.cargo/bin"),
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-    ];
-    for dir in &extra_dirs {
-        let full = format!("{dir}/{cmd}");
-        if std::path::Path::new(&full).exists() {
-            return full;
-        }
-    }
-    // Try resolving via login shell (picks up user's full PATH)
-    if let Ok(output) = std::process::Command::new("/bin/bash")
-        .args(["-lc", &format!("which {cmd}")])
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return path;
-            }
-        }
-    }
-    cmd.to_string()
+    command::resolve(cmd)
 }
 
 /// Background discovery of provider session ID with retry-backoff.
