@@ -83,9 +83,9 @@
   // Task manager state
   let showAddTaskManager = $state(false);
   let newTmName = $state("");
-  let newTmGetTask = $state("");
-  let newTmMoveTask = $state("");
-  let newTmListTasks = $state("");
+  let newTmGetTask = $state("kanban show {key}");
+  let newTmMoveTask = $state("kanban move {key} {status}");
+  let newTmListTasks = $state("kanban list --status todo");
 
   const taskManagers = $derived(config.task_managers ?? {});
 
@@ -447,15 +447,15 @@
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
-            <Input bind:value={newTmGetTask} class="font-mono" placeholder={"kanban show {key}"} />
+            <Input bind:value={newTmGetTask} class="font-mono" />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
-            <Input bind:value={newTmMoveTask} class="font-mono" placeholder={"kanban move {key} {status}"} />
+            <Input bind:value={newTmMoveTask} class="font-mono" />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
-            <Input bind:value={newTmListTasks} class="font-mono" placeholder="kanban list --status todo" />
+            <Input bind:value={newTmListTasks} class="font-mono" />
           </div>
           <div class="flex gap-2">
             <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
