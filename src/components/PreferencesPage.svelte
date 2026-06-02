@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { getThemesByVariant } from "../lib/terminal-themes";
-  import { Select } from "./ui";
+  import { Select, Input } from "./ui";
 
   interface Props {
     onBack: () => void;
@@ -301,30 +301,27 @@
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
-              <input
-                type="text"
+              <Input
                 value={provider.command}
                 onchange={(e) => updateProvider(key, "command", e.currentTarget.value)}
-                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+                class="font-mono"
               />
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
-              <input
-                type="text"
+              <Input
                 value={provider.yolo_flag || ""}
                 onchange={(e) => updateProvider(key, "yolo_flag", e.currentTarget.value)}
-                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+                class="font-mono"
                 placeholder="e.g. --trust-all-tools"
               />
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">Prompt command (optional)</label>
-              <input
-                type="text"
+              <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
-                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+                class="font-mono"
                 placeholder={"{prompt} or --prompt {prompt}"}
               />
             </div>
@@ -336,28 +333,24 @@
         <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
-            <input
-              type="text"
+            <Input
               bind:value={newProviderName}
-              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50"
               placeholder="e.g. claude-code"
             />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
-            <input
-              type="text"
+            <Input
               bind:value={newProviderCommand}
-              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+              class="font-mono"
               placeholder="e.g. claude"
             />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
-            <input
-              type="text"
+            <Input
               bind:value={newProviderYoloFlag}
-              class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+              class="font-mono"
               placeholder="e.g. --dangerously-skip-permissions"
             />
           </div>
@@ -400,15 +393,15 @@
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
-              <input type="text" value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban show {key}"} />
+              <Input value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban show {key}"} />
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
-              <input type="text" value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban move {key} {status}"} />
+              <Input value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban move {key} {status}"} />
             </div>
             <div class="space-y-1">
               <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
-              <input type="text" value={tm.list_tasks} onchange={(e) => updateTaskManager(key, "list_tasks", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="kanban list --status todo" />
+              <Input value={tm.list_tasks} onchange={(e) => updateTaskManager(key, "list_tasks", e.currentTarget.value)} class="font-mono" placeholder="kanban list --status todo" />
             </div>
 
             <!-- Templates -->
@@ -417,15 +410,15 @@
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Branch</label>
-                  <input type="text" value={tm.templates?.branch || ""} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"{key:lower}/{title:slug}"} />
+                  <Input value={tm.templates?.branch || ""} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" placeholder={"{key:lower}/{title:slug}"} />
                 </div>
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Session name</label>
-                  <input type="text" value={tm.templates?.name || ""} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"{key:upper}: {title}"} />
+                  <Input value={tm.templates?.name || ""} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" placeholder={"{key:upper}: {title}"} />
                 </div>
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Prompt</label>
-                  <input type="text" value={tm.templates?.prompt || ""} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"Implement {key}: {title}"} />
+                  <Input value={tm.templates?.prompt || ""} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" placeholder={"Implement {key}: {title}"} />
                 </div>
               </div>
             </details>
@@ -437,7 +430,7 @@
                 {#each [["on_start", "On start"], ["on_notify", "On notify"], ["on_restart", "On restart"], ["on_complete", "On complete"]] as [hookKey, label]}
                   <div class="space-y-1">
                     <label class="text-xs text-surface-500 dark:text-surface-400">{label} → move to</label>
-                    <input type="text" value={(tm as any)[hookKey]?.move_to || ""} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="e.g. in_progress" />
+                    <Input value={(tm as any)[hookKey]?.move_to || ""} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" placeholder="e.g. in_progress" />
                   </div>
                 {/each}
               </div>
@@ -450,19 +443,19 @@
         <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
-            <input type="text" bind:value={newTmName} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50" placeholder="e.g. kanban" />
+            <Input bind:value={newTmName} placeholder="e.g. kanban" />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
-            <input type="text" bind:value={newTmGetTask} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban show {key}"} />
+            <Input bind:value={newTmGetTask} class="font-mono" placeholder={"kanban show {key}"} />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
-            <input type="text" bind:value={newTmMoveTask} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban move {key} {status}"} />
+            <Input bind:value={newTmMoveTask} class="font-mono" placeholder={"kanban move {key} {status}"} />
           </div>
           <div class="space-y-1">
             <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
-            <input type="text" bind:value={newTmListTasks} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="kanban list --status todo" />
+            <Input bind:value={newTmListTasks} class="font-mono" placeholder="kanban list --status todo" />
           </div>
           <div class="flex gap-2">
             <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
