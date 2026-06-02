@@ -69,7 +69,9 @@
     taskKey = task.key;
     sessionName = `${task.key}: ${task.title}`;
     taskPrompt = task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`;
-    branchSearch = `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
+    const slugBranch = `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
+    branchSearch = slugBranch;
+    newBranchName = slugBranch;
   }
 
   const branch = $derived((branchValue || branchSearch).replace(/^remote:/, ""));
