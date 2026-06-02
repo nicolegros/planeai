@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Button, Input, Label, Select, Checkbox } from "./ui";
   import { getSettings } from "../lib/settings.svelte";
+  import { showSnackbar } from "../lib/snackbar.svelte";
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; }
@@ -56,7 +57,7 @@
     if (mode === "task" && selectedProject) {
       invoke<TaskItem[]>("list_task_items", { repoPath: selectedProject.path }).then(
         (items) => (taskItems = items),
-        () => (taskItems = []),
+        (e) => { taskItems = []; showSnackbar(String(e)); },
       );
     }
   });
