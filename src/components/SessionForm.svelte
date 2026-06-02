@@ -71,6 +71,7 @@
     taskPrompt = task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`;
     const slugBranch = `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
     branchSearch = slugBranch;
+    branchValue = slugBranch;
     newBranchName = slugBranch;
   }
 
