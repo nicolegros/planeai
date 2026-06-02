@@ -273,7 +273,7 @@
       {#if backendValue === "tmux" && !tmuxAvailable}
         <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
       {/if}
-      <p class="text-xs text-surface-500 dark:text-surface-400">
+      <p class="text-xs text-surface-700 dark:text-surface-400">
         {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise direct PTY.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
         {:else}Sessions are ephemeral — terminated on app quit.
@@ -307,7 +307,7 @@
               >Remove</button>
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
+              <label class="text-xs text-surface-700 dark:text-surface-400">Command</label>
               <Input
                 value={provider.command}
                 onchange={(e) => updateProvider(key, "command", e.currentTarget.value)}
@@ -315,7 +315,7 @@
               />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
+              <label class="text-xs text-surface-700 dark:text-surface-400">Yolo flag (optional)</label>
               <Input
                 value={provider.yolo_flag || ""}
                 onchange={(e) => updateProvider(key, "yolo_flag", e.currentTarget.value)}
@@ -324,7 +324,7 @@
               />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
               <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
@@ -339,14 +339,14 @@
       {#if showAddProvider}
         <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Name</label>
             <Input
               bind:value={newProviderName}
               placeholder="e.g. claude-code"
             />
           </div>
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Command</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Command</label>
             <Input
               bind:value={newProviderCommand}
               class="font-mono"
@@ -354,7 +354,7 @@
             />
           </div>
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Yolo flag (optional)</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Yolo flag (optional)</label>
             <Input
               bind:value={newProviderYoloFlag}
               class="font-mono"
@@ -399,33 +399,33 @@
               <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Get task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Fetches a single task by key. Must output JSON. Variables: {"{key}"}</span></span></label>
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Get task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Fetches a single task by key. Must output JSON. Variables: {"{key}"}</span></span></label>
               <Input value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban show {key}"} />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Move task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Moves a task to a new status. Called by lifecycle hooks. Variables: {"{key}"}, {"{status}"}</span></span></label>
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Move task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Moves a task to a new status. Called by lifecycle hooks. Variables: {"{key}"}, {"{status}"}</span></span></label>
               <Input value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban move {key} {status}"} />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">List tasks command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Lists tasks for the task picker. Must output a JSON array. Runs with project path as CWD.</span></span></label>
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">List tasks command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Lists tasks for the task picker. Must output a JSON array. Runs with project path as CWD.</span></span></label>
               <Input value={tm.list_tasks} onchange={(e) => updateTaskManager(key, "list_tasks", e.currentTarget.value)} class="font-mono" placeholder="kanban list --status todo" />
             </div>
 
             <!-- Templates -->
             <details class="pt-1">
-              <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Templates</summary>
-              <p class="mt-1 text-[10px] text-surface-400 dark:text-surface-500">Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: {"{var:slug}"}, {"{var:lower}"}, {"{var:upper}"}</p>
+              <summary class="text-xs text-surface-700 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Templates</summary>
+              <p class="mt-1 text-[10px] text-surface-600 dark:text-surface-500">Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: {"{var:slug}"}, {"{var:lower}"}, {"{var:upper}"}</p>
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
                 <div class="space-y-1">
-                  <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Branch <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Branch <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
                   <Input value={tm.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" />
                 </div>
                 <div class="space-y-1">
-                  <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Session name <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Session name <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
                   <Input value={tm.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" />
                 </div>
                 <div class="space-y-1">
-                  <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Prompt <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Prompt <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
                   <Input value={tm.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" />
                 </div>
               </div>
@@ -433,12 +433,12 @@
 
             <!-- Lifecycle hooks -->
             <details class="pt-1">
-              <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Lifecycle hooks</summary>
-              <p class="mt-1 text-[10px] text-surface-400 dark:text-surface-500">Automatically move tasks between statuses. Leave empty to disable a hook.</p>
+              <summary class="text-xs text-surface-700 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Lifecycle hooks</summary>
+              <p class="mt-1 text-[10px] text-surface-600 dark:text-surface-500">Automatically move tasks between statuses. Leave empty to disable a hook.</p>
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
                 {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."]] as [hookKey, label, defaultVal, desc]}
                   <div class="space-y-1">
-                    <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>
+                    <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>
                     <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
                   </div>
                 {/each}
@@ -451,19 +451,19 @@
       {#if showAddTaskManager}
         <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Name</label>
             <Input bind:value={newTmName} placeholder="e.g. kanban" />
           </div>
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Get task command</label>
             <Input bind:value={newTmGetTask} class="font-mono" />
           </div>
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">Move task command</label>
             <Input bind:value={newTmMoveTask} class="font-mono" />
           </div>
           <div class="space-y-1">
-            <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
+            <label class="text-xs text-surface-700 dark:text-surface-400">List tasks command</label>
             <Input bind:value={newTmListTasks} class="font-mono" />
           </div>
           <div class="flex gap-2">
