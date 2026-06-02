@@ -5,6 +5,28 @@ export type AppearanceMode = "system" | "light" | "dark";
 export interface Provider {
   command: string;
   yolo_flag: string | null;
+  prompt_command?: string | null;
+}
+
+export interface LifecycleHook {
+  move_to: string;
+}
+
+export interface TaskManagerTemplates {
+  branch?: string | null;
+  name?: string | null;
+  prompt?: string | null;
+}
+
+export interface TaskManager {
+  get_task: string;
+  move_task: string;
+  list_tasks: string;
+  templates?: TaskManagerTemplates | null;
+  on_start?: LifecycleHook | null;
+  on_notify?: LifecycleHook | null;
+  on_restart?: LifecycleHook | null;
+  on_complete?: LifecycleHook | null;
 }
 
 export interface AppConfig {
@@ -21,6 +43,8 @@ export interface AppConfig {
   providers: Record<string, Provider>;
   default_provider: string;
   session_backend?: string | null;
+  task_managers?: Record<string, TaskManager>;
+  default_task_manager?: string | null;
 }
 
 let config = $state<AppConfig>({

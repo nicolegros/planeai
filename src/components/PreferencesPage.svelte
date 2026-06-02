@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider } from "../lib/settings.svelte";
+  import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { getThemesByVariant } from "../lib/terminal-themes";
   import { Select } from "./ui";
 
@@ -78,6 +78,60 @@
     const providers = { ...config.providers };
     providers[key] = { ...providers[key], [field]: value || null };
     updateSettings({ providers } as Partial<AppConfig>);
+  }
+
+  // Task manager state
+  let showAddTaskManager = $state(false);
+  let newTmName = $state("");
+  let newTmGetTask = $state("");
+  let newTmMoveTask = $state("");
+  let newTmListTasks = $state("");
+
+  const taskManagers = $derived(config.task_managers ?? {});
+
+  function addTaskManager() {
+    if (!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks) return;
+    const tms = { ...taskManagers };
+    tms[newTmName] = { get_task: newTmGetTask, move_task: newTmMoveTask, list_tasks: newTmListTasks };
+    const patch: Partial<AppConfig> = { task_managers: tms };
+    if (!config.default_task_manager) patch.default_task_manager = newTmName;
+    updateSettings(patch);
+    newTmName = ""; newTmGetTask = ""; newTmMoveTask = ""; newTmListTasks = "";
+    showAddTaskManager = false;
+  }
+
+  function removeTaskManager(key: string) {
+    const tms = { ...taskManagers };
+    delete tms[key];
+    const patch: Partial<AppConfig> = { task_managers: tms };
+    if (config.default_task_manager === key) {
+      patch.default_task_manager = Object.keys(tms)[0] || null;
+    }
+    updateSettings(patch);
+  }
+
+  function updateTaskManager(key: string, field: string, value: string) {
+    const tms = { ...taskManagers };
+    tms[key] = { ...tms[key], [field]: value || undefined };
+    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+  }
+
+  function updateTmTemplate(key: string, field: string, value: string) {
+    const tms = { ...taskManagers };
+    const templates = { ...(tms[key].templates ?? {}) };
+    (templates as any)[field] = value || null;
+    tms[key] = { ...tms[key], templates };
+    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+  }
+
+  function updateTmHook(key: string, hookName: string, value: string) {
+    const tms = { ...taskManagers };
+    (tms[key] as any)[hookName] = value ? { move_to: value } : null;
+    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+  }
+
+  function setDefaultTaskManager(key: string) {
+    updateSettings({ default_task_manager: key } as Partial<AppConfig>);
   }
 </script>
 
@@ -264,6 +318,16 @@
                 placeholder="e.g. --trust-all-tools"
               />
             </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">Prompt command (optional)</label>
+              <input
+                type="text"
+                value={provider.prompt_command || ""}
+                onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
+                class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono"
+                placeholder={"{prompt} or --prompt {prompt}"}
+              />
+            </div>
           </div>
         {/each}
       </div>
@@ -314,6 +378,99 @@
           class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700"
           onclick={() => { showAddProvider = true; }}
         >+ Add Provider</button>
+      {/if}
+    </section>
+
+    <!-- Task Managers -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Task Manager</h2>
+      <div class="space-y-3">
+        {#each Object.entries(taskManagers) as [key, tm] (key)}
+          <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-surface-900 dark:text-surface-50">{key}</span>
+                {#if config.default_task_manager === key}
+                  <span class="text-xs bg-primary-500/20 text-primary-700 dark:text-primary-300 px-2 py-0.5 rounded">default</span>
+                {:else}
+                  <button class="text-xs text-surface-500 hover:text-primary-500" onclick={() => setDefaultTaskManager(key)}>set as default</button>
+                {/if}
+              </div>
+              <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
+              <input type="text" value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban show {key}"} />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
+              <input type="text" value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban move {key} {status}"} />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
+              <input type="text" value={tm.list_tasks} onchange={(e) => updateTaskManager(key, "list_tasks", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="kanban list --status todo" />
+            </div>
+
+            <!-- Templates -->
+            <details class="pt-1">
+              <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Templates</summary>
+              <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
+                <div class="space-y-1">
+                  <label class="text-xs text-surface-500 dark:text-surface-400">Branch</label>
+                  <input type="text" value={tm.templates?.branch || ""} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"{key:lower}/{title:slug}"} />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-xs text-surface-500 dark:text-surface-400">Session name</label>
+                  <input type="text" value={tm.templates?.name || ""} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"{key:upper}: {title}"} />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-xs text-surface-500 dark:text-surface-400">Prompt</label>
+                  <input type="text" value={tm.templates?.prompt || ""} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"Implement {key}: {title}"} />
+                </div>
+              </div>
+            </details>
+
+            <!-- Lifecycle hooks -->
+            <details class="pt-1">
+              <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Lifecycle hooks</summary>
+              <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
+                {#each [["on_start", "On start"], ["on_notify", "On notify"], ["on_restart", "On restart"], ["on_complete", "On complete"]] as [hookKey, label]}
+                  <div class="space-y-1">
+                    <label class="text-xs text-surface-500 dark:text-surface-400">{label} → move to</label>
+                    <input type="text" value={(tm as any)[hookKey]?.move_to || ""} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="e.g. in_progress" />
+                  </div>
+                {/each}
+              </div>
+            </details>
+          </div>
+        {/each}
+      </div>
+
+      {#if showAddTaskManager}
+        <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Name</label>
+            <input type="text" bind:value={newTmName} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50" placeholder="e.g. kanban" />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
+            <input type="text" bind:value={newTmGetTask} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban show {key}"} />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
+            <input type="text" bind:value={newTmMoveTask} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder={"kanban move {key} {status}"} />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-surface-500 dark:text-surface-400">List tasks command</label>
+            <input type="text" bind:value={newTmListTasks} class="w-full rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-900 px-3 py-1.5 text-sm text-surface-900 dark:text-surface-50 font-mono" placeholder="kanban list --status todo" />
+          </div>
+          <div class="flex gap-2">
+            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
+            <button class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = false; }}>Cancel</button>
+          </div>
+        </div>
+      {:else}
+        <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = true; }}>+ Add Task Manager</button>
       {/if}
     </section>
   </div>
