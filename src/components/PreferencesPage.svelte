@@ -412,38 +412,26 @@
             </div>
 
             <!-- Templates -->
-            <details class="pt-1">
-              <summary class="text-xs text-surface-700 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Templates</summary>
-              <p class="mt-1 text-[10px] text-surface-600 dark:text-surface-500">Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: {"{var:slug}"}, {"{var:lower}"}, {"{var:upper}"}</p>
-              <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
-                <div class="space-y-1">
-                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Branch <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-                  <Input value={tm.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" />
-                </div>
-                <div class="space-y-1">
-                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Session name <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-                  <Input value={tm.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" />
-                </div>
-                <div class="space-y-1">
-                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Prompt <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-                  <Input value={tm.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" />
-                </div>
-              </div>
-            </details>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <Input value={tm.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <Input value={tm.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <Input value={tm.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" />
+            </div>
 
             <!-- Lifecycle hooks -->
-            <details class="pt-1">
-              <summary class="text-xs text-surface-700 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Lifecycle hooks</summary>
-              <p class="mt-1 text-[10px] text-surface-600 dark:text-surface-500">Automatically move tasks between statuses. Leave empty to disable a hook.</p>
-              <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
-                {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."]] as [hookKey, label, defaultVal, desc]}
-                  <div class="space-y-1">
-                    <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>
-                    <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
-                  </div>
-                {/each}
+            {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."]] as [hookKey, label, defaultVal, desc]}
+              <div class="space-y-1">
+                <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>
+                <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
               </div>
-            </details>
+            {/each}
           </div>
         {/each}
       </div>
