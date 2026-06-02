@@ -135,7 +135,8 @@
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={formKeydown}>
   <!-- Mode toggle -->
   {#if hasTaskManager}
-  <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden">
+  <!-- svelte-ignore a11y_autofocus -->
+  <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
     <button
       type="button"
       tabindex={-1}
