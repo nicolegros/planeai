@@ -92,11 +92,18 @@
   function addTaskManager() {
     if (!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks) return;
     const tms = { ...taskManagers };
-    tms[newTmName] = { get_task: newTmGetTask, move_task: newTmMoveTask, list_tasks: newTmListTasks };
+    tms[newTmName] = {
+      get_task: newTmGetTask, move_task: newTmMoveTask, list_tasks: newTmListTasks,
+      templates: { branch: "{key:lower}/{title:slug}", name: "{key:upper}: {title}", prompt: "Implement task {key}: {title}\n\n{description}" },
+      on_start: { move_to: "in_progress" },
+      on_notify: { move_to: "in_review" },
+      on_restart: { move_to: "in_progress" },
+      on_complete: { move_to: "done" },
+    };
     const patch: Partial<AppConfig> = { task_managers: tms };
     if (!config.default_task_manager) patch.default_task_manager = newTmName;
     updateSettings(patch);
-    newTmName = ""; newTmGetTask = ""; newTmMoveTask = ""; newTmListTasks = "";
+    newTmName = ""; newTmGetTask = "kanban show {key}"; newTmMoveTask = "kanban move {key} {status}"; newTmListTasks = "kanban list --status todo";
     showAddTaskManager = false;
   }
 
