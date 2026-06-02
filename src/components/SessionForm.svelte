@@ -138,11 +138,13 @@
   <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden">
     <button
       type="button"
+      tabindex={-1}
       class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'task' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
       onclick={() => (mode = "task")}
     >From task <span class="text-[10px] opacity-70">T</span></button>
     <button
       type="button"
+      tabindex={-1}
       class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'manual' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
       onclick={() => (mode = "manual")}
     >Manual <span class="text-[10px] opacity-70">M</span></button>
