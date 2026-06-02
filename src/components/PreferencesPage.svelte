@@ -324,7 +324,7 @@
               />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Prompt command (optional) <span class="cursor-help" title="Variable: {prompt} — replaced with the rendered task prompt">ⓘ</span></label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
               <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
@@ -399,11 +399,11 @@
               <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Get task command <span class="cursor-help" title="Variables: {key}">ⓘ</span></label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Get task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Variables: {"{key}"}</span></span></label>
               <Input value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban show {key}"} />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Move task command <span class="cursor-help" title="Variables: {key}, {status}">ⓘ</span></label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Move task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Variables: {"{key}"}, {"{status}"}</span></span></label>
               <Input value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban move {key} {status}"} />
             </div>
             <div class="space-y-1">
