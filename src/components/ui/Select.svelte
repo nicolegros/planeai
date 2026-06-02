@@ -24,7 +24,7 @@
   let open = $state(false);
 
   const inputValue = $derived(
-    open ? undefined : items.find((i) => i.value === value)?.label
+    open ? undefined : (items.find((i) => i.value === value)?.label ?? (value || undefined))
   );
 
   const filtered = $derived(
