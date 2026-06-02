@@ -35,12 +35,16 @@
   $effect(() => {
     const node = contentRef;
     if (!node) return;
+    let hasInteracted = false;
+    const onKey = () => { hasInteracted = true; };
+    node.getRootNode().addEventListener("keydown", onKey, true);
     const ob = new MutationObserver(() => {
+      if (!hasInteracted) return;
       const el = node.querySelector("[data-highlighted]");
       if (el) el.scrollIntoView({ block: "nearest" });
     });
     ob.observe(node, { attributes: true, subtree: true, attributeFilter: ["data-highlighted"] });
-    return () => ob.disconnect();
+    return () => { ob.disconnect(); node.getRootNode().removeEventListener("keydown", onKey, true); };
   });
 </script>
 
