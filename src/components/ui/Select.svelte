@@ -4,6 +4,7 @@
   interface Item {
     value: string;
     label: string;
+    remote?: boolean;
   }
 
   interface Props {
@@ -23,7 +24,7 @@
   let open = $state(false);
 
   const inputValue = $derived(
-    open ? undefined : items.find((i) => i.value === value)?.label
+    open ? undefined : (items.find((i) => i.value === value)?.label ?? (value || undefined))
   );
 
   const filtered = $derived(
@@ -50,8 +51,9 @@
   <Combobox.Portal>
     <Combobox.Content loop class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-900" sideOffset={4}>
       {#each filtered as item (item.value)}
-        <Combobox.Item value={item.value} label={item.label} class="cursor-pointer px-3 py-2 text-sm text-surface-700 data-[highlighted]:bg-surface-100 dark:text-surface-300 dark:data-[highlighted]:bg-surface-800">
-          {item.label}
+        <Combobox.Item value={item.value} label={item.label} class="flex items-center justify-between cursor-pointer px-3 py-2 text-sm text-surface-700 data-[highlighted]:bg-surface-100 dark:text-surface-300 dark:data-[highlighted]:bg-surface-800">
+          <span>{item.label}</span>
+          {#if item.remote}<span class="rounded bg-surface-200 px-1.5 py-0.5 text-[10px] text-surface-500 dark:bg-surface-700 dark:text-surface-400">remote</span>{/if}
         </Combobox.Item>
       {:else}
         <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">{emptyText}</span>

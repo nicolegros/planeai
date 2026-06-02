@@ -10,6 +10,10 @@ pub struct Config {
     pub default_provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub task_managers: HashMap<String, TaskManager>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_task_manager: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,6 +50,40 @@ pub struct Provider {
     pub list_sessions_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskManagerTemplates {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LifecycleHook {
+    pub move_to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskManager {
+    pub get_task: String,
+    pub move_task: String,
+    pub list_tasks: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub templates: Option<TaskManagerTemplates>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_start: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_notify: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_restart: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_complete: Option<LifecycleHook>,
 }
 
 /// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
@@ -82,6 +120,7 @@ impl Default for Config {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
+            prompt_command: Some("{prompt}".to_string()),
         });
         Config {
             appearance: Appearance {
@@ -97,6 +136,8 @@ impl Default for Config {
             providers,
             default_provider: "kiro".to_string(),
             session_backend: None,
+            task_managers: HashMap::new(),
+            default_task_manager: None,
         }
     }
 }
@@ -310,11 +351,14 @@ mod tests {
                     resume_flag: None,
                     list_sessions_command: None,
                     session_id_pattern: None,
+                    prompt_command: None,
                 });
                 m
             },
             default_provider: "claude".to_string(),
             session_backend: None,
+            task_managers: HashMap::new(),
+            default_task_manager: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -410,6 +454,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         });
         config.default_provider = "aider".to_string();
 
@@ -479,6 +524,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(launch_command(&provider, false), "kiro-cli chat");
     }
@@ -491,6 +537,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(launch_command(&provider, true), "kiro-cli chat --trust-all-tools");
     }
@@ -503,6 +550,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(launch_command(&provider, true), "aider");
     }
@@ -572,6 +620,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
+            prompt_command: None,
         };
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
@@ -606,6 +655,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         let result = resume_command(&provider, "abc-123");
         assert_eq!(result, "kiro-cli chat --resume-id abc-123");
@@ -619,6 +669,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(resume_command_if_available(&provider, Some("abc-123")), None);
     }
@@ -631,6 +682,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(resume_command_if_available(&provider, None), None);
     }
@@ -643,6 +695,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         assert_eq!(
             resume_command_if_available(&provider, Some("abc-123")),
@@ -727,6 +780,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
+            prompt_command: None,
         };
         let cmd = restart_command_for_provider(&provider, Some("f4165541-abc"));
         assert_eq!(cmd, "kiro-cli chat --resume-id f4165541-abc");
@@ -740,6 +794,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         let cmd = restart_command_for_provider(&provider, None);
         assert_eq!(cmd, "kiro-cli chat");
@@ -753,6 +808,7 @@ mod tests {
             resume_flag: None,
             list_sessions_command: None,
             session_id_pattern: None,
+            prompt_command: None,
         };
         let cmd = restart_command_for_provider(&provider, Some("some-id"));
         assert_eq!(cmd, "aider");

@@ -5,14 +5,20 @@
 
   interface Project { id: string; name: string; path: string; }
   interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; }
-  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; }
+  interface TaskItem { key: string; title: string; status: string; description: string; priority: number; blocked_by: string[]; }
+  interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
+  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; }
 
-  let { projects, sessions, onCreated, onCancel }: Props = $props();
+  let { projects, sessions, onCreated, onCancel, taskPrefill = null }: Props = $props();
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
+  const hasTaskManager = $derived(Object.keys(config.task_managers ?? {}).length > 0);
 
-  let sessionName = $state("");
+  let mode = $state<"task" | "manual">(taskPrefill ? "task" : (hasTaskManager ? "task" : "manual"));
+  let sessionName = $state(taskPrefill?.name ?? "");
+  let taskKey = $state(taskPrefill?.key ?? "");
+  let taskPrompt = $state(taskPrefill?.prompt ?? "");
   let useWorktree = $state(false);
   let autoApprove = $state(true);
   let selectedProvider = $state("");
@@ -24,23 +30,70 @@
   let branchValue = $state("");
   let branchSearch = $state("");
   let branches = $state<{ value: string; label: string }[]>([]);
-
   let baseBranchValue = $state("");
+
+  // Task picker state
+  let taskItems = $state<TaskItem[]>([]);
+  let taskSearchValue = $state("");
 
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
   $effect(() => {
     if (selectedProject) {
       invoke<string[]>("list_branches", { repoPath: selectedProject.path }).then(
-        (b) => (branches = b.map((name) => ({ value: name, label: name }))),
+        (b) => (branches = b.map((s) => {
+          const remote = s.startsWith("remote:");
+          const name = remote ? s.slice(7) : s;
+          return { value: remote ? `remote:${name}` : name, label: name, remote };
+        })),
         () => (branches = []),
       );
     }
   });
 
-  const branch = $derived(branchValue || branchSearch);
-  const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branch));
+  // Fetch tasks when in task mode and project changes
+  $effect(() => {
+    if (mode === "task" && selectedProject) {
+      invoke<TaskItem[]>("list_task_items", { repoPath: selectedProject.path }).then(
+        (items) => (taskItems = items),
+        () => (taskItems = []),
+      );
+    }
+  });
 
+  const taskSelectItems = $derived(taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })));
+
+  function renderTemplate(template: string, task: TaskItem): string {
+    return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
+      const val = varName === "blocked_by" ? task.blocked_by?.join(", ") ?? "" : String((task as any)[varName] ?? "");
+      if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      if (transform === "lower") return val.toLowerCase();
+      if (transform === "upper") return val.toUpperCase();
+      return val;
+    });
+  }
+
+  function getTaskManagerTemplates() {
+    const tms = config.task_managers ?? {};
+    const tmKey = config.default_task_manager || Object.keys(tms)[0];
+    return tms[tmKey]?.templates;
+  }
+
+  function onTaskSelected(key: string) {
+    const task = taskItems.find((t) => t.key === key);
+    if (!task) return;
+    taskKey = task.key;
+    const templates = getTaskManagerTemplates();
+    sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
+    taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
+    const slugBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
+    branchSearch = slugBranch;
+    branchValue = slugBranch;
+    newBranchName = slugBranch;
+  }
+
+  const branch = $derived((branchValue || branchSearch).replace(/^remote:/, ""));
+  const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branchValue || b.value === `remote:${branch}`));
   const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
   const worktreeBranch = $derived(newBranchName || defaultBranchName);
   const baseBranch = $derived(baseBranchValue || "main");
@@ -52,18 +105,24 @@
   let formEl: HTMLFormElement;
   let error = $state("");
 
-  function focusBranchInput() {
-    requestAnimationFrame(() => {
-      formEl?.querySelectorAll('input')?.[2]?.focus();
-    });
-  }
-
   function metaEnter(e: KeyboardEvent) {
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
   }
 
+  function formKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); return; }
+    if (!hasTaskManager) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.closest("[role='combobox']"))) return;
+    if (e.key === "t") { e.preventDefault(); mode = "task"; }
+    if (e.key === "m") { e.preventDefault(); mode = "manual"; }
+  }
+
   async function submit() {
     if (!selectedProject) { error = "Select a project."; return; }
+
+    const taskKeyParam = taskKey || null;
+    const taskPromptParam = taskPrompt || null;
 
     if (useWorktree) {
       if (!worktreeBranch) { error = "Enter a branch name."; return; }
@@ -73,6 +132,7 @@
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
           name: sessionName, useWorktree: true, baseBranch, autoApprove,
           provider: selectedProvider || config.default_provider,
+          taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -84,6 +144,7 @@
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
           useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
           provider: selectedProvider || config.default_provider,
+          taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
       } catch (e) { error = String(e); }
@@ -91,20 +152,53 @@
   }
 </script>
 
-<form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+<form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={formKeydown}>
+  <!-- Mode toggle -->
+  {#if hasTaskManager}
+  <!-- svelte-ignore a11y_autofocus -->
+  <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
+    <button
+      type="button"
+      tabindex={-1}
+      class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'task' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
+      onclick={() => (mode = "task")}
+    >From task <span class="text-[10px] opacity-70">T</span></button>
+    <button
+      type="button"
+      tabindex={-1}
+      class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'manual' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
+      onclick={() => (mode = "manual")}
+    >Manual <span class="text-[10px] opacity-70">M</span></button>
+  </div>
+  {/if}
+
+  <!-- Task picker (From task mode) -->
+  {#if mode === "task"}
+    <div class="space-y-1">
+      <Label>Task</Label>
+      <Select
+        items={taskSelectItems}
+        bind:value={taskSearchValue}
+        onValueChange={onTaskSelected}
+        onkeydown={metaEnter}
+        placeholder="Search tasks..."
+        emptyText="No tasks found"
+      />
+    </div>
+  {/if}
+
   <div class="space-y-1">
     <Label>Name</Label>
     <Input
       bind:value={sessionName}
       onkeydown={metaEnter}
       placeholder="My session..."
-      autocomplete="off"
     />
   </div>
 
   <div class="space-y-1">
     <Label>Project</Label>
-    <Select items={projectItems} bind:value={projectValue} onValueChange={focusBranchInput} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
+    <Select items={projectItems} bind:value={projectValue} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
   </div>
 
   <div
@@ -148,7 +242,6 @@
         bind:value={newBranchName}
         onkeydown={metaEnter}
         placeholder={defaultBranchName || "feat/my-feature"}
-        autocomplete="off"
       />
       {#if worktreeBranch}
         <p class="text-xs text-surface-500">Branch: <span class="font-medium text-surface-900 dark:text-surface-100">{worktreeBranch}</span></p>

@@ -19,6 +19,7 @@
     created_at: string;
     worktree_path: string | null;
     backend: string;
+    task_key: string | null;
   }
 
   interface Props {
@@ -163,6 +164,7 @@
                 >
                   <span class="w-3 shrink-0 text-center text-[10px] text-surface-600 dark:text-surface-400" title={session.worktree_path ? "Worktree" : ""}>{session.worktree_path ? '⎇' : ''}</span>
                   {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
+                  {#if session.task_key}<span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{session.task_key}</span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
                   {#if session.status === 'exited'}
                     <span class="ml-auto shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
