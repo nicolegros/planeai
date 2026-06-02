@@ -7,9 +7,9 @@
   interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; }
   interface TaskItem { key: string; title: string; status: string; description: string; priority: number; blocked_by: string[]; }
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
-  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; }
+  interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
 
-  let { projects, sessions, onCreated, onCancel, taskPrefill = null }: Props = $props();
+  let { projects, sessions, onCreated, onCancel, taskPrefill = null, currentProjectId = null }: Props = $props();
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
@@ -24,7 +24,7 @@
   let selectedProvider = $state("");
   let newBranchName = $state("");
 
-  let projectValue = $state(projects[0]?.id ?? "");
+  let projectValue = $state(currentProjectId ?? projects[0]?.id ?? "");
   const projectItems = projects.map((p) => ({ value: p.id, label: p.name }));
 
   let branchValue = $state("");
@@ -172,6 +172,11 @@
   </div>
   {/if}
 
+  <div class="space-y-1">
+    <Label>Project</Label>
+    <Select items={projectItems} bind:value={projectValue} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
+  </div>
+
   <!-- Task picker (From task mode) -->
   {#if mode === "task"}
     <div class="space-y-1">
@@ -194,11 +199,6 @@
       onkeydown={metaEnter}
       placeholder="My session..."
     />
-  </div>
-
-  <div class="space-y-1">
-    <Label>Project</Label>
-    <Select items={projectItems} bind:value={projectValue} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
   </div>
 
   <div

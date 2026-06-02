@@ -472,6 +472,7 @@
             {projects}
             {sessions}
             {taskPrefill}
+            currentProjectId={sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
             onCreated={onSessionCreated}
             onCancel={() => { showSessionForm = false; taskPrefill = null; }}
           />
