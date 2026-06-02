@@ -63,13 +63,30 @@
 
   const taskSelectItems = $derived(taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })));
 
+  function renderTemplate(template: string, task: TaskItem): string {
+    return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
+      const val = varName === "blocked_by" ? task.blocked_by?.join(", ") ?? "" : String((task as any)[varName] ?? "");
+      if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      if (transform === "lower") return val.toLowerCase();
+      if (transform === "upper") return val.toUpperCase();
+      return val;
+    });
+  }
+
+  function getTaskManagerTemplates() {
+    const tms = config.task_managers ?? {};
+    const tmKey = config.default_task_manager || Object.keys(tms)[0];
+    return tms[tmKey]?.templates;
+  }
+
   function onTaskSelected(key: string) {
     const task = taskItems.find((t) => t.key === key);
     if (!task) return;
     taskKey = task.key;
-    sessionName = `${task.key}: ${task.title}`;
-    taskPrompt = task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`;
-    const slugBranch = `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
+    const templates = getTaskManagerTemplates();
+    sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
+    taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
+    const slugBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
     branchSearch = slugBranch;
     branchValue = slugBranch;
     newBranchName = slugBranch;
