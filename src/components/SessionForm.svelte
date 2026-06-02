@@ -89,6 +89,15 @@
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
   }
 
+  function formKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); return; }
+    if (!hasTaskManager) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.closest("[role='combobox']"))) return;
+    if (e.key === "t") { e.preventDefault(); mode = "task"; }
+    if (e.key === "m") { e.preventDefault(); mode = "manual"; }
+  }
+
   async function submit() {
     if (!selectedProject) { error = "Select a project."; return; }
 
@@ -123,7 +132,7 @@
   }
 </script>
 
-<form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+<form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={formKeydown}>
   <!-- Mode toggle -->
   {#if hasTaskManager}
   <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden">
@@ -131,12 +140,12 @@
       type="button"
       class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'task' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
       onclick={() => (mode = "task")}
-    >From task</button>
+    >From task <span class="text-[10px] opacity-70">T</span></button>
     <button
       type="button"
       class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'manual' ? 'bg-primary-500 text-white' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
       onclick={() => (mode = "manual")}
-    >Manual</button>
+    >Manual <span class="text-[10px] opacity-70">M</span></button>
   </div>
   {/if}
 
