@@ -324,7 +324,7 @@
               />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400">Prompt command (optional)</label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Prompt command (optional) <span class="cursor-help" title="Variable: {prompt} — replaced with the rendered task prompt">ⓘ</span></label>
               <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
@@ -399,11 +399,11 @@
               <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400">Get task command</label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Get task command <span class="cursor-help" title="Variables: {key}">ⓘ</span></label>
               <Input value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban show {key}"} />
             </div>
             <div class="space-y-1">
-              <label class="text-xs text-surface-500 dark:text-surface-400">Move task command</label>
+              <label class="text-xs text-surface-500 dark:text-surface-400 flex items-center gap-1">Move task command <span class="cursor-help" title="Variables: {key}, {status}">ⓘ</span></label>
               <Input value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban move {key} {status}"} />
             </div>
             <div class="space-y-1">
@@ -414,6 +414,7 @@
             <!-- Templates -->
             <details class="pt-1">
               <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Templates</summary>
+              <p class="mt-1 text-[10px] text-surface-400 dark:text-surface-500">Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: {"{var:slug}"}, {"{var:lower}"}, {"{var:upper}"}</p>
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Branch</label>
