@@ -417,15 +417,15 @@
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Branch</label>
-                  <Input value={tm.templates?.branch || ""} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" placeholder={"{key:lower}/{title:slug}"} />
+                  <Input value={tm.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" />
                 </div>
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Session name</label>
-                  <Input value={tm.templates?.name || ""} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" placeholder={"{key:upper}: {title}"} />
+                  <Input value={tm.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" />
                 </div>
                 <div class="space-y-1">
                   <label class="text-xs text-surface-500 dark:text-surface-400">Prompt</label>
-                  <Input value={tm.templates?.prompt || ""} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" placeholder={"Implement {key}: {title}"} />
+                  <Input value={tm.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" />
                 </div>
               </div>
             </details>
@@ -434,10 +434,10 @@
             <details class="pt-1">
               <summary class="text-xs text-surface-500 dark:text-surface-400 cursor-pointer hover:text-surface-700 dark:hover:text-surface-200">Lifecycle hooks</summary>
               <div class="mt-2 space-y-2 pl-2 border-l-2 border-surface-200 dark:border-surface-700">
-                {#each [["on_start", "On start"], ["on_notify", "On notify"], ["on_restart", "On restart"], ["on_complete", "On complete"]] as [hookKey, label]}
+                {#each [["on_start", "On start", "in_progress"], ["on_notify", "On notify", "in_review"], ["on_restart", "On restart", "in_progress"], ["on_complete", "On complete", "done"]] as [hookKey, label, defaultVal]}
                   <div class="space-y-1">
                     <label class="text-xs text-surface-500 dark:text-surface-400">{label} → move to</label>
-                    <Input value={(tm as any)[hookKey]?.move_to || ""} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" placeholder="e.g. in_progress" />
+                    <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
                   </div>
                 {/each}
               </div>
