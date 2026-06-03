@@ -8,6 +8,7 @@ SOCK="${PLANEAI_SOCKET:-}"
 EVENT=$(jq -r '.hook_event_name // ""' 2>/dev/null)
 case "$EVENT" in
   Stop) E="stop" ;;
+  UserPromptSubmit) E="busy" ;;
   *)    E="notification" ;;
 esac
 [ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null

@@ -186,6 +186,7 @@ pub type SharedNotifyState = Arc<Mutex<NotifyState>>;
 pub enum NotifyEvent {
     Stop,
     Notification,
+    Busy,
 }
 
 pub struct NotifyMessage {
@@ -199,6 +200,7 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
         let session_id = v.get("session_id").and_then(|s| s.as_str()).unwrap_or("").to_string();
         let event = match v.get("event").and_then(|e| e.as_str()) {
             Some("notification") => NotifyEvent::Notification,
+            Some("busy") => NotifyEvent::Busy,
             _ => NotifyEvent::Stop,
         };
         NotifyMessage { session_id, event }
@@ -256,6 +258,7 @@ pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result
     ensure_hook("Stop", None);
     ensure_hook("StopFailure", None);
     ensure_hook("Notification", Some("idle_prompt|permission_prompt"));
+    ensure_hook("UserPromptSubmit", None);
 
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     std::fs::write(&settings_path, output).map_err(|e| format!("failed to write settings.json: {e}"))?;
@@ -298,6 +301,14 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     continue;
                 }
                 match msg.event {
+                    NotifyEvent::Busy => {
+                        let mut s = state.lock().unwrap();
+                        let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                        eprintln!("[notify] \"{name}\" is now busy (hook)");
+                        s.notify_output(&msg.session_id);
+                        drop(s);
+                        emit_state_change(&app, &msg.session_id, AgentState::Busy);
+                    }
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();
@@ -380,6 +391,14 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     continue;
                 }
                 match msg.event {
+                    NotifyEvent::Busy => {
+                        let mut s = state.lock().unwrap();
+                        let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                        eprintln!("[notify] \"{name}\" is now busy (hook)");
+                        s.notify_output(&msg.session_id);
+                        drop(s);
+                        emit_state_change(&app, &msg.session_id, AgentState::Busy);
+                    }
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();

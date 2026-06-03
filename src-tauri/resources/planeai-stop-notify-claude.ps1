@@ -6,7 +6,11 @@ $sock = $env:PLANEAI_SOCKET
 if (-not $sock) { exit 0 }
 $input_text = [Console]::In.ReadToEnd()
 $event = ($input_text | ConvertFrom-Json).hook_event_name
-$e = if ($event -eq "Stop") { "stop" } else { "notification" }
+$e = switch ($event) {
+    "Stop" { "stop" }
+    "UserPromptSubmit" { "busy" }
+    default { "notification" }
+}
 $msg = '{"session_id":"' + $sid + '","event":"' + $e + '"}'
 try {
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", ($sock -replace '^\\\\.\\pipe\\',''), [System.IO.Pipes.PipeDirection]::Out)
