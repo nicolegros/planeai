@@ -66,14 +66,57 @@
     loadFileDiff(files[index]);
   }
 
+  function nextFile() {
+    if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
+  }
+
+  function prevFile() {
+    if (selectedIndex > 0) selectFile(selectedIndex - 1);
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (!visible) return;
-    if (e.key === "ArrowDown") {
+
+    // File navigation: ↑/↓, j/k, Tab/Shift+Tab, Ctrl+n/Ctrl+p
+    if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {
       e.preventDefault();
-      if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
-    } else if (e.key === "ArrowUp") {
+      nextFile();
+    } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey)) {
       e.preventDefault();
-      if (selectedIndex > 0) selectFile(selectedIndex - 1);
+      prevFile();
+    } else if (e.key === "Tab" && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      e.shiftKey ? prevFile() : nextFile();
+    } else if (e.key === "n" && e.ctrlKey) {
+      e.preventDefault();
+      nextFile();
+    } else if (e.key === "p" && e.ctrlKey) {
+      e.preventDefault();
+      prevFile();
+    // Scroll: Ctrl+d half-page down, Ctrl+u half-page up
+    } else if (e.key === "d" && e.ctrlKey) {
+      e.preventDefault();
+      const editor = (renderer as any)?.editor;
+      if (editor) {
+        const mod = editor.getModifiedEditor();
+        const visibleLines = mod.getVisibleRanges()?.[0];
+        if (visibleLines) {
+          const half = Math.floor((visibleLines.endLineNumber - visibleLines.startLineNumber) / 2);
+          mod.setScrollTop(mod.getScrollTop() + half * mod.getOption(66 /* lineHeight */));
+        }
+      }
+    } else if (e.key === "u" && e.ctrlKey) {
+      e.preventDefault();
+      const editor = (renderer as any)?.editor;
+      if (editor) {
+        const mod = editor.getModifiedEditor();
+        const visibleLines = mod.getVisibleRanges()?.[0];
+        if (visibleLines) {
+          const half = Math.floor((visibleLines.endLineNumber - visibleLines.startLineNumber) / 2);
+          mod.setScrollTop(mod.getScrollTop() - half * mod.getOption(66 /* lineHeight */));
+        }
+      }
+    // Other
     } else if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       refresh();
@@ -81,12 +124,6 @@
       e.preventDefault();
       diffMode = diffMode === 'side-by-side' ? 'unified' : 'side-by-side';
       renderer?.setMode(diffMode);
-    } else if (e.key === "n" && e.ctrlKey) {
-      e.preventDefault();
-      renderer?.navigateNext();
-    } else if (e.key === "p" && e.ctrlKey) {
-      e.preventDefault();
-      renderer?.navigatePrevious();
     }
   }
 

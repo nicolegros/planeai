@@ -21,7 +21,7 @@ async function loadMonaco() {
 }
 
 export class MonacoDiffRenderer implements DiffRenderer {
-  private editor: import('monaco-editor').editor.IStandaloneDiffEditor | null = null;
+  editor: import('monaco-editor').editor.IStandaloneDiffEditor | null = null;
   private originalModel: import('monaco-editor').editor.ITextModel | null = null;
   private modifiedModel: import('monaco-editor').editor.ITextModel | null = null;
   private container: HTMLElement | null = null;
