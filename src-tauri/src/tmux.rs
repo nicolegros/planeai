@@ -16,7 +16,7 @@ pub fn tmux_bin() -> &'static str {
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let sanitized = project_name.replace(' ', "-");
+    let sanitized = project_name.replace(' ', "-").replace('.', "").replace(':', "");
     format!("planeai-{}-{}", sanitized, hex)
 }
 
@@ -40,8 +40,10 @@ pub fn build_new_session_args(tmux_name: &str, working_dir: &str, auto_approve: 
 
 /// Check if a tmux session exists.
 pub fn has_session(tmux_name: &str) -> bool {
+    // Use '=' prefix for exact match to avoid tmux interpreting dots as separators
+    let target = format!("={}", tmux_name);
     Command::new(tmux_bin())
-        .args(["has-session", "-t", tmux_name])
+        .args(["has-session", "-t", &target])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -49,8 +51,9 @@ pub fn has_session(tmux_name: &str) -> bool {
 
 /// Kill a tmux session.
 pub fn kill_session(tmux_name: &str) -> Result<(), String> {
+    let target = format!("={}", tmux_name);
     let output = Command::new(tmux_bin())
-        .args(["kill-session", "-t", tmux_name])
+        .args(["kill-session", "-t", &target])
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
@@ -89,8 +92,9 @@ pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, se
     }
 
     // Set PLANEAI_SESSION_ID so the stop hook can identify this session
+    let target = format!("={}", tmux_name);
     let _ = Command::new(tmux_bin())
-        .args(["set-environment", "-t", tmux_name, "PLANEAI_SESSION_ID", session_id])
+        .args(["set-environment", "-t", &target, "PLANEAI_SESSION_ID", session_id])
         .output();
 
     Ok(())

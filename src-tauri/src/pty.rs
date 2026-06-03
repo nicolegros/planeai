@@ -102,8 +102,9 @@ impl PtyManager {
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
+                    let target = format!("={}", tmux_name);
                     let mut c = CommandBuilder::new(tmux::tmux_bin());
-                    c.args(["attach-session", "-t", tmux_name]);
+                    c.args(["attach-session", "-t", &target]);
                     c
                 }
                 #[cfg(windows)]

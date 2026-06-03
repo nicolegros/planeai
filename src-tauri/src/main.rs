@@ -56,6 +56,7 @@ fn discover_provider_session_id(
     app: &tauri::AppHandle,
 ) {
     let delays = [1, 2, 4];
+    let mut last_discovered: Option<String> = None;
     for delay in &delays {
         std::thread::sleep(std::time::Duration::from_secs(*delay));
         let parts: Vec<&str> = list_cmd.split_whitespace().collect();
@@ -83,12 +84,25 @@ fn discover_provider_session_id(
                     return;
                 } else {
                     eprintln!("[DEBUG-disc] rejected (stale or no match)");
+                    last_discovered = discovered;
                 }
             }
             Err(e) => {
                 eprintln!("[DEBUG-disc] command failed to execute: {e}");
                 continue;
             }
+        }
+    }
+    // If resume-based discovery failed but we found a new session ID, accept it.
+    // This handles the case where the old session is gone (e.g. computer restarted)
+    // and the provider started a fresh session with a new ID.
+    if is_resume {
+        if let Some(new_id) = last_discovered {
+            eprintln!("[DEBUG-disc] resume failed, accepting new session id={}", new_id);
+            if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                let _ = db::set_provider_session_id(&conn, session_id, &new_id);
+            }
+            return;
         }
     }
     // Discovery failed — emit event to notify frontend

@@ -119,14 +119,18 @@
     if (e.key === "m") { e.preventDefault(); mode = "manual"; }
   }
 
+  let submitting = false;
+
   async function submit() {
+    if (submitting) return;
     if (!selectedProject) { error = "Select a project."; return; }
+    submitting = true;
 
     const taskKeyParam = taskKey || null;
     const taskPromptParam = taskPrompt || null;
 
     if (useWorktree) {
-      if (!worktreeBranch) { error = "Enter a branch name."; return; }
+      if (!worktreeBranch) { error = "Enter a branch name."; submitting = false; return; }
       try {
         const session = await invoke<Session>("launch_session", {
           projectId: selectedProject.id, projectName: selectedProject.name,
@@ -136,9 +140,9 @@
           taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
-      } catch (e) { error = String(e); }
+      } catch (e) { error = String(e); submitting = false; }
     } else {
-      if (!branch) { error = "Enter a branch name."; return; }
+      if (!branch) { error = "Enter a branch name."; submitting = false; return; }
       try {
         const session = await invoke<Session>("launch_session", {
           projectId: selectedProject.id, projectName: selectedProject.name,
@@ -148,7 +152,7 @@
           taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
         onCreated(session);
-      } catch (e) { error = String(e); }
+      } catch (e) { error = String(e); submitting = false; }
     }
   }
 </script>
