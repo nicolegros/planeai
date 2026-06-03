@@ -122,6 +122,22 @@ impl Default for Config {
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             prompt_command: Some("{prompt}".to_string()),
         });
+        providers.insert("claude".to_string(), Provider {
+            command: "claude".to_string(),
+            yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+            resume_flag: None,
+            list_sessions_command: None,
+            session_id_pattern: None,
+            prompt_command: Some("-p {prompt}".to_string()),
+        });
+        providers.insert("copilot".to_string(), Provider {
+            command: "copilot --resume".to_string(),
+            yolo_flag: Some("--allow-all-tools".to_string()),
+            resume_flag: None,
+            list_sessions_command: None,
+            session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
+            prompt_command: Some("{prompt}".to_string()),
+        });
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),
@@ -648,6 +664,27 @@ mod tests {
     }
 
     #[test]
+    fn default_config_includes_copilot_provider() {
+        let config = Config::default();
+        let copilot = config.providers.get("copilot").unwrap();
+        assert_eq!(copilot.command, "copilot --resume");
+        assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
+        assert_eq!(copilot.resume_flag, None);
+        assert_eq!(copilot.session_id_pattern, Some("--resume=([0-9a-f-]+)".to_string()));
+        assert_eq!(copilot.prompt_command, Some("{prompt}".to_string()));
+    }
+
+    #[test]
+    fn default_config_includes_claude_provider() {
+        let config = Config::default();
+        let claude = config.providers.get("claude").unwrap();
+        assert_eq!(claude.command, "claude");
+        assert_eq!(claude.yolo_flag, Some("--dangerously-skip-permissions".to_string()));
+        assert_eq!(claude.resume_flag, None);
+        assert_eq!(claude.prompt_command, Some("-p {prompt}".to_string()));
+    }
+
+    #[test]
     fn resume_command_appends_flag_and_session_id() {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
@@ -733,6 +770,14 @@ mod tests {
         let pattern = "SessionId: ([a-f0-9-]+)";
         let result = parse_provider_session_id(output, pattern);
         assert_eq!(result, Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string()));
+    }
+
+    #[test]
+    fn parse_provider_session_id_extracts_copilot_resume_id() {
+        let output = "  ╭─╮╭─╮   Changes    +0 -0\n  ╰─╯╰─╯   AI Credits 0 (73h 15m 23s)\n  ▄ ▒▙ ▄   Resume     copilot --resume=a7c77286-ccfc-419b-bd1a-47f88f3e683a\n   ▀▀▀▀\n";
+        let pattern = "--resume=([0-9a-f-]+)";
+        let result = parse_provider_session_id(output, pattern);
+        assert_eq!(result, Some("a7c77286-ccfc-419b-bd1a-47f88f3e683a".to_string()));
     }
 
     #[test]
@@ -837,6 +882,27 @@ mod tests {
         assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
         assert_eq!(kiro.list_sessions_command, Some("kiro-cli chat --list-sessions".to_string()));
         assert!(kiro.session_id_pattern.is_some());
+    }
+
+    #[test]
+    fn load_backfills_copilot_session_id_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        let old_config = r#"{
+            "providers": {
+                "copilot": {
+                    "command": "copilot --resume",
+                    "yolo_flag": "--allow-all-tools"
+                }
+            },
+            "default_provider": "copilot"
+        }"#;
+        fs::write(config_dir.join("config.json"), old_config).unwrap();
+
+        let (config, _) = load(config_dir);
+        let copilot = config.providers.get("copilot").unwrap();
+        assert_eq!(copilot.session_id_pattern, Some("--resume=([0-9a-f-]+)".to_string()));
     }
 
     #[test]
