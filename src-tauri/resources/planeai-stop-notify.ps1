@@ -5,12 +5,14 @@ $event = ($input_text | ConvertFrom-Json).hook_event_name
 if ($event -ne "stop") { exit 0 }
 $sid = if ($env:PLANEAI_SESSION_ID) { $env:PLANEAI_SESSION_ID } else { "" }
 if (-not $sid) { exit 0 }
-$pipeName = "planeai-notify"
+$sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "planeai-notify" }
+$pipeName = $sock -replace '^\\\\.\\pipe\\',''
+$msg = '{"session_id":"' + $sid + '","event":"stop"}'
 try {
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::Out)
     $pipe.Connect(1000)
     $writer = New-Object System.IO.StreamWriter($pipe)
-    $writer.WriteLine($sid)
+    $writer.WriteLine($msg)
     $writer.Flush()
     $writer.Close()
     $pipe.Close()

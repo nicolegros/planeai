@@ -151,6 +151,11 @@ impl NotifyState {
             .collect()
     }
 
+    /// Returns all session IDs waiting for debounce check.
+    pub fn debounced_sessions(&self) -> Vec<String> {
+        self.idle_since.keys().cloned().collect()
+    }
+
     pub fn get_state(&self, session_id: &str) -> Option<AgentState> {
         self.states.get(session_id).copied()
     }
@@ -269,8 +274,8 @@ pub fn socket_path(app_dir: &Path) -> PathBuf {
     app_dir.join(SOCK_NAME)
 }
 
-/// Start the Unix socket listener thread. Incoming lines are treated as session IDs
-/// that just finished a turn (stop hook fired).
+/// Start the Unix socket listener thread. Incoming JSONL lines are parsed and dispatched
+/// to immediate or debounced notification paths.
 #[cfg(unix)]
 pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
     let sock = socket_path(app_dir);
@@ -283,20 +288,42 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
         for stream in listener.incoming().flatten() {
             let reader = BufReader::new(stream);
             for line in reader.lines().map_while(Result::ok) {
-                let session_id = line.trim().to_string();
-                if session_id.is_empty() {
+                let line = line.trim().to_string();
+                if line.is_empty() {
                     continue;
                 }
-                let fired = {
-                    let mut s = state.lock().unwrap();
-                    let current_state = s.get_state(&session_id);
-                    let result = s.notify_stop(&session_id);
-                    eprintln!("[notify] socket received stop for {session_id} | was={current_state:?} | fired={result}");
-                    result
-                };
-                if fired {
-                    emit_state_change(&app, &session_id, AgentState::Idle);
-                    fire_notification(&app, &session_id, &state);
+                let msg = parse_notify_message(&line);
+                if msg.session_id.is_empty() {
+                    continue;
+                }
+                match msg.event {
+                    NotifyEvent::Notification => {
+                        let fired = {
+                            let mut s = state.lock().unwrap();
+                            eprintln!("[notify] socket received notification for {} | was={:?}", msg.session_id, s.get_state(&msg.session_id));
+                            s.notify_stop_immediate(&msg.session_id)
+                        };
+                        if fired {
+                            emit_state_change(&app, &msg.session_id, AgentState::Idle);
+                            fire_notification(&app, &msg.session_id, &state);
+                        }
+                    }
+                    NotifyEvent::Stop => {
+                        let mut s = state.lock().unwrap();
+                        eprintln!("[notify] socket received stop for {} | was={:?}", msg.session_id, s.get_state(&msg.session_id));
+                        // For hook-enabled sessions, debounce; otherwise fire immediately
+                        let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
+                        if hook_enabled {
+                            s.notify_stop_debounced(&msg.session_id);
+                        } else {
+                            let fired = s.notify_stop(&msg.session_id);
+                            drop(s);
+                            if fired {
+                                emit_state_change(&app, &msg.session_id, AgentState::Idle);
+                                fire_notification(&app, &msg.session_id, &state);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -335,51 +362,76 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                 continue;
             }
 
-            // Wait for a client to connect
             let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
-            if connected == 0 {
-                // Check if client connected between Create and Connect (ERROR_PIPE_CONNECTED)
-                // This is fine — proceed anyway
-            }
+            if connected == 0 { }
 
-            // Read lines from the pipe
             let file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
             let reader = BufReader::new(file);
             for line in reader.lines().map_while(Result::ok) {
-                let session_id = line.trim().to_string();
-                if session_id.is_empty() {
+                let line = line.trim().to_string();
+                if line.is_empty() {
                     continue;
                 }
-                let fired = {
-                    let mut s = state.lock().unwrap();
-                    let current_state = s.get_state(&session_id);
-                    let result = s.notify_stop(&session_id);
-                    eprintln!("[notify] pipe received stop for {session_id} | was={current_state:?} | fired={result}");
-                    result
-                };
-                if fired {
-                    emit_state_change(&app, &session_id, AgentState::Idle);
-                    fire_notification(&app, &session_id, &state);
+                let msg = parse_notify_message(&line);
+                if msg.session_id.is_empty() {
+                    continue;
+                }
+                match msg.event {
+                    NotifyEvent::Notification => {
+                        let fired = {
+                            let mut s = state.lock().unwrap();
+                            s.notify_stop_immediate(&msg.session_id)
+                        };
+                        if fired {
+                            emit_state_change(&app, &msg.session_id, AgentState::Idle);
+                            fire_notification(&app, &msg.session_id, &state);
+                        }
+                    }
+                    NotifyEvent::Stop => {
+                        let mut s = state.lock().unwrap();
+                        let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
+                        if hook_enabled {
+                            s.notify_stop_debounced(&msg.session_id);
+                        } else {
+                            let fired = s.notify_stop(&msg.session_id);
+                            drop(s);
+                            if fired {
+                                emit_state_change(&app, &msg.session_id, AgentState::Idle);
+                                fire_notification(&app, &msg.session_id, &state);
+                            }
+                        }
+                    }
                 }
             }
-            // Client disconnected, loop to accept next
         }
     });
 }
 
-/// Start the silence checker thread. Periodically checks all busy sessions.
+/// Start the silence checker thread. Periodically checks all busy sessions
+/// and fires debounced notifications that have exceeded the threshold.
 pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(SILENCE_CHECK_INTERVAL);
-        let timed_out: Vec<String> = {
+        let mut to_notify: Vec<String> = Vec::new();
+        {
             let mut s = state.lock().unwrap();
+            // Check silence-based idle detection
             let busy = s.busy_sessions();
-            busy.into_iter()
-                .filter(|id| s.check_silence(id))
-                .collect()
-        };
-        for session_id in timed_out {
-            eprintln!("[notify] silence timeout fired for {session_id}");
+            for id in busy {
+                if s.check_silence(&id) {
+                    to_notify.push(id);
+                }
+            }
+            // Check debounced hook-based notifications
+            let debounced = s.debounced_sessions();
+            for id in debounced {
+                if s.check_debounce(&id) {
+                    to_notify.push(id);
+                }
+            }
+        }
+        for session_id in to_notify {
+            eprintln!("[notify] timeout fired for {session_id}");
             emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }

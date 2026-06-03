@@ -71,6 +71,7 @@ impl Drop for PtyHandle {
 pub struct PtyManager {
     ptys: Mutex<HashMap<String, Arc<Mutex<PtyHandle>>>>,
     notify_state: Mutex<Option<notify::SharedNotifyState>>,
+    socket_path: Mutex<Option<String>>,
 }
 
 impl PtyManager {
@@ -78,11 +79,16 @@ impl PtyManager {
         Self {
             ptys: Mutex::new(HashMap::new()),
             notify_state: Mutex::new(None),
+            socket_path: Mutex::new(None),
         }
     }
 
     pub fn set_notify_state(&self, state: notify::SharedNotifyState) {
         *self.notify_state.lock().unwrap() = Some(state);
+    }
+
+    pub fn set_socket_path(&self, path: String) {
+        *self.socket_path.lock().unwrap() = Some(path);
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
@@ -118,6 +124,9 @@ impl PtyManager {
         };
         cmd.env("TERM", "xterm-256color");
         cmd.env("PLANEAI_SESSION_ID", session_id);
+        if let Some(sock) = self.socket_path.lock().unwrap().as_deref() {
+            cmd.env("PLANEAI_SOCKET", sock);
+        }
 
         // Ensure UTF-8 locale for proper Nerd Font / Unicode rendering
         #[cfg(unix)]
