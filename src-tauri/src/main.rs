@@ -298,6 +298,21 @@ fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn get_changed_files(repo_path: String, base_branch: String) -> Result<Vec<git::ChangedFile>, String> {
+    git::get_changed_files(&repo_path, &base_branch)
+}
+
+#[tauri::command]
+fn get_file_diff(repo_path: String, base_branch: String, file_path: String) -> Result<git::FileDiff, String> {
+    git::get_file_diff(&repo_path, &base_branch, &file_path)
+}
+
+#[tauri::command]
+fn detect_default_branch(repo_path: String) -> Result<String, String> {
+    git::detect_default_branch(&repo_path)
+}
+
+#[tauri::command]
 fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::source::SystemSource;
     use font_kit::properties::Properties;
@@ -777,6 +792,19 @@ fn launch_session(
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
 
+    // Detect base branch before any checkout/worktree operation
+    let effective_base_branch = base_branch.clone().or_else(|| {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let b = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !b.is_empty() && b != "HEAD" { Some(b) } else { None }
+        } else { None }
+    });
+
     let (working_dir, worktree_path) = if use_worktree {
         let base = base_branch.as_deref().unwrap_or("main");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
@@ -815,7 +843,7 @@ fn launch_session(
     }
 
     // Persist to DB
-    let session = db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve, task_key.as_deref())
+    let session = db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve, task_key.as_deref(), effective_base_branch.as_deref())
         .map_err(|e| e.to_string())?;
 
     // Fire on_start lifecycle hook
@@ -998,6 +1026,9 @@ fn main() {
             restore_session,
             validate_git_repo,
             list_branches,
+            get_changed_files,
+            get_file_diff,
+            detect_default_branch,
             list_monospace_fonts,
             get_config,
             update_config,
