@@ -90,11 +90,9 @@
     }
   }
 
+  let mounted = false;
+
   onMount(() => {
-    renderer = new MonacoDiffRenderer();
-    renderer.mount(editorContainer);
-    renderer.setTheme(theme);
-    refresh();
     window.addEventListener("keydown", handleKeydown);
   });
 
@@ -105,7 +103,15 @@
   });
 
   $effect(() => {
-    if (visible) refresh();
+    if (visible && !mounted && editorContainer) {
+      mounted = true;
+      renderer = new MonacoDiffRenderer();
+      renderer.mount(editorContainer);
+      renderer.setTheme(theme);
+      refresh();
+    } else if (visible && mounted) {
+      refresh();
+    }
   });
 
   $effect(() => {
@@ -134,13 +140,12 @@
 
 <div class="flex h-full w-full" class:hidden={!visible}>
   <!-- Diff content area -->
-  <div class="flex-1 min-w-0">
+  <div class="flex-1 min-w-0 relative">
+    <div bind:this={editorContainer} class="h-full w-full"></div>
     {#if loading && files.length === 0}
-      <div class="flex items-center justify-center h-full text-surface-500">Loading diff…</div>
+      <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
     {:else if files.length === 0}
-      <div class="flex items-center justify-center h-full text-surface-500">No changes on this branch</div>
-    {:else}
-      <div bind:this={editorContainer} class="h-full w-full"></div>
+      <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">No changes on this branch</div>
     {/if}
   </div>
 
