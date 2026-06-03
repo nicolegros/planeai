@@ -5,9 +5,9 @@ $event = ($input_text | ConvertFrom-Json).hook_event_name
 if ($event -ne "stop") { exit 0 }
 $sid = if ($env:PLANEAI_SESSION_ID) { $env:PLANEAI_SESSION_ID } else { "" }
 if (-not $sid) { exit 0 }
-$sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "planeai-notify" }
+$sock = if ($env:PLANEAI_SOCKET) { $env:PLANEAI_SOCKET } else { "\\.\pipe\planeai-notify" }
 $pipeName = $sock -replace '^\\\\.\\pipe\\',''
-$msg = '{"session_id":"' + $sid + '","event":"stop"}'
+$msg = '{"session_id":"' + $sid + '","event":"notification"}'
 try {
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::Out)
     $pipe.Connect(1000)
