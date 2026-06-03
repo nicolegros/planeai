@@ -217,27 +217,39 @@
     <!-- Dark Diff Editor Theme -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Diff Editor Theme</h2>
-      <select
-        class="rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-800 px-3 py-2 text-sm text-surface-900 dark:text-surface-50"
-        value={config.appearance.diff_theme_dark}
-        onchange={(e) => updateSettings({ appearance: { ...config.appearance, diff_theme_dark: (e.target as HTMLSelectElement).value } })}
-      >
-        <option value="vs-dark">VS Dark</option>
-        <option value="hc-black">High Contrast Dark</option>
-      </select>
+      <div class="grid grid-cols-3 gap-3">
+        {#each [{ id: "vs-dark", name: "VS Dark", bg: "#1e1e1e", added: "#2ea04370", removed: "#f8514970" }, { id: "hc-black", name: "High Contrast", bg: "#000000", added: "#2ea04390", removed: "#f8514990" }] as theme (theme.id)}
+          <button
+            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.diff_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
+            onclick={() => updateSettings({ appearance: { ...config.appearance, diff_theme_dark: theme.id } })}
+          >
+            <div class="rounded h-16 mb-2 flex flex-col justify-center px-2 gap-0.5 text-[9px] font-mono" style="background-color: {theme.bg}">
+              <div class="rounded px-1" style="background-color: {theme.removed}"><span class="text-red-300">- removed</span></div>
+              <div class="rounded px-1" style="background-color: {theme.added}"><span class="text-green-300">+ added</span></div>
+            </div>
+            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
+          </button>
+        {/each}
+      </div>
     </section>
 
     <!-- Light Diff Editor Theme -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Diff Editor Theme</h2>
-      <select
-        class="rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-800 px-3 py-2 text-sm text-surface-900 dark:text-surface-50"
-        value={config.appearance.diff_theme_light}
-        onchange={(e) => updateSettings({ appearance: { ...config.appearance, diff_theme_light: (e.target as HTMLSelectElement).value } })}
-      >
-        <option value="vs">VS Light</option>
-        <option value="hc-light">High Contrast Light</option>
-      </select>
+      <div class="grid grid-cols-3 gap-3">
+        {#each [{ id: "vs", name: "VS Light", bg: "#ffffff", added: "#2ea04330", removed: "#f8514930" }, { id: "hc-light", name: "High Contrast", bg: "#ffffff", added: "#2ea04360", removed: "#f8514960" }] as theme (theme.id)}
+          <button
+            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.diff_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
+            onclick={() => updateSettings({ appearance: { ...config.appearance, diff_theme_light: theme.id } })}
+          >
+            <div class="rounded h-16 mb-2 flex flex-col justify-center px-2 gap-0.5 text-[9px] font-mono border border-surface-200" style="background-color: {theme.bg}">
+              <div class="rounded px-1" style="background-color: {theme.removed}"><span class="text-red-700">- removed</span></div>
+              <div class="rounded px-1" style="background-color: {theme.added}"><span class="text-green-700">+ added</span></div>
+            </div>
+            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
+          </button>
+        {/each}
+      </div>
     </section>
 
     <!-- Font Size -->
