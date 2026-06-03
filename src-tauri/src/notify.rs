@@ -213,11 +213,15 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
 }
 
 /// Check if the Claude Code hook is installed at the given settings path.
+/// Returns true only if all expected hook events are configured.
 pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
-    match std::fs::read_to_string(settings_path) {
-        Ok(content) => content.contains("planeai-stop-notify"),
-        Err(_) => false,
-    }
+    let Ok(content) = std::fs::read_to_string(settings_path) else { return false };
+    if !content.contains("planeai-stop-notify") { return false; }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return false };
+    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else { return false };
+    ["Stop", "StopFailure", "Notification", "UserPromptSubmit"]
+        .iter()
+        .all(|event| hooks.contains_key(*event))
 }
 
 /// Install the Claude Code notification hook into the given .claude directory.
@@ -661,7 +665,7 @@ mod tests {
     fn detect_claude_hook_installed() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
-        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}]}}"#).unwrap();
+        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}],"UserPromptSubmit":[{}]}}"#).unwrap();
 
         assert!(is_claude_hook_installed_at(&settings_path));
     }
@@ -671,6 +675,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
         std::fs::write(&settings_path, r#"{"hooks":{}}"#).unwrap();
+
+        assert!(!is_claude_hook_installed_at(&settings_path));
+    }
+
+    #[test]
+    fn detect_claude_hook_missing_event_triggers_reinstall() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        // Missing UserPromptSubmit — should trigger reinstall
+        std::fs::write(&settings_path, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/path/to/planeai-stop-notify-claude.sh"}]}],"StopFailure":[{}],"Notification":[{}]}}"#).unwrap();
 
         assert!(!is_claude_hook_installed_at(&settings_path));
     }
