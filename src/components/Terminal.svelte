@@ -6,6 +6,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { WebglAddon } from "@xterm/addon-webgl";
+  import { Unicode11Addon } from "@xterm/addon-unicode11";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -33,6 +34,11 @@
   const RESIZE_DEBOUNCE_MS = 50;
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
+  function terminalFontStack(primary: string): string {
+    const quoted = `"${primary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    return `${quoted}, "Symbols Nerd Font Mono", monospace`;
+  }
+
   const termBg = $derived(
     getThemeById(
       isDark()
@@ -49,7 +55,7 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: s.terminal.font_size,
-      fontFamily: `'${s.terminal.font_family}', monospace`,
+      fontFamily: terminalFontStack(s.terminal.font_family),
       theme: theme.colors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
@@ -60,6 +66,10 @@
 
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+
+    // Unicode 11 width rules for proper glyph sizing
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
 
     // WebLinksAddon — clickable URLs
     term.loadAddon(
@@ -305,7 +315,7 @@
     const theme = getThemeById(themeId);
     term.options.theme = theme.colors;
     term.options.fontSize = s.terminal.font_size;
-    term.options.fontFamily = `'${s.terminal.font_family}', monospace`;
+    term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;
     if (fitAddon) fitAddon.fit();
   });

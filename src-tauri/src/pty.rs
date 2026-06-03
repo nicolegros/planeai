@@ -119,6 +119,21 @@ impl PtyManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("PLANEAI_SESSION_ID", session_id);
 
+        // Ensure UTF-8 locale for proper Nerd Font / Unicode rendering
+        #[cfg(unix)]
+        {
+            let has_utf8 = |v: &str| {
+                let upper = v.to_ascii_uppercase();
+                upper.contains("UTF-8") || upper.contains("UTF8")
+            };
+            if !has_utf8(&std::env::var("LANG").unwrap_or_default()) {
+                cmd.env("LANG", "en_US.UTF-8");
+            }
+            if !has_utf8(&std::env::var("LC_CTYPE").unwrap_or_default()) {
+                cmd.env("LC_CTYPE", "en_US.UTF-8");
+            }
+        }
+
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
         drop(pair.slave);
 
