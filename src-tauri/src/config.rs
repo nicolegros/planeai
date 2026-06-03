@@ -21,8 +21,10 @@ pub struct Appearance {
     pub mode: String,
     pub terminal_theme_dark: String,
     pub terminal_theme_light: String,
-    #[serde(default = "default_diff_theme")]
-    pub diff_theme: String,
+    #[serde(default = "default_diff_theme_dark")]
+    pub diff_theme_dark: String,
+    #[serde(default = "default_diff_theme_light")]
+    pub diff_theme_light: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,8 +39,12 @@ fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
 }
 
-fn default_diff_theme() -> String {
+fn default_diff_theme_dark() -> String {
     "vs-dark".to_string()
+}
+
+fn default_diff_theme_light() -> String {
+    "vs".to_string()
 }
 
 fn default_font_family() -> &'static str {
@@ -133,7 +139,8 @@ impl Default for Config {
                 mode: "system".to_string(),
                 terminal_theme_dark: "one-dark".to_string(),
                 terminal_theme_light: "one-light".to_string(),
-                diff_theme: "vs-dark".to_string(),
+                diff_theme_dark: "vs-dark".to_string(),
+                diff_theme_light: "vs".to_string(),
             },
             terminal: Terminal {
                 font_family: default_font_family().to_string(),
@@ -344,7 +351,8 @@ mod tests {
                 mode: "dark".to_string(),
                 terminal_theme_dark: "catppuccin".to_string(),
                 terminal_theme_light: "one-light".to_string(),
-                diff_theme: "vs-dark".to_string(),
+                diff_theme_dark: "vs-dark".to_string(),
+                diff_theme_light: "vs".to_string(),
             },
             terminal: Terminal {
                 font_family: "JetBrains Mono".to_string(),

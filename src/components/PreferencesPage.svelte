@@ -214,17 +214,28 @@
       </div>
     </section>
 
-    <!-- Diff Editor Theme -->
+    <!-- Dark Diff Editor Theme -->
     <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Diff Editor Theme</h2>
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Diff Editor Theme</h2>
       <select
         class="rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-800 px-3 py-2 text-sm text-surface-900 dark:text-surface-50"
-        value={config.appearance.diff_theme}
-        onchange={(e) => updateSettings({ appearance: { ...config.appearance, diff_theme: (e.target as HTMLSelectElement).value } })}
+        value={config.appearance.diff_theme_dark}
+        onchange={(e) => updateSettings({ appearance: { ...config.appearance, diff_theme_dark: (e.target as HTMLSelectElement).value } })}
       >
-        <option value="vs-dark">Dark (VS Dark)</option>
-        <option value="vs">Light (VS Light)</option>
+        <option value="vs-dark">VS Dark</option>
         <option value="hc-black">High Contrast Dark</option>
+      </select>
+    </section>
+
+    <!-- Light Diff Editor Theme -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Diff Editor Theme</h2>
+      <select
+        class="rounded border border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-800 px-3 py-2 text-sm text-surface-900 dark:text-surface-50"
+        value={config.appearance.diff_theme_light}
+        onchange={(e) => updateSettings({ appearance: { ...config.appearance, diff_theme_light: (e.target as HTMLSelectElement).value } })}
+      >
+        <option value="vs">VS Light</option>
         <option value="hc-light">High Contrast Light</option>
       </select>
     </section>
