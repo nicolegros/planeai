@@ -112,19 +112,31 @@ fn discover_provider_session_id(
     }));
 }
 
-/// Check if a provider has hook-based idle detection (currently Kiro only).
+/// Check if a provider has hook-based idle detection.
 fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
     let Some(provider) = cfg.providers.get(provider_key) else { return false };
-    provider.command.contains("kiro-cli") && is_notify_hook_installed_check()
+    if provider.command.contains("kiro") {
+        is_kiro_hook_installed()
+    } else if provider.command.contains("claude") {
+        is_claude_hook_installed()
+    } else {
+        false
+    }
 }
 
-fn is_notify_hook_installed_check() -> bool {
+fn is_kiro_hook_installed() -> bool {
     let home = config::home_dir();
     let path = format!("{home}/.kiro/agents/default.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => content.contains("planeai-stop-notify"),
         Err(_) => false,
     }
+}
+
+fn is_claude_hook_installed() -> bool {
+    let home = config::home_dir();
+    let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
+    notify::is_claude_hook_installed_at(&path)
 }
 
 #[tauri::command]
@@ -441,15 +453,39 @@ fn check_session_alive(tmux_name: String) -> bool {
 }
 
 #[tauri::command]
-fn is_notify_hook_installed() -> bool {
-    is_notify_hook_installed_check()
+fn is_notify_hook_installed(config_state: State<ConfigState>) -> bool {
+    let cfg = config_state.0.lock().unwrap();
+    let supported: Vec<_> = cfg.providers.values()
+        .filter(|p| p.command.contains("kiro") || p.command.contains("claude"))
+        .collect();
+    if supported.is_empty() {
+        return true; // no supported providers, nothing to install
+    }
+    supported.iter().all(|p| {
+        if p.command.contains("kiro") { is_kiro_hook_installed() }
+        else { is_claude_hook_installed() }
+    })
 }
 
 #[tauri::command]
-fn install_notify_hook() -> Result<(), String> {
+fn install_notify_hook(config_state: State<ConfigState>) -> Result<(), String> {
+    let cfg = config_state.0.lock().unwrap();
     let home = config::home_dir();
 
-    // Write the hook script (platform-specific)
+    // Install for Kiro if configured
+    if cfg.providers.values().any(|p| p.command.contains("kiro")) {
+        install_kiro_hook(&home)?;
+    }
+
+    // Install for Claude Code if configured
+    if cfg.providers.values().any(|p| p.command.contains("claude")) {
+        install_claude_hook(&home)?;
+    }
+
+    Ok(())
+}
+
+fn install_kiro_hook(home: &str) -> Result<(), String> {
     let hooks_dir = format!("{home}/.kiro/hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
 
@@ -472,7 +508,7 @@ fn install_notify_hook() -> Result<(), String> {
             .map_err(|e| format!("failed to chmod hook: {e}"))?;
     }
 
-    // Patch the default agent config to add our stop hook
+    // Patch the default agent config
     let agents_dir = format!("{home}/.kiro/agents");
     std::fs::create_dir_all(&agents_dir).map_err(|e| format!("failed to create agents dir: {e}"))?;
     let config_path = format!("{agents_dir}/default.json");
@@ -483,14 +519,12 @@ fn install_notify_hook() -> Result<(), String> {
         serde_json::json!({ "name": "default", "tools": ["*"] })
     };
 
-    // Ensure hooks.stop array exists and add our entry
     let hooks = config.as_object_mut().unwrap()
         .entry("hooks").or_insert_with(|| serde_json::json!({}));
     let stop_hooks = hooks.as_object_mut().unwrap()
         .entry("stop").or_insert_with(|| serde_json::json!([]));
     let stop_arr = stop_hooks.as_array_mut().unwrap();
 
-    // Check if already present
     let already = stop_arr.iter().any(|h| {
         h.get("command").and_then(|c| c.as_str()).map_or(false, |c| c.contains("planeai-stop-notify"))
     });
@@ -499,14 +533,40 @@ fn install_notify_hook() -> Result<(), String> {
         let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
         #[cfg(windows)]
         let hook_command = format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
-        stop_arr.push(serde_json::json!({
-            "command": hook_command
-        }));
+        stop_arr.push(serde_json::json!({ "command": hook_command }));
     }
 
     let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&config_path, output).map_err(|e| format!("failed to write default.json: {e}"))?;
     Ok(())
+}
+
+fn install_claude_hook(home: &str) -> Result<(), String> {
+    let claude_dir = std::path::PathBuf::from(format!("{home}/.claude"));
+    let hooks_dir = claude_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (script_path, script_content) = (
+        hooks_dir.join("planeai-stop-notify-claude.sh"),
+        include_str!("../resources/planeai-stop-notify-claude.sh"),
+    );
+    #[cfg(windows)]
+    let (script_path, script_content) = (
+        hooks_dir.join("planeai-stop-notify-claude.ps1"),
+        include_str!("../resources/planeai-stop-notify-claude.ps1"),
+    );
+
+    std::fs::write(&script_path, script_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    let script_command = script_path.to_string_lossy().to_string();
+    notify::install_claude_hook_at(&claude_dir, &script_command)
 }
 
 #[tauri::command]
@@ -711,7 +771,7 @@ fn launch_session(
         cmd = format!("{cmd} {escaped}");
     }
 
-    let hook_enabled = provider_def.command.contains("kiro-cli") && is_notify_hook_installed_check();
+    let hook_enabled = provider_has_hook(&provider_key, &cfg);
     let backend = config::resolve_backend(&cfg).to_string();
     drop(cfg);
 
@@ -912,6 +972,10 @@ fn main() {
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_notify_state(notify_state);
+            #[cfg(unix)]
+            pty_mgr.set_socket_path(notify::socket_path(&app_dir).to_string_lossy().into_owned());
+            #[cfg(windows)]
+            pty_mgr.set_socket_path(notify::PIPE_NAME.to_string());
             app.manage(PtyState(pty_mgr));
 
             // Warm font cache in background so preferences page opens instantly
