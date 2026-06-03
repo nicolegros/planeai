@@ -134,8 +134,9 @@ pub struct FileDiff {
 /// Get the list of changed files between a base branch and the current working tree.
 /// Includes committed changes on the branch + uncommitted modifications + untracked files.
 pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<ChangedFile>, String> {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
     let output = Command::new("git")
-        .args(["diff", "--numstat", base_branch])
+        .args(["diff", "--numstat", &resolved])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -157,7 +158,7 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 
     // Get status for each file
     let status_output = Command::new("git")
-        .args(["diff", "--name-status", base_branch])
+        .args(["diff", "--name-status", &resolved])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -197,9 +198,10 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 /// Get the original and modified content of a file for diff display.
 /// Original = content at the base branch, Modified = current working tree content.
 pub fn get_file_diff(repo_path: &str, base_branch: &str, file_path: &str) -> Result<FileDiff, String> {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
     // Get original content from base branch
     let original_output = Command::new("git")
-        .args(["show", &format!("{base_branch}:{file_path}")])
+        .args(["show", &format!("{resolved}:{file_path}")])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
