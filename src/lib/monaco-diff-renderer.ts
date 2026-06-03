@@ -81,8 +81,6 @@ export class MonacoDiffRenderer implements DiffRenderer {
 
   navigateNext(): void {
     if (!this.editor) return;
-    const changes = (this.editor as any).getLineChanges?.() ?? [];
-    // Use built-in diff navigator action
     this.editor.getModifiedEditor().trigger('diff', 'editor.action.diffReview.next', {});
   }
 
