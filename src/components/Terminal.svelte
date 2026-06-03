@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, Channel } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { WebglAddon } from "@xterm/addon-webgl";
+  import { Unicode11Addon } from "@xterm/addon-unicode11";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -29,8 +31,13 @@
   let attached = false;
 
   const SCROLLBACK_LINES = 100_000;
-  const RESIZE_DEBOUNCE_MS = 120;
+  const RESIZE_DEBOUNCE_MS = 50;
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+
+  function terminalFontStack(primary: string): string {
+    const quoted = `"${primary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    return `${quoted}, "Symbols Nerd Font Mono", monospace`;
+  }
 
   const termBg = $derived(
     getThemeById(
@@ -48,7 +55,7 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: s.terminal.font_size,
-      fontFamily: `'${s.terminal.font_family}', monospace`,
+      fontFamily: terminalFontStack(s.terminal.font_family),
       theme: theme.colors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
@@ -60,6 +67,10 @@
     fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
 
+    // Unicode 11 width rules for proper glyph sizing
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+
     // WebLinksAddon — clickable URLs
     term.loadAddon(
       new WebLinksAddon((_event, uri) => {
@@ -68,6 +79,12 @@
     );
 
     term.open(containerEl);
+
+    try {
+      term.loadAddon(new WebglAddon());
+    } catch {
+      // WebGL not available, fall back to canvas
+    }
 
     fitAddon.fit();
 
@@ -199,21 +216,51 @@
       onUserInput?.();
     });
 
-    // ── Listen for PTY output ────────────────────────────────────────────
-    const unlisten = listen<string>(`pty-output-${sessionId}`, (event) => {
+    // ── Listen for PTY output with flow control ─────────────────────────
+    const FLOW_HIGH = 100_000;
+    const FLOW_LOW = 10_000;
+    let pendingBytes = 0;
+    let isPaused = false;
+
+    const onData = new Channel<ArrayBuffer>();
+    onData.onmessage = (raw: ArrayBuffer) => {
       ptyStarted = true;
-      const bytes = base64Decode(event.payload);
-      term.write(bytes);
-    });
+      const data = new Uint8Array(raw);
+      pendingBytes += data.byteLength;
+
+      if (pendingBytes > FLOW_HIGH && !isPaused) {
+        isPaused = true;
+        invoke("pause_pty", { sessionId });
+      }
+
+      term.write(data, () => {
+        pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
+        if (isPaused && pendingBytes < FLOW_LOW) {
+          isPaused = false;
+          invoke("resume_pty", { sessionId });
+        }
+      });
+    };
+
+    // Listen for exit event
+    const unlisten = listen<void>(`pty-exited-${sessionId}`, () => {});
 
     // ── Attach to the session ─────────────────────────────────────────────
     if (skipAttach) {
-      attached = true;
-      onAttached?.();
-      const { rows, cols } = term;
-      invoke("resize_pty", { sessionId, rows, cols });
+      // Non-primary tab: we call spawn_tab ourselves with our data channel
+      const parts = sessionId.split(":");
+      const baseSessionId = parts[0];
+      const tabIndex = parseInt(parts[1] || "0", 10);
+      invoke("spawn_tab", { sessionId: baseSessionId, tabIndex, onData }).then(() => {
+        attached = true;
+        onAttached?.();
+        const { rows, cols } = term;
+        invoke("resize_pty", { sessionId, rows, cols });
+      }).catch((e) => {
+        showSnackbar(String(e));
+      });
     } else {
-      invoke("attach_session", { sessionId }).then(() => {
+      invoke("attach_session", { sessionId, onData }).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;
@@ -268,19 +315,12 @@
     const theme = getThemeById(themeId);
     term.options.theme = theme.colors;
     term.options.fontSize = s.terminal.font_size;
-    term.options.fontFamily = `'${s.terminal.font_family}', monospace`;
+    term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;
     if (fitAddon) fitAddon.fit();
   });
 
-  function base64Decode(str: string): Uint8Array {
-    const binary = atob(str);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  }
+
 </script>
 
 <div

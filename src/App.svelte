@@ -96,13 +96,9 @@
     for (const s of sessions) {
       if (getTabCount(s.id) === 0) {
         initSession(s.id, s.tab_count);
-        // Spawn helper tabs for restored sessions
+        // Helper tabs are spawned by the Terminal component when it mounts
         if (s.status === "active") {
           for (let i = 1; i < s.tab_count; i++) {
-            invoke("spawn_tab", { sessionId: s.id, tabIndex: i }).catch((e) => {
-              removeTab(s.id, i);
-              showSnackbar(String(e));
-            });
             listenForTabExit(s.id, i);
           }
         }
@@ -158,13 +154,7 @@
     const tabIndex = addTab(activeSessionId);
     if (tabIndex === -1) return;
     setActiveTab(activeSessionId, tabIndex);
-    try {
-      await invoke("spawn_tab", { sessionId: activeSessionId, tabIndex });
-      listenForTabExit(activeSessionId, tabIndex);
-    } catch (e) {
-      removeTab(activeSessionId, tabIndex);
-      showSnackbar(String(e));
-    }
+    listenForTabExit(activeSessionId, tabIndex);
   }
 
   async function handleCloseTab() {

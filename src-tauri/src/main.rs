@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::sync::Arc;
 use rusqlite::Connection;
 use tauri::{State, Manager, Emitter, menu::{Menu, Submenu, PredefinedMenuItem}};
+use tauri::ipc::Channel;
 
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
@@ -302,7 +303,7 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn attach_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, notify: State<NotifyHandle>, app: tauri::AppHandle) -> Result<(), String> {
+fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, notify: State<NotifyHandle>, app: tauri::AppHandle) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -358,7 +359,7 @@ fn attach_session(session_id: String, db_state: State<DbState>, config_state: St
         pty::PtyTarget::Direct { command: command.clone(), args: args.clone(), cwd: cwd.clone() }
     };
 
-    state.0.attach(&session_id, pty_target, app.clone())?;
+    state.0.attach(&session_id, pty_target, app.clone(), on_data)?;
 
     // Register with notification system
     {
@@ -405,6 +406,16 @@ fn write_to_pty(session_id: String, data: Vec<u8>, state: State<PtyState>) -> Re
 #[tauri::command]
 fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) -> Result<(), String> {
     state.0.resize(&session_id, rows, cols)
+}
+
+#[tauri::command]
+fn pause_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
+    state.0.pause(&session_id)
+}
+
+#[tauri::command]
+fn resume_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
+    state.0.resume(&session_id)
 }
 
 #[tauri::command]
@@ -497,7 +508,7 @@ fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn spawn_tab(session_id: String, tab_index: u32, db_state: State<DbState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+fn spawn_tab(session_id: String, tab_index: u32, on_data: Channel<tauri::ipc::Response>, db_state: State<DbState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -519,7 +530,7 @@ fn spawn_tab(session_id: String, tab_index: u32, db_state: State<DbState>, state
         args: vec!["-l".to_string()],
         cwd,
     };
-    state.0.attach(&pty_key, target, app)?;
+    state.0.attach(&pty_key, target, app, on_data)?;
 
     let new_count = session.tab_count + 1;
     db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
@@ -916,6 +927,8 @@ fn main() {
             attach_session,
             write_to_pty,
             resize_pty,
+            pause_pty,
+            resume_pty,
             check_session_alive,
             is_notify_hook_installed,
             install_notify_hook,
