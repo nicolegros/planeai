@@ -34,6 +34,7 @@ export interface AppConfig {
     mode: AppearanceMode;
     terminal_theme_dark: string;
     terminal_theme_light: string;
+    diff_theme: string;
   };
   terminal: {
     font_family: string;
@@ -52,6 +53,7 @@ let config = $state<AppConfig>({
     mode: "system",
     terminal_theme_dark: "one-dark",
     terminal_theme_light: "one-light",
+    diff_theme: "vs-dark",
   },
   terminal: {
     font_family: "Menlo",
