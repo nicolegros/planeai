@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, Channel } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -207,14 +207,15 @@
     });
 
     // ── Listen for PTY output with flow control ─────────────────────────
-    const FLOW_HIGH = 100_000; // pause PTY when xterm has this much pending
-    const FLOW_LOW = 10_000;   // resume PTY when xterm drains to this level
+    const FLOW_HIGH = 100_000;
+    const FLOW_LOW = 10_000;
     let pendingBytes = 0;
     let isPaused = false;
 
-    const unlisten = listen<string>(`pty-output-${sessionId}`, (event) => {
+    const onData = new Channel<ArrayBuffer>();
+    onData.onmessage = (raw: ArrayBuffer) => {
       ptyStarted = true;
-      const data = base64Decode(event.payload);
+      const data = new Uint8Array(raw);
       pendingBytes += data.byteLength;
 
       if (pendingBytes > FLOW_HIGH && !isPaused) {
@@ -229,16 +230,27 @@
           invoke("resume_pty", { sessionId });
         }
       });
-    });
+    };
+
+    // Listen for exit event
+    const unlisten = listen<void>(`pty-exited-${sessionId}`, () => {});
 
     // ── Attach to the session ─────────────────────────────────────────────
     if (skipAttach) {
-      attached = true;
-      onAttached?.();
-      const { rows, cols } = term;
-      invoke("resize_pty", { sessionId, rows, cols });
+      // Non-primary tab: we call spawn_tab ourselves with our data channel
+      const parts = sessionId.split(":");
+      const baseSessionId = parts[0];
+      const tabIndex = parseInt(parts[1] || "0", 10);
+      invoke("spawn_tab", { sessionId: baseSessionId, tabIndex, onData }).then(() => {
+        attached = true;
+        onAttached?.();
+        const { rows, cols } = term;
+        invoke("resize_pty", { sessionId, rows, cols });
+      }).catch((e) => {
+        showSnackbar(String(e));
+      });
     } else {
-      invoke("attach_session", { sessionId }).then(() => {
+      invoke("attach_session", { sessionId, onData }).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;
@@ -298,14 +310,7 @@
     if (fitAddon) fitAddon.fit();
   });
 
-  function base64Decode(str: string): Uint8Array {
-    const binary = atob(str);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  }
+
 </script>
 
 <div

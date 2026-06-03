@@ -2,7 +2,10 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, Child}
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, Condvar};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
+use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
 use crate::notify;
@@ -47,6 +50,11 @@ impl FlowControl {
     }
 }
 
+// Flusher coalesces output so bursts arrive as single chunks.
+const FLUSH_COALESCE: Duration = Duration::from_millis(4);
+const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
+const READ_BUF: usize = 16 * 1024;
+
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -78,7 +86,7 @@ impl PtyManager {
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
-    pub fn attach(&self, session_id: &str, target: PtyTarget, app: AppHandle) -> Result<(), String> {
+    pub fn attach(&self, session_id: &str, target: PtyTarget, app: AppHandle, on_data: Channel<Response>) -> Result<(), String> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -131,30 +139,40 @@ impl PtyManager {
             ptys.insert(session_id.to_string(), handle);
         }
 
-        // Spawn reader thread that emits output to frontend
-        let event_name = format!("pty-output-{session_id}");
+        // Shared buffer between reader and flusher threads
+        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((
+            Mutex::new(Vec::with_capacity(READ_BUF)),
+            Condvar::new(),
+        ));
+        let done = Arc::new(AtomicBool::new(false));
+
+        // ── Reader thread: reads PTY → pushes into pending buffer ─────────
+        let pending_r = pending.clone();
         let exit_event_name = format!("pty-exited-{session_id}");
         let notify_clone = self.notify_state.lock().unwrap().clone();
         let sid = session_id.to_string();
+        let done_r = done.clone();
+        let app_reader = app.clone();
         thread::spawn(move || {
-            let mut buf = [0u8; 65536];
+            let mut buf = [0u8; READ_BUF];
             let mut was_busy = false;
             loop {
-                // Block here if frontend signalled pause (back pressure)
                 flow_clone.wait_if_paused();
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = &buf[..n];
-                        let encoded = base64_encode(data);
-                        let _ = app.emit(&event_name, encoded);
+                        let (lock, cv) = &*pending_r;
+                        let mut g = lock.lock().unwrap();
+                        g.extend_from_slice(&buf[..n]);
+                        cv.notify_one();
+
                         if let Some(ref ns) = notify_clone {
                             let mut s = ns.lock().unwrap();
                             let was_idle = s.get_state(&sid) != Some(crate::notify::AgentState::Busy);
                             s.notify_output(&sid);
                             if was_idle && !was_busy {
                                 drop(s);
-                                let _ = app.emit("agent-state-change", serde_json::json!({
+                                let _ = app_reader.emit("agent-state-change", serde_json::json!({
                                     "session_id": &sid,
                                     "state": "Busy"
                                 }));
@@ -165,8 +183,49 @@ impl PtyManager {
                     Err(_) => break,
                 }
             }
-            // EOF — process exited
-            let _ = app.emit(&exit_event_name, ());
+            // Signal flusher to exit, flush remaining
+            done_r.store(true, Ordering::Release);
+            pending_r.1.notify_one();
+        });
+
+        // ── Flusher thread: coalesces pending data → sends via Channel ────
+        let pending_f = pending.clone();
+        let done_f = done.clone();
+        let exit_event = exit_event_name.clone();
+        let app_flusher = app.clone();
+        thread::spawn(move || {
+            let (lock, cv) = &*pending_f;
+            loop {
+                // Wait for data or done signal
+                {
+                    let mut g = lock.lock().unwrap();
+                    while g.is_empty() {
+                        if done_f.load(Ordering::Acquire) {
+                            // Final flush
+                            if !g.is_empty() {
+                                let chunk = std::mem::take(&mut *g);
+                                let _ = on_data.send(Response::new(chunk));
+                            }
+                            let _ = app_flusher.emit(&exit_event, ());
+                            return;
+                        }
+                        let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
+                        g = next;
+                    }
+                }
+
+                // Coalesce: wait a short window so burst data arrives together
+                thread::sleep(FLUSH_COALESCE);
+
+                let chunk = std::mem::take(&mut *lock.lock().unwrap());
+                if chunk.is_empty() {
+                    continue;
+                }
+                if on_data.send(Response::new(chunk)).is_err() {
+                    break;
+                }
+            }
+            let _ = app_flusher.emit(&exit_event, ());
         });
 
         Ok(())
@@ -219,28 +278,4 @@ impl PtyManager {
         h.flow.resume();
         Ok(())
     }
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-        if chunk.len() > 2 {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
 }
