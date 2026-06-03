@@ -110,8 +110,9 @@ impl NotifyState {
         self.last_output.insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
         let had_notified = self.notified.remove(session_id);
-        if was != Some(AgentState::Busy) || had_notified {
-            eprintln!("[notify] output for {session_id} | was={was:?} | cleared_notified={had_notified}");
+        if was == Some(AgentState::Idle) || had_notified {
+            let name = self.meta.get(session_id).map(|m| m.name.as_str()).unwrap_or("?");
+            eprintln!("[notify] \"{name}\" is now busy");
         }
     }
 
@@ -300,7 +301,8 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();
-                            eprintln!("[notify] socket received notification for {} | was={:?}", msg.session_id, s.get_state(&msg.session_id));
+                            let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                            eprintln!("[notify] \"{name}\" received immediate signal (notification)");
                             s.notify_stop_immediate(&msg.session_id)
                         };
                         if fired {
@@ -310,12 +312,13 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     }
                     NotifyEvent::Stop => {
                         let mut s = state.lock().unwrap();
-                        eprintln!("[notify] socket received stop for {} | was={:?}", msg.session_id, s.get_state(&msg.session_id));
-                        // For hook-enabled sessions, debounce; otherwise fire immediately
+                        let name = s.get_meta(&msg.session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into());
                         let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
                         if hook_enabled {
+                            eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);
                         } else {
+                            eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
                             let fired = s.notify_stop(&msg.session_id);
                             drop(s);
                             if fired {
@@ -380,6 +383,8 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();
+                            let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                            eprintln!("[notify] \"{name}\" received immediate signal (notification)");
                             s.notify_stop_immediate(&msg.session_id)
                         };
                         if fired {
@@ -389,10 +394,13 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     }
                     NotifyEvent::Stop => {
                         let mut s = state.lock().unwrap();
+                        let name = s.get_meta(&msg.session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into());
                         let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
                         if hook_enabled {
+                            eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);
                         } else {
+                            eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
                             let fired = s.notify_stop(&msg.session_id);
                             drop(s);
                             if fired {
@@ -431,7 +439,11 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
             }
         }
         for session_id in to_notify {
-            eprintln!("[notify] timeout fired for {session_id}");
+            let name = {
+                let s = state.lock().unwrap();
+                s.get_meta(&session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into())
+            };
+            eprintln!("[notify] \"{name}\" notifying (idle timeout)");
             emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }
