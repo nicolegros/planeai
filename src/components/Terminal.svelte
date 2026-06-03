@@ -5,6 +5,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
+  import { WebglAddon } from "@xterm/addon-webgl";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -29,7 +30,7 @@
   let attached = false;
 
   const SCROLLBACK_LINES = 100_000;
-  const RESIZE_DEBOUNCE_MS = 120;
+  const RESIZE_DEBOUNCE_MS = 50;
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
   const termBg = $derived(
@@ -68,6 +69,12 @@
     );
 
     term.open(containerEl);
+
+    try {
+      term.loadAddon(new WebglAddon());
+    } catch {
+      // WebGL not available, fall back to canvas
+    }
 
     fitAddon.fit();
 
@@ -199,11 +206,29 @@
       onUserInput?.();
     });
 
-    // ── Listen for PTY output ────────────────────────────────────────────
+    // ── Listen for PTY output with flow control ─────────────────────────
+    const FLOW_HIGH = 100_000; // pause PTY when xterm has this much pending
+    const FLOW_LOW = 10_000;   // resume PTY when xterm drains to this level
+    let pendingBytes = 0;
+    let isPaused = false;
+
     const unlisten = listen<string>(`pty-output-${sessionId}`, (event) => {
       ptyStarted = true;
-      const bytes = base64Decode(event.payload);
-      term.write(bytes);
+      const data = base64Decode(event.payload);
+      pendingBytes += data.byteLength;
+
+      if (pendingBytes > FLOW_HIGH && !isPaused) {
+        isPaused = true;
+        invoke("pause_pty", { sessionId });
+      }
+
+      term.write(data, () => {
+        pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
+        if (isPaused && pendingBytes < FLOW_LOW) {
+          isPaused = false;
+          invoke("resume_pty", { sessionId });
+        }
+      });
     });
 
     // ── Attach to the session ─────────────────────────────────────────────

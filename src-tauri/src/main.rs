@@ -408,6 +408,16 @@ fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) 
 }
 
 #[tauri::command]
+fn pause_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
+    state.0.pause(&session_id)
+}
+
+#[tauri::command]
+fn resume_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
+    state.0.resume(&session_id)
+}
+
+#[tauri::command]
 fn check_session_alive(tmux_name: String) -> bool {
     #[cfg(not(windows))]
     { tmux::has_session(&tmux_name) }
@@ -916,6 +926,8 @@ fn main() {
             attach_session,
             write_to_pty,
             resize_pty,
+            pause_pty,
+            resume_pty,
             check_session_alive,
             is_notify_hook_installed,
             install_notify_hook,

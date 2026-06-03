@@ -1,7 +1,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, Child};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
@@ -18,10 +18,40 @@ pub enum PtyTarget {
     Direct { command: String, args: Vec<String>, cwd: String },
 }
 
+/// Shared pause/resume state for a PTY reader thread.
+struct FlowControl {
+    paused: Mutex<bool>,
+    cond: Condvar,
+}
+
+impl FlowControl {
+    fn new() -> Self {
+        Self { paused: Mutex::new(false), cond: Condvar::new() }
+    }
+
+    fn pause(&self) {
+        *self.paused.lock().unwrap() = true;
+    }
+
+    fn resume(&self) {
+        let mut paused = self.paused.lock().unwrap();
+        *paused = false;
+        self.cond.notify_one();
+    }
+
+    fn wait_if_paused(&self) {
+        let mut paused = self.paused.lock().unwrap();
+        while *paused {
+            paused = self.cond.wait(paused).unwrap();
+        }
+    }
+}
+
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    flow: Arc<FlowControl>,
 }
 
 impl Drop for PtyHandle {
@@ -91,7 +121,10 @@ impl PtyManager {
             master: pair.master,
             writer,
             child,
+            flow: Arc::new(FlowControl::new()),
         }));
+
+        let flow_clone = handle.lock().unwrap().flow.clone();
 
         {
             let mut ptys = self.ptys.lock().map_err(|e| e.to_string())?;
@@ -104,9 +137,11 @@ impl PtyManager {
         let notify_clone = self.notify_state.lock().unwrap().clone();
         let sid = session_id.to_string();
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 65536];
             let mut was_busy = false;
             loop {
+                // Block here if frontend signalled pause (back pressure)
+                flow_clone.wait_if_paused();
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
@@ -165,6 +200,24 @@ impl PtyManager {
     pub fn detach(&self, session_id: &str) {
         let mut ptys = self.ptys.lock().unwrap_or_else(|e| e.into_inner());
         ptys.remove(session_id);
+    }
+
+    /// Pause reading from a session's PTY (flow control back pressure).
+    pub fn pause(&self, session_id: &str) -> Result<(), String> {
+        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let handle = ptys.get(session_id).ok_or("session not attached")?;
+        let h = handle.lock().map_err(|e| e.to_string())?;
+        h.flow.pause();
+        Ok(())
+    }
+
+    /// Resume reading from a session's PTY (flow control).
+    pub fn resume(&self, session_id: &str) -> Result<(), String> {
+        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let handle = ptys.get(session_id).ok_or("session not attached")?;
+        let h = handle.lock().map_err(|e| e.to_string())?;
+        h.flow.resume();
+        Ok(())
     }
 }
 
