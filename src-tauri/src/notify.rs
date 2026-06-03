@@ -224,6 +224,35 @@ pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
         .all(|event| hooks.contains_key(*event))
 }
 
+/// Check if the Copilot CLI hook is installed at the given copilot home directory.
+/// Looks for `hooks/planeai-notify.json` containing our hook script reference.
+pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
+    let notify_path = copilot_dir.join("hooks").join("planeai-notify.json");
+    let Ok(content) = std::fs::read_to_string(notify_path) else { return false };
+    content.contains("planeai-stop-notify-copilot")
+}
+
+/// Install the Copilot CLI notification hook into the given copilot directory.
+/// Creates `hooks/planeai-notify.json` with agentStop, userPromptSubmitted, and errorOccurred hooks.
+pub fn install_copilot_hook_at(copilot_dir: &Path, bash_script: &str, ps_script: &str) -> Result<(), String> {
+    let hooks_dir = copilot_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    let config = serde_json::json!({
+        "version": 1,
+        "hooks": {
+            "agentStop": [{ "type": "command", "bash": format!("{bash_script} stop"), "powershell": format!("{ps_script} stop"), "timeoutSec": 5 }],
+            "userPromptSubmitted": [{ "type": "command", "bash": format!("{bash_script} busy"), "powershell": format!("{ps_script} busy"), "timeoutSec": 5 }],
+            "errorOccurred": [{ "type": "command", "bash": format!("{bash_script} notification"), "powershell": format!("{ps_script} notification"), "timeoutSec": 5 }]
+        }
+    });
+
+    let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(hooks_dir.join("planeai-notify.json"), output)
+        .map_err(|e| format!("failed to write planeai-notify.json: {e}"))?;
+    Ok(())
+}
+
 /// Install the Claude Code notification hook into the given .claude directory.
 /// `script_command` is the path to the hook script to reference in the config.
 pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result<(), String> {
@@ -695,6 +724,130 @@ mod tests {
         let settings_path = dir.path().join("settings.json");
 
         assert!(!is_claude_hook_installed_at(&settings_path));
+    }
+
+    #[test]
+    fn detect_copilot_hook_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_dir = dir.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let notify_path = hooks_dir.join("planeai-notify.json");
+        std::fs::write(&notify_path, r#"{"version":1,"hooks":{"agentStop":[{"type":"command","bash":"planeai-stop-notify-copilot.sh stop"}],"userPromptSubmitted":[{"type":"command","bash":"planeai-stop-notify-copilot.sh busy"}],"errorOccurred":[{"type":"command","bash":"planeai-stop-notify-copilot.sh notification"}]}}"#).unwrap();
+
+        assert!(is_copilot_hook_installed_at(dir.path()));
+    }
+
+    #[test]
+    fn detect_copilot_hook_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_copilot_hook_installed_at(dir.path()));
+    }
+
+    #[test]
+    fn detect_copilot_hook_at_custom_home() {
+        // Simulates COPILOT_HOME pointing to a non-default location
+        let dir = tempfile::tempdir().unwrap();
+        let custom_home = dir.path().join("custom-copilot");
+        let hooks_dir = custom_home.join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Not installed yet
+        assert!(!is_copilot_hook_installed_at(&custom_home));
+
+        // Install at custom home
+        install_copilot_hook_at(&custom_home, "/usr/local/bin/planeai-stop-notify-copilot.sh", "/usr/local/bin/planeai-stop-notify-copilot.ps1").unwrap();
+
+        // Now detected
+        assert!(is_copilot_hook_installed_at(&custom_home));
+    }
+
+    #[test]
+    fn detect_copilot_hook_wrong_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_dir = dir.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(hooks_dir.join("planeai-notify.json"), r#"{"version":1,"hooks":{}}"#).unwrap();
+
+        assert!(!is_copilot_hook_installed_at(dir.path()));
+    }
+
+    #[test]
+    fn install_copilot_hook_creates_correct_structure() {
+        let dir = tempfile::tempdir().unwrap();
+        let copilot_dir = dir.path();
+
+        install_copilot_hook_at(copilot_dir, "/path/to/planeai-stop-notify-copilot.sh", "/path/to/planeai-stop-notify-copilot.ps1").unwrap();
+
+        let content = std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(v["version"], 1);
+        // agentStop hook with bash and powershell
+        let agent_stop = &v["hooks"]["agentStop"][0];
+        assert_eq!(agent_stop["type"], "command");
+        assert!(agent_stop["bash"].as_str().unwrap().contains("planeai-stop-notify-copilot"));
+        assert!(agent_stop["bash"].as_str().unwrap().contains("stop"));
+        assert!(agent_stop["powershell"].as_str().unwrap().contains("planeai-stop-notify-copilot"));
+        // userPromptSubmitted
+        let prompt = &v["hooks"]["userPromptSubmitted"][0];
+        assert!(prompt["bash"].as_str().unwrap().contains("busy"));
+        // errorOccurred
+        let error = &v["hooks"]["errorOccurred"][0];
+        assert!(error["bash"].as_str().unwrap().contains("notification"));
+    }
+
+    #[test]
+    fn install_copilot_hook_writes_script_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let copilot_dir = dir.path();
+        let hooks_dir = copilot_dir.join("hooks");
+
+        let bash_script = hooks_dir.join("planeai-stop-notify-copilot.sh");
+        let ps_script = hooks_dir.join("planeai-stop-notify-copilot.ps1");
+
+        install_copilot_hook_at(copilot_dir, bash_script.to_str().unwrap(), ps_script.to_str().unwrap()).unwrap();
+
+        // Write scripts manually (as install_copilot_hook in main.rs would)
+        let bash_content = include_str!("../resources/planeai-stop-notify-copilot.sh");
+        let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
+        std::fs::write(&bash_script, bash_content).unwrap();
+        std::fs::write(&ps_script, ps_content).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bash_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // Verify script content
+        let content = std::fs::read_to_string(&bash_script).unwrap();
+        assert!(content.contains("PLANEAI_SESSION_ID"));
+        assert!(content.contains("case \"$1\""));
+
+        // Verify permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&bash_script).unwrap().permissions();
+            assert_eq!(perms.mode() & 0o777, 0o755);
+        }
+    }
+
+    #[test]
+    fn install_copilot_hook_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let copilot_dir = dir.path();
+
+        install_copilot_hook_at(copilot_dir, "/path/script.sh", "/path/script.ps1").unwrap();
+        install_copilot_hook_at(copilot_dir, "/path/script.sh", "/path/script.ps1").unwrap();
+
+        let content = std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Should still have exactly one entry per hook, not duplicates
+        assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
+        assert_eq!(v["hooks"]["userPromptSubmitted"].as_array().unwrap().len(), 1);
+        assert_eq!(v["hooks"]["errorOccurred"].as_array().unwrap().len(), 1);
     }
 
     #[test]

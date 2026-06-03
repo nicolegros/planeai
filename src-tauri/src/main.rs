@@ -119,6 +119,8 @@ fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
         is_kiro_hook_installed()
     } else if provider.command.contains("claude") {
         is_claude_hook_installed()
+    } else if provider.command.contains("copilot") {
+        is_copilot_hook_installed()
     } else {
         false
     }
@@ -137,6 +139,13 @@ fn is_claude_hook_installed() -> bool {
     let home = config::home_dir();
     let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
     notify::is_claude_hook_installed_at(&path)
+}
+
+fn is_copilot_hook_installed() -> bool {
+    let copilot_dir = std::env::var("COPILOT_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{}/.copilot", config::home_dir())));
+    notify::is_copilot_hook_installed_at(&copilot_dir)
 }
 
 #[tauri::command]
@@ -456,14 +465,15 @@ fn check_session_alive(tmux_name: String) -> bool {
 fn is_notify_hook_installed(config_state: State<ConfigState>) -> bool {
     let cfg = config_state.0.lock().unwrap();
     let supported: Vec<_> = cfg.providers.values()
-        .filter(|p| p.command.contains("kiro") || p.command.contains("claude"))
+        .filter(|p| p.command.contains("kiro") || p.command.contains("claude") || p.command.contains("copilot"))
         .collect();
     if supported.is_empty() {
         return true; // no supported providers, nothing to install
     }
     supported.iter().all(|p| {
         if p.command.contains("kiro") { is_kiro_hook_installed() }
-        else { is_claude_hook_installed() }
+        else if p.command.contains("claude") { is_claude_hook_installed() }
+        else { is_copilot_hook_installed() }
     })
 }
 
@@ -480,6 +490,11 @@ fn install_notify_hook(config_state: State<ConfigState>) -> Result<(), String> {
     // Install for Claude Code if configured
     if cfg.providers.values().any(|p| p.command.contains("claude")) {
         install_claude_hook(&home)?;
+    }
+
+    // Install for Copilot CLI if configured
+    if cfg.providers.values().any(|p| p.command.contains("copilot")) {
+        install_copilot_hook(&home)?;
     }
 
     Ok(())
@@ -567,6 +582,40 @@ fn install_claude_hook(home: &str) -> Result<(), String> {
 
     let script_command = script_path.to_string_lossy().to_string();
     notify::install_claude_hook_at(&claude_dir, &script_command)
+}
+
+fn install_copilot_hook(home: &str) -> Result<(), String> {
+    let copilot_dir = std::env::var("COPILOT_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.copilot")));
+    let hooks_dir = copilot_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (bash_path, bash_content) = (
+        hooks_dir.join("planeai-stop-notify-copilot.sh"),
+        include_str!("../resources/planeai-stop-notify-copilot.sh"),
+    );
+    #[cfg(not(windows))]
+    {
+        std::fs::write(&bash_path, bash_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bash_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    #[cfg(windows)]
+    let bash_path = hooks_dir.join("planeai-stop-notify-copilot.sh");
+
+    let ps_path = hooks_dir.join("planeai-stop-notify-copilot.ps1");
+    let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
+    std::fs::write(&ps_path, ps_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+
+    notify::install_copilot_hook_at(
+        &copilot_dir,
+        &bash_path.to_string_lossy(),
+        &ps_path.to_string_lossy(),
+    )
 }
 
 #[tauri::command]
