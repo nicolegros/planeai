@@ -74,16 +74,16 @@ export const DEFAULT_THEME_CSS = `:root {
 }
 .dark {
   --color-surface-50: hsl(0 0% 95%);
-  --color-surface-100: hsl(0 0% 92%);
-  --color-surface-200: hsl(0 0% 82%);
-  --color-surface-300: hsl(0 0% 70%);
-  --color-surface-400: hsl(240 3% 55%);
-  --color-surface-500: hsl(240 3% 40%);
-  --color-surface-600: hsl(240 3% 25%);
-  --color-surface-700: hsl(240 4% 16%);
-  --color-surface-800: hsl(240 4% 12%);
-  --color-surface-900: hsl(0 0% 8%);
-  --color-surface-950: hsl(0 0% 5%);
+  --color-surface-100: hsl(0 0% 88%);
+  --color-surface-200: hsl(0 0% 75%);
+  --color-surface-300: hsl(0 0% 62%);
+  --color-surface-400: hsl(240 3% 49%);
+  --color-surface-500: hsl(240 3% 37%);
+  --color-surface-600: hsl(240 3% 26%);
+  --color-surface-700: hsl(240 4% 18%);
+  --color-surface-800: hsl(240 4% 13%);
+  --color-surface-900: hsl(0 0% 9%);
+  --color-surface-950: hsl(0 0% 4%);
   --color-primary-50: hsl(0 0% 4%);
   --color-primary-100: hsl(0 0% 10%);
   --color-primary-200: hsl(0 0% 20%);
