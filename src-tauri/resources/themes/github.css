@@ -77,17 +77,17 @@
 }
 
 .dark {
-  --color-surface-50: oklch(18% 0.01 230);
-  --color-surface-100: oklch(21% 0.01 230);
-  --color-surface-200: oklch(25% 0.01 230);
-  --color-surface-300: oklch(31% 0.01 230);
-  --color-surface-400: oklch(40% 0.01 230);
+  --color-surface-50: oklch(96% 0.003 230);
+  --color-surface-100: oklch(92% 0.003 230);
+  --color-surface-200: oklch(85% 0.003 230);
+  --color-surface-300: oklch(74% 0.005 230);
+  --color-surface-400: oklch(61% 0.005 230);
   --color-surface-500: oklch(50% 0.005 230);
-  --color-surface-600: oklch(61% 0.005 230);
-  --color-surface-700: oklch(74% 0.005 230);
-  --color-surface-800: oklch(85% 0.003 230);
-  --color-surface-900: oklch(92% 0.003 230);
-  --color-surface-950: oklch(96% 0.003 230);
+  --color-surface-600: oklch(40% 0.01 230);
+  --color-surface-700: oklch(31% 0.01 230);
+  --color-surface-800: oklch(25% 0.01 230);
+  --color-surface-900: oklch(21% 0.01 230);
+  --color-surface-950: oklch(18% 0.01 230);
 
   --terminal-background: #0d1117;
   --terminal-foreground: #c9d1d9;
