@@ -5,6 +5,7 @@
   import { loadTheme } from "../lib/theme-loader";
   import { getThemesByVariant } from "../lib/terminal-themes";
   import { Select, Input } from "./ui";
+  import { Palette, Bot, ListTodo } from "@lucide/svelte";
 
   const config = $derived(getSettings());
   const darkThemes = getThemesByVariant("dark");
@@ -18,6 +19,7 @@
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
   let tmuxAvailable = $state(true);
+  let activeTab = $state("Appearance");
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
@@ -141,12 +143,19 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto bg-surface-50 dark:bg-surface-950 p-8">
+<div class="h-screen flex flex-col overflow-hidden bg-surface-50 dark:bg-surface-950">
+  <nav class="flex justify-center gap-1 border-b border-surface-200 dark:border-surface-700 px-8 pt-4">
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}] as tab (tab.name)}
+      <button
+        class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-200'}"
+        onclick={() => activeTab = tab.name}
+      ><tab.icon size={16} />{tab.name}</button>
+    {/each}
+  </nav>
+  <div class="flex-1 overflow-y-auto px-8 py-6">
   <div class="max-w-2xl mx-auto space-y-8">
-    <div class="flex items-center gap-3">
-      <h1 class="text-xl font-semibold text-surface-900 dark:text-surface-50">Preferences</h1>
-    </div>
 
+    {#if activeTab === "Appearance"}
     <!-- Appearance Mode -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Appearance</h2>
@@ -302,6 +311,9 @@
     </section>
     {/if}
 
+    {/if}
+
+    {#if activeTab === "Models"}
     <!-- Session Backend -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
@@ -424,6 +436,9 @@
       {/if}
     </section>
 
+    {/if}
+
+    {#if activeTab === "Task Management"}
     <!-- Task Managers -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Task Manager</h2>
@@ -506,5 +521,7 @@
         <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = true; }}>+ Add Task Manager</button>
       {/if}
     </section>
+    {/if}
+  </div>
   </div>
 </div>
