@@ -175,8 +175,8 @@
 
 <div class="flex h-full w-full" class:hidden={!visible}>
   <!-- Diff content area -->
-  <div class="flex-1 min-w-0 relative">
-    <div bind:this={editorContainer} class="h-full w-full overflow-hidden"></div>
+  <div class="flex-1 min-w-0 relative overflow-hidden">
+    <div bind:this={editorContainer} class="absolute inset-0"></div>
     {#if loading && files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
     {:else if files.length === 0}
