@@ -311,6 +311,25 @@ fn get_theme_css(state: State<ConfigState>, app: tauri::AppHandle) -> Result<Str
 }
 
 #[tauri::command]
+fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let config_dir = config::config_dir(&app.package_info().name);
+    let themes_dir = config_dir.join("themes");
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "css") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
     git::list_branches(&repo_path)
 }
@@ -1108,6 +1127,7 @@ fn main() {
             get_config,
             update_config,
             get_theme_css,
+            list_themes,
             launch_session,
             attach_session,
             write_to_pty,

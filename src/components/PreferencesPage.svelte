@@ -16,6 +16,7 @@
   const lightThemes = getThemesByVariant("light");
 
   let fontItems = $state<{ value: string; label: string }[]>([]);
+  let availableThemes = $state<string[]>([]);
   let editingProvider = $state<string | null>(null);
   let newProviderName = $state("");
   let newProviderCommand = $state("");
@@ -28,6 +29,7 @@
   onMount(async () => {
     const fonts = await invoke<string[]>("list_monospace_fonts");
     fontItems = fonts.map((f) => ({ value: f, label: f }));
+    availableThemes = await invoke<string[]>("list_themes");
     tmuxAvailable = await invoke<boolean>("check_tmux_available");
   });
 
@@ -164,6 +166,19 @@
             class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => setAppearance(mode as AppearanceMode)}
           >{mode}</button>
+        {/each}
+      </div>
+    </section>
+
+    <!-- Theme -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Theme</h2>
+      <div class="flex flex-wrap gap-2">
+        {#each availableThemes as themeName (themeName)}
+          <button
+            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            onclick={() => updateSettings({ appearance: { ...config.appearance, theme: themeName } })}
+          >{themeName}</button>
         {/each}
       </div>
     </section>
