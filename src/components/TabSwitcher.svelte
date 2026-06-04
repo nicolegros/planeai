@@ -42,20 +42,20 @@
 </script>
 
 <div class="absolute inset-0 flex items-center justify-center z-20">
-  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-fit min-w-72 max-w-lg max-h-80 overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
+  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-96 max-h-80 overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
     {#each mruSessionIds as id, i (id)}
       {@const session = getSession(id)}
       {#if session}
-        <div class="px-3 py-2 rounded text-sm flex items-center gap-2 whitespace-nowrap {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
+        <div class="px-3 py-2 rounded text-sm flex items-center gap-2 {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
           {#if session.task_key}<span class="shrink-0 text-[10px] font-medium {i === selectedIndex ? 'text-surface-200' : 'text-primary-600 dark:text-primary-400'}">{session.task_key}</span>{/if}
-          <span class="font-medium">{session.name || session.branch}</span>
-          <span class="ml-auto text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
+          <span class="font-medium truncate">{session.name || session.branch}</span>
+          <span class="ml-auto shrink-0 text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
           {#if agentStates[id] === 'Busy'}
-            <span class="ml-auto shrink-0 size-3.5 animate-spin {i === selectedIndex ? 'text-surface-200' : 'text-surface-500'}">
+            <span class="shrink-0 size-3.5 animate-spin {i === selectedIndex ? 'text-surface-200' : 'text-surface-500'}">
               <LoaderCircle class="size-3.5" />
             </span>
           {:else if agentStates[id] === 'Idle'}
-            <span class="ml-auto shrink-0 size-3.5 animate-pulse text-amber-500">
+            <span class="shrink-0 size-3.5 animate-pulse text-amber-500">
               <Lightbulb class="size-3.5" />
             </span>
           {/if}
