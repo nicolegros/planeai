@@ -22,6 +22,7 @@
   import PreferencesPage from "./components/PreferencesPage.svelte";
   import TabBar from "./components/TabBar.svelte";
   import DiffTab from "./components/DiffTab.svelte";
+  import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
 
   interface Project {
@@ -61,6 +62,7 @@
 
   // Preferences state
   let showPreferences = $state(false);
+  let showShortcuts = $state(false);
 
   // Hook install prompt
   let showHookPrompt = $state(false);
@@ -292,12 +294,15 @@
         showSessionForm = false;
         showProjectForm = false;
         showPreferences = false;
+        showShortcuts = false;
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
         showPreferences = !showPreferences;
+      } else if (action.type === "show_shortcuts") {
+        showShortcuts = !showShortcuts;
       } else if (action.type === "new_tab") {
         handleNewTab();
       } else if (action.type === "close_tab") {
@@ -310,7 +315,7 @@
         handleToggleDiff();
       }
     },
-    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !getCycleState().isCycling
+    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling
     );
 
     // Listen for Ctrl release to commit tab switch
@@ -565,6 +570,8 @@
       }}
       onToggleDiff={handleToggleDiff}
     />
+
+    <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
 
     {#each sessions as session (session.id)}
       {@const tabs = getTabs(session.id)}
