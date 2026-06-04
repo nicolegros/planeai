@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
@@ -20,7 +21,6 @@
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
-  import PreferencesPage from "./components/PreferencesPage.svelte";
   import TabBar from "./components/TabBar.svelte";
   import DiffTab from "./components/DiffTab.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
@@ -63,8 +63,25 @@
   let agentStates = $state<Record<string, string>>({});
 
   // Preferences state
-  let showPreferences = $state(false);
   let showShortcuts = $state(false);
+
+  async function openPreferences() {
+    const existing = await WebviewWindow.getByLabel("preferences");
+    if (existing) {
+      existing.setFocus();
+      return;
+    }
+    new WebviewWindow("preferences", {
+      url: "index.html?page=preferences",
+      title: "Preferences",
+      width: 700,
+      height: 550,
+      parent: getCurrentWindow(),
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+    });
+  }
 
   // Hook install prompt
   let showHookPrompt = $state(false);
@@ -224,6 +241,11 @@
     loadSessions();
     loadSettings().then(() => loadTheme());
 
+    // Reload settings/theme when changed from preferences window
+    const unlistenSettings = listen("settings-changed", () => {
+      loadSettings().then(() => loadTheme());
+    });
+
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {
       if (!installed) showHookPrompt = true;
@@ -289,14 +311,13 @@
         }
         showSessionForm = false;
         showProjectForm = false;
-        showPreferences = false;
         showShortcuts = false;
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
-        showPreferences = !showPreferences;
+        openPreferences();
       } else if (action.type === "show_shortcuts") {
         showShortcuts = !showShortcuts;
       } else if (action.type === "new_tab") {
@@ -311,7 +332,7 @@
         handleToggleDiff();
       }
     },
-    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling
+    () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling
     );
 
     // Listen for Ctrl release to commit tab switch
@@ -335,6 +356,7 @@
     return () => {
       cleanup();
       unlistenState.then((fn) => fn());
+      unlistenSettings.then((fn) => fn());
       unlistenClose.then((fn) => fn());
       exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
@@ -466,7 +488,7 @@
       onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
       onRestartSession={restartSession}
-      onOpenPreferences={() => (showPreferences = true)}
+      onOpenPreferences={openPreferences}
       onRenameSession={doRename}
       onStartRename={(id) => (renamingSessionId = id || null)}
       onArchiveProject={archiveProject}
@@ -475,9 +497,6 @@
   {/if}
 
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950">
-    {#if showPreferences}
-      <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
-    {:else}
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm
@@ -718,7 +737,6 @@
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-    {/if}
     {/if}
   </section>
   </div>

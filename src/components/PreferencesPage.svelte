@@ -1,16 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
+  import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
+  import { loadTheme } from "../lib/theme-loader";
   import { getThemesByVariant } from "../lib/terminal-themes";
   import { Select, Input } from "./ui";
-  import { ChevronLeft } from "@lucide/svelte";
-
-  interface Props {
-    onBack: () => void;
-  }
-
-  let { onBack }: Props = $props();
 
   const config = $derived(getSettings());
   const darkThemes = getThemesByVariant("dark");
@@ -28,6 +22,8 @@
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
   onMount(async () => {
+    await loadSettings();
+    loadTheme();
     const fonts = await invoke<string[]>("list_monospace_fonts");
     fontItems = fonts.map((f) => ({ value: f, label: f }));
     availableThemes = await invoke<string[]>("list_themes");
@@ -148,13 +144,6 @@
 <div class="h-full overflow-y-auto bg-surface-50 dark:bg-surface-950 p-8">
   <div class="max-w-2xl mx-auto space-y-8">
     <div class="flex items-center gap-3">
-      <button
-        class="rounded p-1.5 text-surface-700 hover:text-surface-900 dark:text-surface-300 dark:hover:text-surface-100 hover:bg-surface-200 dark:hover:bg-surface-800"
-        onclick={onBack}
-        aria-label="Back"
-      >
-        <ChevronLeft size={20} />
-      </button>
       <h1 class="text-xl font-semibold text-surface-900 dark:text-surface-50">Preferences</h1>
     </div>
 

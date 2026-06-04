@@ -1,6 +1,13 @@
 {
   "identifier": "default",
-  "description": "Default capability for the main window",
-  "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "notification:default", "opener:default"]
+  "description": "Default capability for all windows",
+  "windows": ["main", "preferences"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
+    "dialog:default",
+    "notification:default",
+    "opener:default"
+  ]
 }

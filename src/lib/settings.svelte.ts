@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { loadTheme } from "./theme-loader";
 
 export type AppearanceMode = "system" | "light" | "dark";
@@ -114,4 +115,5 @@ export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
   if (config.appearance.theme !== prevTheme) {
     loadTheme();
   }
+  emit("settings-changed");
 }
