@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
-  import { MonacoDiffRenderer } from "../lib/monaco-diff-renderer";
+  import { CmDiffRenderer } from "../lib/cm-diff-renderer";
   import type { DiffRenderer } from "../lib/diff-renderer";
   import { getSettings } from "../lib/settings.svelte";
 
@@ -97,25 +97,17 @@
     // Scroll: Ctrl+d half-page down, Ctrl+u half-page up
     } else if (e.key === "d" && e.ctrlKey) {
       e.preventDefault();
-      const editor = (renderer as any)?.editor;
-      if (editor) {
-        const mod = editor.getModifiedEditor();
-        const visibleLines = mod.getVisibleRanges()?.[0];
-        if (visibleLines) {
-          const half = Math.floor((visibleLines.endLineNumber - visibleLines.startLineNumber) / 2);
-          mod.setScrollTop(mod.getScrollTop() + half * mod.getOption(66 /* lineHeight */));
-        }
+      const mv = (renderer as any)?.mergeView;
+      if (mv) {
+        const el = mv.b.scrollDOM;
+        el.scrollTop += el.clientHeight / 2;
       }
     } else if (e.key === "u" && e.ctrlKey) {
       e.preventDefault();
-      const editor = (renderer as any)?.editor;
-      if (editor) {
-        const mod = editor.getModifiedEditor();
-        const visibleLines = mod.getVisibleRanges()?.[0];
-        if (visibleLines) {
-          const half = Math.floor((visibleLines.endLineNumber - visibleLines.startLineNumber) / 2);
-          mod.setScrollTop(mod.getScrollTop() - half * mod.getOption(66 /* lineHeight */));
-        }
+      const mv = (renderer as any)?.mergeView;
+      if (mv) {
+        const el = mv.b.scrollDOM;
+        el.scrollTop -= el.clientHeight / 2;
       }
     // Other
     } else if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
@@ -143,7 +135,7 @@
   $effect(() => {
     if (visible && !mounted && editorContainer) {
       mounted = true;
-      renderer = new MonacoDiffRenderer();
+      renderer = new CmDiffRenderer();
       renderer.mount(editorContainer);
       renderer.setTheme(theme);
       refresh();
