@@ -24,7 +24,8 @@ export type KeyboardAction =
   | { type: "new_tab" }
   | { type: "close_tab" }
   | { type: "next_tab" }
-  | { type: "prev_tab" };
+  | { type: "prev_tab" }
+  | { type: "toggle_diff" };
 
 /**
  * Attempt to match a keyboard event to an app-level action.
@@ -77,6 +78,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+Shift+[ — prev tab
   if (mod && e.shiftKey && e.key === "[") {
     return { type: "prev_tab" };
+  }
+
+  // Mod+D — toggle diff tab
+  if (mod && !e.shiftKey && key === "d") {
+    return { type: "toggle_diff" };
   }
 
   // Mod+Shift+N — new project

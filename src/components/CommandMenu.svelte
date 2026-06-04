@@ -38,6 +38,7 @@
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
     onPickTask: (task: TaskItem) => void;
+    onToggleDiff: () => void;
   }
 
   interface TaskItem {
@@ -49,7 +50,7 @@
     blocked_by: string[];
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
   let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask">("none");
@@ -366,6 +367,15 @@
                   onSelect={() => { onResetTerminal(); close(); }}
                 >
                   Reset terminal
+                </Command.Item>
+                <Command.Item
+                  value="view branch diff"
+                  keywords={["diff", "changes", "git", "review", "branch"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onToggleDiff(); close(); }}
+                >
+                  View branch diff
                 </Command.Item>
                 <Command.Item
                   value="archived sessions"

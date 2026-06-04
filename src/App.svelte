@@ -21,6 +21,7 @@
   import CommandMenu from "./components/CommandMenu.svelte";
   import PreferencesPage from "./components/PreferencesPage.svelte";
   import TabBar from "./components/TabBar.svelte";
+  import DiffTab from "./components/DiffTab.svelte";
   import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
 
   interface Project {
@@ -40,6 +41,7 @@
     worktree_path: string | null;
     backend: string;
     tab_count: number;
+    base_branch: string | null;
   }
 
   let projects = $state<Project[]>([]);
@@ -66,6 +68,10 @@
   // Quit confirmation
   let showQuitConfirm = $state(false);
   let quitDirectCount = $state(0);
+
+  // Diff tab state: set of session IDs that have diff tab open
+  let diffTabOpen = $state<Record<string, boolean>>({});
+  let diffTabActive = $state<Record<string, boolean>>({});
 
   const terminalBg = $derived.by(() => {
     const s = getSettings();
@@ -189,6 +195,24 @@
     setActiveTab(activeSessionId, tabs[prevPos].index);
   }
 
+  function handleToggleDiff() {
+    if (!activeSessionId) return;
+    if (diffTabOpen[activeSessionId]) {
+      // If diff is active, close it. If terminal is active, close diff.
+      if (diffTabActive[activeSessionId]) {
+        diffTabActive = { ...diffTabActive, [activeSessionId]: false };
+        diffTabOpen = { ...diffTabOpen, [activeSessionId]: false };
+      } else {
+        // Switch to diff tab
+        diffTabActive = { ...diffTabActive, [activeSessionId]: true };
+      }
+    } else {
+      // Open diff tab and make it active
+      diffTabOpen = { ...diffTabOpen, [activeSessionId]: true };
+      diffTabActive = { ...diffTabActive, [activeSessionId]: true };
+    }
+  }
+
   function listenForTabExit(sessionId: string, tabIndex: number) {
     const ptyKey = `${sessionId}:${tabIndex}`;
     listen(`pty-exited-${ptyKey}`, () => {
@@ -282,6 +306,8 @@
         handleNextTab();
       } else if (action.type === "prev_tab") {
         handlePrevTab();
+      } else if (action.type === "toggle_diff") {
+        handleToggleDiff();
       }
     },
     () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !getCycleState().isCycling
@@ -327,6 +353,10 @@
   async function doDelete(s: Session) {
     await invoke("destroy_session", { id: s.id });
     destroyTabState(s.id);
+    const { [s.id]: _d1, ...restOpen } = diffTabOpen;
+    const { [s.id]: _d2, ...restActive } = diffTabActive;
+    diffTabOpen = restOpen;
+    diffTabActive = restActive;
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -416,6 +446,9 @@
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
+    showDiffButton={!!activeSessionId}
+    diffActive={!!(activeSessionId && diffTabActive[activeSessionId])}
+    onToggleDiff={handleToggleDiff}
   />
 
   <div class="flex flex-1 min-h-0">
@@ -530,25 +563,50 @@
         taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
         showSessionForm = true;
       }}
+      onToggleDiff={handleToggleDiff}
     />
 
     {#each sessions as session (session.id)}
       {@const tabs = getTabs(session.id)}
       {@const activeTab = getActiveTabIndex(session.id)}
-      {#if session.id === activeSessionId && tabs.length > 1}
-        <TabBar
-          {tabs}
-          activeTabIndex={activeTab}
-          onSelect={(idx) => setActiveTab(session.id, idx)}
-          onClose={async (idx) => { removeTab(session.id, idx); await invoke("close_tab", { sessionId: session.id, tabIndex: idx }); }}
-        />
+      {@const hasDiff = diffTabOpen[session.id] ?? false}
+      {@const isDiffActive = diffTabActive[session.id] ?? false}
+      {@const project = projects.find((p) => p.id === session.project_id)}
+      {#if session.id === activeSessionId && (tabs.length > 1 || hasDiff)}
+        <div class="flex items-center h-8 bg-surface-100 dark:bg-surface-900 border-b border-surface-200 dark:border-surface-800 px-2 gap-0.5 shrink-0" role="tablist">
+          <button
+            role="tab"
+            aria-selected={!isDiffActive}
+            class="flex items-center gap-1 px-3 h-6 rounded text-xs select-none transition-colors
+              {!isDiffActive ? 'bg-surface-200 dark:bg-surface-700 text-surface-900 dark:text-surface-50' : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
+            onclick={() => { diffTabActive = { ...diffTabActive, [session.id]: false }; }}
+          >Terminal</button>
+          {#if hasDiff}
+            <button
+              role="tab"
+              aria-selected={isDiffActive}
+              class="flex items-center gap-1 px-3 h-6 rounded text-xs select-none transition-colors
+                {isDiffActive ? 'bg-surface-200 dark:bg-surface-700 text-surface-900 dark:text-surface-50' : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
+              onclick={() => { diffTabActive = { ...diffTabActive, [session.id]: true }; }}
+            >
+              <span>∆ Diff</span>
+              <span
+                class="ml-1 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-300 dark:hover:bg-surface-600 text-[10px]"
+                role="button"
+                tabindex="-1"
+                aria-label="Close diff"
+                onclick={(e: MouseEvent) => { e.stopPropagation(); diffTabOpen = { ...diffTabOpen, [session.id]: false }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
+              >×</span>
+            </button>
+          {/if}
+        </div>
       {/if}
       {#each tabs as tab (tab.index)}
         {@const ptyKey = tab.index === 0 ? session.id : `${session.id}:${tab.index}`}
         <Terminal
           sessionId={ptyKey}
-          visible={session.id === activeSessionId && tab.index === activeTab}
-          focused={session.id === activeSessionId && tab.index === activeTab && zone === "terminal"}
+          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && zone === "terminal"}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           onAttached={() => {
@@ -565,6 +623,16 @@
           }}
         />
       {/each}
+      {#if hasDiff && project}
+        {@const repoPath = session.worktree_path ?? project.path}
+        {@const baseBranch = session.base_branch ?? "main"}
+        <DiffTab
+          {repoPath}
+          {baseBranch}
+          visible={session.id === activeSessionId && isDiffActive}
+          theme={isDark() ? (getSettings().appearance.diff_theme_dark ?? "vs-dark") : (getSettings().appearance.diff_theme_light ?? "vs")}
+        />
+      {/if}
     {/each}
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
