@@ -1,14 +1,36 @@
 import type { DiffRenderer } from "./diff-renderer";
 import { MergeView, goToNextChunk, goToPreviousChunk } from "@codemirror/merge";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import {
+  EditorView,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+} from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { LanguageDescription } from "@codemirror/language";
+import {
+  LanguageDescription,
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  foldGutter,
+} from "@codemirror/language";
+
+// Minimal, read-only feature set. We intentionally avoid `basicSetup` because it
+// bundles history, autocompletion, search, linting and bracket matching — none of
+// which a read-only diff needs, and all of which add construction cost (×2 editors).
+const readOnlyExtensions = [
+  lineNumbers(),
+  foldGutter(),
+  highlightActiveLine(),
+  highlightActiveLineGutter(),
+  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  EditorState.readOnly.of(true),
+  EditorView.editable.of(false),
+];
 
 const fontCompartment = new Compartment();
-const langCompartment = new Compartment();
 const themeCompartment = new Compartment();
+const langCompartment = new Compartment();
 
 const darkTheme = EditorView.theme(
   {
@@ -76,21 +98,34 @@ export class CmDiffRenderer implements DiffRenderer {
   }
 
   setDiff(original: string, modified: string, language: string): void {
+    const langChanged = language !== this.language;
     this.original = original;
     this.modified = modified;
     this.language = language;
+
+    // Reuse the existing MergeView when possible: swapping the documents via
+    // transactions lets CodeMirror recompute the diff incrementally instead of
+    // tearing down and recreating two editors on every file switch.
+    if (this.mergeView) {
+      const a = this.mergeView.a;
+      const b = this.mergeView.b;
+      a.dispatch({ changes: { from: 0, to: a.state.doc.length, insert: original } });
+      b.dispatch({ changes: { from: 0, to: b.state.doc.length, insert: modified } });
+      if (langChanged) this.applyLanguage();
+      return;
+    }
+
     this.rebuild();
   }
 
   setTheme(theme: string): void {
+    if (theme === this.currentTheme && this.mergeView) return;
     this.currentTheme = theme;
+    // Theme is a compartment, so swap it without rebuilding the view.
     if (this.mergeView) {
-      const dark = isDarkTheme(theme);
-      const ext = dark ? darkTheme : lightTheme;
+      const ext = isDarkTheme(theme) ? darkTheme : lightTheme;
       this.mergeView.a.dispatch({ effects: themeCompartment.reconfigure(ext) });
       this.mergeView.b.dispatch({ effects: themeCompartment.reconfigure(ext) });
-    } else {
-      this.rebuild();
     }
   }
 
@@ -127,34 +162,37 @@ export class CmDiffRenderer implements DiffRenderer {
     this.container = null;
   }
 
+  private applyLanguage() {
+    const langDesc = findLanguage(this.language);
+    if (!langDesc) {
+      if (this.mergeView) {
+        this.mergeView.a.dispatch({ effects: langCompartment.reconfigure([]) });
+        this.mergeView.b.dispatch({ effects: langCompartment.reconfigure([]) });
+      }
+      return;
+    }
+    const targetLanguage = this.language;
+    langDesc.load().then((support) => {
+      // Guard against a newer file having been selected while loading.
+      if (!this.mergeView || this.language !== targetLanguage) return;
+      this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+      this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+    });
+  }
+
   private rebuild() {
     if (!this.container) return;
     this.mergeView?.destroy();
     this.container.innerHTML = "";
 
-    const dark = isDarkTheme(this.currentTheme);
-    const themeExt = dark ? darkTheme : lightTheme;
-    const font = fontCompartment.of(fontExtension(this.fontFamily, this.fontSize));
+    const themeExt = isDarkTheme(this.currentTheme) ? darkTheme : lightTheme;
 
     const sharedExtensions = [
-      lineNumbers(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      EditorState.readOnly.of(true),
-      EditorView.editable.of(false),
-      EditorView.lineWrapping,
+      readOnlyExtensions,
       themeCompartment.of(themeExt),
-      font,
+      fontCompartment.of(fontExtension(this.fontFamily, this.fontSize)),
       langCompartment.of([]),
     ];
-
-    const langDesc = findLanguage(this.language);
-    if (langDesc) {
-      langDesc.load().then((support) => {
-        if (!this.mergeView) return;
-        this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
-        this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
-      });
-    }
 
     this.mergeView = new MergeView({
       a: { doc: this.original, extensions: sharedExtensions },
@@ -167,5 +205,7 @@ export class CmDiffRenderer implements DiffRenderer {
 
     this.mergeView.dom.style.height = "100%";
     this.mergeView.dom.style.overflow = "auto";
+
+    this.applyLanguage();
   }
 }

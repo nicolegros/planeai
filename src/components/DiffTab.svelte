@@ -35,8 +35,13 @@
   let renderer: DiffRenderer | null = null;
   let editorContainer: HTMLElement;
 
+  // Cache file diffs so re-selecting a file is instant (avoids the IPC + `git show`
+  // roundtrip). Cleared on refresh since the working tree may have changed.
+  let diffCache = new Map<string, FileDiff>();
+
   async function refresh() {
     loading = true;
+    diffCache.clear();
     try {
       files = await invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch });
       if (files.length > 0 && selectedIndex >= files.length) {
@@ -54,8 +59,14 @@
 
   async function loadFileDiff(file: ChangedFile) {
     if (!renderer) return;
+    const cached = diffCache.get(file.path);
+    if (cached) {
+      renderer.setDiff(cached.original, cached.modified, cached.language);
+      return;
+    }
     try {
       const diff = await invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath: file.path });
+      diffCache.set(file.path, diff);
       renderer.setDiff(diff.original, diff.modified, diff.language);
     } catch (e) {
       console.error("Failed to get file diff:", e);
