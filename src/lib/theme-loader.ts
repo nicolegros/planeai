@@ -71,6 +71,8 @@ export const DEFAULT_THEME_CSS = `:root {
   --editor-line-number: #6e7781;
   --editor-added: #116329;
   --editor-deleted: #cf222e;
+  --editor-added-bg: #d4f8db;
+  --editor-deleted-bg: #fdd8d8;
 }
 .dark {
   --color-surface-50: hsl(0 0% 95%);
@@ -121,6 +123,8 @@ export const DEFAULT_THEME_CSS = `:root {
   --editor-line-number: #6e7681;
   --editor-added: #3fb950;
   --editor-deleted: #ff7b72;
+  --editor-added-bg: #1a3d2a;
+  --editor-deleted-bg: #3d1a1a;
 }`;
 
 export function injectTheme(css: string): void {

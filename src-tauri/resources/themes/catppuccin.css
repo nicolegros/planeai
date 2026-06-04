@@ -74,6 +74,8 @@
   --editor-line-number: #8c8fa1;
   --editor-added: #40a02b;
   --editor-deleted: #d20f39;
+  --editor-added-bg: #d4f8db;
+  --editor-deleted-bg: #fdd8d8;
 }
 
 .dark {
@@ -116,4 +118,6 @@
   --editor-line-number: #6c7086;
   --editor-added: #a6e3a1;
   --editor-deleted: #f38ba8;
+  --editor-added-bg: #1a3d2a;
+  --editor-deleted-bg: #3d1a1a;
 }
