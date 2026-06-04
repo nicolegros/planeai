@@ -222,8 +222,7 @@
   onMount(() => {
     loadProjects();
     loadSessions();
-    loadSettings();
-    loadTheme();
+    loadSettings().then(() => loadTheme());
 
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {
