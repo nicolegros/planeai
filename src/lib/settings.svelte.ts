@@ -87,6 +87,13 @@ if (typeof window !== "undefined") {
 function applyDarkClass() {
   const dark = isDark();
   document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  // Force scrollbar repaint in WebView
+  document.querySelectorAll("[class*='overflow-y']").forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    htmlEl.style.overflow = "hidden";
+    requestAnimationFrame(() => { htmlEl.style.overflow = ""; });
+  });
 }
 
 /** Reactive — reads $state vars so Svelte tracks it in $effect/$derived */
