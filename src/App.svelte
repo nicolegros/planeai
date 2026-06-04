@@ -74,11 +74,6 @@
   let diffTabOpen = $state<Record<string, boolean>>({});
   let diffTabActive = $state<Record<string, boolean>>({});
 
-  const terminalBg = $derived.by(() => {
-    isDark(); // track dark mode reactivity
-    return extractTerminalTheme().background || "var(--color-surface-950)";
-  });
-
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
@@ -474,7 +469,7 @@
     />
   {/if}
 
-  <section class="flex-1 relative p-4 pr-0" style="background-color: {terminalBg}">
+  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950">
     {#if showPreferences}
       <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
     {:else}
