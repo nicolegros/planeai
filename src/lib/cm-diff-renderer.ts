@@ -98,23 +98,12 @@ export class CmDiffRenderer implements DiffRenderer {
   }
 
   setDiff(original: string, modified: string, language: string): void {
-    const langChanged = language !== this.language;
     this.original = original;
     this.modified = modified;
     this.language = language;
-
-    // Reuse the existing MergeView when possible: swapping the documents via
-    // transactions lets CodeMirror recompute the diff incrementally instead of
-    // tearing down and recreating two editors on every file switch.
-    if (this.mergeView) {
-      const a = this.mergeView.a;
-      const b = this.mergeView.b;
-      a.dispatch({ changes: { from: 0, to: a.state.doc.length, insert: original } });
-      b.dispatch({ changes: { from: 0, to: b.state.doc.length, insert: modified } });
-      if (langChanged) this.applyLanguage();
-      return;
-    }
-
+    // Always rebuild: dispatching to a and b sequentially causes an intermediate
+    // state where chunks are computed against mismatched documents, breaking
+    // collapseUnchanged decorations that don't recover after the second dispatch.
     this.rebuild();
   }
 

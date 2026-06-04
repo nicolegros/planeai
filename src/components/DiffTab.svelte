@@ -10,6 +10,7 @@
     status: string;
     additions: number;
     deletions: number;
+    old_path: string | null;
   }
 
   interface FileDiff {
@@ -65,7 +66,7 @@
       return;
     }
     try {
-      const diff = await invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath: file.path });
+      const diff = await invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath: file.path, oldPath: file.old_path });
       diffCache.set(file.path, diff);
       renderer.setDiff(diff.original, diff.modified, diff.language);
     } catch (e) {
@@ -110,14 +111,14 @@
       e.preventDefault();
       const mv = (renderer as any)?.mergeView;
       if (mv) {
-        const el = mv.b.scrollDOM;
+        const el = mv.dom;
         el.scrollTop += el.clientHeight / 2;
       }
     } else if (e.key === "u" && e.ctrlKey) {
       e.preventDefault();
       const mv = (renderer as any)?.mergeView;
       if (mv) {
-        const el = mv.b.scrollDOM;
+        const el = mv.dom;
         el.scrollTop -= el.clientHeight / 2;
       }
     // Other

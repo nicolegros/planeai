@@ -429,8 +429,9 @@ fn get_file_diff(
     repo_path: String,
     base_branch: String,
     file_path: String,
+    old_path: Option<String>,
 ) -> Result<git::FileDiff, String> {
-    git::get_file_diff(&repo_path, &base_branch, &file_path)
+    git::get_file_diff(&repo_path, &base_branch, &file_path, old_path.as_deref())
 }
 
 #[tauri::command]
