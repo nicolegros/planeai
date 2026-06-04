@@ -12,6 +12,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { getThemeById } from "../lib/terminal-themes";
+  import { extractTerminalTheme } from "../lib/theme-loader";
 
   interface Props {
     sessionId: string;
@@ -42,23 +43,18 @@
   }
 
   const termBg = $derived(
-    getThemeById(
-      isDark()
-        ? getSettings().appearance.terminal_theme_dark
-        : getSettings().appearance.terminal_theme_light
-    ).colors.background
+    extractTerminalTheme().background || "#000"
   );
 
   onMount(() => {
     const s = getSettings();
-    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
-    const theme = getThemeById(themeId);
+    const themeColors = extractTerminalTheme();
 
     term = new Terminal({
       cursorBlink: true,
       fontSize: s.terminal.font_size,
       fontFamily: terminalFontStack(s.terminal.font_family),
-      theme: theme.colors,
+      theme: themeColors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
       scrollOnUserInput: false,
@@ -323,9 +319,8 @@
   $effect(() => {
     if (!term) return;
     const s = getSettings();
-    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
-    const theme = getThemeById(themeId);
-    term.options.theme = theme.colors;
+    isDark(); // track reactivity on dark mode change
+    term.options.theme = extractTerminalTheme();
     term.options.fontSize = s.terminal.font_size;
     term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;

@@ -155,8 +155,8 @@
 
   function statusColor(status: string): string {
     switch (status) {
-      case "A": return "text-green-500";
-      case "D": return "text-red-500";
+      case "A": return "text-green-600 dark:text-green-300";
+      case "D": return "text-red-600 dark:text-red-300";
       case "M": return "text-yellow-500";
       case "R": return "text-blue-500";
       default: return "text-surface-400";
@@ -194,15 +194,15 @@
         <li
           role="option"
           aria-selected={i === selectedIndex}
-          class="px-2 py-1 cursor-pointer flex items-center gap-1 text-xs hover:bg-surface-100 dark:hover:bg-surface-800 {i === selectedIndex ? 'bg-surface-200 dark:bg-surface-700' : ''}"
+          class="px-2 py-1 cursor-pointer flex items-center gap-1 text-xs text-surface-700 dark:text-surface-200 hover:bg-surface-100 dark:hover:bg-surface-800 {i === selectedIndex ? 'bg-surface-200 dark:bg-surface-700' : ''}"
           onclick={() => selectFile(i)}
         >
           <span class="font-mono w-4 shrink-0 {statusColor(file.status)}">{file.status}</span>
           <span class="truncate flex-1" title={file.path}>
             <span class="text-surface-400">{dirName(file.path)}</span>{fileName(file.path)}
           </span>
-          <span class="text-green-600 text-[10px]">+{file.additions}</span>
-          <span class="text-red-600 text-[10px]">-{file.deletions}</span>
+          <span class="text-green-600 dark:text-green-300 text-[10px]">+{file.additions}</span>
+          <span class="text-red-600 dark:text-red-300 text-[10px]">-{file.deletions}</span>
         </li>
       {/each}
     </ul>

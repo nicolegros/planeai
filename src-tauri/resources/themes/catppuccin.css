@@ -1,0 +1,145 @@
+/* Catppuccin (Latte / Macchiato) */
+
+:root {
+  /* Surface — Latte palette */
+  --color-surface-50: #eff1f5; /* Base */
+  --color-surface-100: #e6e9ef; /* Mantle */
+  --color-surface-200: #dce0e8; /* Crust */
+  --color-surface-300: #ccd0da; /* Surface 0 */
+  --color-surface-400: #bcc0cc; /* Surface 1 */
+  --color-surface-500: #acb0be; /* Surface 2 */
+  --color-surface-600: #9ca0b0; /* Overlay 0 */
+  --color-surface-700: #7c7f93; /* Overlay 2 */
+  --color-surface-800: #5c5f77; /* Subtext 1 */
+  --color-surface-900: #4c4f69; /* Text */
+  --color-surface-950: #4c4f69; /* Text */
+
+  /* Primary — Blue */
+  --color-primary-50: #eff1f5;
+  --color-primary-100: #dce0e8;
+  --color-primary-200: #bcc0cc;
+  --color-primary-300: #8c8fa1;
+  --color-primary-400: #7287fd; /* Lavender */
+  --color-primary-500: #1e66f5; /* Blue */
+  --color-primary-600: #1e66f5;
+  --color-primary-700: #1e66f5;
+  --color-primary-800: #1e66f5;
+  --color-primary-900: #1e66f5;
+  --color-primary-950: #1e66f5;
+
+  /* Error — Red */
+  --color-error-50: #eff1f5;
+  --color-error-100: #e6e9ef;
+  --color-error-200: #e64553; /* Maroon */
+  --color-error-300: #d20f39; /* Red */
+  --color-error-400: #d20f39;
+  --color-error-500: #d20f39;
+  --color-error-600: #d20f39;
+  --color-error-700: #d20f39;
+  --color-error-800: #d20f39;
+  --color-error-900: #d20f39;
+  --color-error-950: #d20f39;
+
+  /* Warning — Yellow */
+  --color-warning-50: #eff1f5;
+  --color-warning-100: #e6e9ef;
+  --color-warning-200: #df8e1d;
+  --color-warning-300: #df8e1d;
+  --color-warning-400: #df8e1d;
+  --color-warning-500: #df8e1d;
+
+  --radius-base: 0.5rem;
+  --radius-container: 1rem;
+
+  /* Terminal — Latte */
+  --terminal-background: #eff1f5;
+  --terminal-foreground: #4c4f69;
+  --terminal-cursor: #dc8a78;
+  --terminal-selection: #ccd0da;
+  --terminal-black: #5c5f77;
+  --terminal-red: #d20f39;
+  --terminal-green: #40a02b;
+  --terminal-yellow: #df8e1d;
+  --terminal-blue: #1e66f5;
+  --terminal-magenta: #8839ef;
+  --terminal-cyan: #179299;
+  --terminal-white: #acb0be;
+  --terminal-bright-black: #6c6f85;
+  --terminal-bright-red: #d20f39;
+  --terminal-bright-green: #40a02b;
+  --terminal-bright-yellow: #df8e1d;
+  --terminal-bright-blue: #1e66f5;
+  --terminal-bright-magenta: #8839ef;
+  --terminal-bright-cyan: #179299;
+  --terminal-bright-white: #bcc0cc;
+
+  /* Editor — Latte */
+  --editor-background: #eff1f5;
+  --editor-foreground: #4c4f69;
+  --editor-selection: #ccd0da;
+  --editor-line-number: #8c8fa1;
+  --editor-added: #40a02b;
+  --editor-deleted: #d20f39;
+  --editor-added-bg: #d2f0cd;
+  --editor-deleted-bg: #f5d0d6;
+}
+
+.dark {
+  /* Surface — Macchiato palette */
+  --color-surface-50: #cad3f5; /* Text */
+  --color-surface-100: #b8c0e0; /* Subtext 1 */
+  --color-surface-200: #a5adcb; /* Subtext 0 */
+  --color-surface-300: #939ab7; /* Overlay 2 */
+  --color-surface-400: #6e738d; /* Overlay 0 */
+  --color-surface-500: #5b6078; /* Surface 2 */
+  --color-surface-600: #494d64; /* Surface 1 */
+  --color-surface-700: #363a4f; /* Surface 0 */
+  --color-surface-800: #1e2030; /* Mantle */
+  --color-surface-900: #24273a; /* Base */
+  --color-surface-950: #181926; /* Crust */
+
+  /* Primary — Blue (Macchiato) */
+  --color-primary-50: #181926;
+  --color-primary-100: #24273a;
+  --color-primary-200: #494d64;
+  --color-primary-300: #8087a2;
+  --color-primary-400: #b7bdf8; /* Lavender */
+  --color-primary-500: #8aadf4; /* Blue */
+  --color-primary-600: #8aadf4;
+  --color-primary-700: #8aadf4;
+  --color-primary-800: #8aadf4;
+  --color-primary-900: #8aadf4;
+  --color-primary-950: #8aadf4;
+
+  /* Terminal — Macchiato */
+  --terminal-background: #24273a;
+  --terminal-foreground: #cad3f5;
+  --terminal-cursor: #f4dbd6;
+  --terminal-selection: #363a4f;
+  --terminal-black: #494d64;
+  --terminal-red: #ed8796;
+  --terminal-green: #a6da95;
+  --terminal-yellow: #eed49f;
+  --terminal-blue: #8aadf4;
+  --terminal-magenta: #c6a0f6;
+  --terminal-cyan: #8bd5ca;
+  --terminal-white: #b8c0e0;
+  --terminal-bright-black: #5b6078;
+  --terminal-bright-red: #ed8796;
+  --terminal-bright-green: #a6da95;
+  --terminal-bright-yellow: #eed49f;
+  --terminal-bright-blue: #8aadf4;
+  --terminal-bright-magenta: #c6a0f6;
+  --terminal-bright-cyan: #8bd5ca;
+  --terminal-bright-white: #a5adcb;
+
+  /* Editor — Macchiato */
+  --editor-background: #24273a;
+  --editor-foreground: #cad3f5;
+  --editor-selection: #363a4f;
+  --editor-line-number: #6e738d;
+  --editor-added: #a6da95;
+  --editor-deleted: #ed8796;
+  --editor-added-bg: #2a3f2a;
+  --editor-deleted-bg: #3f2a2e;
+}

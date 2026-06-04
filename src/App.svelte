@@ -8,6 +8,7 @@
   import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
@@ -74,12 +75,6 @@
   // Diff tab state: set of session IDs that have diff tab open
   let diffTabOpen = $state<Record<string, boolean>>({});
   let diffTabActive = $state<Record<string, boolean>>({});
-
-  const terminalBg = $derived.by(() => {
-    const s = getSettings();
-    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
-    return getThemeById(themeId).colors.background;
-  });
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -227,6 +222,7 @@
     loadProjects();
     loadSessions();
     loadSettings();
+    loadTheme();
 
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {
@@ -478,7 +474,7 @@
     />
   {/if}
 
-  <section class="flex-1 relative p-4 pr-0" style="background-color: {terminalBg}">
+  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950">
     {#if showPreferences}
       <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
     {:else}

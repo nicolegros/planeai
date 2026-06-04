@@ -25,6 +25,8 @@ pub struct Appearance {
     pub diff_theme_dark: String,
     #[serde(default = "default_diff_theme_light")]
     pub diff_theme_light: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,6 +47,10 @@ fn default_diff_theme_dark() -> String {
 
 fn default_diff_theme_light() -> String {
     "vs".to_string()
+}
+
+fn default_theme() -> String {
+    "default".to_string()
 }
 
 fn default_font_family() -> &'static str {
@@ -157,6 +163,7 @@ impl Default for Config {
                 terminal_theme_light: "one-light".to_string(),
                 diff_theme_dark: "vs-dark".to_string(),
                 diff_theme_light: "vs".to_string(),
+                theme: "default".to_string(),
             },
             terminal: Terminal {
                 font_family: default_font_family().to_string(),
@@ -369,6 +376,7 @@ mod tests {
                 terminal_theme_light: "one-light".to_string(),
                 diff_theme_dark: "vs-dark".to_string(),
                 diff_theme_light: "vs".to_string(),
+                theme: "default".to_string(),
             },
             terminal: Terminal {
                 font_family: "JetBrains Mono".to_string(),

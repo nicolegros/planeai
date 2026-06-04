@@ -302,6 +302,34 @@ fn update_config(state: State<ConfigState>, new_config: config::Config, app: tau
 }
 
 #[tauri::command]
+fn get_theme_css(state: State<ConfigState>, app: tauri::AppHandle) -> Result<String, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?;
+    let theme_name = &cfg.appearance.theme;
+    let config_dir = config::config_dir(&app.package_info().name);
+    let theme_path = config_dir.join("themes").join(format!("{}.css", theme_name));
+    std::fs::read_to_string(&theme_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let config_dir = config::config_dir(&app.package_info().name);
+    let themes_dir = config_dir.join("themes");
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "css") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
     git::list_branches(&repo_path)
 }
@@ -1038,6 +1066,23 @@ fn main() {
             let (cfg, _warnings) = config::load(&config_dir);
             app.manage(ConfigState(Mutex::new(cfg)));
 
+            // Scaffold themes dir with bundled themes if missing
+            let themes_dir = config_dir.join("themes");
+            let _ = std::fs::create_dir_all(&themes_dir);
+            let bundled_themes: &[(&str, &str)] = &[
+                ("default.css", include_str!("../resources/themes/default.css")),
+                ("github.css", include_str!("../resources/themes/github.css")),
+                ("one.css", include_str!("../resources/themes/one.css")),
+                ("catppuccin.css", include_str!("../resources/themes/catppuccin.css")),
+                ("dracula.css", include_str!("../resources/themes/dracula.css")),
+            ];
+            for (name, content) in bundled_themes {
+                let path = themes_dir.join(name);
+                if !path.exists() {
+                    let _ = std::fs::write(&path, content);
+                }
+            }
+
             app.manage(DbState(Mutex::new(conn)));
 
             // Notification system
@@ -1081,6 +1126,8 @@ fn main() {
             list_monospace_fonts,
             get_config,
             update_config,
+            get_theme_css,
+            list_themes,
             launch_session,
             attach_session,
             write_to_pty,

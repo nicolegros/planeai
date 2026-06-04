@@ -1,0 +1,139 @@
+/* One (Atom One Light / Atom One Dark) */
+
+:root {
+  --color-surface-50: #f9f9f9;
+  --color-surface-100: #f0f0f0;
+  --color-surface-200: #e5e5e6;
+  --color-surface-300: #d4d4d5;
+  --color-surface-400: #a0a1a7;
+  --color-surface-500: #696c77;
+  --color-surface-600: #4f525e;
+  --color-surface-700: #383a42;
+  --color-surface-800: #2a2c33;
+  --color-surface-900: #1f2024;
+  --color-surface-950: #141515;
+
+  --color-primary-50: #f0f4fe;
+  --color-primary-100: #dce6fd;
+  --color-primary-200: #b4c9fb;
+  --color-primary-300: #7ba3f8;
+  --color-primary-400: #4078f2;
+  --color-primary-500: #2f5af3;
+  --color-primary-600: #2848c8;
+  --color-primary-700: #1e369a;
+  --color-primary-800: #162870;
+  --color-primary-900: #0f1b4a;
+  --color-primary-950: #091030;
+
+  --color-error-50: #fef0f0;
+  --color-error-100: #fdd8d8;
+  --color-error-200: #f5a8a8;
+  --color-error-300: #e87070;
+  --color-error-400: #de3e35;
+  --color-error-500: #c62b22;
+  --color-error-600: #a0231c;
+  --color-error-700: #7a1b15;
+  --color-error-800: #54120e;
+  --color-error-900: #330b09;
+  --color-error-950: #1a0504;
+
+  --color-warning-50: #fdf6e8;
+  --color-warning-100: #f5e4bf;
+  --color-warning-200: #e5c88a;
+  --color-warning-300: #d2b67c;
+  --color-warning-400: #c18401;
+  --color-warning-500: #986a01;
+
+  --radius-base: 0.25rem;
+  --radius-container: 0.5rem;
+
+  /* Terminal — Atom One Light (from iTerm2-Color-Schemes) */
+  --terminal-background: #f9f9f9;
+  --terminal-foreground: #2a2c33;
+  --terminal-cursor: #bbbbbb;
+  --terminal-selection: #ededed;
+  --terminal-black: #000000;
+  --terminal-red: #de3e35;
+  --terminal-green: #3f953a;
+  --terminal-yellow: #d2b67c;
+  --terminal-blue: #2f5af3;
+  --terminal-magenta: #950095;
+  --terminal-cyan: #3f953a;
+  --terminal-white: #bbbbbb;
+  --terminal-bright-black: #000000;
+  --terminal-bright-red: #de3e35;
+  --terminal-bright-green: #3f953a;
+  --terminal-bright-yellow: #d2b67c;
+  --terminal-bright-blue: #2f5af3;
+  --terminal-bright-magenta: #a00095;
+  --terminal-bright-cyan: #3f953a;
+  --terminal-bright-white: #ffffff;
+
+  /* Editor */
+  --editor-background: #f9f9f9;
+  --editor-foreground: #2a2c33;
+  --editor-selection: #ededed;
+  --editor-line-number: #a0a1a7;
+  --editor-added: #3f953a;
+  --editor-deleted: #de3e35;
+  --editor-added-bg: #d4f8db;
+  --editor-deleted-bg: #fdd8d8;
+}
+
+.dark {
+  --color-surface-50: #abb2bf;
+  --color-surface-100: #9199a8;
+  --color-surface-200: #767d8a;
+  --color-surface-300: #5c6370;
+  --color-surface-400: #4b5263;
+  --color-surface-500: #3e4451;
+  --color-surface-600: #323844;
+  --color-surface-700: #282c34;
+  --color-surface-800: #21252b;
+  --color-surface-900: #1b1f25;
+  --color-surface-950: #14171c;
+
+  --color-primary-50: #1b1f25;
+  --color-primary-100: #21252b;
+  --color-primary-200: #3e4451;
+  --color-primary-300: #5c6370;
+  --color-primary-400: #98c0f3;
+  --color-primary-500: #61afef;
+  --color-primary-600: #61afef;
+  --color-primary-700: #61afef;
+  --color-primary-800: #61afef;
+  --color-primary-900: #61afef;
+  --color-primary-950: #61afef;
+
+  /* Terminal — Atom One Dark (from iTerm2-Color-Schemes) */
+  --terminal-background: #21252b;
+  --terminal-foreground: #abb2bf;
+  --terminal-cursor: #abb2bf;
+  --terminal-selection: #323844;
+  --terminal-black: #21252b;
+  --terminal-red: #e06c75;
+  --terminal-green: #98c379;
+  --terminal-yellow: #e5c07b;
+  --terminal-blue: #61afef;
+  --terminal-magenta: #c678dd;
+  --terminal-cyan: #56b6c2;
+  --terminal-white: #abb2bf;
+  --terminal-bright-black: #767676;
+  --terminal-bright-red: #e06c75;
+  --terminal-bright-green: #98c379;
+  --terminal-bright-yellow: #e5c07b;
+  --terminal-bright-blue: #61afef;
+  --terminal-bright-magenta: #c678dd;
+  --terminal-bright-cyan: #56b6c2;
+  --terminal-bright-white: #abb2bf;
+
+  /* Editor */
+  --editor-background: #21252b;
+  --editor-foreground: #abb2bf;
+  --editor-selection: #323844;
+  --editor-line-number: #5c6370;
+  --editor-added: #98c379;
+  --editor-deleted: #e06c75;
+  --editor-added-bg: #2a3d2a;
+  --editor-deleted-bg: #3d2a2a;
+}

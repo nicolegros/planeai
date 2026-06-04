@@ -9,13 +9,23 @@ import { LanguageDescription } from '@codemirror/language';
 const fontCompartment = new Compartment();
 
 const darkTheme = EditorView.theme({
-  '&': { backgroundColor: '#1e1e1e' },
-  '.cm-gutters': { backgroundColor: '#1e1e1e', borderRight: '1px solid #333' },
+  '&': { backgroundColor: 'var(--editor-background)' },
+  '.cm-gutters': { backgroundColor: 'var(--editor-background)', color: 'var(--editor-line-number)', borderRight: '1px solid var(--color-surface-300)' },
+  '.cm-content': { color: 'var(--editor-foreground)' },
+  '.cm-activeLine': { backgroundColor: 'var(--editor-selection)' },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--editor-selection)' },
+  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'var(--editor-added-bg)' },
+  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'var(--editor-deleted-bg)' },
 }, { dark: true });
 
 const lightTheme = EditorView.theme({
-  '&': { backgroundColor: '#ffffff' },
-  '.cm-gutters': { backgroundColor: '#ffffff' },
+  '&': { backgroundColor: 'var(--editor-background)' },
+  '.cm-gutters': { backgroundColor: 'var(--editor-background)', color: 'var(--editor-line-number)', borderRight: '1px solid var(--color-surface-300)' },
+  '.cm-content': { color: 'var(--editor-foreground)' },
+  '.cm-activeLine': { backgroundColor: 'var(--editor-selection)' },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--editor-selection)' },
+  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'var(--editor-added-bg)' },
+  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'var(--editor-deleted-bg)' },
 });
 
 function fontExtension(family: string, size: number) {
