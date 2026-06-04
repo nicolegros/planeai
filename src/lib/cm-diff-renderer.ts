@@ -45,8 +45,40 @@ const darkTheme = EditorView.theme(
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
       backgroundColor: "var(--editor-selection)",
     },
-    ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
-    ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
+    // Terax-style diff: subtle line bg + vivid inline text + gutter accent
+    ".cm-changedLine.cm-insertedLine": {
+      backgroundColor: "rgba(110, 200, 120, 0.05) !important",
+    },
+    ".cm-changedLine.cm-deletedLine": {
+      backgroundColor: "rgba(220, 90, 90, 0.05) !important",
+    },
+    ".cm-changedText": {
+      background: "rgba(110, 200, 120, 0.20) !important",
+      borderRadius: "3px",
+      padding: "0 1px",
+    },
+    "&.cm-merge-a .cm-changedText": {
+      background: "rgba(220, 90, 90, 0.22) !important",
+      borderRadius: "3px",
+      padding: "0 1px",
+    },
+    "&.cm-merge-b .cm-changedLineGutter, .cm-changedLineGutter.cm-insertedLineGutter": {
+      background: "rgba(110, 200, 120, 0.55) !important",
+    },
+    "&.cm-merge-a .cm-changedLineGutter, .cm-changedLineGutter.cm-deletedLineGutter": {
+      background: "rgba(220, 90, 90, 0.50) !important",
+    },
+    ".cm-changeGutter": {
+      width: "2px !important",
+      paddingLeft: "0 !important",
+    },
+    ".cm-collapsedLines": {
+      backgroundColor: "transparent",
+      color: "var(--color-surface-400, #9ca3af)",
+      fontSize: "10.5px",
+      padding: "2px 8px",
+      opacity: "0.7",
+    },
   },
   { dark: true },
 );
@@ -63,8 +95,39 @@ const lightTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
     backgroundColor: "var(--editor-selection)",
   },
-  ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
-  ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
+  ".cm-changedLine.cm-insertedLine": {
+    backgroundColor: "rgba(80, 160, 90, 0.08) !important",
+  },
+  ".cm-changedLine.cm-deletedLine": {
+    backgroundColor: "rgba(200, 60, 60, 0.08) !important",
+  },
+  ".cm-changedText": {
+    background: "rgba(80, 160, 90, 0.22) !important",
+    borderRadius: "3px",
+    padding: "0 1px",
+  },
+  "&.cm-merge-a .cm-changedText": {
+    background: "rgba(200, 60, 60, 0.25) !important",
+    borderRadius: "3px",
+    padding: "0 1px",
+  },
+  "&.cm-merge-b .cm-changedLineGutter, .cm-changedLineGutter.cm-insertedLineGutter": {
+    background: "rgba(80, 160, 90, 0.55) !important",
+  },
+  "&.cm-merge-a .cm-changedLineGutter, .cm-changedLineGutter.cm-deletedLineGutter": {
+    background: "rgba(200, 60, 60, 0.50) !important",
+  },
+  ".cm-changeGutter": {
+    width: "2px !important",
+    paddingLeft: "0 !important",
+  },
+  ".cm-collapsedLines": {
+    backgroundColor: "transparent",
+    color: "var(--color-surface-500, #6b7280)",
+    fontSize: "10.5px",
+    padding: "2px 8px",
+    opacity: "0.7",
+  },
 });
 
 function fontExtension(family: string, size: number) {
