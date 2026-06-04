@@ -1,129 +1,129 @@
-/* planeai default theme — pure neutral */
+/* planeai default theme — matches bits-ui documentation style */
 
 :root {
-  /* Surface — pure neutral (no tint) */
-  --color-surface-50: oklch(98% 0 0);
-  --color-surface-100: oklch(95% 0 0);
-  --color-surface-200: oklch(90% 0 0);
-  --color-surface-300: oklch(84% 0 0);
-  --color-surface-400: oklch(72% 0 0);
-  --color-surface-500: oklch(60% 0 0);
-  --color-surface-600: oklch(50% 0 0);
-  --color-surface-700: oklch(40% 0 0);
-  --color-surface-800: oklch(30% 0 0);
-  --color-surface-900: oklch(20% 0 0);
-  --color-surface-950: oklch(13% 0 0);
+  /* Surface — near-pure neutral with hint of blue on mids */
+  --color-surface-50: hsl(0 0% 100%);
+  --color-surface-100: hsl(240 5% 96%);
+  --color-surface-200: hsl(240 5% 92%);
+  --color-surface-300: hsl(240 4% 85%);
+  --color-surface-400: hsl(240 4% 70%);
+  --color-surface-500: hsl(240 3% 55%);
+  --color-surface-600: hsl(240 3% 42%);
+  --color-surface-700: hsl(240 4% 32%);
+  --color-surface-800: hsl(240 5% 20%);
+  --color-surface-900: hsl(240 6% 10%);
+  --color-surface-950: hsl(0 0% 5%);
 
-  /* Primary — blue accent */
-  --color-primary-50: oklch(95% 0.05 258);
-  --color-primary-100: oklch(88% 0.08 258);
-  --color-primary-200: oklch(80% 0.12 258);
-  --color-primary-300: oklch(72% 0.15 258);
-  --color-primary-400: oklch(64% 0.18 258);
-  --color-primary-500: oklch(56% 0.21 258);
-  --color-primary-600: oklch(48% 0.19 258);
-  --color-primary-700: oklch(40% 0.16 258);
-  --color-primary-800: oklch(32% 0.13 258);
-  --color-primary-900: oklch(25% 0.10 258);
-  --color-primary-950: oklch(18% 0.07 258);
+  /* Primary — blue accent (bits-ui uses 204° hue) */
+  --color-primary-50: hsl(204 94% 94%);
+  --color-primary-100: hsl(204 90% 86%);
+  --color-primary-200: hsl(204 85% 75%);
+  --color-primary-300: hsl(204 80% 63%);
+  --color-primary-400: hsl(204 75% 52%);
+  --color-primary-500: hsl(204 70% 42%);
+  --color-primary-600: hsl(204 70% 34%);
+  --color-primary-700: hsl(204 70% 26%);
+  --color-primary-800: hsl(204 70% 20%);
+  --color-primary-900: hsl(204 80% 16%);
+  --color-primary-950: hsl(204 85% 10%);
 
-  /* Error — red */
-  --color-error-50: oklch(95% 0.03 25);
-  --color-error-100: oklch(88% 0.06 25);
-  --color-error-200: oklch(80% 0.10 25);
-  --color-error-300: oklch(72% 0.14 25);
-  --color-error-400: oklch(64% 0.18 25);
-  --color-error-500: oklch(56% 0.22 25);
-  --color-error-600: oklch(48% 0.20 25);
-  --color-error-700: oklch(40% 0.17 25);
-  --color-error-800: oklch(33% 0.14 25);
-  --color-error-900: oklch(26% 0.11 25);
-  --color-error-950: oklch(19% 0.08 25);
+  /* Error — red-pink (bits-ui destructive) */
+  --color-error-50: hsl(347 77% 95%);
+  --color-error-100: hsl(347 77% 88%);
+  --color-error-200: hsl(347 77% 78%);
+  --color-error-300: hsl(347 77% 68%);
+  --color-error-400: hsl(347 77% 58%);
+  --color-error-500: hsl(347 77% 50%);
+  --color-error-600: hsl(347 77% 42%);
+  --color-error-700: hsl(347 70% 35%);
+  --color-error-800: hsl(347 65% 28%);
+  --color-error-900: hsl(347 60% 22%);
+  --color-error-950: hsl(347 55% 15%);
 
-  /* Warning — amber */
-  --color-warning-50: oklch(95% 0.04 85);
-  --color-warning-100: oklch(88% 0.07 85);
-  --color-warning-200: oklch(80% 0.11 80);
-  --color-warning-300: oklch(72% 0.14 75);
-  --color-warning-400: oklch(64% 0.14 70);
-  --color-warning-500: oklch(56% 0.13 65);
+  /* Warning — amber/gold (bits-ui tertiary) */
+  --color-warning-50: hsl(38 92% 95%);
+  --color-warning-100: hsl(38 92% 85%);
+  --color-warning-200: hsl(38 92% 72%);
+  --color-warning-300: hsl(38 92% 60%);
+  --color-warning-400: hsl(38 92% 50%);
+  --color-warning-500: hsl(38 80% 42%);
 
   /* Radii */
   --radius-base: 0.375rem;
   --radius-container: 0.75rem;
 
-  /* Terminal — light mode uses a light terminal */
-  --terminal-background: #fafafa;
-  --terminal-foreground: #383a42;
-  --terminal-cursor: #526fff;
-  --terminal-selection: #e5e6e7;
-  --terminal-black: #383a42;
-  --terminal-red: #e45649;
-  --terminal-green: #50a14f;
-  --terminal-yellow: #c18401;
-  --terminal-blue: #4078f2;
-  --terminal-magenta: #a626a4;
-  --terminal-cyan: #0184bc;
-  --terminal-white: #a0a1a7;
-  --terminal-bright-black: #4f525e;
-  --terminal-bright-red: #e06c75;
-  --terminal-bright-green: #98c379;
-  --terminal-bright-yellow: #e5c07b;
-  --terminal-bright-blue: #61afef;
-  --terminal-bright-magenta: #c678dd;
-  --terminal-bright-cyan: #56b6c2;
-  --terminal-bright-white: #ffffff;
+  /* Terminal — light */
+  --terminal-background: #ffffff;
+  --terminal-foreground: #171717;
+  --terminal-cursor: #0969da;
+  --terminal-selection: #dbe9f9;
+  --terminal-black: #24292f;
+  --terminal-red: #cf222e;
+  --terminal-green: #116329;
+  --terminal-yellow: #4d2d00;
+  --terminal-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-cyan: #1b7c83;
+  --terminal-white: #6e7781;
+  --terminal-bright-black: #57606a;
+  --terminal-bright-red: #a40e26;
+  --terminal-bright-green: #1a7f37;
+  --terminal-bright-yellow: #633c01;
+  --terminal-bright-blue: #0969da;
+  --terminal-bright-magenta: #6639ba;
+  --terminal-bright-cyan: #3192aa;
+  --terminal-bright-white: #8c959f;
 
   /* Editor */
   --editor-background: #ffffff;
-  --editor-foreground: #383a42;
-  --editor-selection: #e5e6e7;
-  --editor-line-number: #9d9d9f;
-  --editor-added: #50a14f;
-  --editor-deleted: #e45649;
+  --editor-foreground: #171717;
+  --editor-selection: #dbe9f9;
+  --editor-line-number: #6e7781;
+  --editor-added: #116329;
+  --editor-deleted: #cf222e;
 }
 
 .dark {
-  /* Surface — inverted scale for dark mode */
-  --color-surface-50: oklch(22% 0 0);
-  --color-surface-100: oklch(24% 0 0);
-  --color-surface-200: oklch(28% 0 0);
-  --color-surface-300: oklch(33% 0 0);
-  --color-surface-400: oklch(40% 0 0);
-  --color-surface-500: oklch(50% 0 0);
-  --color-surface-600: oklch(60% 0 0);
-  --color-surface-700: oklch(72% 0 0);
-  --color-surface-800: oklch(84% 0 0);
-  --color-surface-900: oklch(92% 0 0);
-  --color-surface-950: oklch(96% 0 0);
+  /* Surface — inverted, near-black base */
+  --color-surface-50: hsl(0 0% 5%);
+  --color-surface-100: hsl(0 0% 8%);
+  --color-surface-200: hsl(240 4% 12%);
+  --color-surface-300: hsl(240 4% 16%);
+  --color-surface-400: hsl(240 3% 25%);
+  --color-surface-500: hsl(240 3% 40%);
+  --color-surface-600: hsl(240 3% 55%);
+  --color-surface-700: hsl(0 0% 70%);
+  --color-surface-800: hsl(0 0% 82%);
+  --color-surface-900: hsl(0 0% 92%);
+  --color-surface-950: hsl(0 0% 95%);
 
-  /* Terminal — dark mode */
-  --terminal-background: #1e1e2e;
-  --terminal-foreground: #cdd6f4;
-  --terminal-cursor: #f5e0dc;
-  --terminal-selection: #45475a;
-  --terminal-black: #45475a;
-  --terminal-red: #f38ba8;
-  --terminal-green: #a6e3a1;
-  --terminal-yellow: #f9e2af;
-  --terminal-blue: #89b4fa;
-  --terminal-magenta: #f5c2e7;
-  --terminal-cyan: #94e2d5;
-  --terminal-white: #bac2de;
-  --terminal-bright-black: #585b70;
-  --terminal-bright-red: #f38ba8;
-  --terminal-bright-green: #a6e3a1;
-  --terminal-bright-yellow: #f9e2af;
-  --terminal-bright-blue: #89b4fa;
-  --terminal-bright-magenta: #f5c2e7;
-  --terminal-bright-cyan: #94e2d5;
-  --terminal-bright-white: #a6adc8;
+  /* Terminal — dark */
+  --terminal-background: #0d0d0d;
+  --terminal-foreground: #f2f2f2;
+  --terminal-cursor: #58a6ff;
+  --terminal-selection: #264f78;
+  --terminal-black: #484f58;
+  --terminal-red: #ff7b72;
+  --terminal-green: #3fb950;
+  --terminal-yellow: #d29922;
+  --terminal-blue: #58a6ff;
+  --terminal-magenta: #bc8cff;
+  --terminal-cyan: #39c5cf;
+  --terminal-white: #b1bac4;
+  --terminal-bright-black: #6e7681;
+  --terminal-bright-red: #ffa198;
+  --terminal-bright-green: #56d364;
+  --terminal-bright-yellow: #e3b341;
+  --terminal-bright-blue: #79c0ff;
+  --terminal-bright-magenta: #d2a8ff;
+  --terminal-bright-cyan: #56d4dd;
+  --terminal-bright-white: #f0f6fc;
 
-  /* Editor — dark mode */
-  --editor-background: #1e1e2e;
-  --editor-foreground: #cdd6f4;
-  --editor-selection: #45475a;
-  --editor-line-number: #6c7086;
-  --editor-added: #a6e3a1;
-  --editor-deleted: #f38ba8;
+  /* Editor — dark */
+  --editor-background: #0d0d0d;
+  --editor-foreground: #f2f2f2;
+  --editor-selection: #264f78;
+  --editor-line-number: #6e7681;
+  --editor-added: #3fb950;
+  --editor-deleted: #ff7b72;
 }
