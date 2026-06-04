@@ -1,13 +1,14 @@
 import type { DiffRenderer } from "./diff-renderer";
 import { MergeView, goToNextChunk, goToPreviousChunk } from "@codemirror/merge";
-import { EditorView } from "@codemirror/view";
+import { EditorView, lineNumbers } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
-import { basicSetup } from "codemirror";
+import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { LanguageDescription } from "@codemirror/language";
 
 const fontCompartment = new Compartment();
 const langCompartment = new Compartment();
+const themeCompartment = new Compartment();
 
 const darkTheme = EditorView.theme(
   {
@@ -83,7 +84,14 @@ export class CmDiffRenderer implements DiffRenderer {
 
   setTheme(theme: string): void {
     this.currentTheme = theme;
-    this.rebuild();
+    if (this.mergeView) {
+      const dark = isDarkTheme(theme);
+      const ext = dark ? darkTheme : lightTheme;
+      this.mergeView.a.dispatch({ effects: themeCompartment.reconfigure(ext) });
+      this.mergeView.b.dispatch({ effects: themeCompartment.reconfigure(ext) });
+    } else {
+      this.rebuild();
+    }
   }
 
   setFont(family: string, size: number): void {
@@ -129,10 +137,12 @@ export class CmDiffRenderer implements DiffRenderer {
     const font = fontCompartment.of(fontExtension(this.fontFamily, this.fontSize));
 
     const sharedExtensions = [
-      basicSetup,
+      lineNumbers(),
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
-      themeExt,
+      EditorView.lineWrapping,
+      themeCompartment.of(themeExt),
       font,
       langCompartment.of([]),
     ];

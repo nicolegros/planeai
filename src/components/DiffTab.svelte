@@ -139,8 +139,6 @@
       renderer.mount(editorContainer);
       renderer.setTheme(theme);
       refresh();
-    } else if (visible && mounted) {
-      refresh();
     }
   });
 
