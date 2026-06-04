@@ -7,6 +7,7 @@ import { languages } from '@codemirror/language-data';
 import { LanguageDescription } from '@codemirror/language';
 
 const fontCompartment = new Compartment();
+const langCompartment = new Compartment();
 
 const darkTheme = EditorView.theme({
   '&': { backgroundColor: 'var(--editor-background)' },
@@ -39,7 +40,7 @@ function isDarkTheme(theme: string): boolean {
   return theme.includes('dark') || theme.includes('black');
 }
 
-function findLanguage(lang: string): LanguageDescription | undefined {
+function findLanguage(lang: string): LanguageDescription | null {
   return LanguageDescription.matchLanguageName(languages, lang, true);
 }
 
@@ -118,14 +119,15 @@ export class CmDiffRenderer implements DiffRenderer {
       EditorView.editable.of(false),
       themeExt,
       font,
+      langCompartment.of([]),
     ];
 
     const langDesc = findLanguage(this.language);
     if (langDesc) {
       langDesc.load().then(support => {
         if (!this.mergeView) return;
-        this.mergeView.a.dispatch({ effects: EditorState.appendConfig.of(support.extension) });
-        this.mergeView.b.dispatch({ effects: EditorState.appendConfig.of(support.extension) });
+        this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+        this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
       });
     }
 
