@@ -509,7 +509,7 @@
 
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
+        <Dialog.Overlay class="fixed inset-0 z-40" />
         <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 shadow-lg dark:border-surface-700 dark:bg-surface-900">
           <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
           <SessionForm
@@ -681,7 +681,7 @@
     {#if sessionToDelete}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
@@ -702,7 +702,7 @@
       {@const worktreeCount = projSessions.filter((s) => s.worktree_path).length}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) projectToDelete = null; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
@@ -723,7 +723,7 @@
     {#if showQuitConfirm}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"

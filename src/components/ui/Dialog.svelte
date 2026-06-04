@@ -16,7 +16,7 @@
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+    <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-900 {className}">
       {#if title}
         <Dialog.Title class="sr-only">{title}</Dialog.Title>
