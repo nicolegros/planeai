@@ -16,12 +16,19 @@ pub fn tmux_bin() -> &'static str {
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let sanitized = project_name.replace(' ', "-").replace('.', "").replace(':', "");
+    let sanitized = project_name
+        .replace(' ', "-")
+        .replace('.', "")
+        .replace(':', "");
     format!("planeai-{}-{}", sanitized, hex)
 }
 
 /// Build the tmux command args to create a new session running kiro-cli.
-pub fn build_new_session_args(tmux_name: &str, working_dir: &str, auto_approve: bool) -> Vec<String> {
+pub fn build_new_session_args(
+    tmux_name: &str,
+    working_dir: &str,
+    auto_approve: bool,
+) -> Vec<String> {
     let cmd = if auto_approve {
         "kiro-cli chat --trust-all-tools".to_string()
     } else {
@@ -68,7 +75,12 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 }
 
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
-pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, session_id: &str) -> Result<(), String> {
+pub fn create_session(
+    tmux_name: &str,
+    working_dir: &str,
+    auto_approve: bool,
+    session_id: &str,
+) -> Result<(), String> {
     let cmd = if auto_approve {
         "kiro-cli chat --trust-all-tools".to_string()
     } else {
@@ -78,10 +90,13 @@ pub fn create_session(tmux_name: &str, working_dir: &str, auto_approve: bool, se
 }
 
 /// Create a tmux session with a custom command.
-pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, session_id: &str) -> Result<(), String> {
-    let args = vec![
-        "new-session", "-d", "-s", tmux_name, "-c", working_dir, cmd,
-    ];
+pub fn create_session_with_cmd(
+    tmux_name: &str,
+    working_dir: &str,
+    cmd: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    let args = vec!["new-session", "-d", "-s", tmux_name, "-c", working_dir, cmd];
     let output = Command::new(tmux_bin())
         .args(&args)
         .output()
@@ -94,7 +109,13 @@ pub fn create_session_with_cmd(tmux_name: &str, working_dir: &str, cmd: &str, se
     // Set PLANEAI_SESSION_ID so the stop hook can identify this session
     let target = format!("={}", tmux_name);
     let _ = Command::new(tmux_bin())
-        .args(["set-environment", "-t", &target, "PLANEAI_SESSION_ID", session_id])
+        .args([
+            "set-environment",
+            "-t",
+            &target,
+            "PLANEAI_SESSION_ID",
+            session_id,
+        ])
         .output();
 
     Ok(())

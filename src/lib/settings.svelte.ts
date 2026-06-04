@@ -72,9 +72,7 @@ let config = $state<AppConfig>({
 });
 
 let systemIsDark = $state(
-  typeof window !== "undefined"
-    ? window.matchMedia("(prefers-color-scheme: dark)").matches
-    : true
+  typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)").matches : true,
 );
 
 if (typeof window !== "undefined") {

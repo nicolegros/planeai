@@ -1,7 +1,8 @@
 import { focusTerminal, getActiveZone, toggleSidebar } from "./focus.svelte";
 
 /** True on macOS/iOS, false on Windows/Linux */
-export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+export const IS_MAC =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
 export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
@@ -117,7 +118,7 @@ export type ActionHandler = (action: KeyboardAction) => void;
  */
 export function installKeyboardRouter(
   onAction: ActionHandler,
-  shouldPassEscape?: () => boolean
+  shouldPassEscape?: () => boolean,
 ): () => void {
   function handler(e: KeyboardEvent) {
     const action = matchChord(e);

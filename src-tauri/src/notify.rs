@@ -47,12 +47,21 @@ impl NotifyState {
         }
     }
 
-    pub fn register_session(&mut self, session_id: &str, name: &str, project_name: &str, hook_enabled: bool) {
-        self.meta.insert(session_id.to_string(), SessionMeta {
-            name: name.to_string(),
-            project_name: project_name.to_string(),
-            hook_enabled,
-        });
+    pub fn register_session(
+        &mut self,
+        session_id: &str,
+        name: &str,
+        project_name: &str,
+        hook_enabled: bool,
+    ) {
+        self.meta.insert(
+            session_id.to_string(),
+            SessionMeta {
+                name: name.to_string(),
+                project_name: project_name.to_string(),
+                hook_enabled,
+            },
+        );
     }
 
     pub fn get_meta(&self, session_id: &str) -> Option<&SessionMeta> {
@@ -83,7 +92,8 @@ impl NotifyState {
     pub fn notify_stop_debounced(&mut self, session_id: &str) -> bool {
         self.states.insert(session_id.to_string(), AgentState::Idle);
         if !self.notified.contains(session_id) {
-            self.idle_since.insert(session_id.to_string(), Instant::now());
+            self.idle_since
+                .insert(session_id.to_string(), Instant::now());
         }
         false
     }
@@ -107,11 +117,16 @@ impl NotifyState {
     pub fn notify_output(&mut self, session_id: &str) {
         let was = self.get_state(session_id);
         self.states.insert(session_id.to_string(), AgentState::Busy);
-        self.last_output.insert(session_id.to_string(), Instant::now());
+        self.last_output
+            .insert(session_id.to_string(), Instant::now());
         self.idle_since.remove(session_id);
         let had_notified = self.notified.remove(session_id);
         if was == Some(AgentState::Idle) || had_notified {
-            let name = self.meta.get(session_id).map(|m| m.name.as_str()).unwrap_or("?");
+            let name = self
+                .meta
+                .get(session_id)
+                .map(|m| m.name.as_str())
+                .unwrap_or("?");
             eprintln!("[notify] \"{name}\" is now busy");
         }
     }
@@ -168,7 +183,11 @@ impl NotifyState {
 
     #[cfg(test)]
     fn elapsed_since(&self, session_id: &str, since: Instant) -> Duration {
-        let offset = self.time_offset.get(session_id).copied().unwrap_or_default();
+        let offset = self
+            .time_offset
+            .get(session_id)
+            .copied()
+            .unwrap_or_default();
         since.elapsed() + offset
     }
 
@@ -197,7 +216,11 @@ pub struct NotifyMessage {
 /// Parse a JSONL line from the socket. Falls back to treating the line as a bare session ID.
 pub fn parse_notify_message(line: &str) -> NotifyMessage {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-        let session_id = v.get("session_id").and_then(|s| s.as_str()).unwrap_or("").to_string();
+        let session_id = v
+            .get("session_id")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
         let event = match v.get("event").and_then(|e| e.as_str()) {
             Some("notification") => NotifyEvent::Notification,
             Some("busy") => NotifyEvent::Busy,
@@ -215,10 +238,18 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
 /// Check if the Claude Code hook is installed at the given settings path.
 /// Returns true only if all expected hook events are configured.
 pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(settings_path) else { return false };
-    if !content.contains("planeai-stop-notify") { return false; }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { return false };
-    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else { return false };
+    let Ok(content) = std::fs::read_to_string(settings_path) else {
+        return false;
+    };
+    if !content.contains("planeai-stop-notify") {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
+        return false;
+    };
     ["Stop", "StopFailure", "Notification", "UserPromptSubmit"]
         .iter()
         .all(|event| hooks.contains_key(*event))
@@ -228,13 +259,19 @@ pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
 /// Looks for `hooks/planeai-notify.json` containing our hook script reference.
 pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
     let notify_path = copilot_dir.join("hooks").join("planeai-notify.json");
-    let Ok(content) = std::fs::read_to_string(notify_path) else { return false };
+    let Ok(content) = std::fs::read_to_string(notify_path) else {
+        return false;
+    };
     content.contains("planeai-stop-notify-copilot")
 }
 
 /// Install the Copilot CLI notification hook into the given copilot directory.
 /// Creates `hooks/planeai-notify.json` with agentStop, userPromptSubmitted, and errorOccurred hooks.
-pub fn install_copilot_hook_at(copilot_dir: &Path, bash_script: &str, ps_script: &str) -> Result<(), String> {
+pub fn install_copilot_hook_at(
+    copilot_dir: &Path,
+    bash_script: &str,
+    ps_script: &str,
+) -> Result<(), String> {
     let hooks_dir = copilot_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
 
@@ -256,17 +293,23 @@ pub fn install_copilot_hook_at(copilot_dir: &Path, bash_script: &str, ps_script:
 /// Install the Claude Code notification hook into the given .claude directory.
 /// `script_command` is the path to the hook script to reference in the config.
 pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result<(), String> {
-    std::fs::create_dir_all(claude_dir).map_err(|e| format!("failed to create .claude dir: {e}"))?;
+    std::fs::create_dir_all(claude_dir)
+        .map_err(|e| format!("failed to create .claude dir: {e}"))?;
 
     let settings_path = claude_dir.join("settings.json");
-    let mut settings: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&settings_path) {
+    let mut settings: serde_json::Value = if let Ok(content) =
+        std::fs::read_to_string(&settings_path)
+    {
         serde_json::from_str(&content).map_err(|e| format!("failed to parse settings.json: {e}"))?
     } else {
         serde_json::json!({})
     };
 
-    let hooks = settings.as_object_mut().unwrap()
-        .entry("hooks").or_insert_with(|| serde_json::json!({}));
+    let hooks = settings
+        .as_object_mut()
+        .unwrap()
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
     let hooks_obj = hooks.as_object_mut().unwrap();
 
     let hook_entry = serde_json::json!({
@@ -276,14 +319,23 @@ pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result
     });
 
     let mut ensure_hook = |event: &str, matcher: Option<&str>| {
-        let arr = hooks_obj.entry(event).or_insert_with(|| serde_json::json!([]));
+        let arr = hooks_obj
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
         let arr = arr.as_array_mut().unwrap();
-        if arr.iter().any(|g| serde_json::to_string(g).unwrap_or_default().contains("planeai-stop-notify")) {
+        if arr.iter().any(|g| {
+            serde_json::to_string(g)
+                .unwrap_or_default()
+                .contains("planeai-stop-notify")
+        }) {
             return;
         }
         let mut group = serde_json::json!({ "hooks": [hook_entry] });
         if let Some(m) = matcher {
-            group.as_object_mut().unwrap().insert("matcher".to_string(), serde_json::json!(m));
+            group
+                .as_object_mut()
+                .unwrap()
+                .insert("matcher".to_string(), serde_json::json!(m));
         }
         arr.push(group);
     };
@@ -294,7 +346,8 @@ pub fn install_claude_hook_at(claude_dir: &Path, script_command: &str) -> Result
     ensure_hook("UserPromptSubmit", None);
 
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&settings_path, output).map_err(|e| format!("failed to write settings.json: {e}"))?;
+    std::fs::write(&settings_path, output)
+        .map_err(|e| format!("failed to write settings.json: {e}"))?;
     Ok(())
 }
 
@@ -336,7 +389,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                 match msg.event {
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();
-                        let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                        let name = s
+                            .get_meta(&msg.session_id)
+                            .map(|m| m.name.as_str())
+                            .unwrap_or("?");
                         eprintln!("[notify] \"{name}\" is now busy (hook)");
                         s.notify_output(&msg.session_id);
                         drop(s);
@@ -345,8 +401,13 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();
-                            let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
-                            eprintln!("[notify] \"{name}\" received immediate signal (notification)");
+                            let name = s
+                                .get_meta(&msg.session_id)
+                                .map(|m| m.name.as_str())
+                                .unwrap_or("?");
+                            eprintln!(
+                                "[notify] \"{name}\" received immediate signal (notification)"
+                            );
                             s.notify_stop_immediate(&msg.session_id)
                         };
                         if fired {
@@ -356,8 +417,13 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     }
                     NotifyEvent::Stop => {
                         let mut s = state.lock().unwrap();
-                        let name = s.get_meta(&msg.session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into());
-                        let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
+                        let name = s
+                            .get_meta(&msg.session_id)
+                            .map(|m| m.name.clone())
+                            .unwrap_or_else(|| "?".into());
+                        let hook_enabled = s
+                            .get_meta(&msg.session_id)
+                            .map_or(false, |m| m.hook_enabled);
                         if hook_enabled {
                             eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);
@@ -384,8 +450,8 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::Storage::FileSystem::{ReadFile, PIPE_ACCESS_INBOUND};
     use windows_sys::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW,
-        PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
 
     thread::spawn(move || {
@@ -410,7 +476,7 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
             }
 
             let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
-            if connected == 0 { }
+            if connected == 0 {}
 
             let file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
             let reader = BufReader::new(file);
@@ -426,7 +492,10 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                 match msg.event {
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();
-                        let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
+                        let name = s
+                            .get_meta(&msg.session_id)
+                            .map(|m| m.name.as_str())
+                            .unwrap_or("?");
                         eprintln!("[notify] \"{name}\" is now busy (hook)");
                         s.notify_output(&msg.session_id);
                         drop(s);
@@ -435,8 +504,13 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     NotifyEvent::Notification => {
                         let fired = {
                             let mut s = state.lock().unwrap();
-                            let name = s.get_meta(&msg.session_id).map(|m| m.name.as_str()).unwrap_or("?");
-                            eprintln!("[notify] \"{name}\" received immediate signal (notification)");
+                            let name = s
+                                .get_meta(&msg.session_id)
+                                .map(|m| m.name.as_str())
+                                .unwrap_or("?");
+                            eprintln!(
+                                "[notify] \"{name}\" received immediate signal (notification)"
+                            );
                             s.notify_stop_immediate(&msg.session_id)
                         };
                         if fired {
@@ -446,8 +520,13 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     }
                     NotifyEvent::Stop => {
                         let mut s = state.lock().unwrap();
-                        let name = s.get_meta(&msg.session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into());
-                        let hook_enabled = s.get_meta(&msg.session_id).map_or(false, |m| m.hook_enabled);
+                        let name = s
+                            .get_meta(&msg.session_id)
+                            .map(|m| m.name.clone())
+                            .unwrap_or_else(|| "?".into());
+                        let hook_enabled = s
+                            .get_meta(&msg.session_id)
+                            .map_or(false, |m| m.hook_enabled);
                         if hook_enabled {
                             eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);
@@ -493,7 +572,9 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
         for session_id in to_notify {
             let name = {
                 let s = state.lock().unwrap();
-                s.get_meta(&session_id).map(|m| m.name.clone()).unwrap_or_else(|| "?".into())
+                s.get_meta(&session_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "?".into())
             };
             eprintln!("[notify] \"{name}\" notifying (idle timeout)");
             emit_state_change(&app, &session_id, AgentState::Idle);
@@ -530,7 +611,9 @@ fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyStat
 
     // Native notification via Tauri plugin (uses app icon)
     use tauri_plugin_notification::NotificationExt;
-    let _ = app.notification().builder()
+    let _ = app
+        .notification()
+        .builder()
         .title(&title)
         .body(&body)
         .show();
@@ -755,7 +838,12 @@ mod tests {
         assert!(!is_copilot_hook_installed_at(&custom_home));
 
         // Install at custom home
-        install_copilot_hook_at(&custom_home, "/usr/local/bin/planeai-stop-notify-copilot.sh", "/usr/local/bin/planeai-stop-notify-copilot.ps1").unwrap();
+        install_copilot_hook_at(
+            &custom_home,
+            "/usr/local/bin/planeai-stop-notify-copilot.sh",
+            "/usr/local/bin/planeai-stop-notify-copilot.ps1",
+        )
+        .unwrap();
 
         // Now detected
         assert!(is_copilot_hook_installed_at(&custom_home));
@@ -766,7 +854,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
-        std::fs::write(hooks_dir.join("planeai-notify.json"), r#"{"version":1,"hooks":{}}"#).unwrap();
+        std::fs::write(
+            hooks_dir.join("planeai-notify.json"),
+            r#"{"version":1,"hooks":{}}"#,
+        )
+        .unwrap();
 
         assert!(!is_copilot_hook_installed_at(dir.path()));
     }
@@ -776,18 +868,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let copilot_dir = dir.path();
 
-        install_copilot_hook_at(copilot_dir, "/path/to/planeai-stop-notify-copilot.sh", "/path/to/planeai-stop-notify-copilot.ps1").unwrap();
+        install_copilot_hook_at(
+            copilot_dir,
+            "/path/to/planeai-stop-notify-copilot.sh",
+            "/path/to/planeai-stop-notify-copilot.ps1",
+        )
+        .unwrap();
 
-        let content = std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
+        let content =
+            std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         assert_eq!(v["version"], 1);
         // agentStop hook with bash and powershell
         let agent_stop = &v["hooks"]["agentStop"][0];
         assert_eq!(agent_stop["type"], "command");
-        assert!(agent_stop["bash"].as_str().unwrap().contains("planeai-stop-notify-copilot"));
+        assert!(agent_stop["bash"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify-copilot"));
         assert!(agent_stop["bash"].as_str().unwrap().contains("stop"));
-        assert!(agent_stop["powershell"].as_str().unwrap().contains("planeai-stop-notify-copilot"));
+        assert!(agent_stop["powershell"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify-copilot"));
         // userPromptSubmitted
         let prompt = &v["hooks"]["userPromptSubmitted"][0];
         assert!(prompt["bash"].as_str().unwrap().contains("busy"));
@@ -805,7 +909,12 @@ mod tests {
         let bash_script = hooks_dir.join("planeai-stop-notify-copilot.sh");
         let ps_script = hooks_dir.join("planeai-stop-notify-copilot.ps1");
 
-        install_copilot_hook_at(copilot_dir, bash_script.to_str().unwrap(), ps_script.to_str().unwrap()).unwrap();
+        install_copilot_hook_at(
+            copilot_dir,
+            bash_script.to_str().unwrap(),
+            ps_script.to_str().unwrap(),
+        )
+        .unwrap();
 
         // Write scripts manually (as install_copilot_hook in main.rs would)
         let bash_content = include_str!("../resources/planeai-stop-notify-copilot.sh");
@@ -841,12 +950,16 @@ mod tests {
         install_copilot_hook_at(copilot_dir, "/path/script.sh", "/path/script.ps1").unwrap();
         install_copilot_hook_at(copilot_dir, "/path/script.sh", "/path/script.ps1").unwrap();
 
-        let content = std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
+        let content =
+            std::fs::read_to_string(copilot_dir.join("hooks").join("planeai-notify.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&content).unwrap();
 
         // Should still have exactly one entry per hook, not duplicates
         assert_eq!(v["hooks"]["agentStop"].as_array().unwrap().len(), 1);
-        assert_eq!(v["hooks"]["userPromptSubmitted"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            v["hooks"]["userPromptSubmitted"].as_array().unwrap().len(),
+            1
+        );
         assert_eq!(v["hooks"]["errorOccurred"].as_array().unwrap().len(), 1);
     }
 
@@ -855,16 +968,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude_dir = dir.path().join(".claude");
 
-        install_claude_hook_at(&claude_dir, "/home/user/.claude/hooks/planeai-stop-notify-claude.sh").unwrap();
+        install_claude_hook_at(
+            &claude_dir,
+            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
+        )
+        .unwrap();
 
         let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap()
-        ).unwrap();
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
 
         // Check Stop hook exists with our command
         let stop = &settings["hooks"]["Stop"][0]["hooks"][0];
         assert_eq!(stop["type"], "command");
-        assert!(stop["command"].as_str().unwrap().contains("planeai-stop-notify"));
+        assert!(stop["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
 
         // Check StopFailure hook exists
         let stop_failure = &settings["hooks"]["StopFailure"][0]["hooks"][0];
@@ -889,19 +1010,31 @@ mod tests {
                 "PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command", "command": "lint.sh"}]}]
             }
         });
-        std::fs::write(claude_dir.join("settings.json"), serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
 
-        install_claude_hook_at(&claude_dir, "/home/user/.claude/hooks/planeai-stop-notify-claude.sh").unwrap();
+        install_claude_hook_at(
+            &claude_dir,
+            "/home/user/.claude/hooks/planeai-stop-notify-claude.sh",
+        )
+        .unwrap();
 
         let settings: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap()
-        ).unwrap();
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
 
         // Existing config preserved
         assert_eq!(settings["permissions"]["allow"][0], "Read");
         // Existing hooks preserved
         assert_eq!(settings["hooks"]["PostToolUse"][0]["matcher"], "Write");
         // Our hooks added
-        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().contains("planeai-stop-notify"));
+        assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
     }
 }

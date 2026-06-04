@@ -12,19 +12,19 @@ A provider is a CLI-based AI coding agent. Define one or more providers:
     "kiro": {
       "command": "kiro-cli chat",
       "prompt_command": "{prompt}",
-      "yolo_flag": "--trust-all-tools"
+      "yolo_flag": "--trust-all-tools",
     },
     "claude": {
       "command": "claude",
       "prompt_command": "--prompt {prompt}",
-      "yolo_flag": "--dangerously-skip-permissions"
+      "yolo_flag": "--dangerously-skip-permissions",
     },
     "copilot": {
       "command": "gh copilot",
-      "prompt_command": "{prompt}"
-    }
+      "prompt_command": "{prompt}",
+    },
   },
-  "default_provider": "kiro"
+  "default_provider": "kiro",
 }
 ```
 
@@ -38,7 +38,7 @@ Controls how agent processes are hosted:
 
 ```jsonc
 {
-  "session_backend": "auto"  // "auto" | "tmux" | "direct"
+  "session_backend": "auto", // "auto" | "tmux" | "direct"
 }
 ```
 
@@ -64,15 +64,15 @@ Add a `task_managers` section to your config file:
       "templates": {
         "branch": "{key:lower}/{title:slug}",
         "name": "{key:upper}: {title}",
-        "prompt": "Implement task {key}: {title}\n\n{description}"
+        "prompt": "Implement task {key}: {title}\n\n{description}",
       },
       "on_start": { "move_to": "in_progress" },
       "on_notify": { "move_to": "in_review" },
       "on_restart": { "move_to": "in_progress" },
-      "on_complete": { "move_to": "done" }
-    }
+      "on_complete": { "move_to": "done" },
+    },
   },
-  "default_task_manager": "kanban"
+  "default_task_manager": "kanban",
 }
 ```
 
@@ -97,12 +97,12 @@ Task manager commands must output JSON matching this structure:
 
 Templates use `{variable}` with optional transforms via `{variable:transform}`:
 
-| Transform | Effect | Example |
-|-----------|--------|---------|
-| (none) | Raw value | `{key}` → `KAN-3` |
-| `lower` | Lowercase | `{key:lower}` → `kan-3` |
-| `upper` | Uppercase | `{key:upper}` → `KAN-3` |
-| `slug` | Slugify | `{title:slug}` → `add-dark-mode-support` |
+| Transform | Effect    | Example                                  |
+| --------- | --------- | ---------------------------------------- |
+| (none)    | Raw value | `{key}` → `KAN-3`                        |
+| `lower`   | Lowercase | `{key:lower}` → `kan-3`                  |
+| `upper`   | Uppercase | `{key:upper}` → `KAN-3`                  |
+| `slug`    | Slugify   | `{title:slug}` → `add-dark-mode-support` |
 
 Available variables: `key`, `title`, `status`, `description`, `priority`, `blocked_by`.
 
@@ -110,11 +110,11 @@ Available variables: `key`, `title`, `status`, `description`, `priority`, `block
 
 Each hook is optional. When configured, it calls `move_task` with the specified status:
 
-| Hook | Fires when |
-|------|-----------|
-| `on_start` | Session is created from a task |
-| `on_notify` | Agent signals idle (notification received) |
-| `on_restart` | An exited task-linked session is restarted |
+| Hook          | Fires when                                 |
+| ------------- | ------------------------------------------ |
+| `on_start`    | Session is created from a task             |
+| `on_notify`   | Agent signals idle (notification received) |
+| `on_restart`  | An exited task-linked session is restarted |
 | `on_complete` | Task-linked session is archived or deleted |
 
 ### Usage

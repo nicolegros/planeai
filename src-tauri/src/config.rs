@@ -54,7 +54,11 @@ fn default_theme() -> String {
 }
 
 fn default_font_family() -> &'static str {
-    if cfg!(windows) { "Cascadia Mono" } else { "Menlo" }
+    if cfg!(windows) {
+        "Cascadia Mono"
+    } else {
+        "Menlo"
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -123,8 +127,8 @@ pub fn config_dir(app_name: &str) -> PathBuf {
     }
     #[cfg(not(windows))]
     {
-        let base = std::env::var("XDG_CONFIG_HOME")
-            .unwrap_or_else(|_| format!("{}/.config", home_dir()));
+        let base =
+            std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", home_dir()));
         PathBuf::from(base).join(app_name)
     }
 }
@@ -132,30 +136,39 @@ pub fn config_dir(app_name: &str) -> PathBuf {
 impl Default for Config {
     fn default() -> Self {
         let mut providers = HashMap::new();
-        providers.insert("kiro".to_string(), Provider {
-            command: "kiro-cli chat".to_string(),
-            yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
-            list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
-            session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
-            prompt_command: Some("{prompt}".to_string()),
-        });
-        providers.insert("claude".to_string(), Provider {
-            command: "claude".to_string(),
-            yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-            resume_flag: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: Some("-p {prompt}".to_string()),
-        });
-        providers.insert("copilot".to_string(), Provider {
-            command: "copilot --resume".to_string(),
-            yolo_flag: Some("--allow-all-tools".to_string()),
-            resume_flag: None,
-            list_sessions_command: None,
-            session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
-            prompt_command: Some("{prompt}".to_string()),
-        });
+        providers.insert(
+            "kiro".to_string(),
+            Provider {
+                command: "kiro-cli chat".to_string(),
+                yolo_flag: Some("--trust-all-tools".to_string()),
+                resume_flag: Some("--resume-id".to_string()),
+                list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
+                session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
+                prompt_command: Some("{prompt}".to_string()),
+            },
+        );
+        providers.insert(
+            "claude".to_string(),
+            Provider {
+                command: "claude".to_string(),
+                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+                resume_flag: None,
+                list_sessions_command: None,
+                session_id_pattern: None,
+                prompt_command: Some("-p {prompt}".to_string()),
+            },
+        );
+        providers.insert(
+            "copilot".to_string(),
+            Provider {
+                command: "copilot --resume".to_string(),
+                yolo_flag: Some("--allow-all-tools".to_string()),
+                resume_flag: None,
+                list_sessions_command: None,
+                session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
+                prompt_command: Some("{prompt}".to_string()),
+            },
+        );
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),
@@ -207,7 +220,10 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
-                return (Config::default(), vec![format!("Failed to parse config.json: {e}")]);
+                return (
+                    Config::default(),
+                    vec![format!("Failed to parse config.json: {e}")],
+                );
             }
         };
         let default_val = serde_json::to_value(Config::default()).unwrap();
@@ -253,11 +269,19 @@ pub fn launch_command(provider: &Provider, yolo: bool) -> String {
 
 /// Build a resume command: base command + resume_flag + provider_session_id.
 pub fn resume_command(provider: &Provider, provider_session_id: &str) -> String {
-    format!("{} {} {}", provider.command, provider.resume_flag.as_ref().unwrap(), provider_session_id)
+    format!(
+        "{} {} {}",
+        provider.command,
+        provider.resume_flag.as_ref().unwrap(),
+        provider_session_id
+    )
 }
 
 /// Returns the resume command if both resume_flag and provider_session_id are available.
-pub fn resume_command_if_available(provider: &Provider, provider_session_id: Option<&str>) -> Option<String> {
+pub fn resume_command_if_available(
+    provider: &Provider,
+    provider_session_id: Option<&str>,
+) -> Option<String> {
     match (&provider.resume_flag, provider_session_id) {
         (Some(_), Some(id)) => Some(resume_command(provider, id)),
         _ => None,
@@ -265,7 +289,10 @@ pub fn resume_command_if_available(provider: &Provider, provider_session_id: Opt
 }
 
 /// Build the command for restarting a session: resume if possible, otherwise fresh launch.
-pub fn restart_command_for_provider(provider: &Provider, provider_session_id: Option<&str>) -> String {
+pub fn restart_command_for_provider(
+    provider: &Provider,
+    provider_session_id: Option<&str>,
+) -> String {
     resume_command_if_available(provider, provider_session_id)
         .unwrap_or_else(|| provider.command.clone())
 }
@@ -285,7 +312,11 @@ pub fn parse_provider_session_id(output: &str, pattern: &str) -> Option<String> 
 /// - `discovered`: the ID just found from list_sessions_command output
 /// - `previous`: the previously stored provider_session_id (if any)
 /// - `is_resume`: whether this launch used --resume-id
-pub fn should_accept_provider_session_id(discovered: Option<&str>, previous: Option<&str>, is_resume: bool) -> bool {
+pub fn should_accept_provider_session_id(
+    discovered: Option<&str>,
+    previous: Option<&str>,
+    is_resume: bool,
+) -> bool {
     match discovered {
         None => false,
         Some(id) => match (previous, is_resume) {
@@ -302,7 +333,11 @@ pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
         Some(b) => b.as_str(),
         None => {
-            if tmux_available() { "tmux" } else { "direct" }
+            if tmux_available() {
+                "tmux"
+            } else {
+                "direct"
+            }
         }
     }
 }
@@ -330,7 +365,11 @@ fn merge_top_level(base: serde_json::Value, overlay: serde_json::Value) -> serde
         (serde_json::Value::Object(mut base_map), serde_json::Value::Object(overlay_map)) => {
             for (k, v) in overlay_map {
                 if MERGE_KEYS.contains(&k.as_str()) {
-                    if let (Some(serde_json::Value::Object(base_inner)), serde_json::Value::Object(over_inner)) = (base_map.get(&k), &v) {
+                    if let (
+                        Some(serde_json::Value::Object(base_inner)),
+                        serde_json::Value::Object(over_inner),
+                    ) = (base_map.get(&k), &v)
+                    {
                         let mut merged = base_inner.clone();
                         for (ik, iv) in over_inner {
                             merged.insert(ik.clone(), iv.clone());
@@ -385,14 +424,17 @@ mod tests {
             },
             providers: {
                 let mut m = HashMap::new();
-                m.insert("claude".to_string(), Provider {
-                    command: "claude".to_string(),
-                    yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                    resume_flag: None,
-                    list_sessions_command: None,
-                    session_id_pattern: None,
-                    prompt_command: None,
-                });
+                m.insert(
+                    "claude".to_string(),
+                    Provider {
+                        command: "claude".to_string(),
+                        yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+                        resume_flag: None,
+                        list_sessions_command: None,
+                        session_id_pattern: None,
+                        prompt_command: None,
+                    },
+                );
                 m
             },
             default_provider: "claude".to_string(),
@@ -488,14 +530,17 @@ mod tests {
         let mut config = Config::default();
         config.appearance.mode = "dark".to_string();
         config.terminal.font_size = 18;
-        config.providers.insert("aider".to_string(), Provider {
-            command: "aider".to_string(),
-            yolo_flag: Some("--yes".to_string()),
-            resume_flag: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-        });
+        config.providers.insert(
+            "aider".to_string(),
+            Provider {
+                command: "aider".to_string(),
+                yolo_flag: Some("--yes".to_string()),
+                resume_flag: None,
+                list_sessions_command: None,
+                session_id_pattern: None,
+                prompt_command: None,
+            },
+        );
         config.default_provider = "aider".to_string();
 
         save(config_dir, &config).unwrap();
@@ -579,7 +624,10 @@ mod tests {
             session_id_pattern: None,
             prompt_command: None,
         };
-        assert_eq!(launch_command(&provider, true), "kiro-cli chat --trust-all-tools");
+        assert_eq!(
+            launch_command(&provider, true),
+            "kiro-cli chat --trust-all-tools"
+        );
     }
 
     #[test]
@@ -665,8 +713,14 @@ mod tests {
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.resume_flag, Some("--resume-id".to_string()));
-        assert_eq!(parsed.list_sessions_command, Some("kiro-cli chat --list-sessions".to_string()));
-        assert_eq!(parsed.session_id_pattern, Some("SessionId: ([a-f0-9-]+)".to_string()));
+        assert_eq!(
+            parsed.list_sessions_command,
+            Some("kiro-cli chat --list-sessions".to_string())
+        );
+        assert_eq!(
+            parsed.session_id_pattern,
+            Some("SessionId: ([a-f0-9-]+)".to_string())
+        );
     }
 
     #[test]
@@ -683,8 +737,15 @@ mod tests {
         let config = Config::default();
         let kiro = config.providers.get("kiro").unwrap();
         assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
-        assert_eq!(kiro.list_sessions_command, Some("kiro-cli chat --list-sessions".to_string()));
-        assert!(kiro.session_id_pattern.as_ref().unwrap().contains("SessionId"));
+        assert_eq!(
+            kiro.list_sessions_command,
+            Some("kiro-cli chat --list-sessions".to_string())
+        );
+        assert!(kiro
+            .session_id_pattern
+            .as_ref()
+            .unwrap()
+            .contains("SessionId"));
     }
 
     #[test]
@@ -694,7 +755,10 @@ mod tests {
         assert_eq!(copilot.command, "copilot --resume");
         assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
         assert_eq!(copilot.resume_flag, None);
-        assert_eq!(copilot.session_id_pattern, Some("--resume=([0-9a-f-]+)".to_string()));
+        assert_eq!(
+            copilot.session_id_pattern,
+            Some("--resume=([0-9a-f-]+)".to_string())
+        );
         assert_eq!(copilot.prompt_command, Some("{prompt}".to_string()));
     }
 
@@ -703,7 +767,10 @@ mod tests {
         let config = Config::default();
         let claude = config.providers.get("claude").unwrap();
         assert_eq!(claude.command, "claude");
-        assert_eq!(claude.yolo_flag, Some("--dangerously-skip-permissions".to_string()));
+        assert_eq!(
+            claude.yolo_flag,
+            Some("--dangerously-skip-permissions".to_string())
+        );
         assert_eq!(claude.resume_flag, None);
         assert_eq!(claude.prompt_command, Some("-p {prompt}".to_string()));
     }
@@ -732,7 +799,10 @@ mod tests {
             session_id_pattern: None,
             prompt_command: None,
         };
-        assert_eq!(resume_command_if_available(&provider, Some("abc-123")), None);
+        assert_eq!(
+            resume_command_if_available(&provider, Some("abc-123")),
+            None
+        );
     }
 
     #[test]
@@ -769,7 +839,10 @@ mod tests {
         let output = "Chat sessions for /some/path:\n\nChat SessionId: f4165541-f370-4fdd-9ccd-14b103a4f712\n  12 minutes ago | some description | 203 msgs | v2\n";
         let pattern = "SessionId: ([a-f0-9-]+)";
         let result = parse_provider_session_id(output, pattern);
-        assert_eq!(result, Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string()));
+        assert_eq!(
+            result,
+            Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
+        );
     }
 
     #[test]
@@ -793,7 +866,10 @@ mod tests {
         let output = "\x1B[38;5;141mChat SessionId: f4165541-f370-4fdd-9ccd-14b103a4f712\x1B[0m\n";
         let pattern = "SessionId: ([a-f0-9-]+)";
         let result = parse_provider_session_id(output, pattern);
-        assert_eq!(result, Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string()));
+        assert_eq!(
+            result,
+            Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
+        );
     }
 
     #[test]
@@ -801,44 +877,71 @@ mod tests {
         let output = "  ╭─╮╭─╮   Changes    +0 -0\n  ╰─╯╰─╯   AI Credits 0 (73h 15m 23s)\n  ▄ ▒▙ ▄   Resume     copilot --resume=a7c77286-ccfc-419b-bd1a-47f88f3e683a\n   ▀▀▀▀\n";
         let pattern = "--resume=([0-9a-f-]+)";
         let result = parse_provider_session_id(output, pattern);
-        assert_eq!(result, Some("a7c77286-ccfc-419b-bd1a-47f88f3e683a".to_string()));
+        assert_eq!(
+            result,
+            Some("a7c77286-ccfc-419b-bd1a-47f88f3e683a".to_string())
+        );
     }
 
     #[test]
     fn should_accept_session_id_fresh_launch_no_previous() {
         // Fresh launch, no previous ID → accept any ID
-        assert!(should_accept_provider_session_id(Some("new-id"), None, false));
+        assert!(should_accept_provider_session_id(
+            Some("new-id"),
+            None,
+            false
+        ));
     }
 
     #[test]
     fn should_accept_session_id_fresh_launch_with_different_id() {
         // Fresh launch, previous ID exists, new ID is different → accept
-        assert!(should_accept_provider_session_id(Some("new-id"), Some("old-id"), false));
+        assert!(should_accept_provider_session_id(
+            Some("new-id"),
+            Some("old-id"),
+            false
+        ));
     }
 
     #[test]
     fn should_reject_session_id_fresh_launch_with_same_id() {
         // Fresh launch, previous ID exists, same ID returned → reject (stale)
-        assert!(!should_accept_provider_session_id(Some("old-id"), Some("old-id"), false));
+        assert!(!should_accept_provider_session_id(
+            Some("old-id"),
+            Some("old-id"),
+            false
+        ));
     }
 
     #[test]
     fn should_accept_session_id_resume_with_same_id() {
         // Resume, same ID returned → accept (expected)
-        assert!(should_accept_provider_session_id(Some("old-id"), Some("old-id"), true));
+        assert!(should_accept_provider_session_id(
+            Some("old-id"),
+            Some("old-id"),
+            true
+        ));
     }
 
     #[test]
     fn should_reject_session_id_when_none_discovered() {
         // No ID discovered → reject regardless
         assert!(!should_accept_provider_session_id(None, None, false));
-        assert!(!should_accept_provider_session_id(None, Some("old-id"), true));
+        assert!(!should_accept_provider_session_id(
+            None,
+            Some("old-id"),
+            true
+        ));
     }
 
     #[test]
     fn should_reject_session_id_resume_with_different_id() {
         // Resume, different ID returned → reject (belongs to another session)
-        assert!(!should_accept_provider_session_id(Some("other-id"), Some("old-id"), true));
+        assert!(!should_accept_provider_session_id(
+            Some("other-id"),
+            Some("old-id"),
+            true
+        ));
     }
 
     #[test]
@@ -904,7 +1007,10 @@ mod tests {
         assert!(warnings.is_empty());
         let kiro = config.providers.get("kiro").unwrap();
         assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
-        assert_eq!(kiro.list_sessions_command, Some("kiro-cli chat --list-sessions".to_string()));
+        assert_eq!(
+            kiro.list_sessions_command,
+            Some("kiro-cli chat --list-sessions".to_string())
+        );
         assert!(kiro.session_id_pattern.is_some());
     }
 
@@ -926,7 +1032,10 @@ mod tests {
 
         let (config, _) = load(config_dir);
         let copilot = config.providers.get("copilot").unwrap();
-        assert_eq!(copilot.session_id_pattern, Some("--resume=([0-9a-f-]+)".to_string()));
+        assert_eq!(
+            copilot.session_id_pattern,
+            Some("--resume=([0-9a-f-]+)".to_string())
+        );
     }
 
     #[test]

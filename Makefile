@@ -1,4 +1,16 @@
-.PHONY: dev build bundle open test dev-bundle
+.PHONY: dev build bundle open test dev-bundle ci fmt lint
+
+ci: lint test ## Run lint + tests
+
+fmt:
+	pnpm fmt
+	cd src-tauri && cargo fmt --all
+
+lint: ## Check formatting and clippy
+	pnpm lint
+	pnpm fmt:check
+	cd src-tauri && cargo fmt --all -- --check
+	cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 
 dev:
 	pnpm tauri dev

@@ -11,11 +11,14 @@ mod template;
 #[cfg(not(windows))]
 mod tmux;
 
-use std::sync::Mutex;
-use std::sync::Arc;
 use rusqlite::Connection;
-use tauri::{State, Manager, Emitter, menu::{Menu, Submenu, PredefinedMenuItem}};
+use std::sync::Arc;
+use std::sync::Mutex;
 use tauri::ipc::Channel;
+use tauri::{
+    menu::{Menu, PredefinedMenuItem, Submenu},
+    Emitter, Manager, State,
+};
 
 struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
@@ -70,16 +73,41 @@ fn discover_provider_session_id(
             Ok(o) => {
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 let stderr = String::from_utf8_lossy(&o.stderr);
-                eprintln!("[DEBUG-disc] exit={}, stdout_len={}, stderr_len={}", o.status, stdout.len(), stderr.len());
-                if !o.status.success() { continue; }
+                eprintln!(
+                    "[DEBUG-disc] exit={}, stdout_len={}, stderr_len={}",
+                    o.status,
+                    stdout.len(),
+                    stderr.len()
+                );
+                if !o.status.success() {
+                    continue;
+                }
                 // Try stdout first, then stderr (some providers write to stderr)
-                let combined = if stdout.is_empty() { stderr.to_string() } else { stdout.to_string() };
+                let combined = if stdout.is_empty() {
+                    stderr.to_string()
+                } else {
+                    stdout.to_string()
+                };
                 let discovered = config::parse_provider_session_id(&combined, pattern);
-                eprintln!("[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}", discovered, previous_id, is_resume);
-                if config::should_accept_provider_session_id(discovered.as_deref(), previous_id, is_resume) {
-                    eprintln!("[DEBUG-disc] accepted! storing provider_session_id={:?}", discovered);
+                eprintln!(
+                    "[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}",
+                    discovered, previous_id, is_resume
+                );
+                if config::should_accept_provider_session_id(
+                    discovered.as_deref(),
+                    previous_id,
+                    is_resume,
+                ) {
+                    eprintln!(
+                        "[DEBUG-disc] accepted! storing provider_session_id={:?}",
+                        discovered
+                    );
                     if let Ok(conn) = rusqlite::Connection::open(db_path) {
-                        let _ = db::set_provider_session_id(&conn, session_id, discovered.as_ref().unwrap());
+                        let _ = db::set_provider_session_id(
+                            &conn,
+                            session_id,
+                            discovered.as_ref().unwrap(),
+                        );
                     }
                     return;
                 } else {
@@ -98,7 +126,10 @@ fn discover_provider_session_id(
     // and the provider started a fresh session with a new ID.
     if is_resume {
         if let Some(new_id) = last_discovered {
-            eprintln!("[DEBUG-disc] resume failed, accepting new session id={}", new_id);
+            eprintln!(
+                "[DEBUG-disc] resume failed, accepting new session id={}",
+                new_id
+            );
             if let Ok(conn) = rusqlite::Connection::open(db_path) {
                 let _ = db::set_provider_session_id(&conn, session_id, &new_id);
             }
@@ -106,15 +137,20 @@ fn discover_provider_session_id(
         }
     }
     // Discovery failed — emit event to notify frontend
-    let _ = app.emit("provider-session-id-failed", serde_json::json!({
-        "session_id": session_id,
-        "reason": "Could not discover provider session ID after retries"
-    }));
+    let _ = app.emit(
+        "provider-session-id-failed",
+        serde_json::json!({
+            "session_id": session_id,
+            "reason": "Could not discover provider session ID after retries"
+        }),
+    );
 }
 
 /// Check if a provider has hook-based idle detection.
 fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
-    let Some(provider) = cfg.providers.get(provider_key) else { return false };
+    let Some(provider) = cfg.providers.get(provider_key) else {
+        return false;
+    };
     if provider.command.contains("kiro") {
         is_kiro_hook_installed()
     } else if provider.command.contains("claude") {
@@ -149,7 +185,11 @@ fn is_copilot_hook_installed() -> bool {
 }
 
 #[tauri::command]
-fn create_project(state: State<DbState>, name: String, path: String) -> Result<db::Project, String> {
+fn create_project(
+    state: State<DbState>,
+    name: String,
+    path: String,
+) -> Result<db::Project, String> {
     let path = expand_tilde(&path);
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     if db::project_name_exists(&conn, &name).map_err(|e| e.to_string())? {
@@ -183,7 +223,11 @@ fn restore_project(state: State<DbState>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_project(state: State<DbState>, pty_state: State<PtyState>, id: String) -> Result<(), String> {
+fn delete_project(
+    state: State<DbState>,
+    pty_state: State<PtyState>,
+    id: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::get_project_sessions(&conn, &id).map_err(|e| e.to_string())?;
     let project = db::get_project(&conn, &id).map_err(|e| e.to_string())?;
@@ -207,13 +251,24 @@ fn delete_project(state: State<DbState>, pty_state: State<PtyState>, id: String)
 }
 
 #[tauri::command]
-fn create_session(state: State<DbState>, project_id: String, name: String, tmux_name: String, branch: String) -> Result<db::Session, String> {
+fn create_session(
+    state: State<DbState>,
+    project_id: String,
+    name: String,
+    tmux_name: String,
+    branch: String,
+) -> Result<db::Session, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::create_session(&conn, &project_id, &name, &tmux_name, &branch, None).map_err(|e| e.to_string())
+    db::create_session(&conn, &project_id, &name, &tmux_name, &branch, None)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>) -> Result<Vec<db::Session>, String> {
+fn list_sessions(
+    state: State<DbState>,
+    notify: State<NotifyHandle>,
+    config_state: State<ConfigState>,
+) -> Result<Vec<db::Session>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let sessions = db::list_sessions(&conn).map_err(|e| e.to_string())?;
@@ -224,12 +279,19 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_stat
         if s.status != "active" {
             continue;
         }
-        let project_name = projects.iter()
+        let project_name = projects
+            .iter()
             .find(|p| p.id == s.project_id)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-        let display_name = if s.name.is_empty() { &s.branch } else { &s.name };
-        let hook_enabled = s.provider.as_deref()
+        let display_name = if s.name.is_empty() {
+            &s.branch
+        } else {
+            &s.name
+        };
+        let hook_enabled = s
+            .provider
+            .as_deref()
             .map(|pk| provider_has_hook(pk, &cfg))
             .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
@@ -240,19 +302,32 @@ fn list_sessions(state: State<DbState>, notify: State<NotifyHandle>, config_stat
 }
 
 #[tauri::command]
-fn rename_session(state: State<DbState>, notify: State<NotifyHandle>, config_state: State<ConfigState>, id: String, name: String) -> Result<(), String> {
+fn rename_session(
+    state: State<DbState>,
+    notify: State<NotifyHandle>,
+    config_state: State<ConfigState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::rename_session(&conn, &id, &name).map_err(|e| e.to_string())?;
     // Update notify display name
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_name = projects.iter()
+        let project_name = projects
+            .iter()
             .find(|p| p.id == session.project_id)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-        let display_name = if name.is_empty() { &session.branch } else { &name };
-        let hook_enabled = session.provider.as_deref()
+        let display_name = if name.is_empty() {
+            &session.branch
+        } else {
+            &name
+        };
+        let hook_enabled = session
+            .provider
+            .as_deref()
             .map(|pk| provider_has_hook(pk, &cfg))
             .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
@@ -293,7 +368,11 @@ fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
 }
 
 #[tauri::command]
-fn update_config(state: State<ConfigState>, new_config: config::Config, app: tauri::AppHandle) -> Result<(), String> {
+fn update_config(
+    state: State<ConfigState>,
+    new_config: config::Config,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let config_dir = config::config_dir(&app.package_info().name);
     config::save(&config_dir, &new_config)?;
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
@@ -306,7 +385,9 @@ fn get_theme_css(state: State<ConfigState>, app: tauri::AppHandle) -> Result<Str
     let cfg = state.0.lock().map_err(|e| e.to_string())?;
     let theme_name = &cfg.appearance.theme;
     let config_dir = config::config_dir(&app.package_info().name);
-    let theme_path = config_dir.join("themes").join(format!("{}.css", theme_name));
+    let theme_path = config_dir
+        .join("themes")
+        .join(format!("{}.css", theme_name));
     std::fs::read_to_string(&theme_path).map_err(|e| e.to_string())
 }
 
@@ -335,12 +416,19 @@ fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn get_changed_files(repo_path: String, base_branch: String) -> Result<Vec<git::ChangedFile>, String> {
+fn get_changed_files(
+    repo_path: String,
+    base_branch: String,
+) -> Result<Vec<git::ChangedFile>, String> {
     git::get_changed_files(&repo_path, &base_branch)
 }
 
 #[tauri::command]
-fn get_file_diff(repo_path: String, base_branch: String, file_path: String) -> Result<git::FileDiff, String> {
+fn get_file_diff(
+    repo_path: String,
+    base_branch: String,
+    file_path: String,
+) -> Result<git::FileDiff, String> {
     git::get_file_diff(&repo_path, &base_branch, &file_path)
 }
 
@@ -351,37 +439,47 @@ fn detect_default_branch(repo_path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn list_monospace_fonts() -> Result<Vec<String>, String> {
-    use font_kit::source::SystemSource;
-    use font_kit::properties::Properties;
     use font_kit::family_name::FamilyName;
+    use font_kit::properties::Properties;
+    use font_kit::source::SystemSource;
     use std::sync::OnceLock;
 
     static CACHE: OnceLock<Vec<String>> = OnceLock::new();
 
-    Ok(CACHE.get_or_init(|| {
-        let source = SystemSource::new();
-        let all_families = source.all_families().unwrap_or_default();
+    Ok(CACHE
+        .get_or_init(|| {
+            let source = SystemSource::new();
+            let all_families = source.all_families().unwrap_or_default();
 
-        let mut fonts: Vec<String> = all_families
-            .into_iter()
-            .filter(|name| !name.starts_with('.'))
-            .filter(|name| {
-                source
-                    .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
-                    .ok()
-                    .and_then(|handle| handle.load().ok())
-                    .map(|font| font.is_monospace())
-                    .unwrap_or(false)
-            })
-            .collect();
-        fonts.sort();
-        fonts.dedup();
-        fonts
-    }).clone())
+            let mut fonts: Vec<String> = all_families
+                .into_iter()
+                .filter(|name| !name.starts_with('.'))
+                .filter(|name| {
+                    source
+                        .select_best_match(&[FamilyName::Title(name.clone())], &Properties::new())
+                        .ok()
+                        .and_then(|handle| handle.load().ok())
+                        .map(|font| font.is_monospace())
+                        .unwrap_or(false)
+                })
+                .collect();
+            fonts.sort();
+            fonts.dedup();
+            fonts
+        })
+        .clone())
 }
 
 #[tauri::command]
-fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db_state: State<DbState>, config_state: State<ConfigState>, state: State<PtyState>, notify: State<NotifyHandle>, app: tauri::AppHandle) -> Result<(), String> {
+fn attach_session(
+    session_id: String,
+    on_data: Channel<tauri::ipc::Response>,
+    db_state: State<DbState>,
+    config_state: State<ConfigState>,
+    state: State<PtyState>,
+    notify: State<NotifyHandle>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -391,7 +489,9 @@ fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db
     let discovery_info = if session.backend != "tmux" {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
-        let provider_def = cfg.providers.get(provider_key)
+        let provider_def = cfg
+            .providers
+            .get(provider_key)
             .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
 
         let list_cmd = provider_def.list_sessions_command.clone();
@@ -418,13 +518,27 @@ fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
 
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_path = projects.iter()
+        let project_path = projects
+            .iter()
             .find(|p| p.id == session.project_id)
             .map(|p| p.path.as_str())
             .unwrap_or("/");
-        let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
+        let cwd = session
+            .worktree_path
+            .as_deref()
+            .unwrap_or(project_path)
+            .to_string();
 
-        Some((list_cmd, pattern, is_resume, session.provider_session_id.clone(), cwd.clone(), command, args, cwd))
+        Some((
+            list_cmd,
+            pattern,
+            is_resume,
+            session.provider_session_id.clone(),
+            cwd.clone(),
+            command,
+            args,
+            cwd,
+        ))
     } else {
         None
     };
@@ -434,21 +548,34 @@ fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db
         pty::PtyTarget::TmuxAttach { tmux_name }
     } else {
         let (_, _, _, _, _, ref command, ref args, ref cwd) = discovery_info.as_ref().unwrap();
-        pty::PtyTarget::Direct { command: command.clone(), args: args.clone(), cwd: cwd.clone() }
+        pty::PtyTarget::Direct {
+            command: command.clone(),
+            args: args.clone(),
+            cwd: cwd.clone(),
+        }
     };
 
-    state.0.attach(&session_id, pty_target, app.clone(), on_data)?;
+    state
+        .0
+        .attach(&session_id, pty_target, app.clone(), on_data)?;
 
     // Register with notification system
     {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_name = projects.iter()
+        let project_name = projects
+            .iter()
             .find(|p| p.id == session.project_id)
             .map(|p| p.name.as_str())
             .unwrap_or("unknown");
-        let display_name = if session.name.is_empty() { &session.branch } else { &session.name };
-        let hook_enabled = session.provider.as_deref()
+        let display_name = if session.name.is_empty() {
+            &session.branch
+        } else {
+            &session.name
+        };
+        let hook_enabled = session
+            .provider
+            .as_deref()
             .map(|pk| provider_has_hook(pk, &cfg))
             .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
@@ -462,15 +589,38 @@ fn attach_session(session_id: String, on_data: Channel<tauri::ipc::Response>, db
     drop(conn);
 
     // Spawn background discovery thread for direct sessions
-    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd, _, _, _)) = discovery_info {
-        eprintln!("[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'", &session_id, &list_cmd, &cwd);
+    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd, _, _, _)) =
+        discovery_info
+    {
+        eprintln!(
+            "[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'",
+            &session_id, &list_cmd, &cwd
+        );
         let sid = session_id.clone();
-        let db_path = app.path().app_data_dir().expect("app data dir").join("planeai.db");
+        let db_path = app
+            .path()
+            .app_data_dir()
+            .expect("app data dir")
+            .join("planeai.db");
         std::thread::spawn(move || {
-            discover_provider_session_id(&sid, &list_cmd, &pattern, &cwd, previous_id.as_deref(), is_resume, &db_path, &app);
+            discover_provider_session_id(
+                &sid,
+                &list_cmd,
+                &pattern,
+                &cwd,
+                previous_id.as_deref(),
+                is_resume,
+                &db_path,
+                &app,
+            );
         });
     } else {
-        eprintln!("[DEBUG-disc] skipping discovery: discovery_info={:?}", discovery_info.as_ref().map(|(a, b, _, _, _, _, _, _)| (a.is_some(), b.is_some())));
+        eprintln!(
+            "[DEBUG-disc] skipping discovery: discovery_info={:?}",
+            discovery_info
+                .as_ref()
+                .map(|(a, b, _, _, _, _, _, _)| (a.is_some(), b.is_some()))
+        );
     }
 
     Ok(())
@@ -482,7 +632,12 @@ fn write_to_pty(session_id: String, data: Vec<u8>, state: State<PtyState>) -> Re
 }
 
 #[tauri::command]
-fn resize_pty(session_id: String, rows: u16, cols: u16, state: State<PtyState>) -> Result<(), String> {
+fn resize_pty(
+    session_id: String,
+    rows: u16,
+    cols: u16,
+    state: State<PtyState>,
+) -> Result<(), String> {
     state.0.resize(&session_id, rows, cols)
 }
 
@@ -499,24 +654,38 @@ fn resume_pty(session_id: String, state: State<PtyState>) -> Result<(), String> 
 #[tauri::command]
 fn check_session_alive(tmux_name: String) -> bool {
     #[cfg(not(windows))]
-    { tmux::has_session(&tmux_name) }
+    {
+        tmux::has_session(&tmux_name)
+    }
     #[cfg(windows)]
-    { false }
+    {
+        false
+    }
 }
 
 #[tauri::command]
 fn is_notify_hook_installed(config_state: State<ConfigState>) -> bool {
     let cfg = config_state.0.lock().unwrap();
-    let supported: Vec<_> = cfg.providers.values()
-        .filter(|p| p.command.contains("kiro") || p.command.contains("claude") || p.command.contains("copilot"))
+    let supported: Vec<_> = cfg
+        .providers
+        .values()
+        .filter(|p| {
+            p.command.contains("kiro")
+                || p.command.contains("claude")
+                || p.command.contains("copilot")
+        })
         .collect();
     if supported.is_empty() {
         return true; // no supported providers, nothing to install
     }
     supported.iter().all(|p| {
-        if p.command.contains("kiro") { is_kiro_hook_installed() }
-        else if p.command.contains("claude") { is_claude_hook_installed() }
-        else { is_copilot_hook_installed() }
+        if p.command.contains("kiro") {
+            is_kiro_hook_installed()
+        } else if p.command.contains("claude") {
+            is_claude_hook_installed()
+        } else {
+            is_copilot_hook_installed()
+        }
     })
 }
 
@@ -536,7 +705,11 @@ fn install_notify_hook(config_state: State<ConfigState>) -> Result<(), String> {
     }
 
     // Install for Copilot CLI if configured
-    if cfg.providers.values().any(|p| p.command.contains("copilot")) {
+    if cfg
+        .providers
+        .values()
+        .any(|p| p.command.contains("copilot"))
+    {
         install_copilot_hook(&home)?;
     }
 
@@ -558,7 +731,8 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
         include_str!("../resources/planeai-stop-notify.ps1"),
     );
 
-    std::fs::write(&script_path, script_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -568,7 +742,8 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
 
     // Patch the default agent config
     let agents_dir = format!("{home}/.kiro/agents");
-    std::fs::create_dir_all(&agents_dir).map_err(|e| format!("failed to create agents dir: {e}"))?;
+    std::fs::create_dir_all(&agents_dir)
+        .map_err(|e| format!("failed to create agents dir: {e}"))?;
     let config_path = format!("{agents_dir}/default.json");
 
     let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
@@ -577,25 +752,35 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
         serde_json::json!({ "name": "default", "tools": ["*"] })
     };
 
-    let hooks = config.as_object_mut().unwrap()
-        .entry("hooks").or_insert_with(|| serde_json::json!({}));
-    let stop_hooks = hooks.as_object_mut().unwrap()
-        .entry("stop").or_insert_with(|| serde_json::json!([]));
+    let hooks = config
+        .as_object_mut()
+        .unwrap()
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    let stop_hooks = hooks
+        .as_object_mut()
+        .unwrap()
+        .entry("stop")
+        .or_insert_with(|| serde_json::json!([]));
     let stop_arr = stop_hooks.as_array_mut().unwrap();
 
     let already = stop_arr.iter().any(|h| {
-        h.get("command").and_then(|c| c.as_str()).map_or(false, |c| c.contains("planeai-stop-notify"))
+        h.get("command")
+            .and_then(|c| c.as_str())
+            .map_or(false, |c| c.contains("planeai-stop-notify"))
     });
     if !already {
         #[cfg(not(windows))]
         let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
         #[cfg(windows)]
-        let hook_command = format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
+        let hook_command =
+            format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
         stop_arr.push(serde_json::json!({ "command": hook_command }));
     }
 
     let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, output).map_err(|e| format!("failed to write default.json: {e}"))?;
+    std::fs::write(&config_path, output)
+        .map_err(|e| format!("failed to write default.json: {e}"))?;
     Ok(())
 }
 
@@ -615,7 +800,8 @@ fn install_claude_hook(home: &str) -> Result<(), String> {
         include_str!("../resources/planeai-stop-notify-claude.ps1"),
     );
 
-    std::fs::write(&script_path, script_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -641,7 +827,8 @@ fn install_copilot_hook(home: &str) -> Result<(), String> {
     );
     #[cfg(not(windows))]
     {
-        std::fs::write(&bash_path, bash_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+        std::fs::write(&bash_path, bash_content)
+            .map_err(|e| format!("failed to write hook script: {e}"))?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&bash_path, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("failed to chmod hook: {e}"))?;
@@ -652,7 +839,8 @@ fn install_copilot_hook(home: &str) -> Result<(), String> {
 
     let ps_path = hooks_dir.join("planeai-stop-notify-copilot.ps1");
     let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
-    std::fs::write(&ps_path, ps_content).map_err(|e| format!("failed to write hook script: {e}"))?;
+    std::fs::write(&ps_path, ps_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
 
     notify::install_copilot_hook_at(
         &copilot_dir,
@@ -674,20 +862,36 @@ fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn spawn_tab(session_id: String, tab_index: u32, on_data: Channel<tauri::ipc::Response>, db_state: State<DbState>, state: State<PtyState>, app: tauri::AppHandle) -> Result<(), String> {
+fn spawn_tab(
+    session_id: String,
+    tab_index: u32,
+    on_data: Channel<tauri::ipc::Response>,
+    db_state: State<DbState>,
+    state: State<PtyState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-    let project_path = projects.iter()
+    let project_path = projects
+        .iter()
         .find(|p| p.id == session.project_id)
         .map(|p| p.path.as_str())
         .unwrap_or("/");
-    let cwd = session.worktree_path.as_deref().unwrap_or(project_path).to_string();
+    let cwd = session
+        .worktree_path
+        .as_deref()
+        .unwrap_or(project_path)
+        .to_string();
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(windows) { "cmd.exe".to_string() } else { "/bin/zsh".to_string() }
+        if cfg!(windows) {
+            "cmd.exe".to_string()
+        } else {
+            "/bin/zsh".to_string()
+        }
     });
 
     let pty_key = format!("{}:{}", session_id, tab_index);
@@ -704,7 +908,12 @@ fn spawn_tab(session_id: String, tab_index: u32, on_data: Channel<tauri::ipc::Re
 }
 
 #[tauri::command]
-fn close_tab(session_id: String, tab_index: u32, db_state: State<DbState>, state: State<PtyState>) -> Result<(), String> {
+fn close_tab(
+    session_id: String,
+    tab_index: u32,
+    db_state: State<DbState>,
+    state: State<PtyState>,
+) -> Result<(), String> {
     let pty_key = format!("{}:{}", session_id, tab_index);
     state.0.detach(&pty_key);
 
@@ -723,7 +932,11 @@ fn check_tmux_available() -> bool {
 }
 
 #[tauri::command]
-fn restart_session(session_id: String, db_state: State<DbState>, config_state: State<ConfigState>) -> Result<db::Session, String> {
+fn restart_session(
+    session_id: String,
+    db_state: State<DbState>,
+    config_state: State<ConfigState>,
+) -> Result<db::Session, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -735,7 +948,9 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
 
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
-    let provider_def = cfg.providers.get(provider_key)
+    let provider_def = cfg
+        .providers
+        .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
     let cmd = if has_resume {
@@ -748,9 +963,13 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
     if session.backend == "tmux" {
         #[cfg(not(windows))]
         {
-            let tmux_name = session.tmux_name.as_deref().ok_or("tmux session has no tmux_name")?;
+            let tmux_name = session
+                .tmux_name
+                .as_deref()
+                .ok_or("tmux session has no tmux_name")?;
             let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-            let project_path = projects.iter()
+            let project_path = projects
+                .iter()
                 .find(|p| p.id == session.project_id)
                 .map(|p| p.path.as_str())
                 .unwrap_or("/");
@@ -778,7 +997,12 @@ fn restart_session(session_id: String, db_state: State<DbState>, config_state: S
 }
 
 #[tauri::command]
-fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>, config_state: State<ConfigState>) -> Result<(), String> {
+fn archive_session(
+    id: String,
+    db_state: State<DbState>,
+    pty_state: State<PtyState>,
+    config_state: State<ConfigState>,
+) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
 
@@ -796,7 +1020,12 @@ fn archive_session(id: String, db_state: State<DbState>, pty_state: State<PtySta
 }
 
 #[tauri::command]
-fn destroy_session(id: String, db_state: State<DbState>, pty_state: State<PtyState>, config_state: State<ConfigState>) -> Result<(), String> {
+fn destroy_session(
+    id: String,
+    db_state: State<DbState>,
+    pty_state: State<PtyState>,
+    config_state: State<ConfigState>,
+) -> Result<(), String> {
     // Detach PTY
     pty_state.0.detach(&id);
 
@@ -850,12 +1079,15 @@ fn launch_session(
 ) -> Result<db::Session, String> {
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let provider_key = provider.unwrap_or_else(|| cfg.default_provider.clone());
-    let provider_def = cfg.providers.get(&provider_key)
+    let provider_def = cfg
+        .providers
+        .get(&provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let mut cmd = config::launch_command(provider_def, auto_approve);
 
     // Append prompt_command if task prompt is provided
-    if let (Some(prompt), Some(prompt_cmd_template)) = (&task_prompt, &provider_def.prompt_command) {
+    if let (Some(prompt), Some(prompt_cmd_template)) = (&task_prompt, &provider_def.prompt_command)
+    {
         let mut vars = std::collections::HashMap::new();
         vars.insert("prompt", prompt.as_str());
         let rendered = template::render(prompt_cmd_template, &vars);
@@ -878,8 +1110,14 @@ fn launch_session(
             .ok()?;
         if output.status.success() {
             let b = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !b.is_empty() && b != "HEAD" { Some(b) } else { None }
-        } else { None }
+            if !b.is_empty() && b != "HEAD" {
+                Some(b)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     });
 
     let (working_dir, worktree_path) = if use_worktree {
@@ -920,8 +1158,21 @@ fn launch_session(
     }
 
     // Persist to DB
-    let session = db::create_session_with_id(&conn, &session_id, &project_id, &name, tmux_name.as_deref(), &branch, worktree_path.as_deref(), Some(&provider_key), &backend, auto_approve, task_key.as_deref(), effective_base_branch.as_deref())
-        .map_err(|e| e.to_string())?;
+    let session = db::create_session_with_id(
+        &conn,
+        &session_id,
+        &project_id,
+        &name,
+        tmux_name.as_deref(),
+        &branch,
+        worktree_path.as_deref(),
+        Some(&provider_key),
+        &backend,
+        auto_approve,
+        task_key.as_deref(),
+        effective_base_branch.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
 
     // Fire on_start lifecycle hook
     if session.task_key.is_some() {
@@ -960,7 +1211,8 @@ fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<Str
     if let Some(ref wt) = session.worktree_path {
         return Some(wt.clone());
     }
-    db::list_projects(conn).ok()
+    db::list_projects(conn)
+        .ok()
         .and_then(|ps| ps.into_iter().find(|p| p.id == session.project_id))
         .map(|p| p.path)
 }
@@ -1006,10 +1258,13 @@ fn list_task_items(
 }
 
 fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
-    let key = cfg.default_task_manager.as_deref()
+    let key = cfg
+        .default_task_manager
+        .as_deref()
         .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))
         .ok_or("No task manager configured")?;
-    cfg.task_managers.get(key)
+    cfg.task_managers
+        .get(key)
         .ok_or_else(|| format!("Task manager '{}' not found in config", key))
 }
 
@@ -1019,34 +1274,55 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let menu = Menu::with_items(app, &[
-                &Submenu::with_items(app, "planeai", true, &[
-                    &PredefinedMenuItem::about(app, None, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::hide(app, None)?,
-                    &PredefinedMenuItem::hide_others(app, None)?,
-                    &PredefinedMenuItem::show_all(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ])?,
-                &Submenu::with_items(app, "Edit", true, &[
-                    &PredefinedMenuItem::undo(app, None)?,
-                    &PredefinedMenuItem::redo(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::cut(app, None)?,
-                    &PredefinedMenuItem::copy(app, None)?,
-                    &PredefinedMenuItem::paste(app, None)?,
-                    &PredefinedMenuItem::select_all(app, None)?,
-                ])?,
-                &Submenu::with_items(app, "Window", true, &[
-                    &PredefinedMenuItem::minimize(app, None)?,
-                    &PredefinedMenuItem::maximize(app, None)?,
-                    &PredefinedMenuItem::fullscreen(app, None)?,
-                ])?,
-            ])?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &Submenu::with_items(
+                        app,
+                        "planeai",
+                        true,
+                        &[
+                            &PredefinedMenuItem::about(app, None, None)?,
+                            &PredefinedMenuItem::separator(app)?,
+                            &PredefinedMenuItem::hide(app, None)?,
+                            &PredefinedMenuItem::hide_others(app, None)?,
+                            &PredefinedMenuItem::show_all(app, None)?,
+                            &PredefinedMenuItem::separator(app)?,
+                            &PredefinedMenuItem::quit(app, None)?,
+                        ],
+                    )?,
+                    &Submenu::with_items(
+                        app,
+                        "Edit",
+                        true,
+                        &[
+                            &PredefinedMenuItem::undo(app, None)?,
+                            &PredefinedMenuItem::redo(app, None)?,
+                            &PredefinedMenuItem::separator(app)?,
+                            &PredefinedMenuItem::cut(app, None)?,
+                            &PredefinedMenuItem::copy(app, None)?,
+                            &PredefinedMenuItem::paste(app, None)?,
+                            &PredefinedMenuItem::select_all(app, None)?,
+                        ],
+                    )?,
+                    &Submenu::with_items(
+                        app,
+                        "Window",
+                        true,
+                        &[
+                            &PredefinedMenuItem::minimize(app, None)?,
+                            &PredefinedMenuItem::maximize(app, None)?,
+                            &PredefinedMenuItem::fullscreen(app, None)?,
+                        ],
+                    )?,
+                ],
+            )?;
             app.set_menu(menu)?;
 
-            let app_dir = app.path().app_data_dir().expect("failed to get app data dir");
+            let app_dir = app
+                .path()
+                .app_data_dir()
+                .expect("failed to get app data dir");
             std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
@@ -1070,11 +1346,20 @@ fn main() {
             let themes_dir = config_dir.join("themes");
             let _ = std::fs::create_dir_all(&themes_dir);
             let bundled_themes: &[(&str, &str)] = &[
-                ("default.css", include_str!("../resources/themes/default.css")),
+                (
+                    "default.css",
+                    include_str!("../resources/themes/default.css"),
+                ),
                 ("github.css", include_str!("../resources/themes/github.css")),
                 ("one.css", include_str!("../resources/themes/one.css")),
-                ("catppuccin.css", include_str!("../resources/themes/catppuccin.css")),
-                ("dracula.css", include_str!("../resources/themes/dracula.css")),
+                (
+                    "catppuccin.css",
+                    include_str!("../resources/themes/catppuccin.css"),
+                ),
+                (
+                    "dracula.css",
+                    include_str!("../resources/themes/dracula.css"),
+                ),
             ];
             for (name, content) in bundled_themes {
                 let path = themes_dir.join(name);
@@ -1086,7 +1371,8 @@ fn main() {
             app.manage(DbState(Mutex::new(conn)));
 
             // Notification system
-            let notify_state: notify::SharedNotifyState = Arc::new(Mutex::new(notify::NotifyState::new()));
+            let notify_state: notify::SharedNotifyState =
+                Arc::new(Mutex::new(notify::NotifyState::new()));
             notify::start_socket_listener(&app_dir, notify_state.clone(), app.handle().clone());
             notify::start_silence_checker(notify_state.clone(), app.handle().clone());
             app.manage(NotifyHandle(notify_state.clone()));
@@ -1101,7 +1387,9 @@ fn main() {
             app.manage(PtyState(pty_mgr));
 
             // Warm font cache in background so preferences page opens instantly
-            std::thread::spawn(|| { let _ = list_monospace_fonts(); });
+            std::thread::spawn(|| {
+                let _ = list_monospace_fonts();
+            });
 
             Ok(())
         })

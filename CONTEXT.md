@@ -4,20 +4,20 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 
 ## Glossary
 
-| Term | Definition |
-|------|-----------|
-| **Project** | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit. |
-| **Session** | A single agent working on a single task within a project. Backed by either a tmux session (persistent) or a direct PTY (ephemeral). Contains one terminal pane running the agent CLI. |
-| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `direct` (PTY spawns agent directly, dies on app quit). Resolved at session creation from the global setting. |
-| **Provider** | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`. |
-| **Config file** | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
-| **Yolo mode** | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`. |
-| **Focus zone** | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus. |
-| **Tab switcher** | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. |
-| **Notification** | (future) A signal that an agent needs human attention. |
-| **Token** | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`. |
-| **Primitive** | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components. |
-| **Theme mode** | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active. |
+| Term                | Definition                                                                                                                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                    |
+| **Session**         | A single agent working on a single task within a project. Backed by either a tmux session (persistent) or a direct PTY (ephemeral). Contains one terminal pane running the agent CLI.                                |
+| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `direct` (PTY spawns agent directly, dies on app quit). Resolved at session creation from the global setting.        |
+| **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`.                          |
+| **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
+| **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                 |
+| **Focus zone**      | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                       |
+| **Tab switcher**    | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms.                                                                                                          |
+| **Notification**    | (future) A signal that an agent needs human attention.                                                                                                                                                               |
+| **Token**           | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                |
+| **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.      |
+| **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                   |
 
 ## Session lifecycle (v1)
 
@@ -53,18 +53,18 @@ create → active → exited → deleted
 
 ## Cross-platform strategy
 
-| Concern | macOS | Windows |
-|---------|-------|---------|
-| **Session backend** | tmux (persistent) or direct PTY | direct PTY only (tmux unavailable) |
-| **Notification IPC** | Unix socket (`notify.sock`) | Named pipe (`\\.\pipe\planeai-notify`) |
-| **Stop hook** | Bash script (`.sh`) via `nc -U` | PowerShell script (`.ps1`) via `NamedPipeClientStream` |
-| **Config dir** | `$XDG_CONFIG_HOME/planeai` or `~/.config/planeai` | `%APPDATA%\planeai` |
-| **Home dir** | `$HOME` | `$HOME` or `%USERPROFILE%` |
-| **Platform modifier** | Cmd (⌘) | Ctrl |
-| **Default font** | Menlo | Cascadia Mono |
-| **Title bar padding** | Left (traffic lights) | Right (caption buttons) |
-| **Font enumeration** | font-kit (cross-platform) | font-kit (cross-platform) |
-| **Window style** | Overlay title bar | Overlay title bar (Tauri handles caption buttons) |
+| Concern               | macOS                                             | Windows                                                |
+| --------------------- | ------------------------------------------------- | ------------------------------------------------------ |
+| **Session backend**   | tmux (persistent) or direct PTY                   | direct PTY only (tmux unavailable)                     |
+| **Notification IPC**  | Unix socket (`notify.sock`)                       | Named pipe (`\\.\pipe\planeai-notify`)                 |
+| **Stop hook**         | Bash script (`.sh`) via `nc -U`                   | PowerShell script (`.ps1`) via `NamedPipeClientStream` |
+| **Config dir**        | `$XDG_CONFIG_HOME/planeai` or `~/.config/planeai` | `%APPDATA%\planeai`                                    |
+| **Home dir**          | `$HOME`                                           | `$HOME` or `%USERPROFILE%`                             |
+| **Platform modifier** | Cmd (⌘)                                           | Ctrl                                                   |
+| **Default font**      | Menlo                                             | Cascadia Mono                                          |
+| **Title bar padding** | Left (traffic lights)                             | Right (caption buttons)                                |
+| **Font enumeration**  | font-kit (cross-platform)                         | font-kit (cross-platform)                              |
+| **Window style**      | Overlay title bar                                 | Overlay title bar (Tauri handles caption buttons)      |
 
 ## Session backend
 

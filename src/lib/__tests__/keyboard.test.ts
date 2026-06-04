@@ -62,9 +62,9 @@ describe("matchChord", () => {
   });
 
   it("returns tab_switch_reverse on Ctrl+Shift+Tab", () => {
-    expect(
-      matchChord(key({ key: "Tab", ctrlKey: true, shiftKey: true })),
-    ).toEqual({ type: "tab_switch_reverse" });
+    expect(matchChord(key({ key: "Tab", ctrlKey: true, shiftKey: true }))).toEqual({
+      type: "tab_switch_reverse",
+    });
   });
 
   it("returns null for unmatched keys", () => {

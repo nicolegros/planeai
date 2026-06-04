@@ -9,7 +9,7 @@ function playTone(freq: number, start: number, duration: number, gain = 0.15): v
   const c = getContext();
   const osc = c.createOscillator();
   const vol = c.createGain();
-  osc.type = 'triangle';
+  osc.type = "triangle";
   osc.frequency.value = freq;
   vol.gain.setValueAtTime(gain, start);
   vol.gain.exponentialRampToValueAtTime(0.001, start + duration);

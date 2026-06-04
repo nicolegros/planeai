@@ -62,7 +62,11 @@ fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Command failed ({}): {}", output.status, stderr.trim()));
+        return Err(format!(
+            "Command failed ({}): {}",
+            output.status,
+            stderr.trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -77,15 +81,27 @@ mod tests {
         // Create mock scripts that return fixed JSON
         let get_script = dir.join("mock_get.sh");
         fs::write(&get_script, "#!/bin/sh\necho '{\"key\":\"KAN-1\",\"title\":\"Fix bug\",\"status\":\"todo\",\"description\":\"A nasty bug\",\"priority\":1,\"blocked_by\":[]}'").unwrap();
-        fs::set_permissions(&get_script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        fs::set_permissions(
+            &get_script,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
 
         let list_script = dir.join("mock_list.sh");
         fs::write(&list_script, "#!/bin/sh\necho '[{\"key\":\"KAN-1\",\"title\":\"Fix bug\",\"status\":\"todo\",\"description\":\"\",\"priority\":1,\"blocked_by\":[]},{\"key\":\"KAN-2\",\"title\":\"Add feature\",\"status\":\"todo\",\"description\":\"\",\"priority\":2,\"blocked_by\":[\"KAN-1\"]}]'").unwrap();
-        fs::set_permissions(&list_script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        fs::set_permissions(
+            &list_script,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
 
         let move_script = dir.join("mock_move.sh");
         fs::write(&move_script, "#!/bin/sh\necho '{}'").unwrap();
-        fs::set_permissions(&move_script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        fs::set_permissions(
+            &move_script,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
 
         TaskManager {
             get_task: format!("{} {{key}}", get_script.display()),
