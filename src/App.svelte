@@ -446,6 +446,9 @@
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
+    showDiffButton={!!activeSessionId}
+    diffActive={!!(activeSessionId && diffTabActive[activeSessionId])}
+    onToggleDiff={handleToggleDiff}
   />
 
   <div class="flex flex-1 min-h-0">
