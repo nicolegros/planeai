@@ -8,7 +8,7 @@
   import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
-  import { loadTheme } from "./lib/theme-loader";
+  import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
@@ -75,9 +75,8 @@
   let diffTabActive = $state<Record<string, boolean>>({});
 
   const terminalBg = $derived.by(() => {
-    const s = getSettings();
-    const themeId = isDark() ? s.appearance.terminal_theme_dark : s.appearance.terminal_theme_light;
-    return getThemeById(themeId).colors.background;
+    isDark(); // track dark mode reactivity
+    return extractTerminalTheme().background || "var(--color-surface-950)";
   });
 
   // Delete confirmation state
