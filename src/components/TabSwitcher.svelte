@@ -13,6 +13,7 @@
     backend: string;
     tab_count: number;
     base_branch: string | null;
+    task_key: string | null;
   }
 
   interface Project {
@@ -46,6 +47,7 @@
       {@const session = getSession(id)}
       {#if session}
         <div class="px-3 py-2 rounded text-sm flex items-center gap-2 whitespace-nowrap {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
+          {#if session.task_key}<span class="shrink-0 text-[10px] font-medium {i === selectedIndex ? 'text-surface-200' : 'text-primary-600 dark:text-primary-400'}">{session.task_key}</span>{/if}
           <span class="font-medium">{session.name || session.branch}</span>
           <span class="ml-auto text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
           {#if agentStates[id] === 'Busy'}
