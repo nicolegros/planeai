@@ -246,7 +246,7 @@
       const parts = sessionId.split(":");
       const baseSessionId = parts[0];
       const tabIndex = parseInt(parts[1] || "0", 10);
-      invoke("spawn_tab", { sessionId: baseSessionId, tabIndex, onData }).then(() => {
+      invoke("spawn_tab", { sessionId: baseSessionId, tabIndex, darkMode: isDark(), onData }).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;
@@ -256,7 +256,7 @@
       });
     } else if (!exited) {
       // Attach immediately in onMount to avoid $effect double-fire
-      invoke("attach_session", { sessionId, onData }).then(() => {
+      invoke("attach_session", { sessionId, darkMode: isDark(), onData }).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;

@@ -106,6 +106,7 @@ impl PtyManager {
         &self,
         session_id: &str,
         target: PtyTarget,
+        dark_mode: bool,
         app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
@@ -140,6 +141,7 @@ impl PtyManager {
             }
         };
         cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORFGBG", if dark_mode { "15;0" } else { "0;15" });
         cmd.env("PLANEAI_SESSION_ID", session_id);
         if let Some(sock) = self.socket_path.lock().unwrap().as_deref() {
             cmd.env("PLANEAI_SOCKET", sock);

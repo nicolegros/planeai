@@ -72,7 +72,4 @@
   display: none;
 }
 
-.xterm-viewport,
-.xterm-screen {
-  background-color: transparent !important;
-}
+

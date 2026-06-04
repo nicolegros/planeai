@@ -166,7 +166,7 @@
                 <button
                   class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
                     {isActive
-                      ? 'bg-primary-500/15 text-primary-700 dark:text-primary-300 font-medium'
+                      ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium'
                       : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
                     {isSelected ? 'ring-1 ring-primary-500/50' : ''}
                     {session.status === 'exited' ? 'opacity-60' : ''}"

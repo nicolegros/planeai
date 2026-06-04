@@ -496,7 +496,7 @@
     />
   {/if}
 
-  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950">
+  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm
