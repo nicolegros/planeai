@@ -141,7 +141,7 @@ impl NotifyState {
             return false;
         }
         // Skip silence-based detection for sessions with a working hook
-        if self.meta.get(session_id).map_or(false, |m| m.hook_enabled) {
+        if self.meta.get(session_id).is_some_and(|m| m.hook_enabled) {
             return false;
         }
         if let Some(&last) = self.last_output.get(session_id) {
@@ -421,9 +421,8 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                             .get_meta(&msg.session_id)
                             .map(|m| m.name.clone())
                             .unwrap_or_else(|| "?".into());
-                        let hook_enabled = s
-                            .get_meta(&msg.session_id)
-                            .map_or(false, |m| m.hook_enabled);
+                        let hook_enabled =
+                            s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
                         if hook_enabled {
                             eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);
@@ -524,9 +523,8 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                             .get_meta(&msg.session_id)
                             .map(|m| m.name.clone())
                             .unwrap_or_else(|| "?".into());
-                        let hook_enabled = s
-                            .get_meta(&msg.session_id)
-                            .map_or(false, |m| m.hook_enabled);
+                        let hook_enabled =
+                            s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
                         if hook_enabled {
                             eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
                             s.notify_stop_debounced(&msg.session_id);

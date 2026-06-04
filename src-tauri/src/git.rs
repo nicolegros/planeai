@@ -26,7 +26,7 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
             continue;
         }
         if full.starts_with("refs/remotes/") {
-            let name = short.splitn(2, '/').nth(1).unwrap_or(short);
+            let name = short.split_once('/').map(|x| x.1).unwrap_or(short);
             remote.push(name.to_string());
         } else {
             local_names.insert(short.to_string());

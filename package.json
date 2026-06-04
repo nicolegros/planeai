@@ -10,8 +10,8 @@
     "tauri": "tauri",
     "run:build": "./src-tauri/target/release/planeai",
     "lint": "oxlint",
-    "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check",
+    "fmt": "oxfmt --ignore-path .oxfmtignore",
+    "fmt:check": "oxfmt --check --ignore-path .oxfmtignore",
     "test": "vitest run"
   },
   "dependencies": {

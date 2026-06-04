@@ -50,6 +50,7 @@ pub fn get_settings(conn: &Connection) -> Result<Settings> {
     )
 }
 
+#[allow(dead_code)]
 pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
     conn.execute(
         "UPDATE settings SET terminal_theme_dark = ?1, terminal_theme_light = ?2, font_size = ?3, font_family = ?4, appearance_mode = ?5 WHERE id = 1",
@@ -237,7 +238,7 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
             path: row.get(2)?,
         })
     })?;
-    Ok(rows.next().transpose()?)
+    rows.next().transpose()
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
@@ -291,6 +292,7 @@ pub fn create_session(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_session_with_id(
     conn: &Connection,
     id: &str,
@@ -450,6 +452,7 @@ pub fn restore_session(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn has_active_checkout_session(conn: &Connection, project_id: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND status = 'active' AND worktree_path IS NULL",
@@ -517,7 +520,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
             base_branch: row.get(14)?,
         })
     })?;
-    Ok(rows.next().transpose()?)
+    rows.next().transpose()
 }
 
 #[cfg(test)]
