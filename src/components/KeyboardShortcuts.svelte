@@ -1,0 +1,63 @@
+<script lang="ts">
+  import { Dialog } from "bits-ui";
+  import { MOD_LABEL } from "../lib/keyboard";
+
+  interface Props {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }
+
+  let { open, onOpenChange }: Props = $props();
+
+  const shortcuts = [
+    { section: "General", items: [
+      { keys: `${MOD_LABEL}K`, description: "Command menu" },
+      { keys: `${MOD_LABEL}/`, description: "Keyboard shortcuts" },
+      { keys: `${MOD_LABEL},`, description: "Preferences" },
+      { keys: `Escape`, description: "Dismiss / focus terminal" },
+    ]},
+    { section: "Sessions", items: [
+      { keys: `${MOD_LABEL}N`, description: "New session" },
+      { keys: `${MOD_LABEL}⇧N`, description: "New project" },
+      { keys: `${MOD_LABEL}1–9`, description: "Jump to session" },
+      { keys: `Ctrl+Tab`, description: "Switch session (MRU)" },
+    ]},
+    { section: "Tabs", items: [
+      { keys: `${MOD_LABEL}T`, description: "New tab" },
+      { keys: `${MOD_LABEL}W`, description: "Close tab" },
+      { keys: `${MOD_LABEL}⇧]`, description: "Next tab" },
+      { keys: `${MOD_LABEL}⇧[`, description: "Previous tab" },
+    ]},
+    { section: "View", items: [
+      { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
+      { keys: `${MOD_LABEL}D`, description: "Toggle diff" },
+    ]},
+  ];
+</script>
+
+<Dialog.Root {open} {onOpenChange}>
+  <Dialog.Portal>
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+    <Dialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+    >
+      <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Keyboard Shortcuts</Dialog.Title>
+      <Dialog.Description class="sr-only">List of keyboard shortcuts available in planeai.</Dialog.Description>
+      <div class="space-y-4">
+        {#each shortcuts as group}
+          <div>
+            <h3 class="text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">{group.section}</h3>
+            <div class="space-y-1">
+              {#each group.items as shortcut}
+                <div class="flex items-center justify-between py-1">
+                  <span class="text-sm text-surface-700 dark:text-surface-300">{shortcut.description}</span>
+                  <kbd class="rounded border border-surface-300 dark:border-surface-600 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 text-xs text-surface-600 dark:text-surface-400 font-mono">{shortcut.keys}</kbd>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>
