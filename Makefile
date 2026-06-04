@@ -16,6 +16,9 @@ test:
 	pnpm test
 	cd src-tauri && cargo test
 
+test-e2e: build
+	./tests/e2e_session_persistence.sh
+
 dev-bundle:
 	$(eval BRANCH := $(shell git branch --show-current | sed 's|/|-|g'))
 	$(eval SUFFIX := $(if $(filter main,$(BRANCH)),dev,$(if $(BRANCH),$(shell echo $(BRANCH) | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) printf substr($$i,1,1); printf int(rand()*10)}'),dev)))
