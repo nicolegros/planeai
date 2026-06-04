@@ -2,7 +2,7 @@
   import type { FocusZone } from "../lib/focus.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
   import { ContextMenu } from "./ui";
-  import { GitFork } from "@lucide/svelte";
+  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings } from "@lucide/svelte";
 
   interface Project {
     id: string;
@@ -119,7 +119,7 @@
       title="Add project ({MOD_LABEL}N)"
       class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
     >
-      <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>
+      <Plus class="size-4" />
     </button>
   </div>
 
@@ -173,11 +173,11 @@
                     <span class="ml-auto shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
                   {:else if agentStates[session.id] === 'Busy'}
                     <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>
+                      <LoaderCircle class="size-3.5" />
                     </span>
                   {:else if agentStates[session.id] === 'Idle'}
                     <span class="ml-auto shrink-0 size-3.5 animate-pulse text-amber-500" title="Needs attention">
-                      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 3.53 2.13 6.5 4 8.5V19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1.5c1.87-2 4-4.97 4-8.5a7 7 0 0 0-7-7zm-1 19h2a1 1 0 0 1 0 2h-2a1 1 0 0 1 0-2z"/></svg>
+                      <Lightbulb class="size-3.5" />
                     </span>
                   {/if}
                 </button>
@@ -200,7 +200,7 @@
       title="Preferences ({MOD_LABEL},)"
       class="size-7 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
     >
-      <svg class="size-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      <Settings class="size-4" />
     </button>
   </div>
 </aside>

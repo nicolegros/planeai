@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { LoaderCircle, Lightbulb } from "@lucide/svelte";
+
   interface Session {
     id: string;
     project_id: string;
@@ -48,11 +50,11 @@
           <span class="text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
           {#if agentStates[id] === 'Busy'}
             <span class="ml-auto shrink-0 size-3.5 animate-spin {i === selectedIndex ? 'text-surface-200' : 'text-surface-500'}">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>
+              <LoaderCircle class="size-3.5" />
             </span>
           {:else if agentStates[id] === 'Idle'}
             <span class="ml-auto shrink-0 size-3.5 animate-pulse text-amber-500">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a7 7 0 0 0-7 7c0 3.53 2.13 6.5 4 8.5V19a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-1.5c1.87-2 4-4.97 4-8.5a7 7 0 0 0-7-7zm-1 19h2a1 1 0 0 1 0 2h-2a1 1 0 0 1 0-2z"/></svg>
+              <Lightbulb class="size-3.5" />
             </span>
           {/if}
         </div>
