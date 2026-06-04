@@ -60,6 +60,9 @@ struct PtyHandle {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     flow: Arc<FlowControl>,
+    /// Set to true when this PTY is being replaced by a new attach (not a natural exit).
+    /// Flusher threads check this before emitting pty-exited.
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Drop for PtyHandle {
@@ -150,17 +153,27 @@ impl PtyManager {
         let writer = pair.master.take_writer().map_err(|e| format!("failed to get writer: {e}"))?;
         let mut reader = pair.master.try_clone_reader().map_err(|e| format!("failed to get reader: {e}"))?;
 
+        let cancelled = Arc::new(AtomicBool::new(false));
+
         let handle = Arc::new(Mutex::new(PtyHandle {
             master: pair.master,
             writer,
             child,
             flow: Arc::new(FlowControl::new()),
+            cancelled: cancelled.clone(),
         }));
 
         let flow_clone = handle.lock().unwrap().flow.clone();
 
         {
             let mut ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+            // If replacing an existing PTY, mark it cancelled so its flusher
+            // won't emit pty-exited (this is a re-attach, not a real exit).
+            if let Some(old) = ptys.get(session_id) {
+                if let Ok(h) = old.lock() {
+                    h.cancelled.store(true, Ordering::Release);
+                }
+            }
             ptys.insert(session_id.to_string(), handle);
         }
 
@@ -218,6 +231,7 @@ impl PtyManager {
         let done_f = done.clone();
         let exit_event = exit_event_name.clone();
         let app_flusher = app.clone();
+        let cancelled_f = cancelled.clone();
         thread::spawn(move || {
             let (lock, cv) = &*pending_f;
             loop {
@@ -231,7 +245,9 @@ impl PtyManager {
                                 let chunk = std::mem::take(&mut *g);
                                 let _ = on_data.send(Response::new(chunk));
                             }
-                            let _ = app_flusher.emit(&exit_event, ());
+                            if !cancelled_f.load(Ordering::Acquire) {
+                                let _ = app_flusher.emit(&exit_event, ());
+                            }
                             return;
                         }
                         let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
@@ -250,7 +266,9 @@ impl PtyManager {
                     break;
                 }
             }
-            let _ = app_flusher.emit(&exit_event, ());
+            if !cancelled_f.load(Ordering::Acquire) {
+                let _ = app_flusher.emit(&exit_event, ());
+            }
         });
 
         Ok(())
