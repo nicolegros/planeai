@@ -429,8 +429,9 @@ fn get_file_diff(
     repo_path: String,
     base_branch: String,
     file_path: String,
+    old_path: Option<String>,
 ) -> Result<git::FileDiff, String> {
-    git::get_file_diff(&repo_path, &base_branch, &file_path)
+    git::get_file_diff(&repo_path, &base_branch, &file_path, old_path.as_deref())
 }
 
 #[tauri::command]
@@ -472,8 +473,10 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn attach_session(
     session_id: String,
+    dark_mode: Option<bool>,
     on_data: Channel<tauri::ipc::Response>,
     db_state: State<DbState>,
     config_state: State<ConfigState>,
@@ -556,9 +559,13 @@ fn attach_session(
         }
     };
 
-    state
-        .0
-        .attach(&session_id, pty_target, app.clone(), on_data)?;
+    state.0.attach(
+        &session_id,
+        pty_target,
+        dark_mode.unwrap_or(true),
+        app.clone(),
+        on_data,
+    )?;
 
     // Register with notification system
     {
@@ -866,6 +873,7 @@ fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), Strin
 fn spawn_tab(
     session_id: String,
     tab_index: u32,
+    dark_mode: Option<bool>,
     on_data: Channel<tauri::ipc::Response>,
     db_state: State<DbState>,
     state: State<PtyState>,
@@ -901,7 +909,9 @@ fn spawn_tab(
         args: vec!["-l".to_string()],
         cwd,
     };
-    state.0.attach(&pty_key, target, app, on_data)?;
+    state
+        .0
+        .attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
 
     let new_count = session.tab_count + 1;
     db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;

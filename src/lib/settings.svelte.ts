@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { loadTheme } from "./theme-loader";
 
 export type AppearanceMode = "system" | "light" | "dark";
@@ -33,10 +34,6 @@ export interface TaskManager {
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
-    terminal_theme_dark: string;
-    terminal_theme_light: string;
-    diff_theme_dark: string;
-    diff_theme_light: string;
     theme: string;
   };
   terminal: {
@@ -54,10 +51,6 @@ export interface AppConfig {
 let config = $state<AppConfig>({
   appearance: {
     mode: "system",
-    terminal_theme_dark: "one-dark",
-    terminal_theme_light: "one-light",
-    diff_theme_dark: "vs-dark",
-    diff_theme_light: "vs",
     theme: "default",
   },
   terminal: {
@@ -86,6 +79,15 @@ if (typeof window !== "undefined") {
 function applyDarkClass() {
   const dark = isDark();
   document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
+  // Force scrollbar repaint in WebView
+  document.querySelectorAll("[class*='overflow-y']").forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    htmlEl.style.overflow = "hidden";
+    requestAnimationFrame(() => {
+      htmlEl.style.overflow = "";
+    });
+  });
 }
 
 /** Reactive — reads $state vars so Svelte tracks it in $effect/$derived */
@@ -114,4 +116,5 @@ export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
   if (config.appearance.theme !== prevTheme) {
     loadTheme();
   }
+  emit("settings-changed");
 }

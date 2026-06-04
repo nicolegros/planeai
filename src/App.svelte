@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
   import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
@@ -10,7 +11,6 @@
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
-  import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -20,7 +20,6 @@
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
-  import PreferencesPage from "./components/PreferencesPage.svelte";
   import TabBar from "./components/TabBar.svelte";
   import DiffTab from "./components/DiffTab.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
@@ -63,8 +62,25 @@
   let agentStates = $state<Record<string, string>>({});
 
   // Preferences state
-  let showPreferences = $state(false);
   let showShortcuts = $state(false);
+
+  async function openPreferences() {
+    const existing = await WebviewWindow.getByLabel("preferences");
+    if (existing) {
+      existing.setFocus();
+      return;
+    }
+    new WebviewWindow("preferences", {
+      url: "index.html?page=preferences",
+      title: "Preferences",
+      width: 700,
+      height: 550,
+      parent: getCurrentWindow(),
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+    });
+  }
 
   // Hook install prompt
   let showHookPrompt = $state(false);
@@ -88,6 +104,7 @@
     await invoke("rename_session", { id, name });
     sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
     renamingSessionId = null;
+    focusTerminal();
   }
 
   async function loadProjects() {
@@ -222,8 +239,12 @@
   onMount(() => {
     loadProjects();
     loadSessions();
-    loadSettings();
-    loadTheme();
+    loadSettings().then(() => loadTheme());
+
+    // Reload settings/theme when changed from preferences window
+    const unlistenSettings = listen("settings-changed", () => {
+      loadSettings().then(() => loadTheme());
+    });
 
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {
@@ -290,14 +311,13 @@
         }
         showSessionForm = false;
         showProjectForm = false;
-        showPreferences = false;
         showShortcuts = false;
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
-        showPreferences = !showPreferences;
+        openPreferences();
       } else if (action.type === "show_shortcuts") {
         showShortcuts = !showShortcuts;
       } else if (action.type === "new_tab") {
@@ -312,7 +332,7 @@
         handleToggleDiff();
       }
     },
-    () => !showPreferences && !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling
+    () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling
     );
 
     // Listen for Ctrl release to commit tab switch
@@ -336,6 +356,7 @@
     return () => {
       cleanup();
       unlistenState.then((fn) => fn());
+      unlistenSettings.then((fn) => fn());
       unlistenClose.then((fn) => fn());
       exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
@@ -467,18 +488,15 @@
       onArchiveSession={(s) => archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
       onRestartSession={restartSession}
-      onOpenPreferences={() => (showPreferences = true)}
+      onOpenPreferences={openPreferences}
       onRenameSession={doRename}
-      onStartRename={(id) => (renamingSessionId = id || null)}
+      onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
     />
   {/if}
 
-  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950">
-    {#if showPreferences}
-      <PreferencesPage onBack={() => { showPreferences = false; focusTerminal(); }} />
-    {:else}
+  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm
@@ -490,7 +508,7 @@
 
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
+        <Dialog.Overlay class="fixed inset-0 z-40" />
         <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 shadow-lg dark:border-surface-700 dark:bg-surface-900">
           <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
           <SessionForm
@@ -634,7 +652,7 @@
           {repoPath}
           {baseBranch}
           visible={session.id === activeSessionId && isDiffActive}
-          theme={isDark() ? (getSettings().appearance.diff_theme_dark ?? "vs-dark") : (getSettings().appearance.diff_theme_light ?? "vs")}
+          theme={isDark() ? "vs-dark" : "vs"}
         />
       {/if}
     {/each}
@@ -662,7 +680,7 @@
     {#if sessionToDelete}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
@@ -683,7 +701,7 @@
       {@const worktreeCount = projSessions.filter((s) => s.worktree_path).length}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) projectToDelete = null; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
@@ -704,7 +722,7 @@
     {#if showQuitConfirm}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-black/50" />
+          <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <Dialog.Content
             class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
@@ -719,7 +737,6 @@
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-    {/if}
     {/if}
   </section>
   </div>

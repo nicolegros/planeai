@@ -1,12 +1,35 @@
 import type { DiffRenderer } from "./diff-renderer";
 import { MergeView, goToNextChunk, goToPreviousChunk } from "@codemirror/merge";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorView,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+} from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
-import { basicSetup } from "codemirror";
 import { languages } from "@codemirror/language-data";
-import { LanguageDescription } from "@codemirror/language";
+import {
+  LanguageDescription,
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  foldGutter,
+} from "@codemirror/language";
+
+// Minimal, read-only feature set. We intentionally avoid `basicSetup` because it
+// bundles history, autocompletion, search, linting and bracket matching — none of
+// which a read-only diff needs, and all of which add construction cost (×2 editors).
+const readOnlyExtensions = [
+  lineNumbers(),
+  foldGutter(),
+  highlightActiveLine(),
+  highlightActiveLineGutter(),
+  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  EditorState.readOnly.of(true),
+  EditorView.editable.of(false),
+];
 
 const fontCompartment = new Compartment();
+const themeCompartment = new Compartment();
 const langCompartment = new Compartment();
 
 const darkTheme = EditorView.theme(
@@ -22,8 +45,40 @@ const darkTheme = EditorView.theme(
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
       backgroundColor: "var(--editor-selection)",
     },
-    ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
-    ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
+    // Terax-style diff: subtle line bg + vivid inline text + gutter accent
+    ".cm-changedLine.cm-insertedLine": {
+      backgroundColor: "rgba(110, 200, 120, 0.05) !important",
+    },
+    ".cm-changedLine.cm-deletedLine": {
+      backgroundColor: "rgba(220, 90, 90, 0.05) !important",
+    },
+    ".cm-changedText": {
+      background: "rgba(110, 200, 120, 0.20) !important",
+      borderRadius: "3px",
+      padding: "0 1px",
+    },
+    "&.cm-merge-a .cm-changedText": {
+      background: "rgba(220, 90, 90, 0.22) !important",
+      borderRadius: "3px",
+      padding: "0 1px",
+    },
+    "&.cm-merge-b .cm-changedLineGutter, .cm-changedLineGutter.cm-insertedLineGutter": {
+      background: "rgba(110, 200, 120, 0.55) !important",
+    },
+    "&.cm-merge-a .cm-changedLineGutter, .cm-changedLineGutter.cm-deletedLineGutter": {
+      background: "rgba(220, 90, 90, 0.50) !important",
+    },
+    ".cm-changeGutter": {
+      width: "2px !important",
+      paddingLeft: "0 !important",
+    },
+    ".cm-collapsedLines": {
+      backgroundColor: "transparent",
+      color: "var(--color-surface-400, #9ca3af)",
+      fontSize: "10.5px",
+      padding: "2px 8px",
+      opacity: "0.7",
+    },
   },
   { dark: true },
 );
@@ -40,8 +95,39 @@ const lightTheme = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
     backgroundColor: "var(--editor-selection)",
   },
-  ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
-  ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
+  ".cm-changedLine.cm-insertedLine": {
+    backgroundColor: "rgba(80, 160, 90, 0.08) !important",
+  },
+  ".cm-changedLine.cm-deletedLine": {
+    backgroundColor: "rgba(200, 60, 60, 0.08) !important",
+  },
+  ".cm-changedText": {
+    background: "rgba(80, 160, 90, 0.22) !important",
+    borderRadius: "3px",
+    padding: "0 1px",
+  },
+  "&.cm-merge-a .cm-changedText": {
+    background: "rgba(200, 60, 60, 0.25) !important",
+    borderRadius: "3px",
+    padding: "0 1px",
+  },
+  "&.cm-merge-b .cm-changedLineGutter, .cm-changedLineGutter.cm-insertedLineGutter": {
+    background: "rgba(80, 160, 90, 0.55) !important",
+  },
+  "&.cm-merge-a .cm-changedLineGutter, .cm-changedLineGutter.cm-deletedLineGutter": {
+    background: "rgba(200, 60, 60, 0.50) !important",
+  },
+  ".cm-changeGutter": {
+    width: "2px !important",
+    paddingLeft: "0 !important",
+  },
+  ".cm-collapsedLines": {
+    backgroundColor: "transparent",
+    color: "var(--color-surface-500, #6b7280)",
+    fontSize: "10.5px",
+    padding: "2px 8px",
+    opacity: "0.7",
+  },
 });
 
 function fontExtension(family: string, size: number) {
@@ -78,12 +164,21 @@ export class CmDiffRenderer implements DiffRenderer {
     this.original = original;
     this.modified = modified;
     this.language = language;
+    // Always rebuild: dispatching to a and b sequentially causes an intermediate
+    // state where chunks are computed against mismatched documents, breaking
+    // collapseUnchanged decorations that don't recover after the second dispatch.
     this.rebuild();
   }
 
   setTheme(theme: string): void {
+    if (theme === this.currentTheme && this.mergeView) return;
     this.currentTheme = theme;
-    this.rebuild();
+    // Theme is a compartment, so swap it without rebuilding the view.
+    if (this.mergeView) {
+      const ext = isDarkTheme(theme) ? darkTheme : lightTheme;
+      this.mergeView.a.dispatch({ effects: themeCompartment.reconfigure(ext) });
+      this.mergeView.b.dispatch({ effects: themeCompartment.reconfigure(ext) });
+    }
   }
 
   setFont(family: string, size: number): void {
@@ -119,32 +214,37 @@ export class CmDiffRenderer implements DiffRenderer {
     this.container = null;
   }
 
+  private applyLanguage() {
+    const langDesc = findLanguage(this.language);
+    if (!langDesc) {
+      if (this.mergeView) {
+        this.mergeView.a.dispatch({ effects: langCompartment.reconfigure([]) });
+        this.mergeView.b.dispatch({ effects: langCompartment.reconfigure([]) });
+      }
+      return;
+    }
+    const targetLanguage = this.language;
+    langDesc.load().then((support) => {
+      // Guard against a newer file having been selected while loading.
+      if (!this.mergeView || this.language !== targetLanguage) return;
+      this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+      this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+    });
+  }
+
   private rebuild() {
     if (!this.container) return;
     this.mergeView?.destroy();
     this.container.innerHTML = "";
 
-    const dark = isDarkTheme(this.currentTheme);
-    const themeExt = dark ? darkTheme : lightTheme;
-    const font = fontCompartment.of(fontExtension(this.fontFamily, this.fontSize));
+    const themeExt = isDarkTheme(this.currentTheme) ? darkTheme : lightTheme;
 
     const sharedExtensions = [
-      basicSetup,
-      EditorState.readOnly.of(true),
-      EditorView.editable.of(false),
-      themeExt,
-      font,
+      readOnlyExtensions,
+      themeCompartment.of(themeExt),
+      fontCompartment.of(fontExtension(this.fontFamily, this.fontSize)),
       langCompartment.of([]),
     ];
-
-    const langDesc = findLanguage(this.language);
-    if (langDesc) {
-      langDesc.load().then((support) => {
-        if (!this.mergeView) return;
-        this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
-        this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
-      });
-    }
 
     this.mergeView = new MergeView({
       a: { doc: this.original, extensions: sharedExtensions },
@@ -157,5 +257,7 @@ export class CmDiffRenderer implements DiffRenderer {
 
     this.mergeView.dom.style.height = "100%";
     this.mergeView.dom.style.overflow = "auto";
+
+    this.applyLanguage();
   }
 }

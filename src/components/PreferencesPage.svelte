@@ -1,20 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
-  import { getThemesByVariant } from "../lib/terminal-themes";
+  import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
+  import { loadTheme } from "../lib/theme-loader";
   import { Select, Input } from "./ui";
-
-  interface Props {
-    onBack: () => void;
-  }
-
-  let { onBack }: Props = $props();
+  import { Palette, Bot, ListTodo } from "@lucide/svelte";
 
   const config = $derived(getSettings());
-  const darkThemes = getThemesByVariant("dark");
-  const lightThemes = getThemesByVariant("light");
-
   let fontItems = $state<{ value: string; label: string }[]>([]);
   let availableThemes = $state<string[]>([]);
   let editingProvider = $state<string | null>(null);
@@ -23,10 +15,13 @@
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
   let tmuxAvailable = $state(true);
+  let activeTab = $state("Appearance");
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
   onMount(async () => {
+    await loadSettings();
+    loadTheme();
     const fonts = await invoke<string[]>("list_monospace_fonts");
     fontItems = fonts.map((f) => ({ value: f, label: f }));
     availableThemes = await invoke<string[]>("list_themes");
@@ -144,19 +139,19 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto bg-surface-50 dark:bg-surface-950 p-8">
-  <div class="max-w-2xl mx-auto space-y-8">
-    <div class="flex items-center gap-3">
+<div class="h-screen flex flex-col overflow-hidden bg-surface-50 dark:bg-surface-950">
+  <nav class="flex justify-center gap-1 border-b border-surface-200 dark:border-surface-700 px-8 pt-4">
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}] as tab (tab.name)}
       <button
-        class="rounded p-1.5 text-surface-700 hover:text-surface-900 dark:text-surface-300 dark:hover:text-surface-100 hover:bg-surface-200 dark:hover:bg-surface-800"
-        onclick={onBack}
-        aria-label="Back"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-      </button>
-      <h1 class="text-xl font-semibold text-surface-900 dark:text-surface-50">Preferences</h1>
-    </div>
+        class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-200'}"
+        onclick={() => activeTab = tab.name}
+      ><tab.icon size={16} />{tab.name}</button>
+    {/each}
+  </nav>
+  <div class="flex-1 overflow-y-auto px-8 py-6">
+  <div class="max-w-2xl mx-auto space-y-8">
 
+    {#if activeTab === "Appearance"}
     <!-- Appearance Mode -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Appearance</h2>
@@ -183,89 +178,7 @@
       </div>
     </section>
 
-    <!-- Dark Terminal Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Terminal Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each darkThemes as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_dark: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.green}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.yellow}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.blue}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.magenta}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.cyan}"></span>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
 
-    <!-- Light Terminal Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Terminal Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each lightThemes as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_light: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.green}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.yellow}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.blue}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.magenta}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.cyan}"></span>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
-
-    <!-- Dark Diff Editor Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Diff Editor Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each [{ id: "vs-dark", name: "VS Dark", bg: "#1e1e1e", added: "#2ea04370", removed: "#f8514970" }, { id: "hc-black", name: "High Contrast", bg: "#000000", added: "#2ea04390", removed: "#f8514990" }] as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.diff_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, diff_theme_dark: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex flex-col justify-center px-2 gap-0.5 text-[9px] font-mono" style="background-color: {theme.bg}">
-              <div class="rounded px-1" style="background-color: {theme.removed}"><span class="text-red-300">- removed</span></div>
-              <div class="rounded px-1" style="background-color: {theme.added}"><span class="text-green-300">+ added</span></div>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
-
-    <!-- Light Diff Editor Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Diff Editor Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each [{ id: "vs", name: "VS Light", bg: "#ffffff", added: "#2ea04330", removed: "#f8514930" }, { id: "hc-light", name: "High Contrast", bg: "#ffffff", added: "#2ea04360", removed: "#f8514960" }] as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.diff_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, diff_theme_light: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex flex-col justify-center px-2 gap-0.5 text-[9px] font-mono border border-surface-200" style="background-color: {theme.bg}">
-              <div class="rounded px-1" style="background-color: {theme.removed}"><span class="text-red-700">- removed</span></div>
-              <div class="rounded px-1" style="background-color: {theme.added}"><span class="text-green-700">+ added</span></div>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
 
     <!-- Font Size -->
     <section class="space-y-3">
@@ -312,6 +225,9 @@
     </section>
     {/if}
 
+    {/if}
+
+    {#if activeTab === "Models"}
     <!-- Session Backend -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
@@ -434,6 +350,9 @@
       {/if}
     </section>
 
+    {/if}
+
+    {#if activeTab === "Task Management"}
     <!-- Task Managers -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Task Manager</h2>
@@ -516,5 +435,7 @@
         <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = true; }}>+ Add Task Manager</button>
       {/if}
     </section>
+    {/if}
+  </div>
   </div>
 </div>

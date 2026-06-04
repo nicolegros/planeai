@@ -143,6 +143,8 @@ pub struct ChangedFile {
     pub status: String,
     pub additions: u32,
     pub deletions: u32,
+    /// For renames, the original path before the rename.
+    pub old_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -150,6 +152,30 @@ pub struct FileDiff {
     pub original: String,
     pub modified: String,
     pub language: String,
+}
+
+/// Parse a git rename numstat path like `{old => new}/file.rs` or `old/path => new/path`
+/// into (old_path, new_path).
+fn parse_rename_path(raw: &str) -> (String, String) {
+    if let Some(arrow_pos) = raw.find(" => ") {
+        // Check for brace syntax: prefix{old => new}suffix
+        if let Some(brace_start) = raw[..arrow_pos].rfind('{') {
+            if let Some(brace_end) = raw[arrow_pos..].find('}') {
+                let prefix = &raw[..brace_start];
+                let old_part = &raw[brace_start + 1..arrow_pos];
+                let new_part = &raw[arrow_pos + 4..arrow_pos + brace_end];
+                let suffix = &raw[arrow_pos + brace_end + 1..];
+                let old = format!("{prefix}{old_part}{suffix}");
+                let new = format!("{prefix}{new_part}{suffix}");
+                return (old.replace("//", "/"), new.replace("//", "/"));
+            }
+        }
+        // Simple rename: old/path => new/path
+        let old = raw[..arrow_pos].to_string();
+        let new = raw[arrow_pos + 4..].to_string();
+        return (old, new);
+    }
+    (raw.to_string(), raw.to_string())
 }
 
 /// Get the list of changed files between a base branch and the current working tree.
@@ -169,18 +195,21 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
     let mut files: Vec<ChangedFile> = Vec::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
         if parts.len() != 3 {
             continue;
         }
         let additions = parts[0].parse::<u32>().unwrap_or(0);
         let deletions = parts[1].parse::<u32>().unwrap_or(0);
-        let path = parts[2].to_string();
+        let raw_path = parts[2];
+        let (old_path, new_path) = parse_rename_path(raw_path);
+        let is_rename = old_path != new_path;
         files.push(ChangedFile {
-            path,
+            path: new_path,
             status: String::new(),
             additions,
             deletions,
+            old_path: if is_rename { Some(old_path) } else { None },
         });
     }
 
@@ -198,7 +227,12 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
                 continue;
             }
             let status = parts[0].chars().next().unwrap_or('M').to_string();
-            let path = parts[parts.len() - 1];
+            // Renames have 3 columns: R100\told_path\tnew_path
+            let path = if status == "R" && parts.len() >= 3 {
+                parts[2]
+            } else {
+                parts[parts.len() - 1]
+            };
             if let Some(f) = files.iter_mut().find(|f| f.path == path) {
                 f.status = status;
             }
@@ -226,6 +260,7 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
                 status: "A".to_string(),
                 additions,
                 deletions: 0,
+                old_path: None,
             });
         }
     }
@@ -235,15 +270,18 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 
 /// Get the original and modified content of a file for diff display.
 /// Original = content at the base branch, Modified = current working tree content.
+/// For renames, `old_path` specifies the path in the base branch.
 pub fn get_file_diff(
     repo_path: &str,
     base_branch: &str,
     file_path: &str,
+    old_path: Option<&str>,
 ) -> Result<FileDiff, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
+    let base_file_path = old_path.unwrap_or(file_path);
     // Get original content from base branch
     let original_output = Command::new("git")
-        .args(["show", &format!("{resolved}:{file_path}")])
+        .args(["show", &format!("{resolved}:{base_file_path}")])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -476,11 +514,13 @@ mod tests {
         assert_eq!(modified.status, "M");
         assert_eq!(modified.additions, 1);
         assert_eq!(modified.deletions, 0);
+        assert_eq!(modified.old_path, None);
 
         let added = files.iter().find(|f| f.path == "new_file.txt").unwrap();
         assert_eq!(added.status, "A");
         assert_eq!(added.additions, 1);
         assert_eq!(added.deletions, 0);
+        assert_eq!(added.old_path, None);
     }
 
     #[test]
@@ -499,7 +539,8 @@ mod tests {
     #[test]
     fn get_file_diff_returns_original_and_modified_for_modified_file() {
         let repo = init_repo_with_feature_branch();
-        let diff = get_file_diff(repo.path().to_str().unwrap(), "main", "existing.txt").unwrap();
+        let diff =
+            get_file_diff(repo.path().to_str().unwrap(), "main", "existing.txt", None).unwrap();
         assert_eq!(diff.original, "hello\n");
         assert_eq!(diff.modified, "hello\nworld\n");
         assert_eq!(diff.language, "plaintext");
@@ -508,7 +549,8 @@ mod tests {
     #[test]
     fn get_file_diff_returns_empty_original_for_new_file() {
         let repo = init_repo_with_feature_branch();
-        let diff = get_file_diff(repo.path().to_str().unwrap(), "main", "new_file.txt").unwrap();
+        let diff =
+            get_file_diff(repo.path().to_str().unwrap(), "main", "new_file.txt", None).unwrap();
         assert_eq!(diff.original, "");
         assert_eq!(diff.modified, "brand new\n");
     }
@@ -550,9 +592,125 @@ mod tests {
             .output()
             .unwrap();
 
-        let diff = get_file_diff(p.to_str().unwrap(), "main", "doomed.txt").unwrap();
+        let diff = get_file_diff(p.to_str().unwrap(), "main", "doomed.txt", None).unwrap();
         assert_eq!(diff.original, "will be deleted\n");
         assert_eq!(diff.modified, "");
+    }
+
+    #[test]
+    fn get_changed_files_detects_renamed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        fs::create_dir_all(p.join("src/client")).unwrap();
+        fs::write(p.join("src/client/auth.rs"), "fn auth() {}\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        fs::create_dir_all(p.join("crates/client/src")).unwrap();
+        Command::new("git")
+            .args(["mv", "src/client/auth.rs", "crates/client/src/auth.rs"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "rename"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+
+        let files = get_changed_files(p.to_str().unwrap(), "main").unwrap();
+        let renamed = files
+            .iter()
+            .find(|f| f.path == "crates/client/src/auth.rs")
+            .unwrap();
+        assert_eq!(renamed.status, "R");
+        assert_eq!(renamed.old_path, Some("src/client/auth.rs".to_string()));
+    }
+
+    #[test]
+    fn get_file_diff_uses_old_path_for_renamed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        fs::create_dir_all(p.join("src")).unwrap();
+        fs::write(p.join("src/lib.rs"), "original content\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        fs::create_dir_all(p.join("crates")).unwrap();
+        Command::new("git")
+            .args(["mv", "src/lib.rs", "crates/lib.rs"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        fs::write(p.join("crates/lib.rs"), "modified content\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "rename+edit"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+
+        let diff = get_file_diff(
+            p.to_str().unwrap(),
+            "main",
+            "crates/lib.rs",
+            Some("src/lib.rs"),
+        )
+        .unwrap();
+        assert_eq!(diff.original, "original content\n");
+        assert_eq!(diff.modified, "modified content\n");
+    }
+
+    #[test]
+    fn parse_rename_path_brace_syntax() {
+        let (old, new) = parse_rename_path("{src/client => crates/client/src}/auth.rs");
+        assert_eq!(old, "src/client/auth.rs");
+        assert_eq!(new, "crates/client/src/auth.rs");
+    }
+
+    #[test]
+    fn parse_rename_path_arrow_syntax() {
+        let (old, new) = parse_rename_path("src/repo/mod.rs => crates/persistence/src/lib.rs");
+        assert_eq!(old, "src/repo/mod.rs");
+        assert_eq!(new, "crates/persistence/src/lib.rs");
     }
 
     #[test]

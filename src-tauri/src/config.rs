@@ -19,11 +19,13 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Appearance {
     pub mode: String,
+    #[serde(default)]
     pub terminal_theme_dark: String,
+    #[serde(default)]
     pub terminal_theme_light: String,
-    #[serde(default = "default_diff_theme_dark")]
+    #[serde(default)]
     pub diff_theme_dark: String,
-    #[serde(default = "default_diff_theme_light")]
+    #[serde(default)]
     pub diff_theme_light: String,
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -39,14 +41,6 @@ pub struct Terminal {
 
 fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
-}
-
-fn default_diff_theme_dark() -> String {
-    "vs-dark".to_string()
-}
-
-fn default_diff_theme_light() -> String {
-    "vs".to_string()
 }
 
 fn default_theme() -> String {
@@ -172,10 +166,10 @@ impl Default for Config {
         Config {
             appearance: Appearance {
                 mode: "system".to_string(),
-                terminal_theme_dark: "one-dark".to_string(),
-                terminal_theme_light: "one-light".to_string(),
-                diff_theme_dark: "vs-dark".to_string(),
-                diff_theme_light: "vs".to_string(),
+                terminal_theme_dark: String::new(),
+                terminal_theme_light: String::new(),
+                diff_theme_dark: String::new(),
+                diff_theme_light: String::new(),
                 theme: "default".to_string(),
             },
             terminal: Terminal {
@@ -466,7 +460,7 @@ mod tests {
         // Specified field is kept
         assert_eq!(config.appearance.mode, "dark");
         // Missing fields filled from defaults
-        assert_eq!(config.appearance.terminal_theme_dark, "one-dark");
+        assert_eq!(config.appearance.terminal_theme_dark, "");
         assert_eq!(config.terminal.font_size, 14);
         assert_eq!(config.default_provider, "kiro");
         assert!(config.providers.contains_key("kiro"));

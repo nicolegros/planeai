@@ -71,8 +71,3 @@
 .xterm-viewport::-webkit-scrollbar {
   display: none;
 }
-
-.xterm-viewport,
-.xterm-screen {
-  background-color: transparent !important;
-}
