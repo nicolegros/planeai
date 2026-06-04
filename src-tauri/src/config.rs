@@ -645,11 +645,16 @@ mod tests {
 
     #[test]
     fn resolve_backend_returns_config_value_when_set() {
-        let mut config = Config::default();
-        config.session_backend = Some("direct".to_string());
+        let config = Config {
+            session_backend: Some("direct".to_string()),
+            ..Default::default()
+        };
         assert_eq!(resolve_backend(&config), "direct");
 
-        config.session_backend = Some("tmux".to_string());
+        let config = Config {
+            session_backend: Some("tmux".to_string()),
+            ..Default::default()
+        };
         assert_eq!(resolve_backend(&config), "tmux");
     }
 
@@ -675,14 +680,16 @@ mod tests {
         let config_dir = dir.path();
 
         // Save with session_backend = Some("direct")
-        let mut config = Config::default();
-        config.session_backend = Some("direct".to_string());
+        let config = Config {
+            session_backend: Some("direct".to_string()),
+            ..Default::default()
+        };
         save(config_dir, &config).unwrap();
         let (loaded, _) = load(config_dir);
         assert_eq!(loaded.session_backend, Some("direct".to_string()));
 
         // Save with session_backend = None (should be absent from JSON)
-        config.session_backend = None;
+        let config = Config::default();
         save(config_dir, &config).unwrap();
         let content = fs::read_to_string(config_dir.join("config.json")).unwrap();
         assert!(!content.contains("session_backend"));

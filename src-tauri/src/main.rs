@@ -48,6 +48,7 @@ fn resolve_command(cmd: &str) -> String {
 
 /// Background discovery of provider session ID with retry-backoff.
 /// Runs list_sessions_command in the session's cwd, parses the output, and stores the result.
+#[allow(clippy::too_many_arguments)]
 fn discover_provider_session_id(
     session_id: &str,
     list_cmd: &str,
@@ -767,7 +768,7 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
     let already = stop_arr.iter().any(|h| {
         h.get("command")
             .and_then(|c| c.as_str())
-            .map_or(false, |c| c.contains("planeai-stop-notify"))
+            .is_some_and(|c| c.contains("planeai-stop-notify"))
     });
     if !already {
         #[cfg(not(windows))]
@@ -1060,6 +1061,7 @@ fn destroy_session(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn launch_session(
     state: State<DbState>,
     notify: State<NotifyHandle>,
@@ -1330,7 +1332,7 @@ fn main() {
 
             // Startup reconciliation: mark stale sessions as exited
             #[cfg(not(windows))]
-            let _ = db::reconcile_sessions(&conn, |name| tmux::has_session(name));
+            let _ = db::reconcile_sessions(&conn, tmux::has_session);
             #[cfg(windows)]
             let _ = db::reconcile_sessions(&conn, |_| false);
 

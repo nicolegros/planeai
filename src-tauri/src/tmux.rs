@@ -16,14 +16,12 @@ pub fn tmux_bin() -> &'static str {
 /// Generate a tmux session name: planeai-<project>-<8hex>
 pub fn session_name(project_name: &str) -> String {
     let hex: String = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let sanitized = project_name
-        .replace(' ', "-")
-        .replace('.', "")
-        .replace(':', "");
+    let sanitized = project_name.replace(' ', "-").replace(['.', ':'], "");
     format!("planeai-{}-{}", sanitized, hex)
 }
 
 /// Build the tmux command args to create a new session running kiro-cli.
+#[allow(dead_code)]
 pub fn build_new_session_args(
     tmux_name: &str,
     working_dir: &str,
@@ -75,6 +73,7 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
 }
 
 /// Create a tmux session with remain-on-exit and launch kiro-cli.
+#[allow(dead_code)]
 pub fn create_session(
     tmux_name: &str,
     working_dir: &str,
