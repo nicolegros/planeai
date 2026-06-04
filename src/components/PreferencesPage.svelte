@@ -163,7 +163,7 @@
       <div class="flex gap-2">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
-            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => setAppearance(mode as AppearanceMode)}
           >{mode}</button>
         {/each}
@@ -176,7 +176,7 @@
       <div class="flex flex-wrap gap-2">
         {#each availableThemes as themeName (themeName)}
           <button
-            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            class="px-4 py-2 rounded-md text-sm font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => updateSettings({ appearance: { ...config.appearance, theme: themeName } })}
           >{themeName}</button>
         {/each}
@@ -318,7 +318,7 @@
       <div class="flex gap-2">
         {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "direct", label: "Direct" }] as opt (opt.value)}
           <button
-            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-white' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => setSessionBackend(opt.value)}
           >{opt.label}</button>
         {/each}
@@ -416,7 +416,7 @@
           </div>
           <div class="flex gap-2">
             <button
-              class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50"
+              class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50"
               onclick={addProvider}
               disabled={!newProviderName || !newProviderCommand}
             >Add</button>
@@ -508,7 +508,7 @@
             <Input bind:value={newTmListTasks} class="font-mono" />
           </div>
           <div class="flex gap-2">
-            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
+            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
             <button class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = false; }}>Cancel</button>
           </div>
         </div>
