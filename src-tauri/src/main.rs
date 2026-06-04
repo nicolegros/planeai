@@ -302,6 +302,15 @@ fn update_config(state: State<ConfigState>, new_config: config::Config, app: tau
 }
 
 #[tauri::command]
+fn get_theme_css(state: State<ConfigState>, app: tauri::AppHandle) -> Result<String, String> {
+    let cfg = state.0.lock().map_err(|e| e.to_string())?;
+    let theme_name = &cfg.appearance.theme;
+    let config_dir = config::config_dir(&app.package_info().name);
+    let theme_path = config_dir.join("themes").join(format!("{}.css", theme_name));
+    std::fs::read_to_string(&theme_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_branches(repo_path: String) -> Result<Vec<String>, String> {
     git::list_branches(&repo_path)
 }
@@ -1038,6 +1047,15 @@ fn main() {
             let (cfg, _warnings) = config::load(&config_dir);
             app.manage(ConfigState(Mutex::new(cfg)));
 
+            // Scaffold themes dir with default.css if missing
+            let themes_dir = config_dir.join("themes");
+            let default_theme_path = themes_dir.join("default.css");
+            if !default_theme_path.exists() {
+                let _ = std::fs::create_dir_all(&themes_dir);
+                let bundled = include_str!("../resources/themes/default.css");
+                let _ = std::fs::write(&default_theme_path, bundled);
+            }
+
             app.manage(DbState(Mutex::new(conn)));
 
             // Notification system
@@ -1081,6 +1099,7 @@ fn main() {
             list_monospace_fonts,
             get_config,
             update_config,
+            get_theme_css,
             launch_session,
             attach_session,
             write_to_pty,
