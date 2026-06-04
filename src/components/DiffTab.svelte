@@ -3,6 +3,7 @@
   import { onMount, onDestroy } from "svelte";
   import { MonacoDiffRenderer } from "../lib/monaco-diff-renderer";
   import type { DiffRenderer } from "../lib/diff-renderer";
+  import { getSettings } from "../lib/settings.svelte";
 
   interface ChangedFile {
     path: string;
@@ -153,6 +154,11 @@
 
   $effect(() => {
     renderer?.setTheme(theme);
+  });
+
+  $effect(() => {
+    const { font_family, font_size } = getSettings().terminal;
+    renderer?.setFont(font_family, font_size);
   });
 
   function statusColor(status: string): string {

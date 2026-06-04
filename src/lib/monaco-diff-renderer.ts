@@ -26,6 +26,8 @@ export class MonacoDiffRenderer implements DiffRenderer {
   private modifiedModel: import('monaco-editor').editor.ITextModel | null = null;
   private container: HTMLElement | null = null;
   private currentMode: 'side-by-side' | 'unified' = 'side-by-side';
+  private fontFamily: string | null = null;
+  private fontSize: number | null = null;
 
   mount(container: HTMLElement): void {
     this.container = container;
@@ -42,6 +44,8 @@ export class MonacoDiffRenderer implements DiffRenderer {
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
+      ...(this.fontFamily && { fontFamily: this.fontFamily }),
+      ...(this.fontSize && { fontSize: this.fontSize }),
     });
   }
 
@@ -72,6 +76,12 @@ export class MonacoDiffRenderer implements DiffRenderer {
   private async setThemeAsync(theme: string) {
     const monaco = await loadMonaco();
     monaco.editor.setTheme(theme);
+  }
+
+  setFont(family: string, size: number): void {
+    this.fontFamily = family;
+    this.fontSize = size;
+    this.editor?.updateOptions({ fontFamily: family, fontSize: size });
   }
 
   setMode(mode: 'side-by-side' | 'unified'): void {
