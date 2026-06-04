@@ -91,6 +91,9 @@ mod tests {
     #[test]
     fn multiline_template() {
         let result = render("Task {key}: {title}\n\n{description}", &vars());
-        assert_eq!(result, "Task KAN-3: Add dark mode support\n\nWe need dark mode for accessibility.");
+        assert_eq!(
+            result,
+            "Task KAN-3: Add dark mode support\n\nWe need dark mode for accessibility."
+        );
     }
 }

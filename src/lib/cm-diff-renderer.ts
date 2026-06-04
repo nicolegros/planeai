@@ -1,43 +1,58 @@
-import type { DiffRenderer } from './diff-renderer';
-import { MergeView, goToNextChunk, goToPreviousChunk } from '@codemirror/merge';
-import { EditorView } from '@codemirror/view';
-import { EditorState, Compartment } from '@codemirror/state';
-import { basicSetup } from 'codemirror';
-import { languages } from '@codemirror/language-data';
-import { LanguageDescription } from '@codemirror/language';
+import type { DiffRenderer } from "./diff-renderer";
+import { MergeView, goToNextChunk, goToPreviousChunk } from "@codemirror/merge";
+import { EditorView } from "@codemirror/view";
+import { EditorState, Compartment } from "@codemirror/state";
+import { basicSetup } from "codemirror";
+import { languages } from "@codemirror/language-data";
+import { LanguageDescription } from "@codemirror/language";
 
 const fontCompartment = new Compartment();
 const langCompartment = new Compartment();
 
-const darkTheme = EditorView.theme({
-  '&': { backgroundColor: 'var(--editor-background)' },
-  '.cm-gutters': { backgroundColor: 'var(--editor-background)', color: 'var(--editor-line-number)', borderRight: '1px solid var(--color-surface-300)' },
-  '.cm-content': { color: 'var(--editor-foreground)' },
-  '.cm-activeLine': { backgroundColor: 'var(--editor-selection)' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--editor-selection)' },
-  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'var(--editor-added-bg)' },
-  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'var(--editor-deleted-bg)' },
-}, { dark: true });
+const darkTheme = EditorView.theme(
+  {
+    "&": { backgroundColor: "var(--editor-background)" },
+    ".cm-gutters": {
+      backgroundColor: "var(--editor-background)",
+      color: "var(--editor-line-number)",
+      borderRight: "1px solid var(--color-surface-300)",
+    },
+    ".cm-content": { color: "var(--editor-foreground)" },
+    ".cm-activeLine": { backgroundColor: "var(--editor-selection)" },
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+      backgroundColor: "var(--editor-selection)",
+    },
+    ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
+    ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
+  },
+  { dark: true },
+);
 
 const lightTheme = EditorView.theme({
-  '&': { backgroundColor: 'var(--editor-background)' },
-  '.cm-gutters': { backgroundColor: 'var(--editor-background)', color: 'var(--editor-line-number)', borderRight: '1px solid var(--color-surface-300)' },
-  '.cm-content': { color: 'var(--editor-foreground)' },
-  '.cm-activeLine': { backgroundColor: 'var(--editor-selection)' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--editor-selection)' },
-  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'var(--editor-added-bg)' },
-  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'var(--editor-deleted-bg)' },
+  "&": { backgroundColor: "var(--editor-background)" },
+  ".cm-gutters": {
+    backgroundColor: "var(--editor-background)",
+    color: "var(--editor-line-number)",
+    borderRight: "1px solid var(--color-surface-300)",
+  },
+  ".cm-content": { color: "var(--editor-foreground)" },
+  ".cm-activeLine": { backgroundColor: "var(--editor-selection)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+    backgroundColor: "var(--editor-selection)",
+  },
+  ".cm-changedLine.cm-insertedLine": { backgroundColor: "var(--editor-added-bg)" },
+  ".cm-changedLine.cm-deletedLine": { backgroundColor: "var(--editor-deleted-bg)" },
 });
 
 function fontExtension(family: string, size: number) {
   return EditorView.theme({
-    '&': { fontSize: `${size}px` },
-    '.cm-content, .cm-gutters': { fontFamily: family },
+    "&": { fontSize: `${size}px` },
+    ".cm-content, .cm-gutters": { fontFamily: family },
   });
 }
 
 function isDarkTheme(theme: string): boolean {
-  return theme.includes('dark') || theme.includes('black');
+  return theme.includes("dark") || theme.includes("black");
 }
 
 function findLanguage(lang: string): LanguageDescription | null {
@@ -47,13 +62,13 @@ function findLanguage(lang: string): LanguageDescription | null {
 export class CmDiffRenderer implements DiffRenderer {
   private container: HTMLElement | null = null;
   private mergeView: MergeView | null = null;
-  private currentTheme = 'vs-dark';
-  private currentMode: 'side-by-side' | 'unified' = 'side-by-side';
-  private fontFamily = 'Menlo';
+  private currentTheme = "vs-dark";
+  private currentMode: "side-by-side" | "unified" = "side-by-side";
+  private fontFamily = "Menlo";
   private fontSize = 14;
-  private original = '';
-  private modified = '';
-  private language = '';
+  private original = "";
+  private modified = "";
+  private language = "";
 
   mount(container: HTMLElement): void {
     this.container = container;
@@ -81,7 +96,7 @@ export class CmDiffRenderer implements DiffRenderer {
     }
   }
 
-  setMode(mode: 'side-by-side' | 'unified'): void {
+  setMode(mode: "side-by-side" | "unified"): void {
     this.currentMode = mode;
     this.rebuild();
   }
@@ -107,7 +122,7 @@ export class CmDiffRenderer implements DiffRenderer {
   private rebuild() {
     if (!this.container) return;
     this.mergeView?.destroy();
-    this.container.innerHTML = '';
+    this.container.innerHTML = "";
 
     const dark = isDarkTheme(this.currentTheme);
     const themeExt = dark ? darkTheme : lightTheme;
@@ -124,7 +139,7 @@ export class CmDiffRenderer implements DiffRenderer {
 
     const langDesc = findLanguage(this.language);
     if (langDesc) {
-      langDesc.load().then(support => {
+      langDesc.load().then((support) => {
         if (!this.mergeView) return;
         this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
         this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });
@@ -140,7 +155,7 @@ export class CmDiffRenderer implements DiffRenderer {
       gutter: true,
     });
 
-    this.mergeView.dom.style.height = '100%';
-    this.mergeView.dom.style.overflow = 'auto';
+    this.mergeView.dom.style.height = "100%";
+    this.mergeView.dom.style.overflow = "auto";
   }
 }

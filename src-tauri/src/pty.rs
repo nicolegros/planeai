@@ -1,8 +1,8 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, Child};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, Condvar};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, Response};
@@ -18,7 +18,11 @@ pub enum PtyTarget {
     /// Attach to an existing tmux session.
     TmuxAttach { tmux_name: String },
     /// Spawn a command directly (no tmux).
-    Direct { command: String, args: Vec<String>, cwd: String },
+    Direct {
+        command: String,
+        args: Vec<String>,
+        cwd: String,
+    },
 }
 
 /// Shared pause/resume state for a PTY reader thread.
@@ -29,7 +33,10 @@ struct FlowControl {
 
 impl FlowControl {
     fn new() -> Self {
-        Self { paused: Mutex::new(false), cond: Condvar::new() }
+        Self {
+            paused: Mutex::new(false),
+            cond: Condvar::new(),
+        }
     }
 
     fn pause(&self) {
@@ -95,7 +102,13 @@ impl PtyManager {
     }
 
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
-    pub fn attach(&self, session_id: &str, target: PtyTarget, app: AppHandle, on_data: Channel<Response>) -> Result<(), String> {
+    pub fn attach(
+        &self,
+        session_id: &str,
+        target: PtyTarget,
+        app: AppHandle,
+        on_data: Channel<Response>,
+    ) -> Result<(), String> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
@@ -147,11 +160,20 @@ impl PtyManager {
             }
         }
 
-        let child = pair.slave.spawn_command(cmd).map_err(|e| format!("failed to spawn: {e}"))?;
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| format!("failed to spawn: {e}"))?;
         drop(pair.slave);
 
-        let writer = pair.master.take_writer().map_err(|e| format!("failed to get writer: {e}"))?;
-        let mut reader = pair.master.try_clone_reader().map_err(|e| format!("failed to get reader: {e}"))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| format!("failed to get writer: {e}"))?;
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| format!("failed to get reader: {e}"))?;
 
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -178,10 +200,8 @@ impl PtyManager {
         }
 
         // Shared buffer between reader and flusher threads
-        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((
-            Mutex::new(Vec::with_capacity(READ_BUF)),
-            Condvar::new(),
-        ));
+        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
+            Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
         let done = Arc::new(AtomicBool::new(false));
 
         // ── Reader thread: reads PTY → pushes into pending buffer ─────────
@@ -206,14 +226,18 @@ impl PtyManager {
 
                         if let Some(ref ns) = notify_clone {
                             let mut s = ns.lock().unwrap();
-                            let was_idle = s.get_state(&sid) != Some(crate::notify::AgentState::Busy);
+                            let was_idle =
+                                s.get_state(&sid) != Some(crate::notify::AgentState::Busy);
                             s.notify_output(&sid);
                             if was_idle && !was_busy {
                                 drop(s);
-                                let _ = app_reader.emit("agent-state-change", serde_json::json!({
-                                    "session_id": &sid,
-                                    "state": "Busy"
-                                }));
+                                let _ = app_reader.emit(
+                                    "agent-state-change",
+                                    serde_json::json!({
+                                        "session_id": &sid,
+                                        "state": "Busy"
+                                    }),
+                                );
                             }
                             was_busy = true;
                         }
@@ -279,7 +303,9 @@ impl PtyManager {
         let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
         let handle = ptys.get(session_id).ok_or("session not attached")?;
         let mut h = handle.lock().map_err(|e| e.to_string())?;
-        h.writer.write_all(data).map_err(|e| format!("write failed: {e}"))
+        h.writer
+            .write_all(data)
+            .map_err(|e| format!("write failed: {e}"))
     }
 
     /// Resize a session's PTY.

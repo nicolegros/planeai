@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,30 +82,42 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             font_family TEXT NOT NULL DEFAULT 'Menlo',
             appearance_mode TEXT NOT NULL DEFAULT 'system'
         );
-        INSERT OR IGNORE INTO settings (id) VALUES (1);"
+        INSERT OR IGNORE INTO settings (id) VALUES (1);",
     )?;
     // Add name column to existing databases
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     // Add worktree_path column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
     // Add font_family column
-    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo'");
+    let _ = conn
+        .execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo'");
     // Migrate old settings schema
-    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'");
-    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN terminal_theme_light TEXT NOT NULL DEFAULT 'one-light'");
-    let _ = conn.execute_batch("ALTER TABLE settings ADD COLUMN appearance_mode TEXT NOT NULL DEFAULT 'system'");
+    let _ = conn.execute_batch(
+        "ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE settings ADD COLUMN terminal_theme_light TEXT NOT NULL DEFAULT 'one-light'",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE settings ADD COLUMN appearance_mode TEXT NOT NULL DEFAULT 'system'",
+    );
     // Copy old terminal_theme to terminal_theme_dark if it existed
-    let _ = conn.execute_batch("UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL");
+    let _ = conn.execute_batch(
+        "UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL",
+    );
     // Add provider column to sessions
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
     // Add backend column (defaults to 'tmux' for existing sessions)
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
+    let _ =
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
     // Add provider_session_id column
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
     // Add tab_count column
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
+    let _ =
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
     // Add auto_approve column (defaults to true for existing sessions)
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
+    let _ = conn
+        .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
 
     // Migrate tmux_name from NOT NULL to nullable for existing databases created before dual-backend.
     // SQLite doesn't support ALTER COLUMN, so we rebuild the table.
@@ -139,7 +151,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
 
     // Add status column to projects
-    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    let _ =
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
 
     // Add task_key column to sessions (nullable — only set for task-linked sessions)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
@@ -158,7 +171,11 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
         "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
         params![id, name, path],
     )?;
-    Ok(Project { id, name: name.to_string(), path: path.to_string() })
+    Ok(Project {
+        id,
+        name: name.to_string(),
+        path: path.to_string(),
+    })
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
@@ -174,8 +191,14 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
 }
 
 pub fn archive_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'archived' WHERE project_id = ?1", params![id])?;
-    conn.execute("UPDATE projects SET status = 'archived' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE sessions SET status = 'archived' WHERE project_id = ?1",
+        params![id],
+    )?;
+    conn.execute(
+        "UPDATE projects SET status = 'archived' WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -192,7 +215,10 @@ pub fn list_archived_projects(conn: &Connection) -> Result<Vec<Project>> {
 }
 
 pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE projects SET status = 'active' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE projects SET status = 'active' WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -205,7 +231,11 @@ pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
 pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
     let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE id = ?1")?;
     let mut rows = stmt.query_map(params![id], |row| {
-        Ok(Project { id: row.get(0)?, name: row.get(1)?, path: row.get(2)? })
+        Ok(Project {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            path: row.get(2)?,
+        })
     })?;
     Ok(rows.next().transpose()?)
 }
@@ -245,7 +275,20 @@ pub fn create_session(
     worktree_path: Option<&str>,
 ) -> Result<Session> {
     let id = uuid::Uuid::new_v4().to_string();
-    create_session_with_id(conn, &id, project_id, name, Some(tmux_name), branch, worktree_path, None, "tmux", true, None, None)
+    create_session_with_id(
+        conn,
+        &id,
+        project_id,
+        name,
+        Some(tmux_name),
+        branch,
+        worktree_path,
+        None,
+        "tmux",
+        true,
+        None,
+        None,
+    )
 }
 
 pub fn create_session_with_id(
@@ -267,7 +310,23 @@ pub fn create_session_with_id(
         "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![id, project_id, name, tmux_name, branch, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch],
     )?;
-    Ok(Session { id: id.to_string(), project_id: project_id.to_string(), name: name.to_string(), tmux_name: tmux_name.map(|s| s.to_string()), branch: branch.to_string(), status: "active".to_string(), created_at, worktree_path: worktree_path.map(|s| s.to_string()), provider: provider.map(|s| s.to_string()), backend: backend.to_string(), provider_session_id: None, tab_count: 1, auto_approve, task_key: task_key.map(|s| s.to_string()), base_branch: base_branch.map(|s| s.to_string()) })
+    Ok(Session {
+        id: id.to_string(),
+        project_id: project_id.to_string(),
+        name: name.to_string(),
+        tmux_name: tmux_name.map(|s| s.to_string()),
+        branch: branch.to_string(),
+        status: "active".to_string(),
+        created_at,
+        worktree_path: worktree_path.map(|s| s.to_string()),
+        provider: provider.map(|s| s.to_string()),
+        backend: backend.to_string(),
+        provider_session_id: None,
+        tab_count: 1,
+        auto_approve,
+        task_key: task_key.map(|s| s.to_string()),
+        base_branch: base_branch.map(|s| s.to_string()),
+    })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
@@ -319,7 +378,10 @@ pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
 }
 
 pub fn archive_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'archived' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE sessions SET status = 'archived' WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -329,12 +391,18 @@ pub fn delete_session(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn destroy_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'destroyed' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE sessions SET status = 'destroyed' WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
 pub fn mark_session_exited(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'exited' WHERE id = ?1 AND status = 'active'", params![id])?;
+    conn.execute(
+        "UPDATE sessions SET status = 'exited' WHERE id = ?1 AND status = 'active'",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -345,26 +413,28 @@ pub fn reconcile_sessions<F>(conn: &Connection, has_tmux_session: F) -> Result<(
 where
     F: Fn(&str) -> bool,
 {
-    let mut stmt = conn.prepare("SELECT id, tmux_name, backend FROM sessions WHERE status = 'active'")?;
-    let stale: Vec<String> = stmt.query_map([], |row| {
-        let id: String = row.get(0)?;
-        let tmux_name: Option<String> = row.get(1)?;
-        let backend: String = row.get(2)?;
-        Ok((id, tmux_name, backend))
-    })?
-    .filter_map(|r| r.ok())
-    .filter(|(_, tmux_name, backend)| {
-        if backend == "direct" {
-            return true;
-        }
-        // tmux backend: mark exited if tmux session is gone
-        match tmux_name {
-            Some(ref name) => !has_tmux_session(name),
-            None => true,
-        }
-    })
-    .map(|(id, _, _)| id)
-    .collect();
+    let mut stmt =
+        conn.prepare("SELECT id, tmux_name, backend FROM sessions WHERE status = 'active'")?;
+    let stale: Vec<String> = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let tmux_name: Option<String> = row.get(1)?;
+            let backend: String = row.get(2)?;
+            Ok((id, tmux_name, backend))
+        })?
+        .filter_map(|r| r.ok())
+        .filter(|(_, tmux_name, backend)| {
+            if backend == "direct" {
+                return true;
+            }
+            // tmux backend: mark exited if tmux session is gone
+            match tmux_name {
+                Some(ref name) => !has_tmux_session(name),
+                None => true,
+            }
+        })
+        .map(|(id, _, _)| id)
+        .collect();
 
     for id in &stale {
         mark_session_exited(conn, id)?;
@@ -373,7 +443,10 @@ where
 }
 
 pub fn restore_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET status = 'active' WHERE id = ?1", params![id])?;
+    conn.execute(
+        "UPDATE sessions SET status = 'active' WHERE id = ?1",
+        params![id],
+    )?;
     Ok(())
 }
 
@@ -396,17 +469,30 @@ pub fn project_name_exists(conn: &Connection, name: &str) -> Result<bool> {
 }
 
 pub fn rename_session(conn: &Connection, id: &str, name: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET name = ?2 WHERE id = ?1", params![id, name])?;
+    conn.execute(
+        "UPDATE sessions SET name = ?2 WHERE id = ?1",
+        params![id, name],
+    )?;
     Ok(())
 }
 
-pub fn set_provider_session_id(conn: &Connection, id: &str, provider_session_id: &str) -> Result<()> {
-    conn.execute("UPDATE sessions SET provider_session_id = ?2 WHERE id = ?1", params![id, provider_session_id])?;
+pub fn set_provider_session_id(
+    conn: &Connection,
+    id: &str,
+    provider_session_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET provider_session_id = ?2 WHERE id = ?1",
+        params![id, provider_session_id],
+    )?;
     Ok(())
 }
 
 pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<()> {
-    conn.execute("UPDATE sessions SET tab_count = ?2 WHERE id = ?1", params![id, tab_count])?;
+    conn.execute(
+        "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
+        params![id, tab_count],
+    )?;
     Ok(())
 }
 
@@ -466,7 +552,21 @@ mod tests {
     fn test_create_direct_session_with_null_tmux_name() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session_with_id(&conn, "sess-1", &p.id, "direct session", None, "main", None, None, "direct", true, None, None).unwrap();
+        let s = create_session_with_id(
+            &conn,
+            "sess-1",
+            &p.id,
+            "direct session",
+            None,
+            "main",
+            None,
+            None,
+            "direct",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(s.backend, "direct");
         assert!(s.tmux_name.is_none());
         // Verify round-trip through DB
@@ -490,13 +590,33 @@ mod tests {
     fn test_list_sessions_includes_exited() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s1 = create_session(&conn, &p.id, "active one", "planeai-myapp-aaa", "main", None).unwrap();
-        let s2 = create_session(&conn, &p.id, "exited one", "planeai-myapp-bbb", "feat", None).unwrap();
+        let s1 = create_session(
+            &conn,
+            &p.id,
+            "active one",
+            "planeai-myapp-aaa",
+            "main",
+            None,
+        )
+        .unwrap();
+        let s2 = create_session(
+            &conn,
+            &p.id,
+            "exited one",
+            "planeai-myapp-bbb",
+            "feat",
+            None,
+        )
+        .unwrap();
         mark_session_exited(&conn, &s2.id).unwrap();
         let sessions = list_sessions(&conn).unwrap();
         assert_eq!(sessions.len(), 2);
-        assert!(sessions.iter().any(|s| s.id == s1.id && s.status == "active"));
-        assert!(sessions.iter().any(|s| s.id == s2.id && s.status == "exited"));
+        assert!(sessions
+            .iter()
+            .any(|s| s.id == s1.id && s.status == "active"));
+        assert!(sessions
+            .iter()
+            .any(|s| s.id == s2.id && s.status == "exited"));
     }
 
     #[test]
@@ -513,7 +633,15 @@ mod tests {
     fn test_delete_project_cascades_sessions() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session(&conn, &p.id, "main session", "planeai-myapp-abc123", "main", None).unwrap();
+        create_session(
+            &conn,
+            &p.id,
+            "main session",
+            "planeai-myapp-abc123",
+            "main",
+            None,
+        )
+        .unwrap();
         delete_project(&conn, &p.id).unwrap();
         assert_eq!(list_projects(&conn).unwrap().len(), 0);
         assert_eq!(list_sessions(&conn).unwrap().len(), 0);
@@ -523,7 +651,15 @@ mod tests {
     fn test_create_and_list_sessions() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session(&conn, &p.id, "feat session", "planeai-myapp-aaa", "feat-x", None).unwrap();
+        create_session(
+            &conn,
+            &p.id,
+            "feat session",
+            "planeai-myapp-aaa",
+            "feat-x",
+            None,
+        )
+        .unwrap();
         let sessions = list_sessions(&conn).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].name, "feat session");
@@ -536,7 +672,8 @@ mod tests {
     fn test_delete_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session(&conn, &p.id, "to delete", "planeai-myapp-bbb", "main", None).unwrap();
+        let s =
+            create_session(&conn, &p.id, "to delete", "planeai-myapp-bbb", "main", None).unwrap();
         delete_session(&conn, &s.id).unwrap();
         assert_eq!(list_sessions(&conn).unwrap().len(), 0);
     }
@@ -545,10 +682,24 @@ mod tests {
     fn test_worktree_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session(&conn, &p.id, "wt session", "planeai-myapp-ccc", "feat-wt", Some("/home/.planeai/worktrees/myapp/ccc")).unwrap();
-        assert_eq!(s.worktree_path.as_deref(), Some("/home/.planeai/worktrees/myapp/ccc"));
+        let s = create_session(
+            &conn,
+            &p.id,
+            "wt session",
+            "planeai-myapp-ccc",
+            "feat-wt",
+            Some("/home/.planeai/worktrees/myapp/ccc"),
+        )
+        .unwrap();
+        assert_eq!(
+            s.worktree_path.as_deref(),
+            Some("/home/.planeai/worktrees/myapp/ccc")
+        );
         let sessions = list_sessions(&conn).unwrap();
-        assert_eq!(sessions[0].worktree_path.as_deref(), Some("/home/.planeai/worktrees/myapp/ccc"));
+        assert_eq!(
+            sessions[0].worktree_path.as_deref(),
+            Some("/home/.planeai/worktrees/myapp/ccc")
+        );
     }
 
     #[test]
@@ -561,7 +712,15 @@ mod tests {
         // Worktree session doesn't count
         let conn2 = setup();
         let p2 = create_project(&conn2, "myapp2", "/tmp/myapp2").unwrap();
-        create_session(&conn2, &p2.id, "wt", "planeai-myapp2-bbb", "feat", Some("/tmp/wt")).unwrap();
+        create_session(
+            &conn2,
+            &p2.id,
+            "wt",
+            "planeai-myapp2-bbb",
+            "feat",
+            Some("/tmp/wt"),
+        )
+        .unwrap();
         assert!(!has_active_checkout_session(&conn2, &p2.id).unwrap());
     }
 
@@ -577,7 +736,8 @@ mod tests {
     fn test_rename_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session(&conn, &p.id, "old name", "planeai-myapp-aaa", "main", None).unwrap();
+        let s =
+            create_session(&conn, &p.id, "old name", "planeai-myapp-aaa", "main", None).unwrap();
         rename_session(&conn, &s.id, "new name").unwrap();
         let updated = get_session(&conn, &s.id).unwrap().unwrap();
         assert_eq!(updated.name, "new name");
@@ -587,8 +747,24 @@ mod tests {
     fn test_list_archived_sessions() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        create_session(&conn, &p.id, "active one", "planeai-myapp-aaa", "main", None).unwrap();
-        let s2 = create_session(&conn, &p.id, "archived one", "planeai-myapp-bbb", "feat", None).unwrap();
+        create_session(
+            &conn,
+            &p.id,
+            "active one",
+            "planeai-myapp-aaa",
+            "main",
+            None,
+        )
+        .unwrap();
+        let s2 = create_session(
+            &conn,
+            &p.id,
+            "archived one",
+            "planeai-myapp-bbb",
+            "feat",
+            None,
+        )
+        .unwrap();
         archive_session(&conn, &s2.id).unwrap();
         let archived = list_archived_sessions(&conn).unwrap();
         assert_eq!(archived.len(), 1);
@@ -600,9 +776,11 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session(&conn, &p.id, "active", "planeai-myapp-aaa", "main", None).unwrap();
-        let s2 = create_session(&conn, &p.id, "archived", "planeai-myapp-bbb", "feat", None).unwrap();
+        let s2 =
+            create_session(&conn, &p.id, "archived", "planeai-myapp-bbb", "feat", None).unwrap();
         archive_session(&conn, &s2.id).unwrap();
-        let s3 = create_session(&conn, &p.id, "destroyed", "planeai-myapp-ccc", "fix", None).unwrap();
+        let s3 =
+            create_session(&conn, &p.id, "destroyed", "planeai-myapp-ccc", "fix", None).unwrap();
         destroy_session(&conn, &s3.id).unwrap();
         let sessions = list_sessions(&conn).unwrap();
         assert_eq!(sessions.len(), 1);
@@ -627,7 +805,15 @@ mod tests {
     fn test_restore_session() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session(&conn, &p.id, "to restore", "planeai-myapp-aaa", "main", None).unwrap();
+        let s = create_session(
+            &conn,
+            &p.id,
+            "to restore",
+            "planeai-myapp-aaa",
+            "main",
+            None,
+        )
+        .unwrap();
         archive_session(&conn, &s.id).unwrap();
         assert_eq!(list_sessions(&conn).unwrap().len(), 0);
         restore_session(&conn, &s.id).unwrap();
@@ -640,13 +826,30 @@ mod tests {
     fn test_provider_session_id_round_trips_through_create_and_get() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session_with_id(&conn, "s1", &p.id, "test", None, "main", None, Some("kiro"), "direct", true, None, None).unwrap();
+        let s = create_session_with_id(
+            &conn,
+            "s1",
+            &p.id,
+            "test",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "direct",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         // Initially null
         assert_eq!(s.provider_session_id, None);
         // Set it
         set_provider_session_id(&conn, "s1", "f4165541-f370-4fdd-9ccd-14b103a4f712").unwrap();
         let loaded = get_session(&conn, "s1").unwrap().unwrap();
-        assert_eq!(loaded.provider_session_id, Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string()));
+        assert_eq!(
+            loaded.provider_session_id,
+            Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
+        );
     }
 
     #[test]
@@ -691,15 +894,29 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session(&conn, &p.id, "s1", "planeai-myapp-aaa", "main", None).unwrap();
-        create_session(&conn, &p.id, "s2", "planeai-myapp-bbb", "feat", Some("/tmp/wt/feat")).unwrap();
+        create_session(
+            &conn,
+            &p.id,
+            "s2",
+            "planeai-myapp-bbb",
+            "feat",
+            Some("/tmp/wt/feat"),
+        )
+        .unwrap();
         let s3 = create_session(&conn, &p.id, "s3", "planeai-myapp-ccc", "fix", None).unwrap();
         archive_session(&conn, &s3.id).unwrap();
         // get_project_sessions returns ALL sessions regardless of status
         let sessions = get_project_sessions(&conn, &p.id).unwrap();
         assert_eq!(sessions.len(), 3);
-        let wt_sessions: Vec<_> = sessions.iter().filter(|s| s.worktree_path.is_some()).collect();
+        let wt_sessions: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.worktree_path.is_some())
+            .collect();
         assert_eq!(wt_sessions.len(), 1);
-        assert_eq!(wt_sessions[0].worktree_path.as_deref(), Some("/tmp/wt/feat"));
+        assert_eq!(
+            wt_sessions[0].worktree_path.as_deref(),
+            Some("/tmp/wt/feat")
+        );
     }
 
     #[test]
@@ -725,18 +942,58 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         // Active direct session → should be marked exited (process died with app)
-        let s1 = create_session_with_id(&conn, "s1", &p.id, "direct", None, "main", None, None, "direct", true, None, None).unwrap();
+        let s1 = create_session_with_id(
+            &conn, "s1", &p.id, "direct", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
         // Active tmux session with dead tmux → should be marked exited
-        let s2 = create_session_with_id(&conn, "s2", &p.id, "tmux dead", Some("planeai-dead"), "main", None, None, "tmux", true, None, None).unwrap();
+        let s2 = create_session_with_id(
+            &conn,
+            "s2",
+            &p.id,
+            "tmux dead",
+            Some("planeai-dead"),
+            "main",
+            None,
+            None,
+            "tmux",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         // Active tmux session with alive tmux → should stay active
-        let s3 = create_session_with_id(&conn, "s3", &p.id, "tmux alive", Some("planeai-alive"), "main", None, None, "tmux", true, None, None).unwrap();
+        let s3 = create_session_with_id(
+            &conn,
+            "s3",
+            &p.id,
+            "tmux alive",
+            Some("planeai-alive"),
+            "main",
+            None,
+            None,
+            "tmux",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Reconcile: mock tmux checker that only knows "planeai-alive"
         reconcile_sessions(&conn, |name| name == "planeai-alive").unwrap();
 
-        assert_eq!(get_session(&conn, &s1.id).unwrap().unwrap().status, "exited");
-        assert_eq!(get_session(&conn, &s2.id).unwrap().unwrap().status, "exited");
-        assert_eq!(get_session(&conn, &s3.id).unwrap().unwrap().status, "active");
+        assert_eq!(
+            get_session(&conn, &s1.id).unwrap().unwrap().status,
+            "exited"
+        );
+        assert_eq!(
+            get_session(&conn, &s2.id).unwrap().unwrap().status,
+            "exited"
+        );
+        assert_eq!(
+            get_session(&conn, &s3.id).unwrap().unwrap().status,
+            "active"
+        );
     }
 
     #[test]
@@ -752,8 +1009,9 @@ mod tests {
                  branch TEXT NOT NULL,
                  status TEXT NOT NULL DEFAULT 'active',
                  created_at TEXT NOT NULL
-             );"
-        ).unwrap();
+             );",
+        )
+        .unwrap();
         // Insert a row with the old schema
         conn.execute_batch(
             "INSERT INTO projects VALUES ('p1', 'myapp', '/tmp/myapp');
@@ -762,7 +1020,10 @@ mod tests {
         // Run migration — should rebuild table with nullable tmux_name
         migrate(&conn).unwrap();
         // Now inserting NULL tmux_name should work
-        let s = create_session_with_id(&conn, "s2", "p1", "direct", None, "feat", None, None, "direct", true, None, None).unwrap();
+        let s = create_session_with_id(
+            &conn, "s2", "p1", "direct", None, "feat", None, None, "direct", true, None, None,
+        )
+        .unwrap();
         assert!(s.tmux_name.is_none());
         // Old data preserved
         let old = get_session(&conn, "s1").unwrap().unwrap();
@@ -781,7 +1042,21 @@ mod tests {
     fn test_create_session_with_base_branch() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        let s = create_session_with_id(&conn, "sess-bb", &p.id, "feat session", None, "feat/x", None, None, "direct", true, None, Some("main")).unwrap();
+        let s = create_session_with_id(
+            &conn,
+            "sess-bb",
+            &p.id,
+            "feat session",
+            None,
+            "feat/x",
+            None,
+            None,
+            "direct",
+            true,
+            None,
+            Some("main"),
+        )
+        .unwrap();
         assert_eq!(s.base_branch, Some("main".to_string()));
         let loaded = get_session(&conn, "sess-bb").unwrap().unwrap();
         assert_eq!(loaded.base_branch, Some("main".to_string()));

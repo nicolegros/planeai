@@ -20,11 +20,11 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 
 Download the latest release for your platform:
 
-| Platform | Format |
-|----------|--------|
-| macOS (Apple Silicon) | [`.dmg`](https://github.com/nicolegros/planeai/releases/latest) |
-| Linux | [`.deb`](https://github.com/nicolegros/planeai/releases/latest) / [`.AppImage`](https://github.com/nicolegros/planeai/releases/latest) |
-| Windows | [`.exe`](https://github.com/nicolegros/planeai/releases/latest) |
+| Platform              | Format                                                                                                                                 |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS (Apple Silicon) | [`.dmg`](https://github.com/nicolegros/planeai/releases/latest)                                                                        |
+| Linux                 | [`.deb`](https://github.com/nicolegros/planeai/releases/latest) / [`.AppImage`](https://github.com/nicolegros/planeai/releases/latest) |
+| Windows               | [`.exe`](https://github.com/nicolegros/planeai/releases/latest)                                                                        |
 
 ### Requirements
 

@@ -18,7 +18,9 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
     let mut local_names = std::collections::HashSet::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Some((short, full)) = line.split_once(' ') else { continue };
+        let Some((short, full)) = line.split_once(' ') else {
+            continue;
+        };
         let short = short.trim();
         if short.is_empty() || full.contains("HEAD") {
             continue;
@@ -40,8 +42,15 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
 }
 
 /// Checkout an existing branch or create a new one (optionally from a start point).
-pub fn checkout_branch(repo_path: &str, branch: &str, create: bool, start_point: Option<&str>) -> Result<(), String> {
-    let resolved_start = start_point.map(|s| resolve_base_branch(repo_path, s)).transpose()?;
+pub fn checkout_branch(
+    repo_path: &str,
+    branch: &str,
+    create: bool,
+    start_point: Option<&str>,
+) -> Result<(), String> {
+    let resolved_start = start_point
+        .map(|s| resolve_base_branch(repo_path, s))
+        .transpose()?;
     let mut args = if create {
         vec!["checkout", "-b", branch]
     } else {
@@ -66,10 +75,22 @@ pub fn checkout_branch(repo_path: &str, branch: &str, create: bool, start_point:
 }
 
 /// Create a git worktree with a new branch off a base branch.
-pub fn worktree_add(repo_path: &str, worktree_path: &str, new_branch: &str, base_branch: &str) -> Result<(), String> {
+pub fn worktree_add(
+    repo_path: &str,
+    worktree_path: &str,
+    new_branch: &str,
+    base_branch: &str,
+) -> Result<(), String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
     let output = Command::new("git")
-        .args(["worktree", "add", "-b", new_branch, worktree_path, &resolved])
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            new_branch,
+            worktree_path,
+            &resolved,
+        ])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -149,11 +170,18 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() != 3 { continue; }
+        if parts.len() != 3 {
+            continue;
+        }
         let additions = parts[0].parse::<u32>().unwrap_or(0);
         let deletions = parts[1].parse::<u32>().unwrap_or(0);
         let path = parts[2].to_string();
-        files.push(ChangedFile { path, status: String::new(), additions, deletions });
+        files.push(ChangedFile {
+            path,
+            status: String::new(),
+            additions,
+            deletions,
+        });
     }
 
     // Get status for each file
@@ -166,7 +194,9 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
     if status_output.status.success() {
         for line in String::from_utf8_lossy(&status_output.stdout).lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() < 2 { continue; }
+            if parts.len() < 2 {
+                continue;
+            }
             let status = parts[0].chars().next().unwrap_or('M').to_string();
             let path = parts[parts.len() - 1];
             if let Some(f) = files.iter_mut().find(|f| f.path == path) {
@@ -185,10 +215,18 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
     if untracked_output.status.success() {
         for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
             let path = line.trim().to_string();
-            if path.is_empty() { continue; }
-            let content = std::fs::read_to_string(std::path::Path::new(repo_path).join(&path)).unwrap_or_default();
+            if path.is_empty() {
+                continue;
+            }
+            let content = std::fs::read_to_string(std::path::Path::new(repo_path).join(&path))
+                .unwrap_or_default();
             let additions = content.lines().count() as u32;
-            files.push(ChangedFile { path, status: "A".to_string(), additions, deletions: 0 });
+            files.push(ChangedFile {
+                path,
+                status: "A".to_string(),
+                additions,
+                deletions: 0,
+            });
         }
     }
 
@@ -197,7 +235,11 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 
 /// Get the original and modified content of a file for diff display.
 /// Original = content at the base branch, Modified = current working tree content.
-pub fn get_file_diff(repo_path: &str, base_branch: &str, file_path: &str) -> Result<FileDiff, String> {
+pub fn get_file_diff(
+    repo_path: &str,
+    base_branch: &str,
+    file_path: &str,
+) -> Result<FileDiff, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
     // Get original content from base branch
     let original_output = Command::new("git")
@@ -218,7 +260,11 @@ pub fn get_file_diff(repo_path: &str, base_branch: &str, file_path: &str) -> Res
 
     let language = detect_language(file_path);
 
-    Ok(FileDiff { original, modified, language })
+    Ok(FileDiff {
+        original,
+        modified,
+        language,
+    })
 }
 
 /// Detect the default branch of a repo (main, master, etc.).
@@ -264,19 +310,28 @@ fn detect_language(file_path: &str) -> String {
         "sh" => "shell",
         "sql" => "sql",
         _ => "plaintext",
-    }.to_string()
+    }
+    .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     use std::fs;
+    use std::process::Command;
 
     fn init_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        Command::new("git").args(["init"]).current_dir(dir.path()).output().unwrap();
-        Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(dir.path()).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
         dir
     }
 
@@ -290,23 +345,67 @@ mod tests {
     fn init_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
         // Create a bare "remote" repo
         let remote_dir = tempfile::tempdir().unwrap();
-        Command::new("git").args(["init", "--bare"]).current_dir(remote_dir.path()).output().unwrap();
+        Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(remote_dir.path())
+            .output()
+            .unwrap();
 
         // Create a local repo, add remote, push a branch
         let upstream = tempfile::tempdir().unwrap();
-        Command::new("git").args(["init"]).current_dir(upstream.path()).output().unwrap();
-        Command::new("git").args(["remote", "add", "origin", remote_dir.path().to_str().unwrap()]).current_dir(upstream.path()).output().unwrap();
-        Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(upstream.path()).output().unwrap();
-        Command::new("git").args(["push", "origin", "main"]).current_dir(upstream.path()).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().unwrap(),
+            ])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "origin", "main"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
 
         // Create the "clone" that will be our test repo
         let clone = tempfile::tempdir().unwrap();
-        Command::new("git").args(["clone", remote_dir.path().to_str().unwrap(), clone.path().to_str().unwrap()]).output().unwrap();
+        Command::new("git")
+            .args([
+                "clone",
+                remote_dir.path().to_str().unwrap(),
+                clone.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
 
         // Push a new branch from upstream so clone can fetch it
-        Command::new("git").args(["checkout", "-b", "feat/new"]).current_dir(upstream.path()).output().unwrap();
-        Command::new("git").args(["commit", "--allow-empty", "-m", "new feature"]).current_dir(upstream.path()).output().unwrap();
-        Command::new("git").args(["push", "origin", "feat/new"]).current_dir(upstream.path()).output().unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat/new"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "new feature"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "origin", "feat/new"])
+            .current_dir(upstream.path())
+            .output()
+            .unwrap();
 
         (clone, remote_dir)
     }
@@ -321,24 +420,49 @@ mod tests {
     #[test]
     fn resolve_base_branch_remote_returns_error_when_fetch_fails() {
         let (repo, _remote) = init_repo_with_remote();
-        let result = resolve_base_branch(repo.path().to_str().unwrap(), "remote:nonexistent-branch");
+        let result =
+            resolve_base_branch(repo.path().to_str().unwrap(), "remote:nonexistent-branch");
         assert!(result.is_err());
     }
 
     fn init_repo_with_feature_branch() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::write(p.join("existing.txt"), "hello\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         // Create feature branch
-        Command::new("git").args(["checkout", "-b", "feat"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         // Modify a file and add a new file
         fs::write(p.join("existing.txt"), "hello\nworld\n").unwrap();
         fs::write(p.join("new_file.txt"), "brand new\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "feature work"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "feature work"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         dir
     }
 
@@ -393,14 +517,38 @@ mod tests {
     fn get_file_diff_returns_empty_modified_for_deleted_file() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::write(p.join("doomed.txt"), "will be deleted\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(p).output().unwrap();
-        Command::new("git").args(["checkout", "-b", "feat"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::remove_file(p.join("doomed.txt")).unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "delete file"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "delete file"])
+            .current_dir(p)
+            .output()
+            .unwrap();
 
         let diff = get_file_diff(p.to_str().unwrap(), "main", "doomed.txt").unwrap();
         assert_eq!(diff.original, "will be deleted\n");
@@ -418,8 +566,16 @@ mod tests {
     fn detect_default_branch_finds_master() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        Command::new("git").args(["init", "-b", "master"]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "--allow-empty", "-m", "init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["init", "-b", "master"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         let result = detect_default_branch(p.to_str().unwrap()).unwrap();
         assert_eq!(result, "master");
     }

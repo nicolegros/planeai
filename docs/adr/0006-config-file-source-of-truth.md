@@ -17,6 +17,7 @@ Settings (appearance, terminal preferences) were stored in SQLite. We need to ad
 Use `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`) as the single source of truth for all user preferences and provider definitions.
 
 Key details:
+
 - **JSONC for reading** (comments allowed), pretty JSON for writing.
 - **`config.schema.json`** written alongside the config for editor autocomplete.
 - **Read on launch only** — no file watcher (deferred).

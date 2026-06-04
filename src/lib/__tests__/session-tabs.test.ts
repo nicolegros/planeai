@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession } from "../session-tabs.svelte";
+import {
+  initSession,
+  getTabs,
+  addTab,
+  removeTab,
+  setActiveTab,
+  getActiveTabIndex,
+  getTabCount,
+  destroySession,
+} from "../session-tabs.svelte";
 
 describe("session tabs", () => {
   beforeEach(() => {
