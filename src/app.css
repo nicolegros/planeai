@@ -46,6 +46,17 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+@layer base {
+  body {
+    background-color: var(--color-surface-50);
+    color: var(--color-surface-900);
+  }
+  .dark body {
+    background-color: var(--color-surface-950);
+    color: var(--color-surface-50);
+  }
+}
+
 .xterm {
   height: 100%;
   padding: 0 !important;
