@@ -14,8 +14,8 @@ const darkTheme = EditorView.theme({
   '.cm-content': { color: 'var(--editor-foreground)' },
   '.cm-activeLine': { backgroundColor: 'var(--editor-selection)' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': { backgroundColor: 'var(--editor-selection)' },
-  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'color-mix(in oklch, var(--editor-added), transparent 85%)' },
-  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'color-mix(in oklch, var(--editor-deleted), transparent 85%)' },
+  '.cm-changedLine.cm-insertedLine': { backgroundColor: 'color-mix(in oklch, var(--editor-added), transparent 70%)' },
+  '.cm-changedLine.cm-deletedLine': { backgroundColor: 'color-mix(in oklch, var(--editor-deleted), transparent 70%)' },
 }, { dark: true });
 
 const lightTheme = EditorView.theme({
