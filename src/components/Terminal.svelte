@@ -11,7 +11,6 @@
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, isDark } from "../lib/settings.svelte";
-  import { getThemeById } from "../lib/terminal-themes";
   import { extractTerminalTheme } from "../lib/theme-loader";
 
   interface Props {

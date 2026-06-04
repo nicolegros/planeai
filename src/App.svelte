@@ -11,7 +11,6 @@
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
-  import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";

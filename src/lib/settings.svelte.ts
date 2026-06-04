@@ -34,8 +34,6 @@ export interface TaskManager {
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
-    terminal_theme_dark: string;
-    terminal_theme_light: string;
     diff_theme_dark: string;
     diff_theme_light: string;
     theme: string;
@@ -55,8 +53,6 @@ export interface AppConfig {
 let config = $state<AppConfig>({
   appearance: {
     mode: "system",
-    terminal_theme_dark: "one-dark",
-    terminal_theme_light: "one-light",
     diff_theme_dark: "vs-dark",
     diff_theme_light: "vs",
     theme: "default",

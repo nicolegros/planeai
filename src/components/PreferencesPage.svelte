@@ -3,14 +3,10 @@
   import { invoke } from "@tauri-apps/api/core";
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
-  import { getThemesByVariant } from "../lib/terminal-themes";
   import { Select, Input } from "./ui";
   import { Palette, Bot, ListTodo } from "@lucide/svelte";
 
   const config = $derived(getSettings());
-  const darkThemes = getThemesByVariant("dark");
-  const lightThemes = getThemesByVariant("light");
-
   let fontItems = $state<{ value: string; label: string }[]>([]);
   let availableThemes = $state<string[]>([]);
   let editingProvider = $state<string | null>(null);
@@ -182,51 +178,7 @@
       </div>
     </section>
 
-    <!-- Dark Terminal Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Dark Terminal Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each darkThemes as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_dark === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_dark: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.green}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.yellow}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.blue}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.magenta}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.cyan}"></span>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
 
-    <!-- Light Terminal Theme -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Light Terminal Theme</h2>
-      <div class="grid grid-cols-3 gap-3">
-        {#each lightThemes as theme (theme.id)}
-          <button
-            class="rounded-lg border-2 p-3 text-left transition-colors {config.appearance.terminal_theme_light === theme.id ? 'border-primary-500' : 'border-surface-200 dark:border-surface-700 hover:border-surface-400 dark:hover:border-surface-500'}"
-            onclick={() => updateSettings({ appearance: { ...config.appearance, terminal_theme_light: theme.id } })}
-          >
-            <div class="rounded h-16 mb-2 flex items-end p-2 gap-1" style="background-color: {theme.colors.background}">
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.red}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.green}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.yellow}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.blue}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.magenta}"></span>
-              <span class="w-3 h-3 rounded-full" style="background-color: {theme.colors.cyan}"></span>
-            </div>
-            <span class="text-xs font-medium text-surface-700 dark:text-surface-300">{theme.name}</span>
-          </button>
-        {/each}
-      </div>
-    </section>
 
     <!-- Dark Diff Editor Theme -->
     <section class="space-y-3">
