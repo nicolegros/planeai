@@ -23,9 +23,9 @@ pub struct Appearance {
     pub terminal_theme_dark: String,
     #[serde(default)]
     pub terminal_theme_light: String,
-    #[serde(default = "default_diff_theme_dark")]
+    #[serde(default)]
     pub diff_theme_dark: String,
-    #[serde(default = "default_diff_theme_light")]
+    #[serde(default)]
     pub diff_theme_light: String,
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -41,14 +41,6 @@ pub struct Terminal {
 
 fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
-}
-
-fn default_diff_theme_dark() -> String {
-    "vs-dark".to_string()
-}
-
-fn default_diff_theme_light() -> String {
-    "vs".to_string()
 }
 
 fn default_theme() -> String {
@@ -176,8 +168,8 @@ impl Default for Config {
                 mode: "system".to_string(),
                 terminal_theme_dark: String::new(),
                 terminal_theme_light: String::new(),
-                diff_theme_dark: "vs-dark".to_string(),
-                diff_theme_light: "vs".to_string(),
+                diff_theme_dark: String::new(),
+                diff_theme_light: String::new(),
                 theme: "default".to_string(),
             },
             terminal: Terminal {

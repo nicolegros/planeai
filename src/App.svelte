@@ -652,7 +652,7 @@
           {repoPath}
           {baseBranch}
           visible={session.id === activeSessionId && isDiffActive}
-          theme={isDark() ? (getSettings().appearance.diff_theme_dark ?? "vs-dark") : (getSettings().appearance.diff_theme_light ?? "vs")}
+          theme={isDark() ? "vs-dark" : "vs"}
         />
       {/if}
     {/each}
