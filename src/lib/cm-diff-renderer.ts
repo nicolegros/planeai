@@ -129,5 +129,6 @@ export class CmDiffRenderer implements DiffRenderer {
     });
 
     this.mergeView.dom.style.height = '100%';
+    this.mergeView.dom.style.overflow = 'auto';
   }
 }
