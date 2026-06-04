@@ -84,7 +84,9 @@ function applyDarkClass() {
   document.querySelectorAll("[class*='overflow-y']").forEach((el) => {
     const htmlEl = el as HTMLElement;
     htmlEl.style.overflow = "hidden";
-    requestAnimationFrame(() => { htmlEl.style.overflow = ""; });
+    requestAnimationFrame(() => {
+      htmlEl.style.overflow = "";
+    });
   });
 }
 

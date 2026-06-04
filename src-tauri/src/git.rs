@@ -539,7 +539,8 @@ mod tests {
     #[test]
     fn get_file_diff_returns_original_and_modified_for_modified_file() {
         let repo = init_repo_with_feature_branch();
-        let diff = get_file_diff(repo.path().to_str().unwrap(), "main", "existing.txt", None).unwrap();
+        let diff =
+            get_file_diff(repo.path().to_str().unwrap(), "main", "existing.txt", None).unwrap();
         assert_eq!(diff.original, "hello\n");
         assert_eq!(diff.modified, "hello\nworld\n");
         assert_eq!(diff.language, "plaintext");
@@ -548,7 +549,8 @@ mod tests {
     #[test]
     fn get_file_diff_returns_empty_original_for_new_file() {
         let repo = init_repo_with_feature_branch();
-        let diff = get_file_diff(repo.path().to_str().unwrap(), "main", "new_file.txt", None).unwrap();
+        let diff =
+            get_file_diff(repo.path().to_str().unwrap(), "main", "new_file.txt", None).unwrap();
         assert_eq!(diff.original, "");
         assert_eq!(diff.modified, "brand new\n");
     }
@@ -599,18 +601,45 @@ mod tests {
     fn get_changed_files_detects_renamed_file() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::create_dir_all(p.join("src/client")).unwrap();
         fs::write(p.join("src/client/auth.rs"), "fn auth() {}\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(p).output().unwrap();
-        Command::new("git").args(["checkout", "-b", "feat"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::create_dir_all(p.join("crates/client/src")).unwrap();
-        Command::new("git").args(["mv", "src/client/auth.rs", "crates/client/src/auth.rs"]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "rename"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["mv", "src/client/auth.rs", "crates/client/src/auth.rs"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "rename"])
+            .current_dir(p)
+            .output()
+            .unwrap();
 
         let files = get_changed_files(p.to_str().unwrap(), "main").unwrap();
-        let renamed = files.iter().find(|f| f.path == "crates/client/src/auth.rs").unwrap();
+        let renamed = files
+            .iter()
+            .find(|f| f.path == "crates/client/src/auth.rs")
+            .unwrap();
         assert_eq!(renamed.status, "R");
         assert_eq!(renamed.old_path, Some("src/client/auth.rs".to_string()));
     }
@@ -619,19 +648,53 @@ mod tests {
     fn get_file_diff_uses_old_path_for_renamed_file() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
-        Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::create_dir_all(p.join("src")).unwrap();
         fs::write(p.join("src/lib.rs"), "original content\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(p).output().unwrap();
-        Command::new("git").args(["checkout", "-b", "feat"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "-b", "feat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::create_dir_all(p.join("crates")).unwrap();
-        Command::new("git").args(["mv", "src/lib.rs", "crates/lib.rs"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["mv", "src/lib.rs", "crates/lib.rs"])
+            .current_dir(p)
+            .output()
+            .unwrap();
         fs::write(p.join("crates/lib.rs"), "modified content\n").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
-        Command::new("git").args(["commit", "-m", "rename+edit"]).current_dir(p).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "rename+edit"])
+            .current_dir(p)
+            .output()
+            .unwrap();
 
-        let diff = get_file_diff(p.to_str().unwrap(), "main", "crates/lib.rs", Some("src/lib.rs")).unwrap();
+        let diff = get_file_diff(
+            p.to_str().unwrap(),
+            "main",
+            "crates/lib.rs",
+            Some("src/lib.rs"),
+        )
+        .unwrap();
         assert_eq!(diff.original, "original content\n");
         assert_eq!(diff.modified, "modified content\n");
     }

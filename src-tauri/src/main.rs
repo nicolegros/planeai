@@ -473,6 +473,7 @@ fn list_monospace_fonts() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn attach_session(
     session_id: String,
     dark_mode: Option<bool>,
@@ -558,9 +559,13 @@ fn attach_session(
         }
     };
 
-    state
-        .0
-        .attach(&session_id, pty_target, dark_mode.unwrap_or(true), app.clone(), on_data)?;
+    state.0.attach(
+        &session_id,
+        pty_target,
+        dark_mode.unwrap_or(true),
+        app.clone(),
+        on_data,
+    )?;
 
     // Register with notification system
     {
@@ -904,7 +909,9 @@ fn spawn_tab(
         args: vec!["-l".to_string()],
         cwd,
     };
-    state.0.attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
+    state
+        .0
+        .attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
 
     let new_count = session.tab_count + 1;
     db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
