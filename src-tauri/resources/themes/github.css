@@ -1,0 +1,119 @@
+/* GitHub theme */
+
+:root {
+  --color-surface-50: oklch(99% 0 0);
+  --color-surface-100: oklch(96% 0.003 230);
+  --color-surface-200: oklch(93% 0.005 230);
+  --color-surface-300: oklch(87% 0.005 230);
+  --color-surface-400: oklch(74% 0.005 230);
+  --color-surface-500: oklch(61% 0.005 230);
+  --color-surface-600: oklch(50% 0.005 230);
+  --color-surface-700: oklch(40% 0.005 230);
+  --color-surface-800: oklch(30% 0.01 230);
+  --color-surface-900: oklch(20% 0.01 230);
+  --color-surface-950: oklch(15% 0.01 230);
+
+  --color-primary-50: oklch(95% 0.04 250);
+  --color-primary-100: oklch(88% 0.08 250);
+  --color-primary-200: oklch(80% 0.12 250);
+  --color-primary-300: oklch(72% 0.16 250);
+  --color-primary-400: oklch(64% 0.18 250);
+  --color-primary-500: oklch(55% 0.20 250);
+  --color-primary-600: oklch(47% 0.18 250);
+  --color-primary-700: oklch(40% 0.15 250);
+  --color-primary-800: oklch(33% 0.12 250);
+  --color-primary-900: oklch(26% 0.09 250);
+  --color-primary-950: oklch(19% 0.06 250);
+
+  --color-error-50: oklch(95% 0.03 25);
+  --color-error-100: oklch(88% 0.06 25);
+  --color-error-200: oklch(80% 0.10 25);
+  --color-error-300: oklch(72% 0.14 25);
+  --color-error-400: oklch(64% 0.18 25);
+  --color-error-500: oklch(56% 0.22 25);
+  --color-error-600: oklch(48% 0.20 25);
+  --color-error-700: oklch(40% 0.17 25);
+  --color-error-800: oklch(33% 0.14 25);
+  --color-error-900: oklch(26% 0.11 25);
+  --color-error-950: oklch(19% 0.08 25);
+
+  --color-warning-50: oklch(95% 0.04 85);
+  --color-warning-100: oklch(88% 0.07 85);
+  --color-warning-200: oklch(80% 0.11 80);
+  --color-warning-300: oklch(72% 0.14 75);
+  --color-warning-400: oklch(64% 0.14 70);
+  --color-warning-500: oklch(56% 0.13 65);
+
+  --radius-base: 0.375rem;
+  --radius-container: 0.75rem;
+
+  --terminal-background: #ffffff;
+  --terminal-foreground: #24292f;
+  --terminal-cursor: #044289;
+  --terminal-selection: #dbe9f9;
+  --terminal-black: #24292f;
+  --terminal-red: #cf222e;
+  --terminal-green: #116329;
+  --terminal-yellow: #4d2d00;
+  --terminal-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-cyan: #1b7c83;
+  --terminal-white: #6e7781;
+  --terminal-bright-black: #57606a;
+  --terminal-bright-red: #a40e26;
+  --terminal-bright-green: #1a7f37;
+  --terminal-bright-yellow: #633c01;
+  --terminal-bright-blue: #0969da;
+  --terminal-bright-magenta: #6639ba;
+  --terminal-bright-cyan: #3192aa;
+  --terminal-bright-white: #8c959f;
+
+  --editor-background: #ffffff;
+  --editor-foreground: #24292f;
+  --editor-selection: #dbe9f9;
+  --editor-line-number: #6e7781;
+  --editor-added: #116329;
+  --editor-deleted: #cf222e;
+}
+
+.dark {
+  --color-surface-50: oklch(18% 0.01 230);
+  --color-surface-100: oklch(21% 0.01 230);
+  --color-surface-200: oklch(25% 0.01 230);
+  --color-surface-300: oklch(31% 0.01 230);
+  --color-surface-400: oklch(40% 0.01 230);
+  --color-surface-500: oklch(50% 0.005 230);
+  --color-surface-600: oklch(61% 0.005 230);
+  --color-surface-700: oklch(74% 0.005 230);
+  --color-surface-800: oklch(85% 0.003 230);
+  --color-surface-900: oklch(92% 0.003 230);
+  --color-surface-950: oklch(96% 0.003 230);
+
+  --terminal-background: #0d1117;
+  --terminal-foreground: #c9d1d9;
+  --terminal-cursor: #58a6ff;
+  --terminal-selection: #264f78;
+  --terminal-black: #484f58;
+  --terminal-red: #ff7b72;
+  --terminal-green: #3fb950;
+  --terminal-yellow: #d29922;
+  --terminal-blue: #58a6ff;
+  --terminal-magenta: #bc8cff;
+  --terminal-cyan: #39c5cf;
+  --terminal-white: #b1bac4;
+  --terminal-bright-black: #6e7681;
+  --terminal-bright-red: #ffa198;
+  --terminal-bright-green: #56d364;
+  --terminal-bright-yellow: #e3b341;
+  --terminal-bright-blue: #79c0ff;
+  --terminal-bright-magenta: #d2a8ff;
+  --terminal-bright-cyan: #56d4dd;
+  --terminal-bright-white: #f0f6fc;
+
+  --editor-background: #0d1117;
+  --editor-foreground: #c9d1d9;
+  --editor-selection: #264f78;
+  --editor-line-number: #8b949e;
+  --editor-added: #3fb950;
+  --editor-deleted: #ff7b72;
+}

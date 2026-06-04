@@ -4,17 +4,17 @@ import { invoke } from "@tauri-apps/api/core";
 const STYLE_ID = "planeai-theme";
 
 export const DEFAULT_THEME_CSS = `:root {
-  --color-surface-50: oklch(98% 0.01 260);
-  --color-surface-100: oklch(95% 0.01 260);
-  --color-surface-200: oklch(90% 0.01 260);
-  --color-surface-300: oklch(84% 0.01 260);
-  --color-surface-400: oklch(72% 0.01 260);
-  --color-surface-500: oklch(60% 0.01 260);
-  --color-surface-600: oklch(50% 0.01 260);
-  --color-surface-700: oklch(40% 0.02 260);
-  --color-surface-800: oklch(30% 0.02 260);
-  --color-surface-900: oklch(20% 0.02 260);
-  --color-surface-950: oklch(13% 0.02 260);
+  --color-surface-50: oklch(98% 0 0);
+  --color-surface-100: oklch(95% 0 0);
+  --color-surface-200: oklch(90% 0 0);
+  --color-surface-300: oklch(84% 0 0);
+  --color-surface-400: oklch(72% 0 0);
+  --color-surface-500: oklch(60% 0 0);
+  --color-surface-600: oklch(50% 0 0);
+  --color-surface-700: oklch(40% 0 0);
+  --color-surface-800: oklch(30% 0 0);
+  --color-surface-900: oklch(20% 0 0);
+  --color-surface-950: oklch(13% 0 0);
   --color-primary-50: oklch(95% 0.05 258);
   --color-primary-100: oklch(88% 0.08 258);
   --color-primary-200: oklch(80% 0.12 258);
@@ -73,17 +73,17 @@ export const DEFAULT_THEME_CSS = `:root {
   --editor-deleted: #f38ba8;
 }
 .dark {
-  --color-surface-50: oklch(22% 0.02 260);
-  --color-surface-100: oklch(24% 0.02 260);
-  --color-surface-200: oklch(28% 0.02 260);
-  --color-surface-300: oklch(33% 0.02 260);
-  --color-surface-400: oklch(40% 0.02 260);
-  --color-surface-500: oklch(50% 0.01 260);
-  --color-surface-600: oklch(60% 0.01 260);
-  --color-surface-700: oklch(72% 0.01 260);
-  --color-surface-800: oklch(84% 0.01 260);
-  --color-surface-900: oklch(92% 0.01 260);
-  --color-surface-950: oklch(96% 0.01 260);
+  --color-surface-50: oklch(22% 0 0);
+  --color-surface-100: oklch(24% 0 0);
+  --color-surface-200: oklch(28% 0 0);
+  --color-surface-300: oklch(33% 0 0);
+  --color-surface-400: oklch(40% 0 0);
+  --color-surface-500: oklch(50% 0 0);
+  --color-surface-600: oklch(60% 0 0);
+  --color-surface-700: oklch(72% 0 0);
+  --color-surface-800: oklch(84% 0 0);
+  --color-surface-900: oklch(92% 0 0);
+  --color-surface-950: oklch(96% 0 0);
   --terminal-background: #1e1e2e;
   --terminal-foreground: #cdd6f4;
   --terminal-cursor: #f5e0dc;

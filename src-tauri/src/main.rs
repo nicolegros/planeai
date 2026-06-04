@@ -1047,13 +1047,21 @@ fn main() {
             let (cfg, _warnings) = config::load(&config_dir);
             app.manage(ConfigState(Mutex::new(cfg)));
 
-            // Scaffold themes dir with default.css if missing
+            // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
-            let default_theme_path = themes_dir.join("default.css");
-            if !default_theme_path.exists() {
-                let _ = std::fs::create_dir_all(&themes_dir);
-                let bundled = include_str!("../resources/themes/default.css");
-                let _ = std::fs::write(&default_theme_path, bundled);
+            let _ = std::fs::create_dir_all(&themes_dir);
+            let bundled_themes: &[(&str, &str)] = &[
+                ("default.css", include_str!("../resources/themes/default.css")),
+                ("github.css", include_str!("../resources/themes/github.css")),
+                ("one.css", include_str!("../resources/themes/one.css")),
+                ("catppuccin.css", include_str!("../resources/themes/catppuccin.css")),
+                ("dracula.css", include_str!("../resources/themes/dracula.css")),
+            ];
+            for (name, content) in bundled_themes {
+                let path = themes_dir.join(name);
+                if !path.exists() {
+                    let _ = std::fs::write(&path, content);
+                }
             }
 
             app.manage(DbState(Mutex::new(conn)));
