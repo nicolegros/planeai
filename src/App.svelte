@@ -8,6 +8,7 @@
   import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { getThemeById } from "./lib/terminal-themes";
   import { playTaskComplete } from "./lib/soundPlayer";
@@ -225,6 +226,7 @@
     loadProjects();
     loadSessions();
     loadSettings();
+    loadTheme();
 
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { loadTheme } from "./theme-loader";
 
 export type AppearanceMode = "system" | "light" | "dark";
 
@@ -36,6 +37,7 @@ export interface AppConfig {
     terminal_theme_light: string;
     diff_theme_dark: string;
     diff_theme_light: string;
+    theme: string;
   };
   terminal: {
     font_family: string;
@@ -56,6 +58,7 @@ let config = $state<AppConfig>({
     terminal_theme_light: "one-light",
     diff_theme_dark: "vs-dark",
     diff_theme_light: "vs",
+    theme: "default",
   },
   terminal: {
     font_family: "Menlo",
@@ -104,9 +107,13 @@ export async function loadSettings(): Promise<void> {
 }
 
 export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
+  const prevTheme = config.appearance.theme;
   config = { ...config, ...patch };
   if (patch.appearance) config.appearance = { ...config.appearance, ...patch.appearance };
   if (patch.terminal) config.terminal = { ...config.terminal, ...patch.terminal };
   applyDarkClass();
   await invoke("update_config", { newConfig: config });
+  if (config.appearance.theme !== prevTheme) {
+    loadTheme();
+  }
 }
