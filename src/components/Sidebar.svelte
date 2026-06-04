@@ -48,6 +48,15 @@
 
   let renameValue = $state("");
 
+  $effect(() => {
+    if (renamingSessionId) {
+      const s = sessions.find((x) => x.id === renamingSessionId);
+      if (s) renameValue = s.name || s.branch;
+    }
+  });
+
+  function autofocus(node: HTMLInputElement) { requestAnimationFrame(() => node.focus()); }
+
   function startRename(session: Session) {
     renameValue = session.name || session.branch;
     onStartRename(session.id);
@@ -146,9 +155,8 @@
               {@const isSelected = zone === 'sidebar' && globalIndex === selectedIndex}
               <li>
                 {#if renamingSessionId === session.id}
-                  <!-- svelte-ignore a11y_autofocus -->
                   <input
-                    autofocus
+                    use:autofocus
                     class="w-full px-2 py-1.5 rounded-md text-sm bg-surface-50 dark:bg-surface-800 border border-primary-500 outline-none"
                     bind:value={renameValue}
                     onkeydown={(e) => { if (e.key === 'Enter') commitRename(session.id); if (e.key === 'Escape') onStartRename(""); }}

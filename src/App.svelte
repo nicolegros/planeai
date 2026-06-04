@@ -105,6 +105,7 @@
     await invoke("rename_session", { id, name });
     sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
     renamingSessionId = null;
+    focusTerminal();
   }
 
   async function loadProjects() {
@@ -490,7 +491,7 @@
       onRestartSession={restartSession}
       onOpenPreferences={openPreferences}
       onRenameSession={doRename}
-      onStartRename={(id) => (renamingSessionId = id || null)}
+      onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
     />
