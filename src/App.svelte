@@ -44,6 +44,7 @@
     backend: string;
     tab_count: number;
     base_branch: string | null;
+    task_key: string | null;
   }
 
   let projects = $state<Project[]>([]);
