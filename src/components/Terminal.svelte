@@ -30,8 +30,6 @@
   let term: Terminal;
   let fitAddon: FitAddon;
   let attached = $state(false);
-  let attaching = false;
-  let dataChannel: Channel<ArrayBuffer> | null = $state(null);
 
   const SCROLLBACK_LINES = 100_000;
   const RESIZE_DEBOUNCE_MS = 50;
@@ -221,7 +219,6 @@
     let isPaused = false;
 
     const onData = new Channel<ArrayBuffer>();
-    dataChannel = onData;
     onData.onmessage = (raw: ArrayBuffer) => {
       ptyStarted = true;
       const data = new Uint8Array(raw);
@@ -259,7 +256,15 @@
         showSnackbar(String(e));
       });
     } else if (!exited) {
-      // Attach handled by $effect below
+      // Attach immediately in onMount to avoid $effect double-fire
+      invoke("attach_session", { sessionId, onData }).then(() => {
+        attached = true;
+        onAttached?.();
+        const { rows, cols } = term;
+        invoke("resize_pty", { sessionId, rows, cols });
+      }).catch((e) => {
+        showSnackbar(String(e));
+      });
     }
 
     // ── Resize observer with debouncing ──────────────────────────────────
@@ -286,22 +291,6 @@
       unlisten.then((fn) => fn());
       term.dispose();
     };
-  });
-
-  $effect(() => {
-    if (!exited && !attached && !attaching && dataChannel) {
-      attaching = true;
-      invoke("attach_session", { sessionId, onData: dataChannel }).then(() => {
-        attached = true;
-        onAttached?.();
-        const { rows, cols } = term;
-        invoke("resize_pty", { sessionId, rows, cols });
-      }).catch((e) => {
-        showSnackbar(String(e));
-      }).finally(() => {
-        attaching = false;
-      });
-    }
   });
 
   $effect(() => {
