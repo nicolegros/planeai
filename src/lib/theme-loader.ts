@@ -84,6 +84,17 @@ export const DEFAULT_THEME_CSS = `:root {
   --color-surface-800: hsl(240 4% 12%);
   --color-surface-900: hsl(0 0% 8%);
   --color-surface-950: hsl(0 0% 5%);
+  --color-primary-50: hsl(0 0% 4%);
+  --color-primary-100: hsl(0 0% 10%);
+  --color-primary-200: hsl(0 0% 20%);
+  --color-primary-300: hsl(0 0% 35%);
+  --color-primary-400: hsl(0 0% 50%);
+  --color-primary-500: hsl(0 0% 96%);
+  --color-primary-600: hsl(0 0% 92%);
+  --color-primary-700: hsl(0 0% 88%);
+  --color-primary-800: hsl(0 0% 95%);
+  --color-primary-900: hsl(0 0% 98%);
+  --color-primary-950: hsl(0 0% 100%);
   --terminal-background: #0d0d0d;
   --terminal-foreground: #f2f2f2;
   --terminal-cursor: #58a6ff;
