@@ -15,8 +15,8 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Focus zone** | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus. |
 | **Tab switcher** | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. |
 | **Notification** | (future) A signal that an agent needs human attention. |
-| **Token** | A semantic CSS custom property from the Skeleton Cerberus theme (e.g., `--color-surface-200`). Referenced via Tailwind utilities like `bg-surface-200`. |
-| **Primitive** | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior with token-based styling. The building block for feature components. |
+| **Token** | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`. |
+| **Primitive** | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components. |
 | **Theme mode** | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active. |
 
 ## Session lifecycle (v1)
@@ -34,7 +34,8 @@ create → active → exited → deleted
 - **Tauri v2** (Rust backend + webview frontend)
 - **Svelte 5** with runes for reactive UI
 - **xterm.js** for terminal rendering
-- **Tailwind CSS** with Skeleton Cerberus theme tokens (light + dark)
+- **Tailwind CSS v4** with custom `@theme` block mapping CSS custom properties to utility classes
+- **Custom theming** via CSS files in `~/.config/planeai/themes/`. Theme file defines UI, terminal, and editor tokens for both light and dark modes.
 - **SQLite via rusqlite** on the Rust backend for persistence
 - **tmux** for optional process persistence (auto-detected; see Session backend)
 - **portable-pty** for PTY management (both tmux-attach and direct-spawn go through a local PTY)
