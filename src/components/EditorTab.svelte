@@ -121,10 +121,9 @@
 
   function ensureView(state: EditorState) {
     if (view) {
-      view.setState(state);
-    } else {
-      view = new EditorView({ state, parent: editorContainer });
+      view.destroy();
     }
+    view = new EditorView({ state, parent: editorContainer });
   }
 
   let cleanupInterval: (() => void) | undefined;
