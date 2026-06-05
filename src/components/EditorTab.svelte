@@ -15,6 +15,7 @@
     detectLanguageFromPath,
   } from "../lib/cm-shared";
   import { getSettings } from "../lib/settings.svelte";
+  import { MOD_LABEL } from "../lib/keyboard";
 
   interface Buffer {
     path: string;
@@ -285,7 +286,7 @@
 
   {#if !activeBuffer}
     <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">
-      <span class="text-sm">Press <kbd class="px-1.5 py-0.5 rounded bg-surface-200 dark:bg-surface-700 text-xs font-mono">⌘P</kbd> to open a file</span>
+      <span class="text-sm">Press <kbd class="px-1.5 py-0.5 rounded bg-surface-200 dark:bg-surface-700 text-xs font-mono">{MOD_LABEL}P</kbd> to open a file</span>
     </div>
   {/if}
 

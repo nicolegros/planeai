@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Dialog } from "bits-ui";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
 
   interface Props {
     open: boolean;
@@ -31,6 +31,18 @@
     { section: "View", items: [
       { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
       { keys: `${MOD_LABEL}D`, description: "Toggle diff" },
+    ]},
+    { section: "Terminal", items: [
+      { keys: IS_MAC ? `${MOD_LABEL}C` : `Ctrl+Shift+C`, description: "Copy selection" },
+      { keys: IS_MAC ? `${MOD_LABEL}V` : `Ctrl+Shift+V`, description: "Paste" },
+      { keys: IS_MAC ? `${MOD_LABEL}⌫` : `Ctrl+Backspace`, description: "Kill line" },
+      { keys: IS_MAC ? `${MOD_LABEL}←` : `Home`, description: "Beginning of line" },
+      { keys: IS_MAC ? `${MOD_LABEL}→` : `End`, description: "End of line" },
+      { keys: `Shift+Enter`, description: "Newline (no submit)" },
+      { keys: `Escape`, description: "Interrupt (Ctrl+C)" },
+    ]},
+    { section: "Forms", items: [
+      { keys: MOD_ENTER_HINT, description: "Submit form" },
     ]},
   ];
 </script>

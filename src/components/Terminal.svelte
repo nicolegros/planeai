@@ -12,6 +12,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { extractTerminalTheme } from "../lib/theme-loader";
+  import { matchTerminalKey } from "../lib/terminal-keys";
 
   interface Props {
     sessionId: string;
@@ -32,7 +33,6 @@
 
   const SCROLLBACK_LINES = 100_000;
   const RESIZE_DEBOUNCE_MS = 50;
-  const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
   function terminalFontStack(primary: string): string {
     const quoted = `"${primary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -139,63 +139,27 @@
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
 
-      // Cmd+C → copy selection (if any)
-      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "c") {
-        if (term.hasSelection()) {
+      const action = matchTerminalKey(ev, term.hasSelection());
+      if (!action) return true;
+
+      switch (action.type) {
+        case "copy":
           ev.preventDefault();
           navigator.clipboard.writeText(term.getSelection()).catch(() => {});
           return false;
-        }
-        // No selection: let it pass through as Ctrl+C interrupt
-        return true;
+        case "paste":
+          ev.preventDefault();
+          navigator.clipboard.readText().then((text) => {
+            if (text) invoke("write_to_pty", { sessionId, data: [...new TextEncoder().encode(text)] });
+          }).catch(() => {});
+          return false;
+        case "passthrough":
+          return true;
+        case "send_bytes":
+          ev.preventDefault();
+          invoke("write_to_pty", { sessionId, data: action.bytes });
+          return false;
       }
-
-      // Cmd+V → let it fall through to native paste event
-      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "v") {
-        return true;
-      }
-
-      // Shift+Enter → Ctrl+J (newline without submit)
-      if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && ev.key === "Enter") {
-        ev.preventDefault();
-        const bytes = [0x0a]; // Ctrl+J
-        invoke("write_to_pty", { sessionId, data: bytes });
-        return false;
-      }
-
-      // Cmd+Backspace → Ctrl+U (kill line)
-      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "Backspace") {
-        ev.preventDefault();
-        const bytes = [0x15]; // Ctrl+U
-        invoke("write_to_pty", { sessionId, data: bytes });
-        return false;
-      }
-
-      // Cmd+Left → Ctrl+A (beginning of line)
-      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "ArrowLeft") {
-        ev.preventDefault();
-        const bytes = [0x01]; // Ctrl+A
-        invoke("write_to_pty", { sessionId, data: bytes });
-        return false;
-      }
-
-      // Cmd+Right → Ctrl+E (end of line)
-      if (IS_MAC && ev.metaKey && !ev.ctrlKey && !ev.shiftKey && ev.key === "ArrowRight") {
-        ev.preventDefault();
-        const bytes = [0x05]; // Ctrl+E
-        invoke("write_to_pty", { sessionId, data: bytes });
-        return false;
-      }
-
-      // Escape → send Ctrl+C (interrupt)
-      if (ev.key === "Escape" && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-        ev.preventDefault();
-        const bytes = [0x03]; // Ctrl+C
-        invoke("write_to_pty", { sessionId, data: bytes });
-        return false;
-      }
-
-      return true;
     });
 
     // ── Terminal input with focus-report filtering ────────────────────────
