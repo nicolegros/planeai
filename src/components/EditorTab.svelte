@@ -49,11 +49,6 @@
   const editorLangCompartment = new Compartment();
 
   const activeBuffer = $derived(activeIndex >= 0 ? buffers[activeIndex] : null);
-  const activeFileName = $derived(activeBuffer?.path.split("/").pop() || activeBuffer?.path || "");
-
-  $effect(() => {
-    if (activeFileName) onFileChange?.(activeFileName);
-  });
 
   function createEditorState(content: string, filePath: string): EditorState {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;
@@ -171,6 +166,7 @@
 
     activeIndex = index;
     const buf = buffers[index];
+    onFileChange?.(buf.path.split("/").pop() || buf.path);
 
     if (buf.state) {
       ensureView(buf.state);

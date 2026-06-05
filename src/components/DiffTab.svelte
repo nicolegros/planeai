@@ -38,12 +38,6 @@
   let renderer: DiffRenderer | null = null;
   let editorContainer: HTMLElement;
 
-  const selectedFileName = $derived(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
-
-  $effect(() => {
-    if (selectedFileName) onFileChange?.(selectedFileName);
-  });
-
   // Cache file diffs so re-selecting a file is instant (avoids the IPC + `git show`
   // roundtrip). Cleared on refresh since the working tree may have changed.
   let diffCache = new Map<string, FileDiff>();
@@ -58,6 +52,7 @@
       }
       if (files.length > 0) {
         await loadFileDiff(files[selectedIndex]);
+        onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
       }
     } catch (e) {
       console.error("Failed to get changed files:", e);
@@ -84,6 +79,8 @@
 
   function selectFile(index: number) {
     selectedIndex = index;
+    const file = files[index];
+    if (file) onFileChange?.(file.path.split("/").pop() || file.path);
     loadFileDiff(files[index]);
   }
 
