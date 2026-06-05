@@ -161,6 +161,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Add base_branch column (nullable — NULL for existing sessions, detected on demand)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN base_branch TEXT");
 
+    // Add mru_position column (nullable — NULL means "not yet ordered")
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
+
     Ok(())
 }
 
@@ -332,7 +335,7 @@ pub fn create_session_with_id(
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE status IN ('active', 'exited')")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -496,6 +499,19 @@ pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<(
         "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
         params![id, tab_count],
     )?;
+    Ok(())
+}
+
+pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("UPDATE sessions SET mru_position = NULL", [])?;
+    for (i, id) in session_ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE sessions SET mru_position = ?2 WHERE id = ?1",
+            params![id, i as i64],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -1063,5 +1079,148 @@ mod tests {
         assert_eq!(s.base_branch, Some("main".to_string()));
         let loaded = get_session(&conn, "sess-bb").unwrap().unwrap();
         assert_eq!(loaded.base_branch, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_save_mru_order_persists_rank_indices() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_id(
+            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+
+        save_mru_order(&conn, &["a", "b", "c"]).unwrap();
+
+        let pos_a: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pos_b: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pos_c: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'c'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pos_a, Some(0));
+        assert_eq!(pos_b, Some(1));
+        assert_eq!(pos_c, Some(2));
+    }
+
+    #[test]
+    fn test_list_sessions_returns_mru_order() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_id(
+            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+
+        save_mru_order(&conn, &["b", "a", "c"]).unwrap();
+
+        let sessions = list_sessions(&conn).unwrap();
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn test_null_mru_position_sorts_last_by_created_at() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_id(
+            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+
+        // Only position "b" — a and c remain NULL
+        save_mru_order(&conn, &["b"]).unwrap();
+
+        let sessions = list_sessions(&conn).unwrap();
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        // b first (position 0), then a and c in created_at order
+        assert_eq!(ids, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn test_save_partial_mru_resets_unlisted_positions() {
+        let conn = setup();
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_id(
+            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+        create_session_with_id(
+            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+        )
+        .unwrap();
+
+        // First save positions all three
+        save_mru_order(&conn, &["a", "b", "c"]).unwrap();
+        // Now save only "c" — b and a should become NULL
+        save_mru_order(&conn, &["c"]).unwrap();
+
+        let pos_a: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pos_b: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let pos_c: Option<i64> = conn
+            .query_row(
+                "SELECT mru_position FROM sessions WHERE id = 'c'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pos_c, Some(0));
+        assert_eq!(pos_a, None);
+        assert_eq!(pos_b, None);
     }
 }
