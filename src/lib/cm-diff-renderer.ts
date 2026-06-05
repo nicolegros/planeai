@@ -1,36 +1,22 @@
 import type { DiffRenderer } from "./diff-renderer";
 import { MergeView, goToNextChunk, goToPreviousChunk } from "@codemirror/merge";
+import { EditorView } from "@codemirror/view";
+import { EditorState } from "@codemirror/state";
 import {
-  EditorView,
-  lineNumbers,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-} from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
-import { languages } from "@codemirror/language-data";
-import {
-  LanguageDescription,
-  syntaxHighlighting,
-  defaultHighlightStyle,
-  foldGutter,
-} from "@codemirror/language";
+  fontCompartment,
+  themeCompartment,
+  langCompartment,
+  baseExtensions,
+  fontExtension,
+  isDarkTheme,
+  findLanguage,
+} from "./cm-shared";
 
-// Minimal, read-only feature set. We intentionally avoid `basicSetup` because it
-// bundles history, autocompletion, search, linting and bracket matching — none of
-// which a read-only diff needs, and all of which add construction cost (×2 editors).
 const readOnlyExtensions = [
-  lineNumbers(),
-  foldGutter(),
-  highlightActiveLine(),
-  highlightActiveLineGutter(),
-  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  ...baseExtensions,
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),
 ];
-
-const fontCompartment = new Compartment();
-const themeCompartment = new Compartment();
-const langCompartment = new Compartment();
 
 const darkTheme = EditorView.theme(
   {
@@ -45,7 +31,6 @@ const darkTheme = EditorView.theme(
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
       backgroundColor: "var(--editor-selection)",
     },
-    // Terax-style diff: subtle line bg + vivid inline text + gutter accent
     ".cm-changedLine.cm-insertedLine": {
       backgroundColor: "rgba(110, 200, 120, 0.05) !important",
     },
@@ -130,21 +115,6 @@ const lightTheme = EditorView.theme({
   },
 });
 
-function fontExtension(family: string, size: number) {
-  return EditorView.theme({
-    "&": { fontSize: `${size}px` },
-    ".cm-content, .cm-gutters": { fontFamily: family },
-  });
-}
-
-function isDarkTheme(theme: string): boolean {
-  return theme.includes("dark") || theme.includes("black");
-}
-
-function findLanguage(lang: string): LanguageDescription | null {
-  return LanguageDescription.matchLanguageName(languages, lang, true);
-}
-
 export class CmDiffRenderer implements DiffRenderer {
   private container: HTMLElement | null = null;
   private mergeView: MergeView | null = null;
@@ -164,16 +134,12 @@ export class CmDiffRenderer implements DiffRenderer {
     this.original = original;
     this.modified = modified;
     this.language = language;
-    // Always rebuild: dispatching to a and b sequentially causes an intermediate
-    // state where chunks are computed against mismatched documents, breaking
-    // collapseUnchanged decorations that don't recover after the second dispatch.
     this.rebuild();
   }
 
   setTheme(theme: string): void {
     if (theme === this.currentTheme && this.mergeView) return;
     this.currentTheme = theme;
-    // Theme is a compartment, so swap it without rebuilding the view.
     if (this.mergeView) {
       const ext = isDarkTheme(theme) ? darkTheme : lightTheme;
       this.mergeView.a.dispatch({ effects: themeCompartment.reconfigure(ext) });
@@ -225,7 +191,6 @@ export class CmDiffRenderer implements DiffRenderer {
     }
     const targetLanguage = this.language;
     langDesc.load().then((support) => {
-      // Guard against a newer file having been selected while loading.
       if (!this.mergeView || this.language !== targetLanguage) return;
       this.mergeView.a.dispatch({ effects: langCompartment.reconfigure(support.extension) });
       this.mergeView.b.dispatch({ effects: langCompartment.reconfigure(support.extension) });

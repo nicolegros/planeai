@@ -27,6 +27,8 @@ export type KeyboardAction =
   | { type: "next_tab" }
   | { type: "prev_tab" }
   | { type: "toggle_diff" }
+  | { type: "toggle_editor" }
+  | { type: "open_file" }
   | { type: "show_shortcuts" };
 
 /**
@@ -87,6 +89,16 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "toggle_diff" };
   }
 
+  // Mod+E — toggle editor tab
+  if (mod && !e.shiftKey && key === "e") {
+    return { type: "toggle_editor" };
+  }
+
+  // Mod+P — open file finder
+  if (mod && !e.shiftKey && key === "p") {
+    return { type: "open_file" };
+  }
+
   // Mod+/ — keyboard shortcuts
   if (mod && !e.shiftKey && e.key === "/") {
     return { type: "show_shortcuts" };
@@ -119,10 +131,20 @@ export type ActionHandler = (action: KeyboardAction) => void;
 export function installKeyboardRouter(
   onAction: ActionHandler,
   shouldPassEscape?: () => boolean,
+  isEditorFocused?: () => boolean,
 ): () => void {
+  const editorAllowedActions = new Set<KeyboardAction["type"]>([
+    "open_file", "toggle_editor", "command_palette", "tab_switch", "tab_switch_reverse",
+  ]);
+
   function handler(e: KeyboardEvent) {
     const action = matchChord(e);
     if (action) {
+      // When editor is focused, only intercept whitelisted actions
+      if (isEditorFocused?.() && !editorAllowedActions.has(action.type)) {
+        return;
+      }
+
       // If Escape and terminal already focused with no overlays, let it pass through
       if (
         action.type === "focus_terminal" &&

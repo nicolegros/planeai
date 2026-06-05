@@ -41,6 +41,7 @@
     onRestoreProject: (id: string) => void;
     onPickTask: (task: TaskItem) => void;
     onToggleDiff: () => void;
+    onOpenFile?: (filePath: string) => void;
   }
 
   interface TaskItem {
@@ -52,12 +53,13 @@
     blocked_by: string[];
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff, onOpenFile }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile">("none");
   let archivedProjects = $state<Project[]>([]);
   let taskItems = $state<TaskItem[]>([]);
+  let fileList = $state<string[]>([]);
 
   async function openArchived() {
     archivedSessions = await invoke<Session[]>("list_archived_sessions");
@@ -84,6 +86,17 @@
 
   function openArchiveProject() {
     subMenu = "archiveProject";
+  }
+
+  export async function openFilePicker() {
+    const repoPath = getActiveRootPath();
+    if (!repoPath) { close(); return; }
+    try {
+      fileList = await invoke<string[]>("list_files", { repoPath });
+    } catch {
+      fileList = [];
+    }
+    subMenu = "openFile";
   }
 
   function openDeleteProject() {
@@ -269,6 +282,31 @@
                     >
                       <span class="font-medium text-primary-600 dark:text-primary-400 mr-2">{task.key}</span>
                       <span class="truncate">{task.title}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "openFile"}
+        <Command.Root class="flex flex-col" loop>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Open file..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No files found.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each fileList as file (file)}
+                    <Command.Item
+                      value={file}
+                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm font-mono text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={() => { onOpenFile?.(file); close(); }}
+                    >
+                      <span class="truncate">{file}</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
