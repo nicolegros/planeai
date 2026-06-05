@@ -358,13 +358,27 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
+    fn configure_git_identity(path: &std::path::Path) {
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+    }
+
     fn init_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(dir.path())
             .output()
             .unwrap();
+        configure_git_identity(dir.path());
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(dir.path())
@@ -384,7 +398,7 @@ mod tests {
         // Create a bare "remote" repo
         let remote_dir = tempfile::tempdir().unwrap();
         Command::new("git")
-            .args(["init", "--bare"])
+            .args(["init", "--bare", "-b", "main"])
             .current_dir(remote_dir.path())
             .output()
             .unwrap();
@@ -392,10 +406,11 @@ mod tests {
         // Create a local repo, add remote, push a branch
         let upstream = tempfile::tempdir().unwrap();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(upstream.path())
             .output()
             .unwrap();
+        configure_git_identity(upstream.path());
         Command::new("git")
             .args([
                 "remote",
@@ -427,6 +442,7 @@ mod tests {
             ])
             .output()
             .unwrap();
+        configure_git_identity(clone.path());
 
         // Push a new branch from upstream so clone can fetch it
         Command::new("git")
@@ -467,10 +483,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(p)
             .output()
             .unwrap();
+        configure_git_identity(p);
         fs::write(p.join("existing.txt"), "hello\n").unwrap();
         Command::new("git")
             .args(["add", "."])
@@ -560,10 +577,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(p)
             .output()
             .unwrap();
+        configure_git_identity(p);
         fs::write(p.join("doomed.txt"), "will be deleted\n").unwrap();
         Command::new("git")
             .args(["add", "."])
@@ -602,10 +620,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(p)
             .output()
             .unwrap();
+        configure_git_identity(p);
         fs::create_dir_all(p.join("src/client")).unwrap();
         fs::write(p.join("src/client/auth.rs"), "fn auth() {}\n").unwrap();
         Command::new("git")
@@ -649,10 +668,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(p)
             .output()
             .unwrap();
+        configure_git_identity(p);
         fs::create_dir_all(p.join("src")).unwrap();
         fs::write(p.join("src/lib.rs"), "original content\n").unwrap();
         Command::new("git")
@@ -729,6 +749,7 @@ mod tests {
             .current_dir(p)
             .output()
             .unwrap();
+        configure_git_identity(p);
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(p)
