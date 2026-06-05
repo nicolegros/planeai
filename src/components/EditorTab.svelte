@@ -4,11 +4,10 @@
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
-  import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
-  import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-  import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+  import { basicSetup } from "codemirror";
+  import { defaultKeymap } from "@codemirror/commands";
+  import { searchKeymap } from "@codemirror/search";
   import {
-    baseExtensions,
     darkTheme,
     lightTheme,
     fontExtension,
@@ -59,11 +58,8 @@
       doc: content,
       extensions: [
         ...(useVim ? [vim()] : []),
-        baseExtensions,
-        history(),
-        closeBrackets(),
-        highlightSelectionMatches(),
-        keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap, ...(useVim ? [] : defaultKeymap)]),
+        basicSetup,
+        ...(useVim ? [] : [keymap.of(defaultKeymap)]),
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
         editorLangCompartment.of([]),
