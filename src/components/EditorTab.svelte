@@ -210,6 +210,10 @@
     view?.focus();
   }
 
+  export async function save() {
+    await saveCurrentBuffer();
+  }
+
   onMount(() => {
     // Lazy setup on first visibility
   });

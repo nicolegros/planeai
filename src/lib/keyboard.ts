@@ -29,6 +29,7 @@ export type KeyboardAction =
   | { type: "toggle_diff" }
   | { type: "toggle_editor" }
   | { type: "open_file" }
+  | { type: "save_file" }
   | { type: "show_shortcuts" };
 
 /**
@@ -99,6 +100,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "open_file" };
   }
 
+  // Mod+S — save file
+  if (mod && !e.shiftKey && key === "s") {
+    return { type: "save_file" };
+  }
+
   // Mod+/ — keyboard shortcuts
   if (mod && !e.shiftKey && e.key === "/") {
     return { type: "show_shortcuts" };
@@ -134,7 +140,7 @@ export function installKeyboardRouter(
   isEditorFocused?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
-    "open_file", "toggle_editor", "command_palette", "tab_switch", "tab_switch_reverse",
+    "open_file", "toggle_editor", "command_palette", "tab_switch", "tab_switch_reverse", "save_file",
   ]);
 
   function handler(e: KeyboardEvent) {

@@ -371,6 +371,10 @@
         commandMenuOpen = true;
         // Need to trigger file picker mode after menu opens
         setTimeout(() => commandMenuRef?.openFilePicker(), 50);
+      } else if (action.type === "save_file") {
+        if (activeSessionId && editorTabActive[activeSessionId]) {
+          editorRefs[activeSessionId]?.save();
+        }
       }
     },
     () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling,
