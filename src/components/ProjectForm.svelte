@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { nameFromPath } from "../lib/name-from-path";
   import { Button, Input, Label } from "./ui";
 
   interface Props {
@@ -24,7 +25,7 @@
 
   $effect(() => {
     if (!nameManuallyEdited && path) {
-      name = path.replace(/\/$/, "").split("/").pop() || "";
+      name = nameFromPath(path);
     }
   });
 
@@ -32,8 +33,7 @@
     const selected = await open({ directory: true, multiple: false });
     if (selected) {
       path = selected as string;
-      const parts = path.replace(/\/$/, "").split("/");
-      name = parts[parts.length - 1] || "";
+      name = nameFromPath(path);
       error = "";
     }
   }
@@ -44,7 +44,7 @@
       return;
     }
     if (!name) {
-      name = path.replace(/\/$/, "").split("/").pop() || "";
+      name = nameFromPath(path);
     }
     if (!name) {
       error = "Could not derive a name from the path.";
