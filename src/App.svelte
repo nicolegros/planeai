@@ -58,7 +58,7 @@
 
   // Command menu state
   let commandMenuOpen = $state(false);
-  let commandMenuMode = $state<"none" | "openFile">("none");
+  let commandMenuFileMode = $state(false);
 
   // Agent state tracking (Busy/Idle per session)
   let agentStates = $state<Record<string, string>>({});
@@ -363,7 +363,6 @@
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
-        commandMenuMode = "none";
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
         openPreferences();
@@ -382,7 +381,7 @@
       } else if (action.type === "toggle_editor") {
         handleToggleEditor();
       } else if (action.type === "open_file") {
-        commandMenuMode = "openFile";
+        commandMenuFileMode = true;
         commandMenuOpen = true;
       } else if (action.type === "save_file") {
         if (activeSessionId && editorTabActive[activeSessionId]) {
@@ -597,8 +596,8 @@
       {sessions}
       {projects}
       {activeSessionId}
-      initialMode={commandMenuMode}
-      onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuMode = "none"; }}
+      openFileMode={commandMenuFileMode}
+      onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
       onArchiveSession={archiveCurrentSession}
       onDeleteSession={deleteCurrentSession}
