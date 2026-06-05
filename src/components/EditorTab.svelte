@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
-  import { EditorState, Compartment } from "@codemirror/state";
+  import { EditorState, Compartment, Prec } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
   import { basicSetup } from "codemirror";
   import { defaultKeymap } from "@codemirror/commands";
@@ -62,6 +62,17 @@
     return EditorState.create({
       doc: content,
       extensions: [
+        Prec.highest(keymap.of([
+          { key: "Mod-t", run: () => false },
+          { key: "Mod-w", run: () => false },
+          { key: "Mod-d", run: () => false },
+          { key: "Mod-Shift-[", run: () => false },
+          { key: "Mod-Shift-]", run: () => false },
+          { key: "Mod-b", run: () => false },
+          { key: "Mod-k", run: () => false },
+          { key: "Mod-e", run: () => false },
+          { key: "Mod-,", run: () => false },
+        ])),
         ...(useVim ? [vim()] : []),
         basicSetup,
         ...(useVim ? [] : [keymap.of(defaultKeymap)]),
