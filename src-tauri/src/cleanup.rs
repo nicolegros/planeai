@@ -6,6 +6,7 @@ pub struct CleanupContext {
     pub tmux_name: Option<String>,
     pub worktree_path: Option<String>,
     pub project_path: Option<String>,
+    pub branch: Option<String>,
 }
 
 /// Operations that cleanup can perform (injectable for testing).
@@ -13,6 +14,7 @@ pub struct CleanupOps {
     pub kill_tmux: Box<dyn Fn(&str) -> Result<(), String>>,
     pub remove_worktree: Box<dyn Fn(&str, &str) -> Result<(), String>>,
     pub remove_dir: Box<dyn Fn(&str) -> Result<(), String>>,
+    pub delete_branch: Box<dyn Fn(&str, &str) -> Result<(), String>>,
 }
 
 /// Run background cleanup for a destroyed session. Returns collected errors.
@@ -38,6 +40,12 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         if let Err(e) = (ops.remove_dir)(wt_path) {
             errors.push(format!("remove dir: {e}"));
         }
+        // Delete the branch that was created with the worktree
+        if let (Some(ref project_path), Some(ref branch)) = (&ctx.project_path, &ctx.branch) {
+            if let Err(e) = (ops.delete_branch)(project_path, branch) {
+                errors.push(format!("branch delete: {e}"));
+            }
+        }
     }
 
     errors
@@ -60,6 +68,20 @@ pub fn real_ops() -> CleanupOps {
                 Err(e) => Err(e.to_string()),
             }
         }),
+        delete_branch: Box::new(|repo, branch| {
+            let output = std::process::Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(repo)
+                .output()
+                .map_err(|e| format!("failed to run git: {e}"))?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.contains("not found") {
+                    return Err(stderr.to_string());
+                }
+            }
+            Ok(())
+        }),
     }
 }
 
@@ -73,6 +95,7 @@ mod tests {
             kill_tmux: Box::new(|_| Ok(())),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
+            delete_branch: Box::new(|_, _| Ok(())),
         }
     }
 
@@ -83,6 +106,7 @@ mod tests {
             tmux_name: None,
             worktree_path: None,
             project_path: None,
+            branch: None,
         };
         let errors = run_cleanup(&ctx, &noop_ops());
         assert!(errors.is_empty());
@@ -100,12 +124,14 @@ mod tests {
             }),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
+            delete_branch: Box::new(|_, _| Ok(())),
         };
         let ctx = CleanupContext {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: None,
             project_path: None,
+            branch: None,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -119,6 +145,7 @@ mod tests {
         thread_local! {
             static WT_REMOVED: RefCell<Vec<(String, String)>> = RefCell::new(vec![]);
             static DIR_REMOVED: RefCell<Vec<String>> = RefCell::new(vec![]);
+            static BR_DELETED: RefCell<Vec<(String, String)>> = RefCell::new(vec![]);
         }
         let ops = CleanupOps {
             kill_tmux: Box::new(|_| Ok(())),
@@ -130,12 +157,17 @@ mod tests {
                 DIR_REMOVED.with(|v| v.borrow_mut().push(path.to_string()));
                 Ok(())
             }),
+            delete_branch: Box::new(|repo, branch| {
+                BR_DELETED.with(|v| v.borrow_mut().push((repo.to_string(), branch.to_string())));
+                Ok(())
+            }),
         };
         let ctx = CleanupContext {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
+            branch: Some("test-iv".to_string()),
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -145,6 +177,9 @@ mod tests {
         DIR_REMOVED.with(|v| {
             assert_eq!(v.borrow().as_slice(), &["/tmp/wt/abc"]);
         });
+        BR_DELETED.with(|v| {
+            assert_eq!(v.borrow().as_slice(), &[("/tmp/myapp".to_string(), "test-iv".to_string())]);
+        });
     }
 
     #[test]
@@ -153,18 +188,21 @@ mod tests {
             kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
+            delete_branch: Box::new(|_, _| Err("branch in use".to_string())),
         };
         let ctx = CleanupContext {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
+            branch: Some("feat-x".to_string()),
         };
         let errors = run_cleanup(&ctx, &ops);
-        assert_eq!(errors.len(), 3);
+        assert_eq!(errors.len(), 4);
         assert!(errors[0].contains("tmux"));
         assert!(errors[1].contains("locked"));
         assert!(errors[2].contains("permission denied"));
+        assert!(errors[3].contains("branch in use"));
     }
 }
 

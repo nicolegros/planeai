@@ -1105,6 +1105,11 @@ async fn destroy_session(
                 tmux_name: session.tmux_name.clone(),
                 worktree_path: session.worktree_path.clone(),
                 project_path: project_path.clone(),
+                branch: if session.worktree_path.is_some() {
+                    Some(session.branch.clone())
+                } else {
+                    None
+                },
             });
 
             task_hook_ctx = if session.task_key.is_some() {
