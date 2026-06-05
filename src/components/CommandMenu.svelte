@@ -307,7 +307,6 @@
             placeholder="Open file..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2 scroll-py-2">
-            <Command.Viewport>
               <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No files found.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
@@ -322,7 +321,6 @@
                   {/each}
                 </Command.GroupItems>
               </Command.Group>
-            </Command.Viewport>
           </Command.List>
         </Command.Root>
       {:else}
