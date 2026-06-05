@@ -58,6 +58,7 @@
 
   // Command menu state
   let commandMenuOpen = $state(false);
+  let commandMenuMode = $state<"none" | "openFile">("none");
 
   // Agent state tracking (Busy/Idle per session)
   let agentStates = $state<Record<string, string>>({});
@@ -98,7 +99,6 @@
   let editorTabOpen = $state<Record<string, boolean>>({});
   let editorTabActive = $state<Record<string, boolean>>({});
   let editorRefs = $state<Record<string, EditorTab>>({});
-  let commandMenuRef: CommandMenu;
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -363,6 +363,7 @@
         sessionToDelete = null;
         commandMenuOpen = false;
       } else if (action.type === "command_palette") {
+        commandMenuMode = "none";
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
         openPreferences();
@@ -381,9 +382,8 @@
       } else if (action.type === "toggle_editor") {
         handleToggleEditor();
       } else if (action.type === "open_file") {
+        commandMenuMode = "openFile";
         commandMenuOpen = true;
-        // Need to trigger file picker mode after menu opens
-        setTimeout(() => commandMenuRef?.openFilePicker(), 50);
       } else if (action.type === "save_file") {
         if (activeSessionId && editorTabActive[activeSessionId]) {
           editorRefs[activeSessionId]?.save();
@@ -597,7 +597,8 @@
       {sessions}
       {projects}
       {activeSessionId}
-      onOpenChange={(v) => (commandMenuOpen = v)}
+      initialMode={commandMenuMode}
+      onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuMode = "none"; }}
       onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
       onArchiveSession={archiveCurrentSession}
       onDeleteSession={deleteCurrentSession}
@@ -644,7 +645,6 @@
       }}
       onToggleDiff={handleToggleDiff}
       onOpenFile={handleOpenFile}
-      bind:this={commandMenuRef}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />

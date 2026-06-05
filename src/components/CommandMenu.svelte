@@ -42,6 +42,7 @@
     onPickTask: (task: TaskItem) => void;
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
+    initialMode?: "none" | "openFile";
   }
 
   interface TaskItem {
@@ -53,7 +54,7 @@
     blocked_by: string[];
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff, onOpenFile }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff, onOpenFile, initialMode = "none" }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
   let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile">("none");
@@ -113,7 +114,13 @@
   }
 
   $effect(() => {
-    if (open) subMenu = "none";
+    if (open) {
+      if (initialMode === "openFile") {
+        openFilePicker();
+      } else {
+        subMenu = "none";
+      }
+    }
   });
 
   function getActiveRootPath(): string | null {
