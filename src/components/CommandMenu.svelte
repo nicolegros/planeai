@@ -306,7 +306,7 @@
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Open file..."
           />
-          <Command.List class="max-h-72 overflow-y-auto p-2">
+          <Command.List class="max-h-72 overflow-y-auto p-2 scroll-py-2">
             <Command.Viewport>
               <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No files found.</Command.Empty>
               <Command.Group>
@@ -314,7 +314,7 @@
                   {#each fileList as file (file)}
                     <Command.Item
                       value={file}
-                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm font-mono text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-8 cursor-pointer items-center rounded-md px-3 text-sm font-mono text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
                       onSelect={() => { onOpenFile?.(file); close(); }}
                     >
                       <span class="truncate">{file}</span>
