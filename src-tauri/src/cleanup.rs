@@ -54,7 +54,11 @@ pub fn real_ops() -> CleanupOps {
         }),
         remove_worktree: Box::new(|repo, wt| crate::git::worktree_remove(repo, wt)),
         remove_dir: Box::new(|path| {
-            std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
         }),
     }
 }
