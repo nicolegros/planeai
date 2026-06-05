@@ -301,7 +301,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "openFile"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col">
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Open file..."
