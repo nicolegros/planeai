@@ -24,9 +24,10 @@
     baseBranch: string;
     visible: boolean;
     theme?: string;
+    onEditFile?: (filePath: string) => void;
   }
 
-  let { repoPath, baseBranch, visible, theme = "vs-dark" }: Props = $props();
+  let { repoPath, baseBranch, visible, theme = "vs-dark", onEditFile }: Props = $props();
 
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
@@ -129,6 +130,9 @@
       e.preventDefault();
       diffMode = diffMode === 'side-by-side' ? 'unified' : 'side-by-side';
       renderer?.setMode(diffMode);
+    } else if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) {
+      e.preventDefault();
+      onEditFile?.(files[selectedIndex].path);
     }
   }
 

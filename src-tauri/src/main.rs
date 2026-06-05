@@ -440,6 +440,43 @@ fn detect_default_branch(repo_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn list_files(repo_path: String) -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files"])
+        .current_dir(&repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git ls-files: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.to_string())
+        .collect())
+}
+
+#[tauri::command]
+fn read_file(file_path: String) -> Result<String, String> {
+    let path = std::path::Path::new(&file_path);
+    let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {e}"))?;
+    if metadata.len() > 10 * 1024 * 1024 {
+        return Err("File is too large (>10MB)".to_string());
+    }
+    // Check for binary content (null bytes in first 8KB)
+    let bytes = std::fs::read(path).map_err(|e| format!("Cannot read file: {e}"))?;
+    let check_len = bytes.len().min(8192);
+    if bytes[..check_len].contains(&0) {
+        return Err("Binary file cannot be opened in the editor".to_string());
+    }
+    String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8".to_string())
+}
+
+#[tauri::command]
+fn write_file(file_path: String, content: String) -> Result<(), String> {
+    std::fs::write(&file_path, &content).map_err(|e| format!("Cannot write file: {e}"))
+}
+
+#[tauri::command]
 fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::family_name::FamilyName;
     use font_kit::properties::Properties;
@@ -1430,6 +1467,9 @@ fn main() {
             get_changed_files,
             get_file_diff,
             detect_default_branch,
+            list_files,
+            read_file,
+            write_file,
             list_monospace_fonts,
             get_config,
             update_config,

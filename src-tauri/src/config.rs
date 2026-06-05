@@ -10,6 +10,8 @@ pub struct Config {
     pub default_provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vim_mode: Option<bool>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub task_managers: HashMap<String, TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,6 +182,7 @@ impl Default for Config {
             providers,
             default_provider: "kiro".to_string(),
             session_backend: None,
+            vim_mode: None,
             task_managers: HashMap::new(),
             default_task_manager: None,
         }
@@ -433,6 +436,7 @@ mod tests {
             },
             default_provider: "claude".to_string(),
             session_backend: None,
+            vim_mode: None,
             task_managers: HashMap::new(),
             default_task_manager: None,
         };

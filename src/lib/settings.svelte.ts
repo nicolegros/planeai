@@ -44,6 +44,7 @@ export interface AppConfig {
   providers: Record<string, Provider>;
   default_provider: string;
   session_backend?: string | null;
+  vim_mode?: boolean | null;
   task_managers?: Record<string, TaskManager>;
   default_task_manager?: string | null;
 }

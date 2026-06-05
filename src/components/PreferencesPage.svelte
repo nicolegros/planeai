@@ -4,7 +4,7 @@
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
   import { Select, Input } from "./ui";
-  import { Palette, Bot, ListTodo } from "@lucide/svelte";
+  import { Palette, Bot, ListTodo, Settings } from "@lucide/svelte";
 
   const config = $derived(getSettings());
   let fontItems = $state<{ value: string; label: string }[]>([]);
@@ -42,10 +42,15 @@
   });
 
   const backendValue = $derived(config.session_backend ?? "auto");
+  const vimEnabled = $derived(config.vim_mode ?? true);
 
   function setSessionBackend(value: string) {
     const backend = value === "auto" ? null : value;
     updateSettings({ session_backend: backend } as Partial<AppConfig>);
+  }
+
+  function setVimMode(enabled: boolean) {
+    updateSettings({ vim_mode: enabled } as Partial<AppConfig>);
   }
 
   function setAppearance(mode: AppearanceMode) {
@@ -154,7 +159,7 @@
 
 <div class="h-screen flex flex-col overflow-hidden bg-surface-50 dark:bg-surface-950">
   <nav class="flex justify-center gap-1 border-b border-surface-200 dark:border-surface-700 px-8 pt-4">
-    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}] as tab (tab.name)}
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
         class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-200'}"
         onclick={() => activeTab = tab.name}
@@ -241,29 +246,6 @@
     {/if}
 
     {#if activeTab === "Models"}
-    <!-- Session Backend -->
-    <section class="space-y-3">
-      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
-      <div class="flex gap-2">
-        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "direct", label: "Direct" }] as opt (opt.value)}
-          <button
-            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
-            onclick={() => setSessionBackend(opt.value)}
-          >{opt.label}</button>
-        {/each}
-      </div>
-      {#if backendValue === "tmux" && !tmuxAvailable}
-        <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
-      {/if}
-      <p class="text-xs text-surface-700 dark:text-surface-400">
-        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise direct PTY.
-        {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
-        {:else}Sessions are ephemeral — terminated on app quit.
-        {/if}
-        Changes apply to new sessions only.
-      </p>
-    </section>
-
     <!-- Providers -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Providers</h2>
@@ -464,6 +446,48 @@
       {:else}
         <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = true; }}>+ Add Task Manager</button>
       {/if}
+    </section>
+    {/if}
+
+    {#if activeTab === "More"}
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
+      <div class="flex gap-2">
+        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "direct", label: "Direct" }] as opt (opt.value)}
+          <button
+            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
+            onclick={() => setSessionBackend(opt.value)}
+          >{opt.label}</button>
+        {/each}
+      </div>
+      {#if backendValue === "tmux" && !tmuxAvailable}
+        <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
+      {/if}
+      <p class="text-xs text-surface-700 dark:text-surface-400">
+        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise direct PTY.
+        {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
+        {:else}Sessions are ephemeral — terminated on app quit.
+        {/if}
+        Changes apply to new sessions only.
+      </p>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Vim Mode</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-surface-700 dark:text-surface-300">Enable vim keybindings</p>
+          <p class="text-xs text-surface-500 dark:text-surface-400">Full vim emulation in the code editor (motions, visual mode, ex commands)</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-primary-500' : 'bg-surface-300 dark:bg-surface-700'}"
+          onclick={() => setVimMode(!vimEnabled)}
+          role="switch"
+          aria-checked={vimEnabled}
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
     </section>
     {/if}
   </div>
