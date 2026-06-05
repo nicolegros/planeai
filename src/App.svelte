@@ -610,6 +610,7 @@
               onclick={() => { diffTabActive = { ...diffTabActive, [session.id]: true }; }}
             >
               <span>∆ Diff</span>
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
               <span
                 class="ml-1 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-300 dark:hover:bg-surface-600 text-[10px]"
                 role="button"

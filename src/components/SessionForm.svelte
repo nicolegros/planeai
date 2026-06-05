@@ -16,16 +16,22 @@
   const providerKeys = $derived(Object.keys(config.providers));
   const hasTaskManager = $derived(Object.keys(config.task_managers ?? {}).length > 0);
 
+  // svelte-ignore state_referenced_locally
   let mode = $state<"task" | "manual">(taskPrefill ? "task" : (hasTaskManager ? "task" : "manual"));
+  // svelte-ignore state_referenced_locally
   let sessionName = $state(taskPrefill?.name ?? "");
+  // svelte-ignore state_referenced_locally
   let taskKey = $state(taskPrefill?.key ?? "");
+  // svelte-ignore state_referenced_locally
   let taskPrompt = $state(taskPrefill?.prompt ?? "");
   let useWorktree = $state(false);
   let autoApprove = $state(true);
   let selectedProvider = $state("");
   let newBranchName = $state("");
 
+  // svelte-ignore state_referenced_locally
   let projectValue = $state(currentProjectId ?? projects[0]?.id ?? "");
+  // svelte-ignore state_referenced_locally
   const projectItems = projects.map((p) => ({ value: p.id, label: p.name }));
 
   let branchValue = $state("");
@@ -157,11 +163,13 @@
   }
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={formKeydown}>
   <!-- Mode toggle -->
   {#if hasTaskManager}
   <!-- svelte-ignore a11y_autofocus -->
-  <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden" role="toolbar" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
     <button
       type="button"
       tabindex={-1}
@@ -206,8 +214,10 @@
     />
   </div>
 
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
     class="flex flex-col gap-2 rounded border border-transparent px-2 py-1.5 focus:border-surface-300 focus:bg-surface-50 dark:focus:border-surface-600 dark:focus:bg-surface-900 outline-none"
+    role="group"
     tabindex="0"
     onkeydown={(e) => {
       if (e.key === "w") { e.preventDefault(); useWorktree = !useWorktree; }
