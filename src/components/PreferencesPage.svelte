@@ -19,13 +19,26 @@
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
+  const fontDropdownItems = $derived(
+    fontItems.length > 0
+      ? fontItems
+      : config.terminal.font_family
+        ? [{ value: config.terminal.font_family, label: config.terminal.font_family }]
+        : []
+  );
+
   onMount(async () => {
     await loadSettings();
     loadTheme();
-    const fonts = await invoke<string[]>("list_monospace_fonts");
-    fontItems = fonts.map((f) => ({ value: f, label: f }));
-    availableThemes = await invoke<string[]>("list_themes");
-    tmuxAvailable = await invoke<boolean>("check_tmux_available");
+    invoke<string[]>("list_monospace_fonts").then((fonts) => {
+      fontItems = fonts.map((f) => ({ value: f, label: f }));
+    });
+    invoke<string[]>("list_themes").then((themes) => {
+      availableThemes = themes;
+    });
+    invoke<boolean>("check_tmux_available").then((available) => {
+      tmuxAvailable = available;
+    });
   });
 
   const backendValue = $derived(config.session_backend ?? "auto");
@@ -201,7 +214,7 @@
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Font Family</h2>
       <Select
-        items={fontItems}
+        items={fontDropdownItems}
         value={config.terminal.font_family}
         onValueChange={(v) => updateSettings({ terminal: { ...config.terminal, font_family: v } })}
         placeholder="Search fonts…"
