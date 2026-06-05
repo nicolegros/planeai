@@ -1132,10 +1132,8 @@ async fn destroy_session(
     if let Some(ctx) = cleanup_ctx {
         std::thread::spawn(move || {
             // Fire task hook
-            if let Some((cfg, session, cwd)) = task_hook_ctx {
-                if let Some(cwd) = cwd {
-                    fire_task_hook(&cfg, &session, "on_complete", &cwd);
-                }
+            if let Some((cfg, session, Some(cwd))) = task_hook_ctx {
+                fire_task_hook(&cfg, &session, "on_complete", &cwd);
             }
 
             // Run cleanup

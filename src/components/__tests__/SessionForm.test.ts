@@ -39,7 +39,14 @@ describe("SessionForm", () => {
 
   it("defaults to task mode when taskPrefill is provided", () => {
     const target = renderForm({
-      taskPrefill: { key: "PROJ-1", title: "Fix bug", description: "", branch: "fix/bug", name: "Fix bug", prompt: "Fix it" },
+      taskPrefill: {
+        key: "PROJ-1",
+        title: "Fix bug",
+        description: "",
+        branch: "fix/bug",
+        name: "Fix bug",
+        prompt: "Fix it",
+      },
     });
     const buttons = target.querySelectorAll("[role='toolbar'] button");
     const taskBtn = Array.from(buttons).find((b) => b.textContent?.includes("From task"));

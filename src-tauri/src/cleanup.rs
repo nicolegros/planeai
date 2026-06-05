@@ -1,4 +1,8 @@
-/// Background session cleanup — runs after soft-delete, off the main thread.
+//! Background session cleanup — runs after soft-delete, off the main thread.
+
+type OpResult = Result<(), String>;
+type Op1 = Box<dyn Fn(&str) -> OpResult>;
+type Op2 = Box<dyn Fn(&str, &str) -> OpResult>;
 
 /// Data needed by background cleanup (gathered while locks are held).
 pub struct CleanupContext {
@@ -11,10 +15,10 @@ pub struct CleanupContext {
 
 /// Operations that cleanup can perform (injectable for testing).
 pub struct CleanupOps {
-    pub kill_tmux: Box<dyn Fn(&str) -> Result<(), String>>,
-    pub remove_worktree: Box<dyn Fn(&str, &str) -> Result<(), String>>,
-    pub remove_dir: Box<dyn Fn(&str) -> Result<(), String>>,
-    pub delete_branch: Box<dyn Fn(&str, &str) -> Result<(), String>>,
+    pub kill_tmux: Op1,
+    pub remove_worktree: Op2,
+    pub remove_dir: Op1,
+    pub delete_branch: Op2,
 }
 
 /// Run background cleanup for a destroyed session. Returns collected errors.
@@ -56,17 +60,19 @@ pub fn real_ops() -> CleanupOps {
     CleanupOps {
         kill_tmux: Box::new(|name| {
             #[cfg(not(windows))]
-            { crate::tmux::kill_session(name) }
-            #[cfg(windows)]
-            { Ok(()) }
-        }),
-        remove_worktree: Box::new(|repo, wt| crate::git::worktree_remove(repo, wt)),
-        remove_dir: Box::new(|path| {
-            match std::fs::remove_dir_all(path) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e.to_string()),
+            {
+                crate::tmux::kill_session(name)
             }
+            #[cfg(windows)]
+            {
+                Ok(())
+            }
+        }),
+        remove_worktree: Box::new(crate::git::worktree_remove),
+        remove_dir: Box::new(|path| match std::fs::remove_dir_all(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
         }),
         delete_branch: Box::new(|repo, branch| {
             let output = std::process::Command::new("git")
@@ -115,7 +121,7 @@ mod tests {
     #[test]
     fn cleanup_kills_tmux_for_tmux_backend() {
         thread_local! {
-            static KILLED: RefCell<Vec<String>> = RefCell::new(vec![]);
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = CleanupOps {
             kill_tmux: Box::new(|name| {
@@ -143,9 +149,9 @@ mod tests {
     #[test]
     fn cleanup_removes_worktree_and_dir() {
         thread_local! {
-            static WT_REMOVED: RefCell<Vec<(String, String)>> = RefCell::new(vec![]);
-            static DIR_REMOVED: RefCell<Vec<String>> = RefCell::new(vec![]);
-            static BR_DELETED: RefCell<Vec<(String, String)>> = RefCell::new(vec![]);
+            static WT_REMOVED: RefCell<Vec<(String, String)>> = const { RefCell::new(vec![]) };
+            static DIR_REMOVED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+            static BR_DELETED: RefCell<Vec<(String, String)>> = const { RefCell::new(vec![]) };
         }
         let ops = CleanupOps {
             kill_tmux: Box::new(|_| Ok(())),
@@ -172,13 +178,19 @@ mod tests {
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
         WT_REMOVED.with(|v| {
-            assert_eq!(v.borrow().as_slice(), &[("/tmp/myapp".to_string(), "/tmp/wt/abc".to_string())]);
+            assert_eq!(
+                v.borrow().as_slice(),
+                &[("/tmp/myapp".to_string(), "/tmp/wt/abc".to_string())]
+            );
         });
         DIR_REMOVED.with(|v| {
             assert_eq!(v.borrow().as_slice(), &["/tmp/wt/abc"]);
         });
         BR_DELETED.with(|v| {
-            assert_eq!(v.borrow().as_slice(), &[("/tmp/myapp".to_string(), "test-iv".to_string())]);
+            assert_eq!(
+                v.borrow().as_slice(),
+                &[("/tmp/myapp".to_string(), "test-iv".to_string())]
+            );
         });
     }
 
@@ -205,4 +217,3 @@ mod tests {
         assert!(errors[3].contains("branch in use"));
     }
 }
-

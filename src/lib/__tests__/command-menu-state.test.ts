@@ -11,7 +11,10 @@ describe("command menu state transitions", () => {
     return { commandMenuOpen: false, commandMenuFileMode: false };
   }
 
-  function handleAction(state: { commandMenuOpen: boolean; commandMenuFileMode: boolean }, action: string) {
+  function handleAction(
+    state: { commandMenuOpen: boolean; commandMenuFileMode: boolean },
+    action: string,
+  ) {
     if (action === "open_file") {
       state.commandMenuFileMode = true;
       state.commandMenuOpen = true;
