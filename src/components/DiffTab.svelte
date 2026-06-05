@@ -201,6 +201,7 @@
     </div>
     <ul class="py-1" role="listbox">
       {#each files as file, i (file.path)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li
           role="option"
           aria-selected={i === selectedIndex}
