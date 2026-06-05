@@ -29,10 +29,15 @@
   });
 
   const backendValue = $derived(config.session_backend ?? "auto");
+  const vimEnabled = $derived(config.vim_mode ?? true);
 
   function setSessionBackend(value: string) {
     const backend = value === "auto" ? null : value;
     updateSettings({ session_backend: backend } as Partial<AppConfig>);
+  }
+
+  function setVimMode(enabled: boolean) {
+    updateSettings({ vim_mode: enabled } as Partial<AppConfig>);
   }
 
   function setAppearance(mode: AppearanceMode) {
@@ -249,6 +254,25 @@
         {/if}
         Changes apply to new sessions only.
       </p>
+    </section>
+
+    <!-- More -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">More</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-surface-700 dark:text-surface-300">Vim mode</p>
+          <p class="text-xs text-surface-500 dark:text-surface-400">Enable vim keybindings in the code editor</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-primary-500' : 'bg-surface-300 dark:bg-surface-700'}"
+          onclick={() => setVimMode(!vimEnabled)}
+          role="switch"
+          aria-checked={vimEnabled}
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
     </section>
 
     <!-- Providers -->

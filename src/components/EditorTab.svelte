@@ -4,7 +4,7 @@
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
-  import { history, historyKeymap } from "@codemirror/commands";
+  import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
   import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
   import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
   import {
@@ -53,16 +53,17 @@
   function createEditorState(content: string, filePath: string): EditorState {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;
     const { font_family, font_size } = getSettings().terminal;
+    const useVim = getSettings().vim_mode ?? true;
 
     return EditorState.create({
       doc: content,
       extensions: [
-        vim(),
+        ...(useVim ? [vim()] : []),
         baseExtensions,
         history(),
         closeBrackets(),
         highlightSelectionMatches(),
-        keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap]),
+        keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap, ...(useVim ? [] : defaultKeymap)]),
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
         editorLangCompartment.of([]),
