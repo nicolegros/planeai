@@ -4,7 +4,7 @@
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
-  import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
+  import { history, historyKeymap } from "@codemirror/commands";
   import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
   import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
   import {
@@ -60,7 +60,7 @@
         history(),
         closeBrackets(),
         highlightSelectionMatches(),
-        keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap, ...defaultKeymap]),
+        keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap]),
         themeCompartment.of(themeExt),
         fontCompartment.of(fontExtension(font_family, font_size)),
         langCompartment.of([]),
