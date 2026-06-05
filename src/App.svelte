@@ -20,7 +20,6 @@
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
-  import TabBar from "./components/TabBar.svelte";
   import DiffTab from "./components/DiffTab.svelte";
   import EditorTab from "./components/EditorTab.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
@@ -99,6 +98,9 @@
   let editorTabOpen = $state<Record<string, boolean>>({});
   let editorTabActive = $state<Record<string, boolean>>({});
   let editorRefs = $state<Record<string, EditorTab>>({});
+  let diffFileName = $state<Record<string, string>>({});
+  let editorFileName = $state<Record<string, string>>({});
+  let editorModified = $state<Record<string, boolean>>({});
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -179,19 +181,25 @@
     const tabIndex = addTab(activeSessionId);
     if (tabIndex === -1) return;
     setActiveTab(activeSessionId, tabIndex);
+    diffTabActive = { ...diffTabActive, [activeSessionId]: false };
+    editorTabActive = { ...editorTabActive, [activeSessionId]: false };
     listenForTabExit(activeSessionId, tabIndex);
   }
 
   async function handleCloseTab() {
     if (!activeSessionId) return;
-    // If editor is active, close the current buffer
+    if (diffTabActive[activeSessionId]) {
+      diffTabOpen = { ...diffTabOpen, [activeSessionId]: false };
+      diffTabActive = { ...diffTabActive, [activeSessionId]: false };
+      return;
+    }
     if (editorTabActive[activeSessionId]) {
-      editorRefs[activeSessionId]?.closeBuffer();
+      editorTabOpen = { ...editorTabOpen, [activeSessionId]: false };
+      editorTabActive = { ...editorTabActive, [activeSessionId]: false };
       return;
     }
     const active = getActiveTabIndex(activeSessionId);
     if (active === 0) {
-      // No helper tab active — close window (original Cmd+W behavior)
       getCurrentWindow().close();
       return;
     }
@@ -199,41 +207,61 @@
     await invoke("close_tab", { sessionId: activeSessionId, tabIndex: active });
   }
 
-  function handleNextTab() {
+  function getUnifiedTabs(): { index: number }[] {
+    if (!activeSessionId) return [];
+    const shell = getTabs(activeSessionId);
+    const extra: { index: number }[] = [];
+    if (diffTabOpen[activeSessionId]) extra.push({ index: -1 });
+    if (editorTabOpen[activeSessionId]) extra.push({ index: -2 });
+    return [...shell, ...extra];
+  }
+
+  function getUnifiedActiveIndex(): number {
+    if (!activeSessionId) return 0;
+    if (diffTabActive[activeSessionId]) return -1;
+    if (editorTabActive[activeSessionId]) return -2;
+    return getActiveTabIndex(activeSessionId);
+  }
+
+  function selectUnifiedTab(index: number) {
     if (!activeSessionId) return;
-    const tabs = getTabs(activeSessionId);
+    if (index === -1) { diffTabActive = { ...diffTabActive, [activeSessionId]: true }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; }
+    else if (index === -2) { editorTabActive = { ...editorTabActive, [activeSessionId]: true }; diffTabActive = { ...diffTabActive, [activeSessionId]: false }; }
+    else { diffTabActive = { ...diffTabActive, [activeSessionId]: false }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; setActiveTab(activeSessionId, index); }
+  }
+
+  function handleNextTab() {
+    const tabs = getUnifiedTabs();
     if (tabs.length <= 1) return;
-    const active = getActiveTabIndex(activeSessionId);
+    const active = getUnifiedActiveIndex();
     const currentPos = tabs.findIndex((t) => t.index === active);
     const nextPos = (currentPos + 1) % tabs.length;
-    setActiveTab(activeSessionId, tabs[nextPos].index);
+    selectUnifiedTab(tabs[nextPos].index);
   }
 
   function handlePrevTab() {
-    if (!activeSessionId) return;
-    const tabs = getTabs(activeSessionId);
+    const tabs = getUnifiedTabs();
     if (tabs.length <= 1) return;
-    const active = getActiveTabIndex(activeSessionId);
+    const active = getUnifiedActiveIndex();
     const currentPos = tabs.findIndex((t) => t.index === active);
     const prevPos = (currentPos - 1 + tabs.length) % tabs.length;
-    setActiveTab(activeSessionId, tabs[prevPos].index);
+    selectUnifiedTab(tabs[prevPos].index);
   }
 
   function handleToggleDiff() {
     if (!activeSessionId) return;
     if (diffTabOpen[activeSessionId]) {
-      // If diff is active, close it. If terminal is active, close diff.
       if (diffTabActive[activeSessionId]) {
         diffTabActive = { ...diffTabActive, [activeSessionId]: false };
         diffTabOpen = { ...diffTabOpen, [activeSessionId]: false };
       } else {
-        // Switch to diff tab
         diffTabActive = { ...diffTabActive, [activeSessionId]: true };
+        editorTabActive = { ...editorTabActive, [activeSessionId]: false };
       }
     } else {
-      // Open diff tab and make it active
       diffTabOpen = { ...diffTabOpen, [activeSessionId]: true };
       diffTabActive = { ...diffTabActive, [activeSessionId]: true };
+      editorTabActive = { ...editorTabActive, [activeSessionId]: false };
     }
   }
 
@@ -525,9 +553,23 @@
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
-    showDiffButton={!!activeSessionId}
-    diffActive={!!(activeSessionId && diffTabActive[activeSessionId])}
-    onToggleDiff={handleToggleDiff}
+    tabs={(() => {
+      if (!activeSessionId) return [];
+      const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: getSettings().default_provider || "Agent" } : t);
+      const extra = [];
+      if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
+      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
+      return [...shellTabs, ...extra];
+    })()}
+    activeTabIndex={getUnifiedActiveIndex()}
+    onSelectTab={selectUnifiedTab}
+    onCloseTab={(i) => {
+      if (!activeSessionId) return;
+      if (i === -1) { diffTabOpen = { ...diffTabOpen, [activeSessionId]: false }; diffTabActive = { ...diffTabActive, [activeSessionId]: false }; }
+      else if (i === -2) { editorTabOpen = { ...editorTabOpen, [activeSessionId]: false }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; }
+      else { removeTab(activeSessionId, i); invoke("close_tab", { sessionId: activeSessionId, tabIndex: i }); }
+    }}
+    onAddTab={handleNewTab}
   />
 
   <div class="flex flex-1 min-h-0">
@@ -654,54 +696,6 @@
       {@const hasEditor = editorTabOpen[session.id] ?? false}
       {@const isEditorActive = editorTabActive[session.id] ?? false}
       {@const project = projects.find((p) => p.id === session.project_id)}
-      {#if session.id === activeSessionId && (tabs.length > 1 || hasDiff || hasEditor)}
-        <div class="flex items-center h-8 bg-surface-100 dark:bg-surface-900 border-b border-surface-200 dark:border-surface-800 px-2 gap-0.5 shrink-0" role="tablist">
-          <button
-            role="tab"
-            aria-selected={!isDiffActive && !isEditorActive}
-            class="flex items-center gap-1 px-3 h-6 rounded text-xs select-none transition-colors
-              {!isDiffActive && !isEditorActive ? 'bg-surface-200 dark:bg-surface-700 text-surface-900 dark:text-surface-50' : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
-            onclick={() => { diffTabActive = { ...diffTabActive, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
-          >Terminal</button>
-          {#if hasDiff}
-            <button
-              role="tab"
-              aria-selected={isDiffActive}
-              class="flex items-center gap-1 px-3 h-6 rounded text-xs select-none transition-colors
-                {isDiffActive ? 'bg-surface-200 dark:bg-surface-700 text-surface-900 dark:text-surface-50' : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
-              onclick={() => { diffTabActive = { ...diffTabActive, [session.id]: true }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
-            >
-              <span>∆ Diff</span>
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <span
-                class="ml-1 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-300 dark:hover:bg-surface-600 text-[10px]"
-                role="button"
-                tabindex="-1"
-                aria-label="Close diff"
-                onclick={(e: MouseEvent) => { e.stopPropagation(); diffTabOpen = { ...diffTabOpen, [session.id]: false }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
-              >×</span>
-            </button>
-          {/if}
-          {#if hasEditor}
-            <button
-              role="tab"
-              aria-selected={isEditorActive}
-              class="flex items-center gap-1 px-3 h-6 rounded text-xs select-none transition-colors
-                {isEditorActive ? 'bg-surface-200 dark:bg-surface-700 text-surface-900 dark:text-surface-50' : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
-              onclick={() => { editorTabActive = { ...editorTabActive, [session.id]: true }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
-            >
-              <span>✎ Editor</span>
-              <span
-                class="ml-1 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-300 dark:hover:bg-surface-600 text-[10px]"
-                role="button"
-                tabindex="-1"
-                aria-label="Close editor"
-                onclick={(e: MouseEvent) => { e.stopPropagation(); editorTabOpen = { ...editorTabOpen, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
-              >×</span>
-            </button>
-          {/if}
-        </div>
-      {/if}
       {#each tabs as tab (tab.index)}
         {@const ptyKey = tab.index === 0 ? session.id : `${session.id}:${tab.index}`}
         <Terminal
@@ -733,6 +727,7 @@
           visible={session.id === activeSessionId && isDiffActive}
           theme={isDark() ? "vs-dark" : "vs"}
           onEditFile={(filePath) => handleOpenFile(filePath)}
+          onFileChange={(name) => { diffFileName = { ...diffFileName, [session.id]: name }; }}
         />
       {/if}
       {#if hasEditor && project}
@@ -743,6 +738,8 @@
           theme={isDark() ? "vs-dark" : "vs"}
           onClose={() => { editorTabOpen = { ...editorTabOpen, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
           onFocusEditor={() => { editorTabActive = { ...editorTabActive, [session.id]: true }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
+          onFileChange={(name) => { editorFileName = { ...editorFileName, [session.id]: name }; }}
+          onModifiedChange={(mod) => { editorModified = { ...editorModified, [session.id]: mod }; }}
           bind:this={editorRefs[session.id]}
         />
       {/if}

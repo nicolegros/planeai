@@ -25,9 +25,10 @@
     visible: boolean;
     theme?: string;
     onEditFile?: (filePath: string) => void;
+    onFileChange?: (fileName: string) => void;
   }
 
-  let { repoPath, baseBranch, visible, theme = "vs-dark", onEditFile }: Props = $props();
+  let { repoPath, baseBranch, visible, theme = "vs-dark", onEditFile, onFileChange }: Props = $props();
 
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
@@ -51,6 +52,7 @@
       }
       if (files.length > 0) {
         await loadFileDiff(files[selectedIndex]);
+        onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
       }
     } catch (e) {
       console.error("Failed to get changed files:", e);
@@ -77,6 +79,8 @@
 
   function selectFile(index: number) {
     selectedIndex = index;
+    const file = files[index];
+    if (file) onFileChange?.(file.path.split("/").pop() || file.path);
     loadFileDiff(files[index]);
   }
 

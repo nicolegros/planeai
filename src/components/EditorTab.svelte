@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
-  import { EditorState, Compartment } from "@codemirror/state";
+  import { EditorState, Compartment, Prec } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
   import { basicSetup } from "codemirror";
   import { defaultKeymap } from "@codemirror/commands";
@@ -29,9 +29,11 @@
     theme?: string;
     onClose: () => void;
     onFocusEditor: () => void;
+    onFileChange?: (fileName: string) => void;
+    onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor }: Props = $props();
+  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -57,6 +59,17 @@
     return EditorState.create({
       doc: content,
       extensions: [
+        Prec.highest(keymap.of([
+          { key: "Mod-t", run: () => false },
+          { key: "Mod-w", run: () => false },
+          { key: "Mod-d", run: () => false },
+          { key: "Mod-Shift-[", run: () => false },
+          { key: "Mod-Shift-]", run: () => false },
+          { key: "Mod-b", run: () => false },
+          { key: "Mod-k", run: () => false },
+          { key: "Mod-e", run: () => false },
+          { key: "Mod-,", run: () => false },
+        ])),
         ...(useVim ? [vim()] : []),
         basicSetup,
         ...(useVim ? [] : [keymap.of(defaultKeymap)]),
@@ -65,6 +78,7 @@
         editorLangCompartment.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
+            if (!activeBuffer.modified) onModifiedChange?.(true);
             activeBuffer.modified = true;
           }
           if (update.selectionSet || update.docChanged) {
@@ -154,6 +168,8 @@
 
     activeIndex = index;
     const buf = buffers[index];
+    onFileChange?.(buf.path.split("/").pop() || buf.path);
+    onModifiedChange?.(buf.modified);
 
     if (buf.state) {
       ensureView(buf.state);
@@ -182,6 +198,7 @@
       await invoke("write_file", { filePath: fullPath, content });
       activeBuffer.modified = false;
       activeBuffer.content = content;
+      onModifiedChange?.(false);
     } catch (e) {
       console.error("Failed to save file:", e);
     }

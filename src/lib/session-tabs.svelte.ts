@@ -1,6 +1,8 @@
 export interface Tab {
   index: number;
   label: string;
+  icon?: string;
+  modified?: boolean;
 }
 
 interface SessionTabState {
@@ -13,13 +15,13 @@ let state = $state<Record<string, SessionTabState>>({});
 
 function relabel(tabs: Tab[]): Tab[] {
   let shellNum = 1;
-  return tabs.map((t) => (t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}` }));
+  return tabs.map((t) => (t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}`, icon: "terminal" }));
 }
 
 export function initSession(sessionId: string, tabCount = 1): void {
-  const tabs: Tab[] = [{ index: 0, label: "Agent" }];
+  const tabs: Tab[] = [{ index: 0, label: "Agent", icon: "bot" }];
   for (let i = 1; i < tabCount; i++) {
-    tabs.push({ index: i, label: `Shell ${i}` });
+    tabs.push({ index: i, label: `Shell ${i}`, icon: "terminal" });
   }
   state[sessionId] = { tabs, activeTab: 0, nextIndex: tabCount };
 }
@@ -32,7 +34,7 @@ export function addTab(sessionId: string): number {
   const s = state[sessionId];
   if (!s) return -1;
   const index = s.nextIndex;
-  s.tabs = relabel([...s.tabs, { index, label: "" }]);
+  s.tabs = relabel([...s.tabs, { index, label: "", icon: "terminal" }]);
   s.nextIndex = index + 1;
   return index;
 }
