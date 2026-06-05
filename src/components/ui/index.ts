@@ -5,3 +5,4 @@ export { default as Checkbox } from "./Checkbox.svelte";
 export { default as Select } from "./Select.svelte";
 export { default as Dialog } from "./Dialog.svelte";
 export { default as ContextMenu } from "./ContextMenu.svelte";
+export { default as ResizeHandle } from "./ResizeHandle.svelte";

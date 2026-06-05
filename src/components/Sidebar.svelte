@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
-  import { ContextMenu } from "./ui";
+  import { ContextMenu, ResizeHandle } from "./ui";
+  import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { GitFork, Plus, LoaderCircle, Lightbulb, Settings } from "@lucide/svelte";
 
   interface Project {
@@ -45,6 +46,8 @@
   }
 
   let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject }: Props = $props();
+
+  let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
 
   let renameValue = $state("");
 
@@ -119,7 +122,8 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<aside class="w-56 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}">
+<aside class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
+  <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
     <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Sessions</span>

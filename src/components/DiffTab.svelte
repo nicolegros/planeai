@@ -4,6 +4,8 @@
   import { CmDiffRenderer } from "../lib/cm-diff-renderer";
   import type { DiffRenderer } from "../lib/diff-renderer";
   import { getSettings } from "../lib/settings.svelte";
+  import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
+  import { ResizeHandle } from "./ui";
 
   interface ChangedFile {
     path: string;
@@ -34,6 +36,7 @@
   let selectedIndex = $state(0);
   let loading = $state(true);
   let diffMode = $state<'side-by-side' | 'unified'>('side-by-side');
+  let diffSidebarWidth = $state(getLayoutWidth("diff-sidebar", 256));
 
   let renderer: DiffRenderer | null = null;
   let editorContainer: HTMLElement;
@@ -203,7 +206,8 @@
   </div>
 
   <!-- Right sidebar file list -->
-  <div class="w-64 shrink-0 border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-y-auto">
+  <div class="relative shrink-0 border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-y-auto" style:width="{diffSidebarWidth}px">
+    <ResizeHandle side="left" bind:width={diffSidebarWidth} min={180} max={Infinity} defaultWidth={256} onResizeEnd={(w) => setLayoutWidth("diff-sidebar", w)} />
     <div class="px-3 py-2 text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wider border-b border-surface-200 dark:border-surface-800">
       Changed files ({files.length})
     </div>
