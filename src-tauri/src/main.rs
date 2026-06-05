@@ -870,6 +870,13 @@ fn mark_exited(session_id: String, db_state: State<DbState>) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn save_mru_order(session_ids: Vec<String>, db_state: State<DbState>) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let refs: Vec<&str> = session_ids.iter().map(|s| s.as_str()).collect();
+    db::save_mru_order(&conn, &refs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn spawn_tab(
     session_id: String,
     tab_index: u32,
@@ -1439,6 +1446,7 @@ fn main() {
             install_notify_hook,
             acknowledge_session,
             mark_exited,
+            save_mru_order,
             spawn_tab,
             close_tab,
             check_tmux_available,

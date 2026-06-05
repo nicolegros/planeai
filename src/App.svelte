@@ -6,7 +6,7 @@
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter } from "./lib/keyboard";
-  import { touchMru, removeMru, getMruList } from "./lib/mru.svelte";
+  import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
@@ -128,10 +128,7 @@
     listenForExits();
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
-      // Seed MRU with all sessions (active one first)
-      for (let i = sessions.length - 1; i >= 0; i--) {
-        touchMru(sessions[i].id);
-      }
+      seedMru(sessions.map((s) => s.id));
       selectSession(sessions[0].id);
     }
   }
@@ -253,6 +250,7 @@
 
     // Quit confirmation for active direct sessions
     const unlistenClose = getCurrentWindow().onCloseRequested(async (event) => {
+      flushMru().catch(() => {});
       const activeDirectCount = sessions.filter(
         (s) => s.status === "active" && s.backend === "direct"
       ).length;
