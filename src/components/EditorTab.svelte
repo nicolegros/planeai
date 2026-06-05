@@ -162,6 +162,7 @@
     if (buf.state) {
       ensureView(buf.state);
       applyLanguage(buf.path);
+      view?.focus();
     }
   }
 
