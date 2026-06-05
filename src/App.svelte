@@ -187,6 +187,11 @@
 
   async function handleCloseTab() {
     if (!activeSessionId) return;
+    // If editor is active, close the current buffer
+    if (editorTabActive[activeSessionId]) {
+      editorRefs[activeSessionId]?.closeBuffer();
+      return;
+    }
     const active = getActiveTabIndex(activeSessionId);
     if (active === 0) {
       // No helper tab active — close window (original Cmd+W behavior)

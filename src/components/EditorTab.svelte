@@ -214,6 +214,10 @@
     await saveCurrentBuffer();
   }
 
+  export function closeBuffer() {
+    closeCurrentBuffer(false);
+  }
+
   onMount(() => {
     // Lazy setup on first visibility
   });

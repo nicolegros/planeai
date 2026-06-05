@@ -140,7 +140,7 @@ export function installKeyboardRouter(
   isEditorFocused?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
-    "open_file", "toggle_editor", "command_palette", "tab_switch", "tab_switch_reverse", "save_file",
+    "open_file", "toggle_editor", "command_palette", "tab_switch", "tab_switch_reverse", "save_file", "close_tab",
   ]);
 
   function handler(e: KeyboardEvent) {
