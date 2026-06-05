@@ -151,7 +151,7 @@
       <Dialog.Title class="sr-only">Command Menu</Dialog.Title>
       <Dialog.Description class="sr-only">Search sessions, archive, or create new.</Dialog.Description>
       {#if subMenu === "archivedSessions"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Search archived sessions..."
@@ -198,7 +198,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "archiveProject"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Archive which project..."
@@ -223,7 +223,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "deleteProject"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Delete which project..."
@@ -248,7 +248,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "restoreProject"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Restore which project..."
@@ -274,7 +274,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "pickTask"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Search tasks..."
@@ -301,7 +301,7 @@
           </Command.List>
         </Command.Root>
       {:else if subMenu === "openFile"}
-        <Command.Root class="flex flex-col" loop>
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
             class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
             placeholder="Open file..."
@@ -326,7 +326,7 @@
           </Command.List>
         </Command.Root>
       {:else}
-      <Command.Root class="flex flex-col" loop>
+      <Command.Root class="flex flex-col" loop disablePointerSelection>
         <Command.Input
           class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
           placeholder="Search sessions..."
