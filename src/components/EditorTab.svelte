@@ -8,9 +8,6 @@
   import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
   import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
   import {
-    fontCompartment,
-    themeCompartment,
-    langCompartment,
     baseExtensions,
     darkTheme,
     lightTheme,
@@ -46,6 +43,11 @@
   let view: EditorView | null = null;
   let mounted = false;
 
+  // Editor-local compartments (not shared with diff renderer)
+  const editorFontCompartment = new Compartment();
+  const editorThemeCompartment = new Compartment();
+  const editorLangCompartment = new Compartment();
+
   const activeBuffer = $derived(activeIndex >= 0 ? buffers[activeIndex] : null);
 
   function createEditorState(content: string, filePath: string): EditorState {
@@ -61,9 +63,9 @@
         closeBrackets(),
         highlightSelectionMatches(),
         keymap.of([...closeBracketsKeymap, ...historyKeymap, ...searchKeymap]),
-        themeCompartment.of(themeExt),
-        fontCompartment.of(fontExtension(font_family, font_size)),
-        langCompartment.of([]),
+        editorThemeCompartment.of(themeExt),
+        editorFontCompartment.of(fontExtension(font_family, font_size)),
+        editorLangCompartment.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
             activeBuffer.modified = true;
@@ -80,10 +82,9 @@
   }
 
   function setupView() {
-    if (!editorContainer || view) return;
-    view = new EditorView({ parent: editorContainer });
+    if (!editorContainer) return;
 
-    // Register custom ex commands
+    // Register custom ex commands (global, only once)
     Vim.defineEx("w", "w", () => saveCurrentBuffer());
     Vim.defineEx("q", "q", (cm: any, params: any) => {
       if (params?.bang) {
@@ -118,6 +119,14 @@
     return () => clearInterval(interval);
   }
 
+  function ensureView(state: EditorState) {
+    if (view) {
+      view.setState(state);
+    } else {
+      view = new EditorView({ state, parent: editorContainer });
+    }
+  }
+
   let cleanupInterval: (() => void) | undefined;
 
   export async function openFile(filePath: string) {
@@ -150,8 +159,8 @@
     activeIndex = index;
     const buf = buffers[index];
 
-    if (view && buf.state) {
-      view.setState(buf.state);
+    if (buf.state) {
+      ensureView(buf.state);
       applyLanguage(buf.path);
     }
   }
@@ -159,12 +168,12 @@
   function applyLanguage(filePath: string) {
     const langDesc = detectLanguageFromPath(filePath);
     if (!langDesc) {
-      view?.dispatch({ effects: langCompartment.reconfigure([]) });
+      view?.dispatch({ effects: editorLangCompartment.reconfigure([]) });
       return;
     }
     langDesc.load().then((support) => {
       if (!view || buffers[activeIndex]?.path !== filePath) return;
-      view.dispatch({ effects: langCompartment.reconfigure(support.extension) });
+      view.dispatch({ effects: editorLangCompartment.reconfigure(support.extension) });
     });
   }
 
@@ -243,12 +252,12 @@
 
   $effect(() => {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;
-    view?.dispatch({ effects: themeCompartment.reconfigure(themeExt) });
+    view?.dispatch({ effects: editorThemeCompartment.reconfigure(themeExt) });
   });
 
   $effect(() => {
     const { font_family, font_size } = getSettings().terminal;
-    view?.dispatch({ effects: fontCompartment.reconfigure(fontExtension(font_family, font_size)) });
+    view?.dispatch({ effects: editorFontCompartment.reconfigure(fontExtension(font_family, font_size)) });
   });
 
   function fileName(path: string): string {
