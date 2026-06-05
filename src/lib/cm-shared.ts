@@ -28,6 +28,14 @@ export const darkTheme = EditorView.theme(
     "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
       backgroundColor: "var(--editor-selection)",
     },
+    ".cm-fat-cursor": {
+      background: "rgba(255, 255, 255, 0.35) !important",
+      outline: "1px solid rgba(255, 255, 255, 0.55) !important",
+    },
+    "&:not(.cm-focused) .cm-fat-cursor": {
+      background: "transparent !important",
+      outline: "1px solid rgba(255, 255, 255, 0.35) !important",
+    },
   },
   { dark: true },
 );
@@ -43,6 +51,14 @@ export const lightTheme = EditorView.theme({
   ".cm-activeLine": { backgroundColor: "var(--editor-selection)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
     backgroundColor: "var(--editor-selection)",
+  },
+  ".cm-fat-cursor": {
+    background: "rgba(0, 0, 0, 0.3) !important",
+    outline: "1px solid rgba(0, 0, 0, 0.5) !important",
+  },
+  "&:not(.cm-focused) .cm-fat-cursor": {
+    background: "transparent !important",
+    outline: "1px solid rgba(0, 0, 0, 0.3) !important",
   },
 });
 
