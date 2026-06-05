@@ -90,6 +90,7 @@
   }
 
   export async function openFilePicker() {
+    subMenu = "openFile";
     const repoPath = getActiveRootPath();
     if (!repoPath) { close(); return; }
     try {
@@ -97,7 +98,6 @@
     } catch {
       fileList = [];
     }
-    subMenu = "openFile";
   }
 
   function openDeleteProject() {
