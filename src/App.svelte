@@ -388,6 +388,7 @@
         showShortcuts = false;
         sessionToDelete = null;
         commandMenuOpen = false;
+        commandMenuFileMode = false;
       } else if (action.type === "command_palette") {
         commandMenuOpen = !commandMenuOpen;
       } else if (action.type === "open_preferences") {
