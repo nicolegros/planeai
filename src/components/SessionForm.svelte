@@ -17,7 +17,7 @@
   const hasTaskManager = $derived(Object.keys(config.task_managers ?? {}).length > 0);
 
   // svelte-ignore state_referenced_locally
-  let mode = $state<"task" | "manual">(taskPrefill ? "task" : (hasTaskManager ? "task" : "manual"));
+  let mode = $state<"task" | "manual">(taskPrefill ? "task" : "manual");
   // svelte-ignore state_referenced_locally
   let sessionName = $state(taskPrefill?.name ?? "");
   // svelte-ignore state_referenced_locally
@@ -173,15 +173,15 @@
     <button
       type="button"
       tabindex={-1}
-      class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'task' ? 'bg-primary-500 text-primary-50' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
-      onclick={() => (mode = "task")}
-    >From task <span class="text-[10px] opacity-70">T</span></button>
-    <button
-      type="button"
-      tabindex={-1}
       class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'manual' ? 'bg-primary-500 text-primary-50' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
       onclick={() => (mode = "manual")}
     >Manual <span class="text-[10px] opacity-70">M</span></button>
+    <button
+      type="button"
+      tabindex={-1}
+      class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {mode === 'task' ? 'bg-primary-500 text-primary-50' : 'bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700'}"
+      onclick={() => (mode = "task")}
+    >From task <span class="text-[10px] opacity-70">T</span></button>
   </div>
   {/if}
 
