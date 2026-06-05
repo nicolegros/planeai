@@ -29,9 +29,10 @@
     theme?: string;
     onClose: () => void;
     onFocusEditor: () => void;
+    onFileChange?: (fileName: string) => void;
   }
 
-  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor }: Props = $props();
+  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor, onFileChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -48,6 +49,10 @@
   const editorLangCompartment = new Compartment();
 
   const activeBuffer = $derived(activeIndex >= 0 ? buffers[activeIndex] : null);
+
+  $effect(() => {
+    if (activeBuffer) onFileChange?.(activeBuffer.path.split("/").pop() || activeBuffer.path);
+  });
 
   function createEditorState(content: string, filePath: string): EditorState {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;

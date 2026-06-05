@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Tab } from "../lib/session-tabs.svelte";
+  import { Bot, GitCompareArrows, FileText, Terminal } from "@lucide/svelte";
 
   interface Props {
     tabs: Tab[];
@@ -10,6 +11,8 @@
   }
 
   let { tabs, activeTabIndex, onSelect, onClose, onAdd }: Props = $props();
+
+  const icons: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompareArrows, file: FileText, terminal: Terminal };
 </script>
 
 <div class="flex items-center gap-0.5 w-full" role="tablist">
@@ -17,7 +20,7 @@
     <button
       role="tab"
       aria-selected={tab.index === activeTabIndex}
-      class="flex-1 relative flex items-center justify-center px-3 h-6 rounded text-xs select-none transition-colors group
+      class="flex-1 relative flex items-center justify-center gap-1.5 px-3 h-6 rounded text-xs select-none transition-colors group
         {tab.index === activeTabIndex
           ? 'bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-50 shadow-sm'
           : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
@@ -33,7 +36,11 @@
           onclick={(e: MouseEvent) => { e.stopPropagation(); onClose(tab.index); }}
         >×</span>
       {/if}
-      <span>{tab.label}</span>
+      {#if tab.icon && icons[tab.icon]}
+        {@const Icon = icons[tab.icon]}
+        <Icon size={12} />
+      {/if}
+      <span class="truncate">{tab.label}</span>
     </button>
   {/each}
   <button

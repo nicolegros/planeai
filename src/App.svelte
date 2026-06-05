@@ -98,6 +98,8 @@
   let editorTabOpen = $state<Record<string, boolean>>({});
   let editorTabActive = $state<Record<string, boolean>>({});
   let editorRefs = $state<Record<string, EditorTab>>({});
+  let diffFileName = $state<Record<string, string>>({});
+  let editorFileName = $state<Record<string, string>>({});
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -552,10 +554,10 @@
     {sidebarVisible}
     tabs={(() => {
       if (!activeSessionId) return [];
-      const shellTabs = getTabs(activeSessionId);
+      const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: getSettings().default_provider || "Agent" } : t);
       const extra = [];
-      if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: "∆ Diff" });
-      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: "✎ Editor" });
+      if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
+      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file" });
       return [...shellTabs, ...extra];
     })()}
     activeTabIndex={getUnifiedActiveIndex()}
@@ -724,6 +726,7 @@
           visible={session.id === activeSessionId && isDiffActive}
           theme={isDark() ? "vs-dark" : "vs"}
           onEditFile={(filePath) => handleOpenFile(filePath)}
+          onFileChange={(name) => { diffFileName = { ...diffFileName, [session.id]: name }; }}
         />
       {/if}
       {#if hasEditor && project}
@@ -734,6 +737,7 @@
           theme={isDark() ? "vs-dark" : "vs"}
           onClose={() => { editorTabOpen = { ...editorTabOpen, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
           onFocusEditor={() => { editorTabActive = { ...editorTabActive, [session.id]: true }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
+          onFileChange={(name) => { editorFileName = { ...editorFileName, [session.id]: name }; }}
           bind:this={editorRefs[session.id]}
         />
       {/if}

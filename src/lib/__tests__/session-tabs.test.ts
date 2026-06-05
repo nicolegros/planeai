@@ -19,7 +19,7 @@ describe("session tabs", () => {
   it("new session starts with 1 tab (agent at index 0)", () => {
     initSession("s1");
     const tabs = getTabs("s1");
-    expect(tabs).toEqual([{ index: 0, label: "Agent" }]);
+    expect(tabs).toEqual([{ index: 0, label: "Agent", icon: "bot" }]);
   });
 
   it("addTab creates helper tabs with incrementing indices", () => {
@@ -29,9 +29,9 @@ describe("session tabs", () => {
     expect(idx1).toBe(1);
     expect(idx2).toBe(2);
     expect(getTabs("s1")).toEqual([
-      { index: 0, label: "Agent" },
-      { index: 1, label: "Shell 1" },
-      { index: 2, label: "Shell 2" },
+      { index: 0, label: "Agent", icon: "bot" },
+      { index: 1, label: "Shell 1", icon: "terminal" },
+      { index: 2, label: "Shell 2", icon: "terminal" },
     ]);
   });
 
@@ -40,8 +40,8 @@ describe("session tabs", () => {
     addTab("s1");
     removeTab("s1", 0);
     expect(getTabs("s1")).toEqual([
-      { index: 0, label: "Agent" },
-      { index: 1, label: "Shell 1" },
+      { index: 0, label: "Agent", icon: "bot" },
+      { index: 1, label: "Shell 1", icon: "terminal" },
     ]);
   });
 
@@ -51,8 +51,8 @@ describe("session tabs", () => {
     addTab("s1");
     removeTab("s1", 1);
     expect(getTabs("s1")).toEqual([
-      { index: 0, label: "Agent" },
-      { index: 2, label: "Shell 1" },
+      { index: 0, label: "Agent", icon: "bot" },
+      { index: 2, label: "Shell 1", icon: "terminal" },
     ]);
   });
 
@@ -93,9 +93,9 @@ describe("session tabs", () => {
   it("initSession with tabCount > 1 pre-creates helper tabs", () => {
     initSession("s1", 3);
     expect(getTabs("s1")).toEqual([
-      { index: 0, label: "Agent" },
-      { index: 1, label: "Shell 1" },
-      { index: 2, label: "Shell 2" },
+      { index: 0, label: "Agent", icon: "bot" },
+      { index: 1, label: "Shell 1", icon: "terminal" },
+      { index: 2, label: "Shell 2", icon: "terminal" },
     ]);
     expect(getTabCount("s1")).toBe(3);
   });

@@ -25,9 +25,10 @@
     visible: boolean;
     theme?: string;
     onEditFile?: (filePath: string) => void;
+    onFileChange?: (fileName: string) => void;
   }
 
-  let { repoPath, baseBranch, visible, theme = "vs-dark", onEditFile }: Props = $props();
+  let { repoPath, baseBranch, visible, theme = "vs-dark", onEditFile, onFileChange }: Props = $props();
 
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
@@ -36,6 +37,11 @@
 
   let renderer: DiffRenderer | null = null;
   let editorContainer: HTMLElement;
+
+  $effect(() => {
+    const file = files[selectedIndex];
+    if (file) onFileChange?.(file.path.split("/").pop() || file.path);
+  });
 
   // Cache file diffs so re-selecting a file is instant (avoids the IPC + `git show`
   // roundtrip). Cleared on refresh since the working tree may have changed.
