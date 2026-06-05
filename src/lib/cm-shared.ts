@@ -1,4 +1,4 @@
-import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from "@codemirror/view";
+import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { languages } from "@codemirror/language-data";
 import { LanguageDescription, syntaxHighlighting, defaultHighlightStyle, foldGutter } from "@codemirror/language";
@@ -10,6 +10,7 @@ export const langCompartment = new Compartment();
 export const baseExtensions = [
   lineNumbers(),
   foldGutter(),
+  drawSelection(),
   highlightActiveLine(),
   highlightActiveLineGutter(),
   syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
