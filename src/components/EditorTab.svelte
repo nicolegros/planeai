@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
-  import { EditorState } from "@codemirror/state";
+  import { EditorState, Compartment } from "@codemirror/state";
   import { vim, Vim, getCM } from "@replit/codemirror-vim";
   import { history, defaultKeymap, historyKeymap } from "@codemirror/commands";
   import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
