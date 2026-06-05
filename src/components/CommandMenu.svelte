@@ -113,14 +113,18 @@
     onOpenChange(false);
   }
 
-  $effect(() => {
-    if (open) {
+  // When the dialog opens, decide which sub-menu to show.
+  // Using a separate variable to track previous open state for edge detection.
+  let prevOpen = false;
+  $effect.pre(() => {
+    if (open && !prevOpen) {
       if (openFileMode) {
         openFilePicker();
       } else {
         subMenu = "none";
       }
     }
+    prevOpen = open;
   });
 
   function getActiveRootPath(): string | null {
