@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { nameFromPath } from "../lib/name-from-path";
   import { Button, Input, Label } from "./ui";
 
@@ -65,6 +66,7 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; }
     if (e.key === "Escape") {
       e.stopPropagation();
       onCancel();
@@ -100,6 +102,6 @@
 
   <div class="flex justify-end gap-2">
     <Button type="button" onclick={onCancel}>Cancel</Button>
-    <Button type="submit" variant="primary">Add</Button>
+    <Button type="submit" variant="primary">Add <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
   </div>
 </form>

@@ -7,8 +7,11 @@ export const IS_MAC =
 /** Returns the platform modifier label: ⌘ on macOS, Ctrl on Windows/Linux */
 export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl+";
 
+/** Hint text for Mod+Enter submit shortcut */
+export const MOD_ENTER_HINT = IS_MAC ? "⌘↵" : "Ctrl+↵";
+
 /** Check if the platform modifier key is pressed (Cmd on macOS, Ctrl on Windows/Linux) */
-function isPlatformMod(e: KeyboardEvent): boolean {
+export function isPlatformMod(e: KeyboardEvent): boolean {
   return IS_MAC ? e.metaKey : e.ctrlKey;
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchChord, IS_MAC } from "../keyboard";
+import { matchChord, IS_MAC, MOD_LABEL, MOD_ENTER_HINT, isPlatformMod } from "../keyboard";
 
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -15,6 +15,31 @@ function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
 // In test environment (jsdom), navigator.platform is empty so IS_MAC is false.
 // Platform mod is ctrlKey in tests.
 const modKey = IS_MAC ? "metaKey" : "ctrlKey";
+
+describe("MOD_LABEL", () => {
+  it("returns Ctrl+ on non-mac (jsdom)", () => {
+    expect(IS_MAC).toBe(false);
+    expect(MOD_LABEL).toBe("Ctrl+");
+  });
+
+  it("MOD_ENTER_HINT returns Ctrl+↵ on non-mac", () => {
+    expect(MOD_ENTER_HINT).toBe("Ctrl+↵");
+  });
+});
+
+describe("isPlatformMod", () => {
+  it("returns true for ctrlKey on non-mac", () => {
+    expect(isPlatformMod(key({ ctrlKey: true }))).toBe(true);
+  });
+
+  it("returns false for metaKey on non-mac", () => {
+    expect(isPlatformMod(key({ metaKey: true }))).toBe(false);
+  });
+
+  it("returns false with no modifiers", () => {
+    expect(isPlatformMod(key({}))).toBe(false);
+  });
+});
 
 describe("matchChord", () => {
   it("returns focus_terminal on Escape", () => {

@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Button, Input, Label, Select, Checkbox } from "./ui";
   import { getSettings } from "../lib/settings.svelte";
+  import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
 
   interface Project { id: string; name: string; path: string; }
@@ -113,11 +114,11 @@
   let error = $state("");
 
   function metaEnter(e: KeyboardEvent) {
-    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
   }
 
   function formKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); submit(); return; }
+    if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; }
     if (!hasTaskManager) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.closest("[role='combobox']"))) return;
@@ -287,6 +288,6 @@
 
   <div class="flex justify-end gap-2">
     <Button type="button" onclick={onCancel}>Cancel</Button>
-    <Button type="submit" variant="primary">Launch</Button>
+    <Button type="submit" variant="primary">Launch <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
   </div>
 </form>
