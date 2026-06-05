@@ -264,8 +264,16 @@
     editorTabOpen = { ...editorTabOpen, [activeSessionId]: true };
     editorTabActive = { ...editorTabActive, [activeSessionId]: true };
     diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-    // Open the file in the editor
-    editorRefs[activeSessionId]?.openFile(filePath);
+    // Open the file in the editor (tick needed for first open when component mounts)
+    const sid = activeSessionId;
+    const tryOpen = () => {
+      if (editorRefs[sid]) {
+        editorRefs[sid].openFile(filePath);
+      } else {
+        requestAnimationFrame(tryOpen);
+      }
+    };
+    tryOpen();
   }
 
   function listenForTabExit(sessionId: string, tabIndex: number) {
