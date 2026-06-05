@@ -100,6 +100,7 @@
   let editorRefs = $state<Record<string, EditorTab>>({});
   let diffFileName = $state<Record<string, string>>({});
   let editorFileName = $state<Record<string, string>>({});
+  let editorModified = $state<Record<string, boolean>>({});
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -557,7 +558,7 @@
       const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: getSettings().default_provider || "Agent" } : t);
       const extra = [];
       if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
-      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file" });
+      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
       return [...shellTabs, ...extra];
     })()}
     activeTabIndex={getUnifiedActiveIndex()}
@@ -738,6 +739,7 @@
           onClose={() => { editorTabOpen = { ...editorTabOpen, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
           onFocusEditor={() => { editorTabActive = { ...editorTabActive, [session.id]: true }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
           onFileChange={(name) => { editorFileName = { ...editorFileName, [session.id]: name }; }}
+          onModifiedChange={(mod) => { editorModified = { ...editorModified, [session.id]: mod }; }}
           bind:this={editorRefs[session.id]}
         />
       {/if}

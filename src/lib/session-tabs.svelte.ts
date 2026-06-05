@@ -2,6 +2,7 @@ export interface Tab {
   index: number;
   label: string;
   icon?: string;
+  modified?: boolean;
 }
 
 interface SessionTabState {

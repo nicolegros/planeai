@@ -41,6 +41,7 @@
         <Icon size={12} />
       {/if}
       <span class="truncate">{tab.label}</span>
+      {#if tab.modified}<span class="w-2 h-2 rounded-full bg-surface-400 dark:bg-surface-500 shrink-0"></span>{/if}
     </button>
   {/each}
   <button

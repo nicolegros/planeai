@@ -30,9 +30,10 @@
     onClose: () => void;
     onFocusEditor: () => void;
     onFileChange?: (fileName: string) => void;
+    onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor, onFileChange }: Props = $props();
+  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -77,6 +78,7 @@
         editorLangCompartment.of([]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
+            if (!activeBuffer.modified) onModifiedChange?.(true);
             activeBuffer.modified = true;
           }
           if (update.selectionSet || update.docChanged) {
@@ -167,6 +169,7 @@
     activeIndex = index;
     const buf = buffers[index];
     onFileChange?.(buf.path.split("/").pop() || buf.path);
+    onModifiedChange?.(buf.modified);
 
     if (buf.state) {
       ensureView(buf.state);
@@ -195,6 +198,7 @@
       await invoke("write_file", { filePath: fullPath, content });
       activeBuffer.modified = false;
       activeBuffer.content = content;
+      onModifiedChange?.(false);
     } catch (e) {
       console.error("Failed to save file:", e);
     }
