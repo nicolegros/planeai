@@ -38,9 +38,10 @@
   let renderer: DiffRenderer | null = null;
   let editorContainer: HTMLElement;
 
+  const selectedFileName = $derived(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
+
   $effect(() => {
-    const file = files[selectedIndex];
-    if (file) onFileChange?.(file.path.split("/").pop() || file.path);
+    if (selectedFileName) onFileChange?.(selectedFileName);
   });
 
   // Cache file diffs so re-selecting a file is instant (avoids the IPC + `git show`

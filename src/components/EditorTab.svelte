@@ -49,9 +49,10 @@
   const editorLangCompartment = new Compartment();
 
   const activeBuffer = $derived(activeIndex >= 0 ? buffers[activeIndex] : null);
+  const activeFileName = $derived(activeBuffer?.path.split("/").pop() || activeBuffer?.path || "");
 
   $effect(() => {
-    if (activeBuffer) onFileChange?.(activeBuffer.path.split("/").pop() || activeBuffer.path);
+    if (activeFileName) onFileChange?.(activeFileName);
   });
 
   function createEditorState(content: string, filePath: string): EditorState {
