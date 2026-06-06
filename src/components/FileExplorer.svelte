@@ -43,6 +43,7 @@
   let createValue = $state("");
   let previewPath = $state<string | null>(null);
   let unlisten: (() => void) | null = null;
+  let panelEl: HTMLElement;
 
   function flatten(nodes: TreeNode[]): TreeNode[] {
     const result: TreeNode[] = [];
@@ -272,6 +273,12 @@
     }
   });
 
+  $effect(() => {
+    if (visible && panelEl) {
+      requestAnimationFrame(() => panelEl.focus());
+    }
+  });
+
   function contextMenuItems(node: TreeNode) {
     const items = [];
     if (node.entry.is_dir) {
@@ -287,7 +294,9 @@
 {#if visible}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <aside
-  class="relative shrink-0 flex flex-col border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-hidden"
+  bind:this={panelEl}
+  tabindex="-1"
+  class="relative shrink-0 flex flex-col border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-hidden outline-none"
   style:width="{panelWidth}px"
   onclick={onFocus}
   onkeydown={handleKeydown}

@@ -626,24 +626,6 @@
     />
   {/if}
 
-  {#if fileExplorerVisible && activeSessionId}
-    {@const activeSession = sessions.find(s => s.id === activeSessionId)}
-    {@const activeProject = projects.find(p => p.id === activeSession?.project_id)}
-    {@const explorerRoot = activeSession?.worktree_path ?? activeProject?.path ?? ""}
-    {#if explorerRoot}
-      <FileExplorer
-        rootPath={explorerRoot}
-        sessionId={activeSessionId}
-        visible={true}
-        activeFilePath={editorFileName[activeSessionId] ?? null}
-        modifiedPaths={editorModified[activeSessionId] ? new Set([editorFileName[activeSessionId] ?? ""].filter(Boolean)) : new Set()}
-        onOpenFile={(path) => handleOpenFile(path)}
-        onPinFile={(path) => handleOpenFile(path)}
-        onFocus={() => focusExplorer()}
-      />
-    {/if}
-  {/if}
-
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
