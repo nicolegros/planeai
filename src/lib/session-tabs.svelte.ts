@@ -15,7 +15,9 @@ let state = $state<Record<string, SessionTabState>>({});
 
 function relabel(tabs: Tab[]): Tab[] {
   let shellNum = 1;
-  return tabs.map((t) => (t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}`, icon: "terminal" }));
+  return tabs.map((t) =>
+    t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}`, icon: "terminal" },
+  );
 }
 
 export function initSession(sessionId: string, tabCount = 1): void {

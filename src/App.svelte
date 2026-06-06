@@ -319,6 +319,11 @@
       loadSettings().then(() => loadTheme());
     });
 
+    // Show errors from background session cleanup
+    const unlistenCleanup = listen<string>("cleanup-error", (event) => {
+      showSnackbar(event.payload);
+    });
+
     // Check if notification hook is installed
     invoke<boolean>("is_notify_hook_installed").then((installed) => {
       if (!installed) showHookPrompt = true;
@@ -442,6 +447,7 @@
       cleanup();
       unlistenState.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
+      unlistenCleanup.then((fn) => fn());
       unlistenClose.then((fn) => fn());
       exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);

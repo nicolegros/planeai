@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod cleanup;
 mod command;
 mod config;
 mod db;
@@ -1075,43 +1076,78 @@ fn archive_session(
 }
 
 #[tauri::command]
-fn destroy_session(
+async fn destroy_session(
     id: String,
-    db_state: State<DbState>,
-    pty_state: State<PtyState>,
-    config_state: State<ConfigState>,
+    db_state: State<'_, DbState>,
+    pty_state: State<'_, PtyState>,
+    config_state: State<'_, ConfigState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Detach PTY
+    // Detach PTY (cheap, immediate)
     pty_state.0.detach(&id);
 
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
-        // Fire on_complete before destroying
-        if session.task_key.is_some() {
-            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-            if let Some(cwd) = session_cwd(&conn, &session) {
-                fire_task_hook(&cfg, &session, "on_complete", &cwd);
-            }
+    // Gather data while locks are held
+    let cleanup_ctx;
+    let task_hook_ctx;
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &id).map_err(|e| e.to_string())?;
+
+        if let Some(ref session) = session {
+            let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+            let project_path = projects
+                .iter()
+                .find(|p| p.id == session.project_id)
+                .map(|p| p.path.clone());
+
+            cleanup_ctx = Some(cleanup::CleanupContext {
+                backend: session.backend.clone(),
+                tmux_name: session.tmux_name.clone(),
+                worktree_path: session.worktree_path.clone(),
+                project_path: project_path.clone(),
+                branch: if session.worktree_path.is_some() {
+                    Some(session.branch.clone())
+                } else {
+                    None
+                },
+            });
+
+            task_hook_ctx = if session.task_key.is_some() {
+                let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+                let cwd = session_cwd(&conn, session);
+                Some((cfg.clone(), session.clone(), cwd))
+            } else {
+                None
+            };
+        } else {
+            cleanup_ctx = None;
+            task_hook_ctx = None;
         }
 
-        // Only kill tmux if this is a tmux-backed session
-        if session.backend == "tmux" {
-            #[cfg(not(windows))]
-            if let Some(ref tn) = session.tmux_name {
-                let _ = tmux::kill_session(tn);
-            }
-        }
-        // Remove worktree if applicable
-        if let Some(ref wt_path) = session.worktree_path {
-            let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-            if let Some(project) = projects.iter().find(|p| p.id == session.project_id) {
-                let _ = git::worktree_remove(&project.path, wt_path);
-            }
-            let _ = std::fs::remove_dir_all(wt_path);
-        }
+        // Soft-delete immediately
+        db::destroy_session(&conn, &id).map_err(|e| e.to_string())?;
     }
-    // Soft-delete
-    db::destroy_session(&conn, &id).map_err(|e| e.to_string())
+
+    // Spawn background cleanup
+    if let Some(ctx) = cleanup_ctx {
+        std::thread::spawn(move || {
+            // Fire task hook
+            if let Some((cfg, session, Some(cwd))) = task_hook_ctx {
+                fire_task_hook(&cfg, &session, "on_complete", &cwd);
+            }
+
+            // Run cleanup
+            let errors = cleanup::run_cleanup(&ctx, &cleanup::real_ops());
+
+            // Emit errors to frontend
+            if !errors.is_empty() {
+                let msg = errors.join("; ");
+                let _ = app_handle.emit("cleanup-error", msg);
+            }
+        });
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

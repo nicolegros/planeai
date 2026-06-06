@@ -1,7 +1,18 @@
-import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection } from "@codemirror/view";
+import {
+  EditorView,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  drawSelection,
+} from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { languages } from "@codemirror/language-data";
-import { LanguageDescription, syntaxHighlighting, defaultHighlightStyle, foldGutter } from "@codemirror/language";
+import {
+  LanguageDescription,
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  foldGutter,
+} from "@codemirror/language";
 
 export const fontCompartment = new Compartment();
 export const themeCompartment = new Compartment();

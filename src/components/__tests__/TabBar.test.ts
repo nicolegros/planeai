@@ -53,7 +53,10 @@ describe("TabBar", () => {
 
   it("does not render a close button on the Agent tab (index 0)", () => {
     const target = renderTabBar({
-      tabs: [{ index: 0, label: "Agent" }, { index: 1, label: "Shell 1" }],
+      tabs: [
+        { index: 0, label: "Agent" },
+        { index: 1, label: "Shell 1" },
+      ],
       activeTabIndex: 0,
       onSelect: vi.fn(),
       onClose: vi.fn(),
@@ -67,7 +70,10 @@ describe("TabBar", () => {
   it("renders close buttons on shell tabs that fire onClose", () => {
     const onClose = vi.fn();
     const target = renderTabBar({
-      tabs: [{ index: 0, label: "Agent" }, { index: 1, label: "Shell 1" }],
+      tabs: [
+        { index: 0, label: "Agent" },
+        { index: 1, label: "Shell 1" },
+      ],
       activeTabIndex: 0,
       onSelect: vi.fn(),
       onClose,
@@ -82,7 +88,10 @@ describe("TabBar", () => {
 
   it("sets aria-selected=true on the active tab", () => {
     const target = renderTabBar({
-      tabs: [{ index: 0, label: "Agent" }, { index: 1, label: "Shell 1" }],
+      tabs: [
+        { index: 0, label: "Agent" },
+        { index: 1, label: "Shell 1" },
+      ],
       activeTabIndex: 1,
       onSelect: vi.fn(),
       onClose: vi.fn(),
