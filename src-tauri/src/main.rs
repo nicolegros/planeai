@@ -486,7 +486,7 @@ fn write_file(file_path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_monospace_fonts() -> Result<Vec<String>, String> {
+async fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::family_name::FamilyName;
     use font_kit::properties::Properties;
     use font_kit::source::SystemSource;
@@ -1488,7 +1488,7 @@ fn main() {
 
             // Warm font cache in background so preferences page opens instantly
             std::thread::spawn(|| {
-                let _ = list_monospace_fonts();
+                tauri::async_runtime::block_on(list_monospace_fonts()).ok();
             });
 
             Ok(())
