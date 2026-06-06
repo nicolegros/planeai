@@ -30,6 +30,7 @@
     ]},
     { section: "View", items: [
       { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
+      { keys: `${MOD_LABEL}E`, description: "Toggle file explorer" },
       { keys: `${MOD_LABEL}D`, description: "Toggle diff" },
     ]},
     { section: "Terminal", items: [

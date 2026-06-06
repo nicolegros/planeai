@@ -30,7 +30,7 @@ export type KeyboardAction =
   | { type: "next_tab" }
   | { type: "prev_tab" }
   | { type: "toggle_diff" }
-  | { type: "toggle_editor" }
+  | { type: "toggle_file_explorer" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" };
@@ -93,9 +93,9 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "toggle_diff" };
   }
 
-  // Mod+E — toggle editor tab
+  // Mod+E — toggle file explorer
   if (mod && !e.shiftKey && key === "e") {
-    return { type: "toggle_editor" };
+    return { type: "toggle_file_explorer" };
   }
 
   // Mod+P — open file finder
@@ -144,7 +144,7 @@ export function installKeyboardRouter(
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
-    "toggle_editor",
+    "toggle_file_explorer",
     "toggle_diff",
     "command_palette",
     "tab_switch",

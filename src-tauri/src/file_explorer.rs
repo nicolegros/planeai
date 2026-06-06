@@ -1,0 +1,305 @@
+use serde::Serialize;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+
+const DEBOUNCE_MS: u64 = 200;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FsEvent {
+    pub session_id: String,
+    pub path: String,
+}
+
+pub struct WatcherManager {
+    watchers: HashMap<String, RecommendedWatcher>,
+}
+
+impl WatcherManager {
+    pub fn new() -> Self {
+        Self {
+            watchers: HashMap::new(),
+        }
+    }
+
+    pub fn watch(
+        &mut self,
+        session_id: &str,
+        path: &str,
+        sender: mpsc::Sender<FsEvent>,
+    ) -> Result<(), String> {
+        let sid = session_id.to_string();
+        let pending: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let pending_clone = pending.clone();
+        let sender_clone = sender.clone();
+        let sid_clone = sid.clone();
+
+        // Debounce thread: flushes accumulated paths every DEBOUNCE_MS
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
+            let paths: Vec<String> = {
+                let mut set = pending_clone.lock().unwrap();
+                if set.is_empty() {
+                    continue;
+                }
+                let drained: Vec<String> = set.drain().collect();
+                drained
+            };
+            for p in paths {
+                let _ = sender_clone.send(FsEvent {
+                    session_id: sid_clone.clone(),
+                    path: p,
+                });
+            }
+        });
+
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let mut set = pending.lock().unwrap();
+                    for p in event.paths {
+                        set.insert(p.to_string_lossy().into_owned());
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+
+        watcher
+            .watch(Path::new(path), RecursiveMode::Recursive)
+            .map_err(|e| e.to_string())?;
+
+        self.watchers.insert(session_id.to_string(), watcher);
+        Ok(())
+    }
+
+    pub fn unwatch(&mut self, session_id: &str) {
+        self.watchers.remove(session_id);
+    }
+}
+
+pub fn create_file(path: &str) -> Result<(), String> {
+    std::fs::File::create(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn create_directory(path: &str) -> Result<(), String> {
+    std::fs::create_dir(path).map_err(|e| e.to_string())
+}
+
+pub fn rename_entry(old_path: &str, new_path: &str) -> Result<(), String> {
+    std::fs::rename(old_path, new_path).map_err(|e| e.to_string())
+}
+
+pub fn delete_to_trash(path: &str) -> Result<(), String> {
+    trash::delete(path).map_err(|e| e.to_string())
+}
+
+pub fn list_directory(path: &str) -> Result<Vec<DirEntry>, String> {
+    let dir = Path::new(path);
+    let mut entries: Vec<DirEntry> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            DirEntry {
+                name: e.file_name().to_string_lossy().into_owned(),
+                path: e.path().to_string_lossy().into_owned(),
+                is_dir,
+            }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::sync::mpsc;
+    use tempfile::TempDir;
+
+    #[test]
+    fn list_directory_returns_dirs_first_then_files_alphabetical() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::write(root.join("banana.txt"), "").unwrap();
+        fs::write(root.join("apple.txt"), "").unwrap();
+        fs::create_dir(root.join("zeta")).unwrap();
+        fs::create_dir(root.join("alpha")).unwrap();
+        fs::write(root.join("cherry.txt"), "").unwrap();
+
+        let entries = list_directory(root.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec!["alpha", "zeta", "apple.txt", "banana.txt", "cherry.txt"]
+        );
+
+        // Verify is_dir flags
+        assert!(entries[0].is_dir);
+        assert!(entries[1].is_dir);
+        assert!(!entries[2].is_dir);
+        assert!(!entries[3].is_dir);
+        assert!(!entries[4].is_dir);
+    }
+
+    #[test]
+    fn list_directory_errors_for_nonexistent_path() {
+        let result = list_directory("/tmp/absolutely-does-not-exist-xyz");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn create_file_appears_in_listing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let file_path = root.join("new_file.txt");
+
+        create_file(file_path.to_str().unwrap()).unwrap();
+
+        let entries = list_directory(root.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "new_file.txt");
+        assert!(!entries[0].is_dir);
+    }
+
+    #[test]
+    fn create_directory_appears_in_listing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let dir_path = root.join("new_dir");
+
+        create_directory(dir_path.to_str().unwrap()).unwrap();
+
+        let entries = list_directory(root.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "new_dir");
+        assert!(entries[0].is_dir);
+    }
+
+    #[test]
+    fn rename_entry_old_disappears_new_appears() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("old.txt"), "content").unwrap();
+
+        rename_entry(
+            root.join("old.txt").to_str().unwrap(),
+            root.join("new.txt").to_str().unwrap(),
+        )
+        .unwrap();
+
+        let entries = list_directory(root.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"old.txt"));
+        assert!(names.contains(&"new.txt"));
+    }
+
+    #[test]
+    fn delete_to_trash_removes_from_listing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("doomed.txt"), "bye").unwrap();
+
+        delete_to_trash(root.join("doomed.txt").to_str().unwrap()).unwrap();
+
+        let entries = list_directory(root.to_str().unwrap()).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"doomed.txt"));
+    }
+
+    #[test]
+    fn watch_directory_emits_event_on_file_create() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Create a subdirectory to test recursive watching
+        let subdir = root.join("nested");
+        fs::create_dir(&subdir).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+
+        let mut manager = WatcherManager::new();
+        manager
+            .watch("session-1", root.to_str().unwrap(), tx)
+            .unwrap();
+
+        // Give watcher time to set up
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Write in a nested subdirectory (tests recursive mode)
+        fs::write(subdir.join("deep.txt"), "hello").unwrap();
+
+        // Drain events until we find one for deep.txt (other events may fire for the directory)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(event) => {
+                    assert_eq!(event.session_id, "session-1");
+                    if event.path.contains("deep.txt") {
+                        found = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(found, "expected an event containing 'deep.txt'");
+
+        manager.unwatch("session-1");
+    }
+
+    #[test]
+    fn watch_debounces_rapid_changes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let (tx, rx) = mpsc::channel();
+
+        let mut manager = WatcherManager::new();
+        manager
+            .watch("session-2", root.to_str().unwrap(), tx)
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Rapid-fire writes to the same file
+        for i in 0..5 {
+            fs::write(root.join("rapid.txt"), format!("v{i}")).unwrap();
+        }
+
+        // Collect events over 500ms — should be deduplicated to 1 path
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let mut paths: Vec<String> = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            paths.push(event.path);
+        }
+        // All events should reference the same file, deduplicated to 1
+        let unique: HashSet<&String> = paths.iter().collect();
+        assert_eq!(unique.len(), 1);
+        assert!(paths[0].contains("rapid.txt"));
+
+        manager.unwatch("session-2");
+    }
+}

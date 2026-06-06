@@ -4,6 +4,7 @@ mod cleanup;
 mod command;
 mod config;
 mod db;
+mod file_explorer;
 mod git;
 mod notify;
 mod pr;
@@ -26,6 +27,7 @@ struct DbState(Mutex<Connection>);
 struct PtyState(pty::PtyManager);
 struct NotifyHandle(notify::SharedNotifyState);
 struct ConfigState(Mutex<config::Config>);
+struct FileExplorerState(Mutex<file_explorer::WatcherManager>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
@@ -484,6 +486,58 @@ fn read_file(file_path: String) -> Result<String, String> {
 #[tauri::command]
 fn write_file(file_path: String, content: String) -> Result<(), String> {
     std::fs::write(&file_path, &content).map_err(|e| format!("Cannot write file: {e}"))
+}
+
+#[tauri::command]
+fn fe_list_directory(path: String) -> Result<Vec<file_explorer::DirEntry>, String> {
+    file_explorer::list_directory(&path)
+}
+
+#[tauri::command]
+fn fe_create_file(path: String) -> Result<(), String> {
+    file_explorer::create_file(&path)
+}
+
+#[tauri::command]
+fn fe_create_directory(path: String) -> Result<(), String> {
+    file_explorer::create_directory(&path)
+}
+
+#[tauri::command]
+fn fe_rename_entry(old_path: String, new_path: String) -> Result<(), String> {
+    file_explorer::rename_entry(&old_path, &new_path)
+}
+
+#[tauri::command]
+fn fe_delete_to_trash(path: String) -> Result<(), String> {
+    file_explorer::delete_to_trash(&path)
+}
+
+#[tauri::command]
+fn fe_watch_directory(
+    session_id: String,
+    path: String,
+    state: State<'_, FileExplorerState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    state.0.lock().unwrap().watch(&session_id, &path, tx)?;
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            let _ = handle.emit("fs-change", &event);
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn fe_unwatch_directory(
+    session_id: String,
+    state: State<'_, FileExplorerState>,
+) -> Result<(), String> {
+    state.0.lock().unwrap().unwatch(&session_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1524,6 +1578,9 @@ fn main() {
             #[cfg(windows)]
             pty_mgr.set_socket_path(notify::PIPE_NAME.to_string());
             app.manage(PtyState(pty_mgr));
+            app.manage(FileExplorerState(Mutex::new(
+                file_explorer::WatcherManager::new(),
+            )));
 
             // Warm font cache in background so preferences page opens instantly
             std::thread::spawn(|| {
@@ -1612,6 +1669,13 @@ fn main() {
             get_task_details,
             list_task_items,
             fire_task_notify_hook,
+            fe_list_directory,
+            fe_create_file,
+            fe_create_directory,
+            fe_rename_entry,
+            fe_delete_to_trash,
+            fe_watch_directory,
+            fe_unwatch_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
