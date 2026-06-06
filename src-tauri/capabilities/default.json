@@ -5,6 +5,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-create",
+    "core:window:allow-destroy",
     "core:webview:allow-create-webview-window",
     "dialog:default",
     "notification:default",
