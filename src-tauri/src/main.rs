@@ -532,7 +532,10 @@ fn fe_watch_directory(
 }
 
 #[tauri::command]
-fn fe_unwatch_directory(session_id: String, state: State<'_, FileExplorerState>) -> Result<(), String> {
+fn fe_unwatch_directory(
+    session_id: String,
+    state: State<'_, FileExplorerState>,
+) -> Result<(), String> {
     state.0.lock().unwrap().unwatch(&session_id);
     Ok(())
 }
@@ -1575,7 +1578,9 @@ fn main() {
             #[cfg(windows)]
             pty_mgr.set_socket_path(notify::PIPE_NAME.to_string());
             app.manage(PtyState(pty_mgr));
-            app.manage(FileExplorerState(Mutex::new(file_explorer::WatcherManager::new())));
+            app.manage(FileExplorerState(Mutex::new(
+                file_explorer::WatcherManager::new(),
+            )));
 
             // Warm font cache in background so preferences page opens instantly
             std::thread::spawn(|| {

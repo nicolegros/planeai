@@ -29,7 +29,9 @@ pub struct WatcherManager {
 
 impl WatcherManager {
     pub fn new() -> Self {
-        Self { watchers: HashMap::new() }
+        Self {
+            watchers: HashMap::new(),
+        }
     }
 
     pub fn watch(
@@ -45,34 +47,37 @@ impl WatcherManager {
         let sid_clone = sid.clone();
 
         // Debounce thread: flushes accumulated paths every DEBOUNCE_MS
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
-                let paths: Vec<String> = {
-                    let mut set = pending_clone.lock().unwrap();
-                    if set.is_empty() { continue; }
-                    let drained: Vec<String> = set.drain().collect();
-                    drained
-                };
-                for p in paths {
-                    let _ = sender_clone.send(FsEvent {
-                        session_id: sid_clone.clone(),
-                        path: p,
-                    });
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
+            let paths: Vec<String> = {
+                let mut set = pending_clone.lock().unwrap();
+                if set.is_empty() {
+                    continue;
                 }
+                let drained: Vec<String> = set.drain().collect();
+                drained
+            };
+            for p in paths {
+                let _ = sender_clone.send(FsEvent {
+                    session_id: sid_clone.clone(),
+                    path: p,
+                });
             }
         });
 
-        let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                let mut set = pending.lock().unwrap();
-                for p in event.paths {
-                    set.insert(p.to_string_lossy().into_owned());
+        let mut watcher =
+            notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let mut set = pending.lock().unwrap();
+                    for p in event.paths {
+                        set.insert(p.to_string_lossy().into_owned());
+                    }
                 }
-            }
-        }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
 
-        watcher.watch(Path::new(path), RecursiveMode::Recursive)
+        watcher
+            .watch(Path::new(path), RecursiveMode::Recursive)
             .map_err(|e| e.to_string())?;
 
         self.watchers.insert(session_id.to_string(), watcher);
@@ -128,10 +133,10 @@ pub fn list_directory(path: &str) -> Result<Vec<DirEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::collections::HashSet;
     use std::fs;
     use std::sync::mpsc;
+    use tempfile::TempDir;
 
     #[test]
     fn list_directory_returns_dirs_first_then_files_alphabetical() {
@@ -147,7 +152,10 @@ mod tests {
         let entries = list_directory(root.to_str().unwrap()).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
-        assert_eq!(names, vec!["alpha", "zeta", "apple.txt", "banana.txt", "cherry.txt"]);
+        assert_eq!(
+            names,
+            vec!["alpha", "zeta", "apple.txt", "banana.txt", "cherry.txt"]
+        );
 
         // Verify is_dir flags
         assert!(entries[0].is_dir);
@@ -200,7 +208,8 @@ mod tests {
         rename_entry(
             root.join("old.txt").to_str().unwrap(),
             root.join("new.txt").to_str().unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let entries = list_directory(root.to_str().unwrap()).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
@@ -232,7 +241,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         let mut manager = WatcherManager::new();
-        manager.watch("session-1", root.to_str().unwrap(), tx).unwrap();
+        manager
+            .watch("session-1", root.to_str().unwrap(), tx)
+            .unwrap();
 
         // Give watcher time to set up
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -255,7 +266,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
 
         let mut manager = WatcherManager::new();
-        manager.watch("session-2", root.to_str().unwrap(), tx).unwrap();
+        manager
+            .watch("session-2", root.to_str().unwrap(), tx)
+            .unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
