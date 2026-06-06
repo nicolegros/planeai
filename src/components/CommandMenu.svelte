@@ -2,6 +2,7 @@
   import { Command, Dialog } from "bits-ui";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { showSnackbar } from "../lib/snackbar.svelte";
 
   interface Session {
     id: string;
@@ -433,9 +434,9 @@
                 <Command.Item
                   value="open pull request"
                   keywords={["pr", "pull request", "github", "link", "review"]}
-                  disabled={!sessions.find(s => s.id === activeSessionId)?.pr_url}
+                  disabled={!activeSessionId}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={() => { const url = sessions.find(s => s.id === activeSessionId)?.pr_url; if (url) openUrl(url); close(); }}
+                  onSelect={async () => { try { const url = await invoke<string | null>("fetch_pr_url", { sessionId: activeSessionId }); if (url) { openUrl(url); } } catch (e: any) { showSnackbar(e.toString()); } close(); }}
                 >
                   Open pull request
                 </Command.Item>

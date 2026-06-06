@@ -1408,6 +1408,67 @@ fn poll_pr_for_session(
     Ok(transition.is_some())
 }
 
+/// Build a "create PR" URL from the git remote origin and branch name.
+fn new_pr_url(cwd: &str, branch: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("failed to get remote URL: {e}"))?;
+    if !output.status.success() {
+        return Err("no origin remote configured".to_string());
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let repo_path = parse_github_repo(&raw).ok_or("could not parse GitHub repo from remote URL")?;
+    Ok(format!(
+        "https://github.com/{repo_path}/compare/{branch}?expand=1"
+    ))
+}
+
+/// Extract "owner/repo" from a GitHub remote URL (SSH or HTTPS).
+fn parse_github_repo(url: &str) -> Option<String> {
+    let path = url
+        .strip_prefix("git@github.com:")
+        .or_else(|| url.strip_prefix("https://github.com/"))?;
+    Some(path.trim_end_matches(".git").to_string())
+}
+
+/// On-demand PR URL fetch for a session. Returns the PR URL if found,
+/// or a "create PR" URL if no PR exists yet.
+fn fetch_pr_url_inner(
+    conn: &rusqlite::Connection,
+    cfg: &config::Config,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let pr_cmd = cfg.pr_status.as_ref().ok_or("pr_status not configured")?;
+    let session = db::get_session(conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let cwd = session_cwd(conn, &session).ok_or("cannot resolve session working directory")?;
+    let status = pr::check_pr_status(pr_cmd, &session.branch, std::path::Path::new(&cwd))?;
+    match status {
+        Some(s) => {
+            let _ = db::update_pr_state(conn, session_id, &s.url, &s.state);
+            Ok(Some(s.url))
+        }
+        None => {
+            let create_url = new_pr_url(&cwd, &session.branch)?;
+            Ok(Some(create_url))
+        }
+    }
+}
+
+#[tauri::command]
+fn fetch_pr_url(
+    session_id: String,
+    db_state: State<DbState>,
+    config_state: State<ConfigState>,
+) -> Result<Option<String>, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    fetch_pr_url_inner(&conn, &cfg, &session_id)
+}
+
 #[tauri::command]
 fn get_task_details(
     config_state: State<ConfigState>,
@@ -1676,6 +1737,7 @@ fn main() {
             fe_delete_to_trash,
             fe_watch_directory,
             fe_unwatch_directory,
+            fetch_pr_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1724,5 +1786,148 @@ mod tests {
     #[test]
     fn sanitize_plain_name() {
         assert_eq!(sanitize_project_name("planeai"), "planeai");
+    }
+
+    #[test]
+    fn fetch_pr_url_returns_url_when_pr_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("pr.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho '{\"url\":\"https://github.com/org/repo/pull/1\",\"state\":\"open\"}'",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "test", dir.path().to_str().unwrap()).unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "sess",
+            None,
+            "feat/x",
+            None,
+            None,
+            "direct",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config {
+            pr_status: Some(format!("{} {{branch}}", script.display())),
+            ..Default::default()
+        };
+
+        let result = fetch_pr_url_inner(&conn, &cfg, "s1");
+        assert_eq!(
+            result.unwrap(),
+            Some("https://github.com/org/repo/pull/1".to_string())
+        );
+    }
+
+    #[test]
+    fn fetch_pr_url_returns_create_url_when_no_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("pr.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 1").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+
+        // Init a git repo with a github remote
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:org/repo.git"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "test", dir.path().to_str().unwrap()).unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "sess",
+            None,
+            "feat/x",
+            None,
+            None,
+            "direct",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config {
+            pr_status: Some(format!("{}", script.display())),
+            ..Default::default()
+        };
+
+        let result = fetch_pr_url_inner(&conn, &cfg, "s1");
+        assert_eq!(
+            result.unwrap(),
+            Some("https://github.com/org/repo/compare/feat/x?expand=1".to_string())
+        );
+    }
+
+    #[test]
+    fn fetch_pr_url_errors_when_not_configured() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "test", "/tmp").unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "sess",
+            None,
+            "feat/x",
+            None,
+            None,
+            "direct",
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config::default(); // pr_status is None
+
+        let result = fetch_pr_url_inner(&conn, &cfg, "s1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not configured"));
+    }
+
+    #[test]
+    fn parse_github_repo_ssh() {
+        assert_eq!(
+            parse_github_repo("git@github.com:org/repo.git"),
+            Some("org/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_https() {
+        assert_eq!(
+            parse_github_repo("https://github.com/org/repo.git"),
+            Some("org/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_non_github() {
+        assert_eq!(parse_github_repo("git@gitlab.com:org/repo.git"), None);
     }
 }
