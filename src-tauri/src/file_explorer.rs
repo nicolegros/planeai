@@ -251,10 +251,22 @@ mod tests {
         // Write in a nested subdirectory (tests recursive mode)
         fs::write(subdir.join("deep.txt"), "hello").unwrap();
 
-        // Wait for debounced event (200ms debounce + margin)
-        let event = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
-        assert_eq!(event.session_id, "session-1");
-        assert!(event.path.contains("deep.txt"));
+        // Drain events until we find one for deep.txt (other events may fire for the directory)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(event) => {
+                    assert_eq!(event.session_id, "session-1");
+                    if event.path.contains("deep.txt") {
+                        found = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(found, "expected an event containing 'deep.txt'");
 
         manager.unwatch("session-1");
     }
