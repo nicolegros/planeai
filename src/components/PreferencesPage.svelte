@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
@@ -28,7 +29,17 @@
         : []
   );
 
+  function handleKeydown(e: KeyboardEvent) {
+    const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+    if (mod && e.key.toLowerCase() === "w") {
+      e.preventDefault();
+      e.stopPropagation();
+      getCurrentWindow().close();
+    }
+  }
+
   onMount(async () => {
+    window.addEventListener("keydown", handleKeydown, true);
     await loadSettings();
     loadTheme();
     invoke<string[]>("list_monospace_fonts").then((fonts) => {
@@ -40,6 +51,10 @@
     invoke<boolean>("check_tmux_available").then((available) => {
       tmuxAvailable = available;
     });
+  });
+
+  onDestroy(() => {
+    window.removeEventListener("keydown", handleKeydown, true);
   });
 
   const backendValue = $derived(config.session_backend ?? "auto");
