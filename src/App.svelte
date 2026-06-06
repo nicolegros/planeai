@@ -4,7 +4,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { focusTerminal, getActiveZone } from "./lib/focus.svelte";
+  import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
@@ -22,6 +22,7 @@
   import CommandMenu from "./components/CommandMenu.svelte";
   import DiffTab from "./components/DiffTab.svelte";
   import EditorTab from "./components/EditorTab.svelte";
+  import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
 
@@ -103,6 +104,9 @@
   let diffFileName = $state<Record<string, string>>({});
   let editorFileName = $state<Record<string, string>>({});
   let editorModified = $state<Record<string, boolean>>({});
+
+  // File explorer state
+  let fileExplorerVisible = $state(false);
 
   // Delete confirmation state
   let sessionToDelete = $state<Session | null>(null);
@@ -285,6 +289,16 @@
     }
   }
 
+  function handleToggleFileExplorer() {
+    if (!activeSessionId) return;
+    fileExplorerVisible = !fileExplorerVisible;
+    if (fileExplorerVisible) {
+      focusExplorer();
+    } else {
+      focusTerminal();
+    }
+  }
+
   function handleOpenFile(filePath: string) {
     if (!activeSessionId) return;
     // Ensure editor tab is open and active
@@ -419,8 +433,8 @@
         handlePrevTab();
       } else if (action.type === "toggle_diff") {
         handleToggleDiff();
-      } else if (action.type === "toggle_editor") {
-        handleToggleEditor();
+      } else if (action.type === "toggle_file_explorer") {
+        handleToggleFileExplorer();
       } else if (action.type === "open_file") {
         commandMenuFileMode = true;
         commandMenuOpen = true;
@@ -610,6 +624,24 @@
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
     />
+  {/if}
+
+  {#if fileExplorerVisible && activeSessionId}
+    {@const activeSession = sessions.find(s => s.id === activeSessionId)}
+    {@const activeProject = projects.find(p => p.id === activeSession?.project_id)}
+    {@const explorerRoot = activeSession?.worktree_path ?? activeProject?.path ?? ""}
+    {#if explorerRoot}
+      <FileExplorer
+        rootPath={explorerRoot}
+        sessionId={activeSessionId}
+        visible={true}
+        activeFilePath={editorFileName[activeSessionId] ?? null}
+        modifiedPaths={editorModified[activeSessionId] ? new Set([editorFileName[activeSessionId] ?? ""].filter(Boolean)) : new Set()}
+        onOpenFile={(path) => handleOpenFile(path)}
+        onPinFile={(path) => handleOpenFile(path)}
+        onFocus={() => focusExplorer()}
+      />
+    {/if}
   {/if}
 
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
