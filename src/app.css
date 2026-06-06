@@ -57,6 +57,90 @@
   }
 }
 
+/* CodeMirror syntax highlighting — classHighlighter applies .tok-* classes */
+.tok-keyword {
+  color: var(--editor-keyword, var(--editor-foreground));
+}
+.tok-atom {
+  color: var(--editor-atom, var(--editor-keyword, var(--editor-foreground)));
+}
+.tok-bool {
+  color: var(--editor-bool, var(--editor-atom, var(--editor-keyword, var(--editor-foreground))));
+}
+.tok-string {
+  color: var(--editor-string, var(--editor-foreground));
+}
+.tok-string2 {
+  color: var(--editor-string2, var(--editor-string, var(--editor-foreground)));
+}
+.tok-number {
+  color: var(--editor-number, var(--editor-foreground));
+}
+.tok-variableName {
+  color: var(--editor-variable, var(--editor-foreground));
+}
+.tok-variableName2 {
+  color: var(--editor-variable2, var(--editor-variable, var(--editor-foreground)));
+}
+.tok-typeName {
+  color: var(--editor-type, var(--editor-foreground));
+}
+.tok-className {
+  color: var(--editor-class, var(--editor-type, var(--editor-foreground)));
+}
+.tok-namespace {
+  color: var(--editor-namespace, var(--editor-type, var(--editor-foreground)));
+}
+.tok-macroName {
+  color: var(--editor-macro, var(--editor-function, var(--editor-foreground)));
+}
+.tok-propertyName {
+  color: var(--editor-property, var(--editor-foreground));
+}
+.tok-operator {
+  color: var(--editor-operator, var(--editor-foreground));
+}
+.tok-comment {
+  color: var(--editor-comment, var(--editor-foreground));
+  font-style: italic;
+}
+.tok-meta {
+  color: var(--editor-meta, var(--editor-foreground));
+}
+.tok-punctuation {
+  color: var(--editor-punctuation, var(--editor-foreground));
+}
+.tok-invalid {
+  color: var(--editor-invalid, #ff0000);
+  text-decoration: underline;
+}
+.tok-literal {
+  color: var(--editor-literal, var(--editor-string, var(--editor-foreground)));
+}
+.tok-labelName {
+  color: var(--editor-label, var(--editor-foreground));
+}
+.tok-heading {
+  color: var(--editor-heading, var(--editor-keyword, var(--editor-foreground)));
+  font-weight: bold;
+}
+.tok-emphasis {
+  font-style: italic;
+}
+.tok-strong {
+  font-weight: bold;
+}
+.tok-link {
+  color: var(--editor-link, var(--editor-string, var(--editor-foreground)));
+  text-decoration: underline;
+}
+.tok-definition {
+  font-weight: 600;
+}
+.tok-local {
+  text-decoration: underline;
+}
+
 .xterm {
   height: 100%;
   padding: 0 !important;

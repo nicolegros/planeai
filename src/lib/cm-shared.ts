@@ -7,12 +7,8 @@ import {
 } from "@codemirror/view";
 import { Compartment } from "@codemirror/state";
 import { languages } from "@codemirror/language-data";
-import {
-  LanguageDescription,
-  syntaxHighlighting,
-  defaultHighlightStyle,
-  foldGutter,
-} from "@codemirror/language";
+import { LanguageDescription, syntaxHighlighting, foldGutter } from "@codemirror/language";
+import { classHighlighter } from "@lezer/highlight";
 
 export const fontCompartment = new Compartment();
 export const themeCompartment = new Compartment();
@@ -24,7 +20,7 @@ export const baseExtensions = [
   drawSelection(),
   highlightActiveLine(),
   highlightActiveLineGutter(),
-  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  syntaxHighlighting(classHighlighter),
 ];
 
 export const darkTheme = EditorView.theme(

@@ -73,6 +73,17 @@ export const DEFAULT_THEME_CSS = `:root {
   --editor-deleted: #cf222e;
   --editor-added-bg: #d4f8db;
   --editor-deleted-bg: #fdd8d8;
+  --editor-keyword: #cf222e;
+  --editor-string: #0a3069;
+  --editor-comment: #6e7781;
+  --editor-number: #0550ae;
+  --editor-variable: #24292f;
+  --editor-type: #8250df;
+  --editor-function: #8250df;
+  --editor-property: #0550ae;
+  --editor-operator: #cf222e;
+  --editor-punctuation: #24292f;
+  --editor-meta: #1b7c83;
 }
 .dark {
   --color-surface-50: hsl(0 0% 95%);
@@ -125,6 +136,17 @@ export const DEFAULT_THEME_CSS = `:root {
   --editor-deleted: #ff7b72;
   --editor-added-bg: #1a3d2a;
   --editor-deleted-bg: #3d1a1a;
+  --editor-keyword: #ff7b72;
+  --editor-string: #a5d6ff;
+  --editor-comment: #8b949e;
+  --editor-number: #79c0ff;
+  --editor-variable: #f2f2f2;
+  --editor-type: #d2a8ff;
+  --editor-function: #d2a8ff;
+  --editor-property: #79c0ff;
+  --editor-operator: #ff7b72;
+  --editor-punctuation: #f2f2f2;
+  --editor-meta: #56d4dd;
 }`;
 
 export function injectTheme(css: string): void {
