@@ -44,6 +44,8 @@
     tab_count: number;
     base_branch: string | null;
     task_key: string | null;
+    pr_url: string | null;
+    pr_state: string | null;
   }
 
   let projects = $state<Project[]>([]);
@@ -349,8 +351,15 @@
       if (event.payload.state === "Idle") {
         console.log("[notify] playing task complete sound");
         playTaskComplete();
-        invoke("fire_task_notify_hook", { sessionId: event.payload.session_id }).catch(() => {});
+        invoke("fire_task_notify_hook", { sessionId: event.payload.session_id }).catch((err) => {
+          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
+        });
       }
+    });
+
+    // Refresh sessions when PR poll detects changes
+    const unlistenPr = listen("sessions-changed", () => {
+      loadSessions();
     });
 
     const cleanup = installKeyboardRouter(
@@ -449,6 +458,7 @@
       unlistenSettings.then((fn) => fn());
       unlistenCleanup.then((fn) => fn());
       unlistenClose.then((fn) => fn());
+      unlistenPr.then((fn) => fn());
       exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
@@ -560,6 +570,7 @@
     projectName={activeProjectName}
     sessionName={activeSessionName}
     {sidebarVisible}
+    prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
     tabs={(() => {
       if (!activeSessionId) return [];
       const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: getSettings().default_provider || "Agent" } : t);

@@ -29,6 +29,8 @@ export interface TaskManager {
   on_notify?: LifecycleHook | null;
   on_restart?: LifecycleHook | null;
   on_complete?: LifecycleHook | null;
+  on_pr_open?: LifecycleHook | null;
+  on_pr_merge?: LifecycleHook | null;
 }
 
 export interface AppConfig {
@@ -48,6 +50,7 @@ export interface AppConfig {
   task_managers?: Record<string, TaskManager>;
   default_task_manager?: string | null;
   projects_base_path?: string | null;
+  pr_status?: string | null;
 }
 
 let config = $state<AppConfig>({

@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod git;
 mod notify;
+mod pr;
 mod pty;
 mod task_manager;
 mod template;
@@ -1317,6 +1318,42 @@ fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<Str
         .map(|p| p.path)
 }
 
+/// Check PR status for a single session and handle transitions.
+/// Returns Ok(true) if a state change was detected, Ok(false) if no change, Err on failure.
+fn poll_pr_for_session(
+    conn: &rusqlite::Connection,
+    cfg: &config::Config,
+    session: &db::Session,
+) -> Result<bool, String> {
+    let pr_cmd = match &cfg.pr_status {
+        Some(cmd) => cmd,
+        None => return Ok(false),
+    };
+    if !pr::is_poll_eligible(&session.status, session.pr_state.as_deref()) {
+        return Ok(false);
+    }
+    let cwd = match session_cwd(conn, session) {
+        Some(c) => c,
+        None => return Ok(false),
+    };
+    let status = match pr::check_pr_status(pr_cmd, &session.branch, std::path::Path::new(&cwd))? {
+        Some(s) => s,
+        None => return Ok(false),
+    };
+    let transition = pr::detect_transition(session.pr_state.as_deref(), &status);
+    // Persist new state
+    let _ = db::update_pr_state(conn, &session.id, &status.url, &status.state);
+    if let Some(ref t) = transition {
+        // Fire task hook if session has a task_key and task manager is configured
+        if let Some(ref task_key) = session.task_key {
+            if let Ok(tm) = resolve_task_manager(cfg) {
+                pr::fire_pr_hook(tm, t, task_key, std::path::Path::new(&cwd));
+            }
+        }
+    }
+    Ok(transition.is_some())
+}
+
 #[tauri::command]
 fn get_task_details(
     config_state: State<ConfigState>,
@@ -1338,12 +1375,14 @@ fn fire_task_notify_hook(
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     if session.task_key.is_some() {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         if let Some(cwd) = session_cwd(&conn, &session) {
             fire_task_hook(&cfg, &session, "on_notify", &cwd);
         }
     }
+    // Check PR status on idle — propagate errors
+    poll_pr_for_session(&conn, &cfg, &session)?;
     Ok(())
 }
 
@@ -1490,6 +1529,39 @@ fn main() {
             std::thread::spawn(|| {
                 tauri::async_runtime::block_on(list_monospace_fonts()).ok();
             });
+
+            // PR status background poll (every 2 minutes)
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(120));
+                    let db = app_handle.state::<DbState>();
+                    let cfg_state = app_handle.state::<ConfigState>();
+                    let Ok(conn) = db.0.lock() else { continue };
+                    let Ok(cfg) = cfg_state.0.lock() else {
+                        continue;
+                    };
+                    if cfg.pr_status.is_none() {
+                        continue;
+                    }
+                    let Ok(sessions) = db::list_sessions(&conn) else {
+                        continue;
+                    };
+                    let mut changed = false;
+                    for session in &sessions {
+                        match poll_pr_for_session(&conn, &cfg, session) {
+                            Ok(true) => changed = true,
+                            Err(e) => {
+                                let _ = app_handle.emit("cleanup-error", e);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if changed {
+                        let _ = app_handle.emit("sessions-changed", ());
+                    }
+                });
+            }
 
             Ok(())
         })

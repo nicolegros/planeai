@@ -112,6 +112,8 @@ mod tests {
             on_notify: None,
             on_restart: None,
             on_complete: None,
+            on_pr_open: None,
+            on_pr_merge: None,
         }
     }
 
@@ -162,6 +164,8 @@ mod tests {
             on_notify: None,
             on_restart: None,
             on_complete: None,
+            on_pr_open: None,
+            on_pr_merge: None,
         };
         let dir = tempdir().unwrap();
         let result = get_task(&tm, "X-1", dir.path());
@@ -184,6 +188,8 @@ mod tests {
             on_notify: None,
             on_restart: None,
             on_complete: None,
+            on_pr_open: None,
+            on_pr_merge: None,
         };
         let result = get_task(&tm, "X-1", dir.path());
         assert!(result.is_err());

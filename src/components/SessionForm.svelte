@@ -6,7 +6,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
 
   interface Project { id: string; name: string; path: string; }
-  interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; tab_count: number; base_branch: string | null; task_key: string | null; }
+  interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; backend: string; tab_count: number; base_branch: string | null; task_key: string | null; pr_url: string | null; pr_state: string | null; }
   interface TaskItem { key: string; title: string; status: string; description: string; priority: number; blocked_by: string[]; }
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
   interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
