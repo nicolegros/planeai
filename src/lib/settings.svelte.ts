@@ -47,6 +47,7 @@ export interface AppConfig {
   vim_mode?: boolean | null;
   task_managers?: Record<string, TaskManager>;
   default_task_manager?: string | null;
+  projects_base_path?: string | null;
 }
 
 let config = $state<AppConfig>({

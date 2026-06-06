@@ -16,6 +16,8 @@ pub struct Config {
     pub task_managers: HashMap<String, TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_task_manager: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projects_base_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -185,6 +187,7 @@ impl Default for Config {
             vim_mode: None,
             task_managers: HashMap::new(),
             default_task_manager: None,
+            projects_base_path: None,
         }
     }
 }
@@ -254,6 +257,18 @@ pub fn migrate_from_db(config_dir: &Path, settings: &crate::db::Settings) -> Res
     config.terminal.font_size = settings.font_size;
     config.terminal.font_family = settings.font_family.clone();
     save(config_dir, &config)
+}
+
+/// Normalize a base path: expand leading `~` to the user's home directory and strip trailing slash.
+pub fn normalize_base_path(raw: &str) -> String {
+    let expanded = if raw.starts_with("~/") {
+        format!("{}{}", home_dir(), &raw[1..])
+    } else if raw == "~" {
+        home_dir()
+    } else {
+        raw.to_string()
+    };
+    expanded.trim_end_matches('/').to_string()
 }
 
 /// Build the full launch command for a provider, optionally appending the yolo flag.
@@ -439,6 +454,7 @@ mod tests {
             vim_mode: None,
             task_managers: HashMap::new(),
             default_task_manager: None,
+            projects_base_path: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -1088,5 +1104,24 @@ mod tests {
         if let Some(h) = original_home {
             std::env::set_var("HOME", h);
         }
+    }
+
+    #[test]
+    fn normalize_base_path_expands_tilde() {
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", "/Users/testuser");
+
+        let result = normalize_base_path("~/Developer");
+        assert_eq!(result, "/Users/testuser/Developer");
+
+        if let Some(h) = original_home {
+            std::env::set_var("HOME", h);
+        }
+    }
+
+    #[test]
+    fn normalize_base_path_strips_trailing_slash() {
+        let result = normalize_base_path("/Users/testuser/Developer/");
+        assert_eq!(result, "/Users/testuser/Developer");
     }
 }

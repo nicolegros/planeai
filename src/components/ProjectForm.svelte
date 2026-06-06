@@ -5,6 +5,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { nameFromPath } from "../lib/name-from-path";
+  import { getSettings } from "../lib/settings.svelte";
   import { Button, Input, Label } from "./ui";
 
   interface Props {
@@ -14,7 +15,10 @@
 
   let { onCreated, onCancel }: Props = $props();
 
-  let path = $state("");
+  const config = $derived(getSettings());
+  const basePath = $derived(config.projects_base_path);
+
+  let path = $state(getSettings().projects_base_path ? getSettings().projects_base_path + "/" : "");
   let name = $state("");
   let nameManuallyEdited = $state(false);
   let error = $state("");
@@ -31,7 +35,7 @@
   });
 
   async function pickFolder() {
-    const selected = await open({ directory: true, multiple: false });
+    const selected = await open({ directory: true, multiple: false, defaultPath: basePath ?? undefined });
     if (selected) {
       path = selected as string;
       name = nameFromPath(path);
