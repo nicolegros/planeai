@@ -78,6 +78,17 @@
   --editor-deleted: #de3e35;
   --editor-added-bg: #d4f8db;
   --editor-deleted-bg: #fdd8d8;
+  --editor-keyword: #a626a4;
+  --editor-string: #50a14f;
+  --editor-comment: #a0a1a7;
+  --editor-number: #986801;
+  --editor-variable: #383a42;
+  --editor-type: #c18401;
+  --editor-function: #4078f2;
+  --editor-property: #4078f2;
+  --editor-operator: #0184bc;
+  --editor-punctuation: #383a42;
+  --editor-meta: #a626a4;
 }
 
 .dark {
@@ -136,4 +147,15 @@
   --editor-deleted: #e06c75;
   --editor-added-bg: #2a3d2a;
   --editor-deleted-bg: #3d2a2a;
+  --editor-keyword: #c678dd;
+  --editor-string: #98c379;
+  --editor-comment: #5c6370;
+  --editor-number: #d19a66;
+  --editor-variable: #abb2bf;
+  --editor-type: #e5c07b;
+  --editor-function: #61afef;
+  --editor-property: #61afef;
+  --editor-operator: #56b6c2;
+  --editor-punctuation: #abb2bf;
+  --editor-meta: #c678dd;
 }

@@ -82,10 +82,20 @@
   --editor-deleted: #d20f39;
   --editor-added-bg: #d2f0cd;
   --editor-deleted-bg: #f5d0d6;
+  --editor-keyword: #8839ef;
+  --editor-string: #40a02b;
+  --editor-comment: #9ca0b0;
+  --editor-number: #fe640b;
+  --editor-variable: #4c4f69;
+  --editor-type: #df8e1d;
+  --editor-function: #1e66f5;
+  --editor-property: #1e66f5;
+  --editor-operator: #179299;
+  --editor-punctuation: #5c5f77;
+  --editor-meta: #8839ef;
 }
 
 .dark {
-  /* Surface — Macchiato palette */
   --color-surface-50: #cad3f5; /* Text */
   --color-surface-100: #b8c0e0; /* Subtext 1 */
   --color-surface-200: #a5adcb; /* Subtext 0 */
@@ -142,4 +152,15 @@
   --editor-deleted: #ed8796;
   --editor-added-bg: #2a3f2a;
   --editor-deleted-bg: #3f2a2e;
+  --editor-keyword: #c6a0f6;
+  --editor-string: #a6da95;
+  --editor-comment: #6e738d;
+  --editor-number: #f5a97f;
+  --editor-variable: #cad3f5;
+  --editor-type: #eed49f;
+  --editor-function: #8aadf4;
+  --editor-property: #8aadf4;
+  --editor-operator: #8bd5ca;
+  --editor-punctuation: #939ab7;
+  --editor-meta: #c6a0f6;
 }

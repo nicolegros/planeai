@@ -79,6 +79,17 @@
   --editor-deleted: #ff5555;
   --editor-added-bg: #d4f8db;
   --editor-deleted-bg: #fdd8d8;
+  --editor-keyword: #d63384;
+  --editor-string: #50fa7b;
+  --editor-comment: #6272a4;
+  --editor-number: #bd93f9;
+  --editor-variable: #282a36;
+  --editor-type: #8be9fd;
+  --editor-function: #50fa7b;
+  --editor-property: #66d9ef;
+  --editor-operator: #ff79c6;
+  --editor-punctuation: #282a36;
+  --editor-meta: #f1fa8c;
 }
 
 .dark {
@@ -137,4 +148,15 @@
   --editor-deleted: #ff5555;
   --editor-added-bg: #1a3d2a;
   --editor-deleted-bg: #3d1a1a;
+  --editor-keyword: #ff79c6;
+  --editor-string: #f1fa8c;
+  --editor-comment: #6272a4;
+  --editor-number: #bd93f9;
+  --editor-variable: #f8f8f2;
+  --editor-type: #8be9fd;
+  --editor-function: #50fa7b;
+  --editor-property: #66d9ef;
+  --editor-operator: #ff79c6;
+  --editor-punctuation: #f8f8f2;
+  --editor-meta: #f1fa8c;
 }

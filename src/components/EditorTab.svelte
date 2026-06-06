@@ -14,6 +14,8 @@
     isDarkTheme,
     detectLanguageFromPath,
   } from "../lib/cm-shared";
+  import { syntaxHighlighting } from "@codemirror/language";
+  import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
 
@@ -73,6 +75,7 @@
         ])),
         ...(useVim ? [vim()] : []),
         basicSetup,
+        syntaxHighlighting(classHighlighter),
         ...(useVim ? [] : [keymap.of(defaultKeymap)]),
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
