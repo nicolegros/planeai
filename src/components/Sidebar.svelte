@@ -184,30 +184,34 @@
                   {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
                   {#if session.task_key}<span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{session.task_key}</span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
-                  {#if session.pr_url}
-                    <button
-                      class="ml-auto shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
-                      title="Open PR ({session.pr_state})"
-                      tabindex="-1"
-                      onmousedown={(e: MouseEvent) => e.preventDefault()}
-                      onclick={(e: MouseEvent) => { e.stopPropagation(); openUrl(session.pr_url!); }}
-                    >
-                      {#if session.pr_state === "merged"}
-                        <GitMerge class="size-3.5" />
-                      {:else}
-                        <GitPullRequest class="size-3.5" />
+                  {#if session.pr_url || session.status === 'exited' || agentStates[session.id]}
+                    <span class="ml-auto shrink-0 flex items-center gap-1">
+                      {#if session.pr_url}
+                        <button
+                          class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
+                          title="Open PR ({session.pr_state})"
+                          tabindex="-1"
+                          onmousedown={(e: MouseEvent) => e.preventDefault()}
+                          onclick={(e: MouseEvent) => { e.stopPropagation(); openUrl(session.pr_url!); }}
+                        >
+                          {#if session.pr_state === "merged"}
+                            <GitMerge class="size-3.5" />
+                          {:else}
+                            <GitPullRequest class="size-3.5" />
+                          {/if}
+                        </button>
                       {/if}
-                    </button>
-                  {/if}
-                  {#if session.status === 'exited'}
-                    <span class="ml-auto shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
-                  {:else if agentStates[session.id] === 'Busy'}
-                    <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
-                      <LoaderCircle class="size-3.5" />
-                    </span>
-                  {:else if agentStates[session.id] === 'Idle'}
-                    <span class="ml-auto shrink-0 size-3.5 animate-pulse text-amber-500" title="Needs attention">
-                      <Lightbulb class="size-3.5" />
+                      {#if session.status === 'exited'}
+                        <span class="shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
+                      {:else if agentStates[session.id] === 'Busy'}
+                        <span class="shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
+                          <LoaderCircle class="size-3.5" />
+                        </span>
+                      {:else if agentStates[session.id] === 'Idle'}
+                        <span class="shrink-0 size-3.5 animate-pulse text-amber-500" title="Needs attention">
+                          <Lightbulb class="size-3.5" />
+                        </span>
+                      {/if}
                     </span>
                   {/if}
                 </button>
