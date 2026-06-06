@@ -371,9 +371,17 @@ fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
 #[tauri::command]
 fn update_config(
     state: State<ConfigState>,
-    new_config: config::Config,
+    mut new_config: config::Config,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    if let Some(ref raw) = new_config.projects_base_path {
+        let normalized = config::normalize_base_path(raw);
+        new_config.projects_base_path = if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        };
+    }
     let config_dir = config::config_dir(&app.package_info().name);
     config::save(&config_dir, &new_config)?;
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;

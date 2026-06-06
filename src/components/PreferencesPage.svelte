@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
-  import { Select, Input } from "./ui";
+  import { Select, Input, Button } from "./ui";
   import { Palette, Bot, ListTodo, Settings } from "@lucide/svelte";
 
   const config = $derived(getSettings());
@@ -51,6 +52,13 @@
 
   function setVimMode(enabled: boolean) {
     updateSettings({ vim_mode: enabled } as Partial<AppConfig>);
+  }
+
+  async function pickProjectsBasePath() {
+    const selected = await open({ directory: true, multiple: false, defaultPath: config.projects_base_path ?? undefined });
+    if (selected) {
+      updateSettings({ projects_base_path: selected as string } as Partial<AppConfig>);
+    }
   }
 
   function setAppearance(mode: AppearanceMode) {
@@ -488,6 +496,20 @@
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>
       </div>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Projects Base Path</h2>
+      <div class="flex gap-2">
+        <Input
+          value={config.projects_base_path ?? ""}
+          onchange={(e) => updateSettings({ projects_base_path: e.currentTarget.value || null } as Partial<AppConfig>)}
+          placeholder="e.g. ~/Developer"
+          class="flex-1 font-mono"
+        />
+        <Button type="button" onclick={pickProjectsBasePath}>Browse</Button>
+      </div>
+      <p class="text-xs text-surface-500 dark:text-surface-400">Default directory for the project file picker and path pre-fill.</p>
     </section>
     {/if}
   </div>
