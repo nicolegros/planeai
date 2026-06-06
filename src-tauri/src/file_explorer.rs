@@ -1,9 +1,14 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+
+const DEBOUNCE_MS: u64 = 200;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DirEntry {
@@ -34,18 +39,40 @@ impl WatcherManager {
         sender: mpsc::Sender<FsEvent>,
     ) -> Result<(), String> {
         let sid = session_id.to_string();
+        let pending: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let pending_clone = pending.clone();
+        let sender_clone = sender.clone();
+        let sid_clone = sid.clone();
+
+        // Debounce thread: flushes accumulated paths every DEBOUNCE_MS
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(DEBOUNCE_MS));
+                let paths: Vec<String> = {
+                    let mut set = pending_clone.lock().unwrap();
+                    if set.is_empty() { continue; }
+                    let drained: Vec<String> = set.drain().collect();
+                    drained
+                };
+                for p in paths {
+                    let _ = sender_clone.send(FsEvent {
+                        session_id: sid_clone.clone(),
+                        path: p,
+                    });
+                }
+            }
+        });
+
         let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
+                let mut set = pending.lock().unwrap();
                 for p in event.paths {
-                    let _ = sender.send(FsEvent {
-                        session_id: sid.clone(),
-                        path: p.to_string_lossy().into_owned(),
-                    });
+                    set.insert(p.to_string_lossy().into_owned());
                 }
             }
         }).map_err(|e| e.to_string())?;
 
-        watcher.watch(Path::new(path), RecursiveMode::NonRecursive)
+        watcher.watch(Path::new(path), RecursiveMode::Recursive)
             .map_err(|e| e.to_string())?;
 
         self.watchers.insert(session_id.to_string(), watcher);
@@ -102,6 +129,7 @@ pub fn list_directory(path: &str) -> Result<Vec<DirEntry>, String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use std::collections::HashSet;
     use std::fs;
     use std::sync::mpsc;
 
@@ -197,6 +225,10 @@ mod tests {
     fn watch_directory_emits_event_on_file_create() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
+        // Create a subdirectory to test recursive watching
+        let subdir = root.join("nested");
+        fs::create_dir(&subdir).unwrap();
+
         let (tx, rx) = mpsc::channel();
 
         let mut manager = WatcherManager::new();
@@ -205,13 +237,44 @@ mod tests {
         // Give watcher time to set up
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        fs::write(root.join("watched.txt"), "hello").unwrap();
+        // Write in a nested subdirectory (tests recursive mode)
+        fs::write(subdir.join("deep.txt"), "hello").unwrap();
 
-        // Wait for event (with timeout)
+        // Wait for debounced event (200ms debounce + margin)
         let event = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         assert_eq!(event.session_id, "session-1");
-        assert!(event.path.contains("watched.txt"));
+        assert!(event.path.contains("deep.txt"));
 
         manager.unwatch("session-1");
+    }
+
+    #[test]
+    fn watch_debounces_rapid_changes() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let (tx, rx) = mpsc::channel();
+
+        let mut manager = WatcherManager::new();
+        manager.watch("session-2", root.to_str().unwrap(), tx).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Rapid-fire writes to the same file
+        for i in 0..5 {
+            fs::write(root.join("rapid.txt"), format!("v{i}")).unwrap();
+        }
+
+        // Collect events over 500ms — should be deduplicated to 1 path
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let mut paths: Vec<String> = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            paths.push(event.path);
+        }
+        // All events should reference the same file, deduplicated to 1
+        let unique: HashSet<&String> = paths.iter().collect();
+        assert_eq!(unique.len(), 1);
+        assert!(paths[0].contains("rapid.txt"));
+
+        manager.unwatch("session-2");
     }
 }
