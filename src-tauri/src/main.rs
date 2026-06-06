@@ -1223,7 +1223,7 @@ fn launch_session(
     let (working_dir, worktree_path) = if use_worktree {
         let base = base_branch.as_deref().unwrap_or("main");
         let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-        let sanitized_project = project_name.replace(' ', "-").to_lowercase();
+        let sanitized_project = sanitize_project_name(&project_name);
         let home = config::home_dir();
         let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
         std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
@@ -1543,4 +1543,50 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn sanitize_project_name(name: &str) -> String {
+    name.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .replace(' ', "-")
+        .replace([':', '?', '*', '<', '>', '|', '"'], "")
+        .to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_windows_absolute_path() {
+        assert_eq!(
+            sanitize_project_name(r"C:\Users\nic\Developer\my-project"),
+            "my-project"
+        );
+    }
+
+    #[test]
+    fn sanitize_unix_path() {
+        assert_eq!(sanitize_project_name("/home/user/my-project"), "my-project");
+    }
+
+    #[test]
+    fn sanitize_trailing_slash() {
+        assert_eq!(
+            sanitize_project_name("/home/user/my-project/"),
+            "my-project"
+        );
+    }
+
+    #[test]
+    fn sanitize_spaces() {
+        assert_eq!(sanitize_project_name("My Cool Project"), "my-cool-project");
+    }
+
+    #[test]
+    fn sanitize_plain_name() {
+        assert_eq!(sanitize_project_name("planeai"), "planeai");
+    }
 }
