@@ -25,6 +25,8 @@ pub struct Session {
     pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
+    pub pr_url: Option<String>,
+    pub pr_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +166,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // Add mru_position column (nullable — NULL means "not yet ordered")
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
 
+    // Add pr_url and pr_state columns for PR integration
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_url TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_state TEXT");
+
     Ok(())
 }
 
@@ -245,7 +251,7 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE project_id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE project_id = ?1")?;
     let rows = stmt.query_map(params![project_id], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -263,6 +269,8 @@ pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<S
             auto_approve: row.get(12)?,
             task_key: row.get(13)?,
             base_branch: row.get(14)?,
+            pr_url: row.get(15)?,
+            pr_state: row.get(16)?,
         })
     })?;
     rows.collect()
@@ -331,11 +339,13 @@ pub fn create_session_with_id(
         auto_approve,
         task_key: task_key.map(|s| s.to_string()),
         base_branch: base_branch.map(|s| s.to_string()),
+        pr_url: None,
+        pr_state: None,
     })
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -353,13 +363,15 @@ pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
             auto_approve: row.get(12)?,
             task_key: row.get(13)?,
             base_branch: row.get(14)?,
+            pr_url: row.get(15)?,
+            pr_state: row.get(16)?,
         })
     })?;
     rows.collect()
 }
 
 pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE status = 'archived'")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE status = 'archived'")?;
     let rows = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -377,6 +389,8 @@ pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
             auto_approve: row.get(12)?,
             task_key: row.get(13)?,
             base_branch: row.get(14)?,
+            pr_url: row.get(15)?,
+            pr_state: row.get(16)?,
         })
     })?;
     rows.collect()
@@ -516,7 +530,7 @@ pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch FROM sessions WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE id = ?1")?;
     let mut rows = stmt.query_map(params![id], |row| {
         Ok(Session {
             id: row.get(0)?,
@@ -534,9 +548,19 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
             auto_approve: row.get(12)?,
             task_key: row.get(13)?,
             base_branch: row.get(14)?,
+            pr_url: row.get(15)?,
+            pr_state: row.get(16)?,
         })
     })?;
     rows.next().transpose()
+}
+
+pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET pr_url = ?1, pr_state = ?2 WHERE id = ?3",
+        params![pr_url, pr_state, id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1222,5 +1246,45 @@ mod tests {
         assert_eq!(pos_c, Some(0));
         assert_eq!(pos_a, None);
         assert_eq!(pos_b, None);
+    }
+
+    #[test]
+    fn test_pr_state_round_trips_through_update_and_get() {
+        let conn = setup();
+        let proj = create_project(&conn, "test", "/tmp/test").unwrap();
+        let session =
+            create_session(&conn, &proj.id, "feat", "tmux-1", "feat/pr-test", None).unwrap();
+
+        // Initially null
+        let s = get_session(&conn, &session.id).unwrap().unwrap();
+        assert_eq!(s.pr_url, None);
+        assert_eq!(s.pr_state, None);
+
+        // Update
+        update_pr_state(
+            &conn,
+            &session.id,
+            "https://github.com/org/repo/pull/42",
+            "open",
+        )
+        .unwrap();
+
+        let s = get_session(&conn, &session.id).unwrap().unwrap();
+        assert_eq!(
+            s.pr_url.as_deref(),
+            Some("https://github.com/org/repo/pull/42")
+        );
+        assert_eq!(s.pr_state.as_deref(), Some("open"));
+
+        // Update again (state transition)
+        update_pr_state(
+            &conn,
+            &session.id,
+            "https://github.com/org/repo/pull/42",
+            "merged",
+        )
+        .unwrap();
+        let s = get_session(&conn, &session.id).unwrap().unwrap();
+        assert_eq!(s.pr_state.as_deref(), Some("merged"));
     }
 }

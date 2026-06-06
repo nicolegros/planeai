@@ -1,5 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { GitPullRequest } from "@lucide/svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -9,12 +11,13 @@
     sidebarVisible: boolean;
     tabs: Tab[];
     activeTabIndex: number;
+    prUrl: string | null;
     onSelectTab: (index: number) => void;
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, onSelectTab, onCloseTab, onAddTab }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, onSelectTab, onCloseTab, onAddTab }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
 </script>
@@ -38,4 +41,17 @@
     </div>
     <div class="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface-100 dark:from-surface-900 to-transparent"></div>
   </div>
+
+  {#if prUrl}
+    <button
+      class="ml-2 mr-3 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+      title="Open pull request"
+      tabindex="-1"
+      onmousedown={(e: MouseEvent) => e.preventDefault()}
+      onclick={() => openUrl(prUrl!)}
+    >
+      <GitPullRequest class="size-3.5" />
+      <span>Open PR</span>
+    </button>
+  {/if}
 </header>

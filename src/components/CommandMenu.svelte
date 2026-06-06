@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Command, Dialog } from "bits-ui";
   import { invoke } from "@tauri-apps/api/core";
+  import { openUrl } from "@tauri-apps/plugin-opener";
 
   interface Session {
     id: string;
@@ -14,6 +15,7 @@
     backend: string;
     tab_count: number;
     base_branch: string | null;
+    pr_url: string | null;
   }
 
   interface Project {
@@ -427,6 +429,15 @@
                   onSelect={() => { onToggleDiff(); close(); }}
                 >
                   View branch diff
+                </Command.Item>
+                <Command.Item
+                  value="open pull request"
+                  keywords={["pr", "pull request", "github", "link", "review"]}
+                  disabled={!sessions.find(s => s.id === activeSessionId)?.pr_url}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { const url = sessions.find(s => s.id === activeSessionId)?.pr_url; if (url) openUrl(url); close(); }}
+                >
+                  Open pull request
                 </Command.Item>
                 <Command.Item
                   value="archived sessions"

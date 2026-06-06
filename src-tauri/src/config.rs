@@ -18,6 +18,8 @@ pub struct Config {
     pub default_task_manager: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -104,6 +106,10 @@ pub struct TaskManager {
     pub on_restart: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_complete: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_pr_open: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_pr_merge: Option<LifecycleHook>,
 }
 
 /// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
@@ -188,6 +194,7 @@ impl Default for Config {
             task_managers: HashMap::new(),
             default_task_manager: None,
             projects_base_path: None,
+            pr_status: None,
         }
     }
 }
@@ -455,6 +462,7 @@ mod tests {
             task_managers: HashMap::new(),
             default_task_manager: None,
             projects_base_path: None,
+            pr_status: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -1123,5 +1131,20 @@ mod tests {
     fn normalize_base_path_strips_trailing_slash() {
         let result = normalize_base_path("/Users/testuser/Developer/");
         assert_eq!(result, "/Users/testuser/Developer");
+    }
+
+    #[test]
+    fn pr_status_round_trips_through_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config {
+            pr_status: Some("gh pr view {branch} --json url,state".to_string()),
+            ..Config::default()
+        };
+
+        save(dir.path(), &config).unwrap();
+        let (loaded, warnings) = load(dir.path());
+
+        assert_eq!(loaded.pr_status, config.pr_status);
+        assert!(warnings.is_empty());
     }
 }

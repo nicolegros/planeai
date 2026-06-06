@@ -377,6 +377,16 @@
     {/if}
 
     {#if activeTab === "Task Management"}
+    <!-- PR Integration -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Pull Request Integration</h2>
+      <div class="space-y-1">
+        <!-- svelte-ignore a11y_label_has_associated_control -->
+        <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">PR status command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Command to check PR status for a branch. Must output JSON with "url" and "state" (open/merged/closed). Non-zero exit = no PR. Variable: {"{branch}"}</span></span></label>
+        <Input value={config.pr_status || ""} onchange={(e) => updateSettings({ pr_status: e.currentTarget.value || null } as Partial<AppConfig>)} class="font-mono" placeholder={"gh pr view {branch} --json url,state,isDraft"} />
+      </div>
+    </section>
+
     <!-- Task Managers -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Task Manager</h2>
@@ -428,7 +438,7 @@
             </div>
 
             <!-- Lifecycle hooks -->
-            {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."]] as [hookKey, label, defaultVal, desc]}
+            {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."], ["on_pr_open", "On PR open", "in_review", "Fires when a pull request is opened for this session's branch."], ["on_pr_merge", "On PR merge", "done", "Fires when the pull request is merged."]] as [hookKey, label, defaultVal, desc]}
               <div class="space-y-1">
                 <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>

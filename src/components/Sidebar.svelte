@@ -3,7 +3,8 @@
   import { MOD_LABEL } from "../lib/keyboard";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
-  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings } from "@lucide/svelte";
+  import { openUrl } from "@tauri-apps/plugin-opener";
+  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge } from "@lucide/svelte";
 
   interface Project {
     id: string;
@@ -24,6 +25,8 @@
     tab_count: number;
     base_branch: string | null;
     task_key: string | null;
+    pr_url: string | null;
+    pr_state: string | null;
   }
 
   interface Props {
@@ -181,6 +184,21 @@
                   {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
                   {#if session.task_key}<span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{session.task_key}</span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
+                  {#if session.pr_url}
+                    <button
+                      class="ml-auto shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
+                      title="Open PR ({session.pr_state})"
+                      tabindex="-1"
+                      onmousedown={(e: MouseEvent) => e.preventDefault()}
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); openUrl(session.pr_url!); }}
+                    >
+                      {#if session.pr_state === "merged"}
+                        <GitMerge class="size-3.5" />
+                      {:else}
+                        <GitPullRequest class="size-3.5" />
+                      {/if}
+                    </button>
+                  {/if}
                   {#if session.status === 'exited'}
                     <span class="ml-auto shrink-0 text-[10px] font-medium text-surface-500 dark:text-surface-400 bg-surface-200 dark:bg-surface-800 rounded px-1" title="{session.backend} session exited">exited</span>
                   {:else if agentStates[session.id] === 'Busy'}
