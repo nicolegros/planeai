@@ -287,12 +287,12 @@
 {#if visible}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <aside
-  class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-hidden"
+  class="relative shrink-0 flex flex-col border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-hidden"
   style:width="{panelWidth}px"
   onclick={onFocus}
   onkeydown={handleKeydown}
 >
-  <ResizeHandle side="right" bind:width={panelWidth} min={140} max={500} defaultWidth={220} onResizeEnd={(w) => setLayoutWidth("file-explorer", w)} />
+  <ResizeHandle side="left" bind:width={panelWidth} min={140} max={500} defaultWidth={220} onResizeEnd={(w) => setLayoutWidth("file-explorer", w)} />
 
   <!-- Header -->
   <div class="flex items-center justify-between px-3 py-2 border-b border-surface-200 dark:border-surface-800">
