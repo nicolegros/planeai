@@ -14,12 +14,13 @@ export function getCycleState() {
 }
 
 /** Begin a cycle. Returns false if nothing to switch to. */
-export function startCycle(currentSessionId: string | undefined): boolean {
+export function startCycle(currentSessionId: string | undefined, validIds?: Set<string>): boolean {
   const mru = getMruList();
-  const others = mru.filter((id) => id !== currentSessionId);
+  const filtered = validIds ? mru.filter((id) => validIds.has(id)) : mru;
+  const others = filtered.filter((id) => id !== currentSessionId);
   if (others.length === 0) return false;
 
-  const current = currentSessionId && mru.includes(currentSessionId) ? currentSessionId : null;
+  const current = currentSessionId && filtered.includes(currentSessionId) ? currentSessionId : null;
   cycleList = current ? [...others, current] : [...others];
   originSessionId = currentSessionId ?? null;
   index = 0;

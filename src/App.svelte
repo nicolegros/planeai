@@ -373,6 +373,9 @@
 
     // Refresh sessions when PR poll detects changes
     const unlistenPr = listen("sessions-changed", () => {
+      // Defer reload while tab-switching to avoid reactive re-renders
+      // that could disrupt the overlay
+      if (getCycleState().isCycling) return;
       loadSessions();
     });
 
@@ -399,14 +402,16 @@
       } else if (action.type === "tab_switch") {
         const switcher = getCycleState();
         if (!switcher.isCycling) {
-          startCycle(activeSessionId ?? undefined);
+          const validIds = new Set(sessions.map((s) => s.id));
+          startCycle(activeSessionId ?? undefined, validIds);
         } else {
           advance(1);
         }
       } else if (action.type === "tab_switch_reverse") {
         const switcher = getCycleState();
         if (!switcher.isCycling) {
-          startCycle(activeSessionId ?? undefined);
+          const validIds = new Set(sessions.map((s) => s.id));
+          startCycle(activeSessionId ?? undefined, validIds);
           // After startCycle, index is 0 (next MRU). For reverse, go to end.
           advance(-1);
         } else {
@@ -457,7 +462,7 @@
     // Listen for Ctrl release to commit tab switch
     function onKeyUp(e: KeyboardEvent) {
       const switcher = getCycleState();
-      if (e.key === "Control" && switcher.isCycling) {
+      if (e.key === "Control" && !e.ctrlKey && switcher.isCycling) {
         const target = commit();
         if (target) selectSession(target);
         focusTerminal();
@@ -465,8 +470,11 @@
     }
 
     function onBlur() {
-      const switcher = getCycleState();
-      if (switcher.isCycling) cancel();
+      // Only cancel if the document genuinely lost focus.
+      // WebKit/Tauri can fire spurious blur events during DOM re-renders.
+      setTimeout(() => {
+        if (!document.hasFocus() && getCycleState().isCycling) cancel();
+      }, 0);
     }
 
     window.addEventListener("keyup", onKeyUp);
