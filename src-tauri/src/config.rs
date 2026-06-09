@@ -126,8 +126,12 @@ pub struct AutoDispatchConfig {
     pub terminal_states: Option<Vec<String>>,
 }
 
-fn default_poll_interval() -> u64 { 30000 }
-fn default_max_concurrent() -> usize { 3 }
+fn default_poll_interval() -> u64 {
+    30000
+}
+fn default_max_concurrent() -> usize {
+    3
+}
 
 /// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
 pub fn home_dir() -> String {

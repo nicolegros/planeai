@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+use tokio_util::sync::CancellationToken;
 
 /// Backend that records dispatched sessions.
 #[derive(Default)]
@@ -15,18 +16,36 @@ struct TestBackend {
 }
 
 impl Backend for TestBackend {
-    fn create_worktree(&self, _repo: &str, path: &str, _branch: &str, _base: &str) -> Result<(), String> {
+    fn create_worktree(
+        &self,
+        _repo: &str,
+        path: &str,
+        _branch: &str,
+        _base: &str,
+    ) -> Result<(), String> {
         self.worktrees.lock().unwrap().push(path.to_string());
         Ok(())
     }
-    fn create_tmux_session(&self, _name: &str, _cwd: &str, _cmd: &str, _sid: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        _name: &str,
+        _cwd: &str,
+        _cmd: &str,
+        _sid: &str,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         self.sessions.lock().unwrap().push(session.clone());
         Ok(())
     }
-    fn run_move_task(&self, _cfg: &TaskManagerConfig, _key: &str, _status: &str, _cwd: &Path) -> Result<(), String> {
+    fn run_move_task(
+        &self,
+        _cfg: &TaskManagerConfig,
+        _key: &str,
+        _status: &str,
+        _cwd: &Path,
+    ) -> Result<(), String> {
         Ok(())
     }
     fn notify_gui(&self, _session_id: &str) -> Result<(), String> {
@@ -68,7 +87,9 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
                 get_task: String::new(),
                 move_task: String::new(),
                 terminal_states: vec!["done".to_string()],
-                on_start: Some(LifecycleHook { move_to: "in_progress".to_string() }),
+                on_start: Some(LifecycleHook {
+                    move_to: "in_progress".to_string(),
+                }),
             },
             dispatch_config: planeai_core::session::DispatchConfig {
                 provider: "kiro".to_string(),
@@ -88,9 +109,7 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
     let orchestrator = Orchestrator::new(config, backend.clone());
 
     // Spawn orchestrator in background
-    let handle = tokio::spawn(async move {
-        orchestrator.run().await
-    });
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
 
     // Wait for at least one poll tick to fire
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -185,14 +204,28 @@ fi
     }
 
     impl Backend for KillTrackingBackend {
-        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
             self.sessions.lock().unwrap().push(session.clone());
             Ok(())
         }
-        fn run_move_task(&self, _: &TaskManagerConfig, _: &str, _: &str, _: &Path) -> Result<(), String> { Ok(()) }
-        fn notify_gui(&self, _: &str) -> Result<(), String> { Ok(()) }
+        fn run_move_task(
+            &self,
+            _: &TaskManagerConfig,
+            _: &str,
+            _: &str,
+            _: &Path,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify_gui(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn kill_session(&self, session: &NewSession) -> Result<(), String> {
             self.killed.lock().unwrap().push(session.task_key.clone());
             Ok(())
@@ -205,17 +238,21 @@ fi
     let backend = Arc::new(KillTrackingBackend::default());
     let orchestrator = Orchestrator::new(config, backend.clone());
 
-    let handle = tokio::spawn(async move { orchestrator.run().await });
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
 
     // Wait for dispatch + reconciliation (at least 3 ticks)
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     // Stop the orchestrator
     let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
-    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n").await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n")
+        .await
+        .unwrap();
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
-        .await.unwrap().unwrap();
+        .await
+        .unwrap()
+        .unwrap();
     assert!(result.is_ok());
 
     // Session was dispatched
@@ -280,15 +317,31 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
     }
 
     impl Backend for PreloadedBackend {
-        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
-        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
         fn insert_session(&self, session: &NewSession) -> Result<(), String> {
             self.dispatched.lock().unwrap().push(session.clone());
             Ok(())
         }
-        fn run_move_task(&self, _: &TaskManagerConfig, _: &str, _: &str, _: &Path) -> Result<(), String> { Ok(()) }
-        fn notify_gui(&self, _: &str) -> Result<(), String> { Ok(()) }
-        fn kill_session(&self, _: &NewSession) -> Result<(), String> { Ok(()) }
+        fn run_move_task(
+            &self,
+            _: &TaskManagerConfig,
+            _: &str,
+            _: &str,
+            _: &Path,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify_gui(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn kill_session(&self, _: &NewSession) -> Result<(), String> {
+            Ok(())
+        }
         fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
             // Simulate 2 sessions already running from a previous daemon lifecycle
             Ok(vec![
@@ -331,16 +384,20 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
     let backend = Arc::new(PreloadedBackend::default());
     let orchestrator = Orchestrator::new(config, backend.clone());
 
-    let handle = tokio::spawn(async move { orchestrator.run().await });
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
 
     // Wait for dispatch
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     // Stop
     let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
-    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n").await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n")
+        .await
+        .unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
-        .await.unwrap().unwrap();
+        .await
+        .unwrap()
+        .unwrap();
     assert!(result.is_ok());
 
     // With max_concurrent=3 and 2 pre-existing sessions (KAN-1, KAN-2),

@@ -14,15 +14,33 @@ struct RecordingBackend {
 }
 
 impl Backend for RecordingBackend {
-    fn create_worktree(&self, repo: &str, path: &str, branch: &str, base: &str) -> Result<(), String> {
+    fn create_worktree(
+        &self,
+        repo: &str,
+        path: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<(), String> {
         self.worktrees_created.lock().unwrap().push((
-            repo.to_string(), path.to_string(), branch.to_string(), base.to_string(),
+            repo.to_string(),
+            path.to_string(),
+            branch.to_string(),
+            base.to_string(),
         ));
         Ok(())
     }
-    fn create_tmux_session(&self, name: &str, cwd: &str, cmd: &str, session_id: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        name: &str,
+        cwd: &str,
+        cmd: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
         self.tmux_sessions.lock().unwrap().push((
-            name.to_string(), cwd.to_string(), cmd.to_string(), session_id.to_string(),
+            name.to_string(),
+            cwd.to_string(),
+            cmd.to_string(),
+            session_id.to_string(),
         ));
         Ok(())
     }
@@ -30,12 +48,24 @@ impl Backend for RecordingBackend {
         self.sessions_inserted.lock().unwrap().push(session.clone());
         Ok(())
     }
-    fn run_move_task(&self, _config: &TaskManagerConfig, key: &str, status: &str, _cwd: &Path) -> Result<(), String> {
-        self.task_moves.lock().unwrap().push((key.to_string(), status.to_string()));
+    fn run_move_task(
+        &self,
+        _config: &TaskManagerConfig,
+        key: &str,
+        status: &str,
+        _cwd: &Path,
+    ) -> Result<(), String> {
+        self.task_moves
+            .lock()
+            .unwrap()
+            .push((key.to_string(), status.to_string()));
         Ok(())
     }
     fn notify_gui(&self, session_id: &str) -> Result<(), String> {
-        self.gui_notified.lock().unwrap().push(session_id.to_string());
+        self.gui_notified
+            .lock()
+            .unwrap()
+            .push(session_id.to_string());
         Ok(())
     }
     fn kill_session(&self, _session: &NewSession) -> Result<(), String> {
@@ -55,7 +85,9 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         get_task: String::new(),
         move_task: "kanban move {key} {status}".to_string(),
         terminal_states: vec!["done".to_string()],
-        on_start: Some(LifecycleHook { move_to: "in_progress".to_string() }),
+        on_start: Some(LifecycleHook {
+            move_to: "in_progress".to_string(),
+        }),
     };
 
     let dispatch_config = DispatchConfig {

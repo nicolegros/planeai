@@ -7,10 +7,28 @@ use crate::template;
 /// Operations that interact with git, tmux, DB, and task manager CLI.
 /// Injected for testability.
 pub trait Backend: Send + Sync {
-    fn create_worktree(&self, repo: &str, path: &str, branch: &str, base: &str) -> Result<(), String>;
-    fn create_tmux_session(&self, name: &str, cwd: &str, cmd: &str, session_id: &str) -> Result<(), String>;
+    fn create_worktree(
+        &self,
+        repo: &str,
+        path: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<(), String>;
+    fn create_tmux_session(
+        &self,
+        name: &str,
+        cwd: &str,
+        cmd: &str,
+        session_id: &str,
+    ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
-    fn run_move_task(&self, config: &TaskManagerConfig, key: &str, status: &str, cwd: &Path) -> Result<(), String>;
+    fn run_move_task(
+        &self,
+        config: &TaskManagerConfig,
+        key: &str,
+        status: &str,
+        cwd: &Path,
+    ) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
@@ -58,11 +76,7 @@ pub struct SessionDispatcher {
 }
 
 impl SessionDispatcher {
-    pub fn dispatch(
-        &self,
-        task: &Task,
-        backend: &dyn Backend,
-    ) -> Result<NewSession, String> {
+    pub fn dispatch(&self, task: &Task, backend: &dyn Backend) -> Result<NewSession, String> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let short_id = &session_id.replace('-', "")[..8];
 

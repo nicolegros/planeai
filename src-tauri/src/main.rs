@@ -9,6 +9,7 @@ mod git;
 mod notify;
 mod pr;
 mod pty;
+mod symphony;
 mod task_manager;
 mod template;
 #[cfg(not(windows))]
@@ -23,11 +24,12 @@ use tauri::{
     Emitter, Manager, State,
 };
 
-struct DbState(Mutex<Connection>);
+struct DbState(Arc<Mutex<Connection>>);
 struct PtyState(pty::PtyManager);
 struct NotifyHandle(notify::SharedNotifyState);
 struct ConfigState(Mutex<config::Config>);
 struct FileExplorerState(Mutex<file_explorer::WatcherManager>);
+struct SymphonyHandle(Mutex<symphony::SymphonyState>);
 
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
@@ -228,16 +230,26 @@ fn restore_project(state: State<DbState>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_project_auto_mode(state: State<DbState>, id: String) -> Result<(bool, Option<String>), String> {
+fn get_project_auto_mode(
+    state: State<DbState>,
+    id: String,
+) -> Result<(bool, Option<String>), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let auto_mode: bool = conn.query_row(
-        "SELECT auto_mode FROM projects WHERE id = ?1", [&id],
-        |row| row.get::<_, i64>(0),
-    ).map(|v| v != 0).unwrap_or(false);
-    let task_manager: Option<String> = conn.query_row(
-        "SELECT task_manager FROM projects WHERE id = ?1", [&id],
-        |row| row.get(0),
-    ).unwrap_or(None);
+    let auto_mode: bool = conn
+        .query_row(
+            "SELECT auto_mode FROM projects WHERE id = ?1",
+            [&id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)
+        .unwrap_or(false);
+    let task_manager: Option<String> = conn
+        .query_row(
+            "SELECT task_manager FROM projects WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
     Ok((auto_mode, task_manager))
 }
 
@@ -247,17 +259,23 @@ fn set_project_auto_mode(state: State<DbState>, id: String, enabled: bool) -> Re
     conn.execute(
         "UPDATE projects SET auto_mode = ?1 WHERE id = ?2",
         rusqlite::params![enabled as i64, id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-fn set_project_task_manager(state: State<DbState>, id: String, task_manager: Option<String>) -> Result<(), String> {
+fn set_project_task_manager(
+    state: State<DbState>,
+    id: String,
+    task_manager: Option<String>,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "UPDATE projects SET task_manager = ?1 WHERE id = ?2",
         rusqlite::params![task_manager, id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1667,7 +1685,8 @@ fn main() {
                 }
             }
 
-            app.manage(DbState(Mutex::new(conn)));
+            let db_arc = Arc::new(Mutex::new(conn));
+            app.manage(DbState(db_arc.clone()));
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -1726,34 +1745,47 @@ fn main() {
                 });
             }
 
-            // Auto-launch symphony daemon if any project has auto_mode enabled
-            {
-                let db = app.state::<DbState>();
-                let conn = db.0.lock().unwrap();
-                let has_auto_mode: bool = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM projects WHERE status = 'active' AND auto_mode = 1",
-                        [],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .unwrap_or(0) > 0;
-                if has_auto_mode {
-                    let symphony_sock = app_dir.join("symphony.sock");
-                    if !symphony_sock.exists() {
-                        // Find the symphony binary next to our own executable
-                        if let Ok(exe) = std::env::current_exe() {
-                            let symphony_bin = exe.parent().unwrap().join("planeai-symphony");
-                            if symphony_bin.exists() {
-                                let _ = std::process::Command::new(&symphony_bin)
-                                    .stdin(std::process::Stdio::null())
-                                    .stdout(std::process::Stdio::null())
-                                    .stderr(std::process::Stdio::null())
-                                    .spawn();
-                            }
-                        }
-                    }
+            // Start symphony orchestrator in-process if any project has auto_mode
+            let symphony_state = {
+                let conn = db_arc.lock().unwrap();
+                let cfg_state = app.state::<ConfigState>();
+                let cfg = cfg_state.0.lock().unwrap();
+                let socket_path = app_dir.join("symphony.sock");
+
+                let mut state = symphony::SymphonyState::new();
+                if let Some(orch_config) =
+                    symphony::build_orchestrator_config(&cfg, &conn, socket_path)
+                {
+                    drop(cfg);
+                    drop(conn);
+
+                    let backend = Arc::new(symphony::TauriBackend {
+                        db: db_arc.clone(),
+                        notify_socket: notify::socket_path(&app_dir),
+                    });
+
+                    let token = tokio_util::sync::CancellationToken::new();
+                    let orchestrator =
+                        planeai_core::orchestrator::Orchestrator::new(orch_config, backend);
+                    let task_token = token.clone();
+                    let handle = tauri::async_runtime::spawn(async move {
+                        let _ = orchestrator.run(task_token).await;
+                    });
+
+                    state.token = Some(token);
+                    state.handle = Some(handle);
+
+                    // Watcher task: emit event when orchestrator stops
+                    let app_handle = app.handle().clone();
+                    let watch_token = state.token.as_ref().unwrap().clone();
+                    tauri::async_runtime::spawn(async move {
+                        watch_token.cancelled().await;
+                        let _ = app_handle.emit("symphony-stopped", ());
+                    });
                 }
-            }
+                state
+            };
+            app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
             Ok(())
         })
@@ -1830,24 +1862,10 @@ fn check_cli_installed() -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_symphony_status(app: tauri::AppHandle) -> Result<String, String> {
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let socket_path = app_dir.join("symphony.sock");
-    if !socket_path.exists() {
-        return Ok("{\"running\":[], \"max_concurrent\":0, \"slots_used\":0, \"active\":false}".to_string());
-    }
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(&socket_path).map_err(|e| e.to_string())?;
-    stream.write_all(b"status\n").map_err(|e| e.to_string())?;
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let l = line.map_err(|e| e.to_string())?;
-        // Inject active:true into the response
-        let with_active = l.trim_end_matches('}').to_string() + ",\"active\":true}";
-        return Ok(with_active);
-    }
-    Err("no response from orchestrator".to_string())
+fn get_symphony_status(state: State<SymphonyHandle>) -> Result<String, String> {
+    let symphony = state.0.lock().map_err(|e| e.to_string())?;
+    let active = symphony.is_running();
+    Ok(format!("{{\"active\":{active}}}"))
 }
 
 #[tauri::command]
