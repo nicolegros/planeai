@@ -7,7 +7,7 @@ use crate::state::{ConfigState, DbState, NotifyHandle};
 use crate::template;
 #[cfg(not(windows))]
 use crate::tmux;
-use crate::util::{resolve_command, sanitize_project_name, shell_escape};
+use crate::util::{sanitize_project_name, shell_escape};
 
 use super::helpers::{fire_task_hook, provider_has_hook};
 
