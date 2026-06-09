@@ -1,10 +1,10 @@
 [workspace]
-members = ["planeai-app", "planeai-core"]
+members = ["planeai-app", "planeai-core", "planeai-symphony"]
 resolver = "2"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
-tokio = { version = "1", features = ["macros", "process", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time", "io-util", "net"] }
 tempfile = "3"

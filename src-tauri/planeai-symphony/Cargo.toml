@@ -1,0 +1,12 @@
+[package]
+name = "planeai-symphony"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "planeai-symphony"
+path = "src/main.rs"
+
+[dependencies]
+planeai-core = { path = "../planeai-core" }
+tokio = { workspace = true }

@@ -15,6 +15,11 @@ pub struct Task {
     pub blocked_by: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LifecycleHook {
+    pub move_to: String,
+}
+
 /// Configuration for a task manager's commands.
 #[derive(Debug, Clone)]
 pub struct TaskManagerConfig {
@@ -22,4 +27,5 @@ pub struct TaskManagerConfig {
     pub list_tasks: String,
     pub move_task: String,
     pub terminal_states: Vec<String>,
+    pub on_start: Option<LifecycleHook>,
 }

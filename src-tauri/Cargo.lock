@@ -2983,6 +2983,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "planeai-symphony"
+version = "0.0.0"
+dependencies = [
+ "planeai-core",
+ "tokio",
 ]
 
 [[package]]

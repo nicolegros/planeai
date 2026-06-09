@@ -40,6 +40,7 @@ async fn filters_blocked_and_claimed_tasks_returns_sorted_eligible() {
         get_task: format!("{get_script} {{key}}"),
         move_task: String::new(),
         terminal_states: vec!["done".to_string(), "cancelled".to_string()],
+        on_start: None,
     };
 
     let dispatcher = TaskDispatcher::new(&config, "myproject", dir.path());
