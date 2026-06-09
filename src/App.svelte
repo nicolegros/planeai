@@ -376,6 +376,11 @@
       loadSessions();
     });
 
+    // Refresh sessions when CLI creates a new session
+    const unlistenSessionCreated = listen<string>("session-created", () => {
+      loadSessions();
+    });
+
     const cleanup = installKeyboardRouter(
       (action) => {
       if (action.type === "new_session") {
@@ -473,6 +478,7 @@
       unlistenCleanup.then((fn) => fn());
       unlistenClose.then((fn) => fn());
       unlistenPr.then((fn) => fn());
+      unlistenSessionCreated.then((fn) => fn());
       exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

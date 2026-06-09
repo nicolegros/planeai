@@ -206,6 +206,7 @@ pub enum NotifyEvent {
     Stop,
     Notification,
     Busy,
+    SessionCreated,
 }
 
 pub struct NotifyMessage {
@@ -224,6 +225,7 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
         let event = match v.get("event").and_then(|e| e.as_str()) {
             Some("notification") => NotifyEvent::Notification,
             Some("busy") => NotifyEvent::Busy,
+            Some("session_created") => NotifyEvent::SessionCreated,
             _ => NotifyEvent::Stop,
         };
         NotifyMessage { session_id, event }
@@ -387,6 +389,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                     continue;
                 }
                 match msg.event {
+                    NotifyEvent::SessionCreated => {
+                        eprintln!("[notify] session_created: {}", msg.session_id);
+                        let _ = app.emit("session-created", msg.session_id.clone());
+                    }
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();
                         let name = s
@@ -489,6 +495,10 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     continue;
                 }
                 match msg.event {
+                    NotifyEvent::SessionCreated => {
+                        eprintln!("[notify] session_created: {}", msg.session_id);
+                        let _ = app.emit("session-created", msg.session_id.clone());
+                    }
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();
                         let name = s
