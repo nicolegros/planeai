@@ -350,7 +350,7 @@
                     class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 {session.id === activeSessionId ? 'font-medium' : ''}"
                     onSelect={() => { onSelectSession(session.id); close(); }}
                   >
-                    {session.name || session.branch}
+                    <span class="truncate">{session.name || session.branch}</span>
                   </Command.Item>
                 {/each}
               </Command.GroupItems>
