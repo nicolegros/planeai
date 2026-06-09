@@ -2949,7 +2949,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "planeai"
+name = "planeai-app"
 version = "0.0.0"
 dependencies = [
  "chrono",
@@ -2957,6 +2957,7 @@ dependencies = [
  "font-kit",
  "json_comments",
  "notify",
+ "planeai-core",
  "portable-pty",
  "regex",
  "rusqlite",
@@ -2971,6 +2972,17 @@ dependencies = [
  "trash",
  "uuid",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "planeai-core"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -4438,8 +4450,21 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

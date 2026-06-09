@@ -1,0 +1,50 @@
+[package]
+name = "planeai-app"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+name = "planeai"
+path = "src/lib.rs"
+
+[[bin]]
+name = "planeai"
+path = "src/main.rs"
+
+[[bin]]
+name = "planeai-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+planeai-core = { path = "../planeai-core" }
+clap = { version = "4", features = ["derive"] }
+tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+json_comments = "0.2"
+regex = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+portable-pty = "0.8"
+tauri-plugin-opener = "2.5.4"
+font-kit = "0.14"
+trash = "5"
+notify = "7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+  "Win32_System_Pipes",
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
+  "Win32_System_IO",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
