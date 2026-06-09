@@ -42,7 +42,7 @@
 </script>
 
 <div class="absolute inset-0 flex items-center justify-center z-20">
-  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-96 max-h-80 overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
+  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-96 max-h-screen overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
     {#each mruSessionIds as id, i (id)}
       {@const session = getSession(id)}
       {#if session}
