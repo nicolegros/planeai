@@ -3,7 +3,20 @@ name = "planeai"
 version = "0.0.0"
 edition = "2021"
 
+[lib]
+name = "planeai"
+path = "src/lib.rs"
+
+[[bin]]
+name = "planeai"
+path = "src/main.rs"
+
+[[bin]]
+name = "planeai-cli"
+path = "src/bin/cli.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1749,9 +1749,52 @@ fn main() {
             fe_watch_directory,
             fe_unwatch_directory,
             fetch_pr_url,
+            check_cli_installed,
+            install_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn check_cli_installed() -> Result<bool, String> {
+    let target = std::path::Path::new("/usr/local/bin/planeai-cli");
+    Ok(target.exists())
+}
+
+#[tauri::command]
+fn install_cli(app: tauri::AppHandle) -> Result<(), String> {
+    let exe_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    // In a macOS .app bundle, the binary is at Contents/MacOS/planeai-cli
+    // resource_dir points to Contents/Resources, so go up one level to Contents/MacOS
+    let cli_bin = exe_dir
+        .parent()
+        .unwrap_or(&exe_dir)
+        .join("MacOS")
+        .join("planeai-cli");
+    if !cli_bin.exists() {
+        // Fallback: same directory as the main binary
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let bin_dir = current_exe.parent().ok_or("cannot determine binary dir")?;
+        let alt = bin_dir.join("planeai-cli");
+        if !alt.exists() {
+            return Err(format!(
+                "CLI binary not found at {:?} or {:?}",
+                cli_bin, alt
+            ));
+        }
+        return symlink_cli(&alt);
+    }
+    symlink_cli(&cli_bin)
+}
+
+fn symlink_cli(source: &std::path::Path) -> Result<(), String> {
+    let target = std::path::Path::new("/usr/local/bin/planeai-cli");
+    if target.exists() || target.symlink_metadata().is_ok() {
+        std::fs::remove_file(target)
+            .map_err(|e| format!("failed to remove existing symlink: {e}"))?;
+    }
+    std::os::unix::fs::symlink(source, target).map_err(|e| format!("failed to create symlink: {e}"))
 }
 
 fn sanitize_project_name(name: &str) -> String {

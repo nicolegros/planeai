@@ -17,6 +17,7 @@
   let newProviderYoloFlag = $state("");
   let showAddProvider = $state(false);
   let tmuxAvailable = $state(true);
+  let cliInstalled = $state(false);
   let activeTab = $state("Appearance");
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
@@ -51,6 +52,9 @@
     invoke<boolean>("check_tmux_available").then((available) => {
       tmuxAvailable = available;
     });
+    invoke<boolean>("check_cli_installed").then((installed) => {
+      cliInstalled = installed;
+    });
   });
 
   onDestroy(() => {
@@ -73,6 +77,15 @@
     const selected = await open({ directory: true, multiple: false, defaultPath: config.projects_base_path ?? undefined });
     if (selected) {
       updateSettings({ projects_base_path: selected as string } as Partial<AppConfig>);
+    }
+  }
+
+  async function installCli() {
+    try {
+      await invoke("install_cli");
+      cliInstalled = true;
+    } catch (e) {
+      console.error("Failed to install CLI:", e);
     }
   }
 
@@ -535,6 +548,22 @@
         <Button type="button" onclick={pickProjectsBasePath}>Browse</Button>
       </div>
       <p class="text-xs text-surface-500 dark:text-surface-400">Default directory for the project file picker and path pre-fill.</p>
+    </section>
+
+    <!-- CLI -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">CLI</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-surface-700 dark:text-surface-300">Install <code class="text-xs bg-surface-200 dark:bg-surface-700 px-1 rounded">planeai-cli</code> in PATH</p>
+          <p class="text-xs text-surface-500 dark:text-surface-400">Creates a symlink at /usr/local/bin/planeai-cli</p>
+        </div>
+        {#if cliInstalled}
+          <span class="text-xs text-green-600 dark:text-green-400 font-medium">Installed ✓</span>
+        {:else}
+          <Button type="button" onclick={installCli}>Install</Button>
+        {/if}
+      </div>
     </section>
     {/if}
   </div>
