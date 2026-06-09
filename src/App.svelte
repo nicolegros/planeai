@@ -377,8 +377,9 @@
     });
 
     // Refresh sessions when CLI creates a new session
-    const unlistenSessionCreated = listen<string>("session-created", () => {
-      loadSessions();
+    const unlistenSessionCreated = listen<string>("session-created", async (event) => {
+      await loadSessions();
+      touchMru(event.payload);
     });
 
     const cleanup = installKeyboardRouter(
