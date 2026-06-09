@@ -10,7 +10,7 @@ lint: ## Check formatting and clippy
 	pnpm lint
 	pnpm fmt:check
 	cd src-tauri && cargo fmt --all -- --check
-	cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
+	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev:
 	pnpm tauri dev
@@ -26,7 +26,7 @@ open: bundle
 
 test:
 	pnpm test
-	cd src-tauri && cargo test
+	cd src-tauri && cargo test --workspace
 
 test-e2e: build
 	./tests/e2e_session_persistence.sh
