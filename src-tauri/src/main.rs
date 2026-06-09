@@ -1761,6 +1761,7 @@ fn main() {
 
                     let backend = Arc::new(symphony::TauriBackend {
                         db: db_arc.clone(),
+                        app_handle: app.handle().clone(),
                         notify_socket: notify::socket_path(&app_dir),
                     });
 

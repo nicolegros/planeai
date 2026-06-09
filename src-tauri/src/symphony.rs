@@ -4,6 +4,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
+use tauri::Emitter;
 use tokio_util::sync::CancellationToken;
 
 use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
@@ -40,6 +41,7 @@ impl SymphonyState {
 
 pub struct TauriBackend {
     pub db: Arc<Mutex<Connection>>,
+    pub app_handle: tauri::AppHandle,
     #[allow(dead_code)]
     pub notify_socket: std::path::PathBuf,
 }
@@ -123,8 +125,7 @@ impl Backend for TauriBackend {
     }
 
     fn notify_gui(&self, _session_id: &str) -> Result<(), String> {
-        // In-process: GUI is notified via Tauri events from the session-created flow.
-        // No socket round-trip needed.
+        let _ = self.app_handle.emit("sessions-changed", ());
         Ok(())
     }
 
