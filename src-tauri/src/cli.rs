@@ -26,17 +26,59 @@ pub struct SessionCreateOpts {
 }
 
 pub trait Backend {
-    fn checkout_branch(&self, repo: &str, branch: &str, new: bool, base: Option<&str>) -> Result<(), String>;
-    fn create_worktree(&self, repo: &str, path: &str, branch: &str, base: &str) -> Result<(), String>;
-    fn create_tmux_session(&self, name: &str, cwd: &str, cmd: &str, session_id: &str) -> Result<(), String>;
+    fn checkout_branch(
+        &self,
+        repo: &str,
+        branch: &str,
+        new: bool,
+        base: Option<&str>,
+    ) -> Result<(), String>;
+    fn create_worktree(
+        &self,
+        repo: &str,
+        path: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<(), String>;
+    fn create_tmux_session(
+        &self,
+        name: &str,
+        cwd: &str,
+        cmd: &str,
+        session_id: &str,
+    ) -> Result<(), String>;
 }
 
 pub struct NoOpBackend;
 
 impl Backend for NoOpBackend {
-    fn checkout_branch(&self, _repo: &str, _branch: &str, _new: bool, _base: Option<&str>) -> Result<(), String> { Ok(()) }
-    fn create_worktree(&self, _repo: &str, _path: &str, _branch: &str, _base: &str) -> Result<(), String> { Ok(()) }
-    fn create_tmux_session(&self, _name: &str, _cwd: &str, _cmd: &str, _session_id: &str) -> Result<(), String> { Ok(()) }
+    fn checkout_branch(
+        &self,
+        _repo: &str,
+        _branch: &str,
+        _new: bool,
+        _base: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn create_worktree(
+        &self,
+        _repo: &str,
+        _path: &str,
+        _branch: &str,
+        _base: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn create_tmux_session(
+        &self,
+        _name: &str,
+        _cwd: &str,
+        _cmd: &str,
+        _session_id: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 pub struct Env {
@@ -45,7 +87,11 @@ pub struct Env {
     pub config: config::Config,
 }
 
-pub fn run_session_create(conn: &Connection, opts: &SessionCreateOpts, backend: &dyn Backend) -> Result<String, String> {
+pub fn run_session_create(
+    conn: &Connection,
+    opts: &SessionCreateOpts,
+    backend: &dyn Backend,
+) -> Result<String, String> {
     let cfg_dir = config::config_dir("planeai");
     let (cfg, _) = config::load(&cfg_dir);
     let env = Env {
@@ -56,18 +102,31 @@ pub fn run_session_create(conn: &Connection, opts: &SessionCreateOpts, backend: 
     run_session_create_with_env(conn, opts, backend, &env)
 }
 
-pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, backend: &dyn Backend, env: &Env) -> Result<String, String> {
+pub fn run_session_create_with_env(
+    conn: &Connection,
+    opts: &SessionCreateOpts,
+    backend: &dyn Backend,
+    env: &Env,
+) -> Result<String, String> {
     if env.backend == "direct" && !env.socket_path.exists() {
         return Err("GUI is not running (socket not found). Direct backend requires the GUI to spawn sessions.".to_string());
     }
 
     let projects = db::list_projects(conn).map_err(|e| e.to_string())?;
-    let project = projects.iter().find(|p| p.name == opts.project)
+    let project = projects
+        .iter()
+        .find(|p| p.name == opts.project)
         .ok_or_else(|| format!("unknown project: {}", opts.project))?;
 
     // Resolve provider and build launch command
-    let provider_key = opts.provider.as_deref().unwrap_or(&env.config.default_provider);
-    let provider_def = env.config.providers.get(provider_key)
+    let provider_key = opts
+        .provider
+        .as_deref()
+        .unwrap_or(&env.config.default_provider);
+    let provider_def = env
+        .config
+        .providers
+        .get(provider_key)
         .ok_or_else(|| format!("unknown provider: {provider_key}"))?;
     let mut cmd = config::launch_command(provider_def, opts.yolo);
 
@@ -89,7 +148,12 @@ pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, 
         backend.create_worktree(&project.path, &wt_path, &opts.branch, base)?;
         Some(wt_path)
     } else {
-        backend.checkout_branch(&project.path, &opts.branch, opts.new_branch, opts.base_branch.as_deref())?;
+        backend.checkout_branch(
+            &project.path,
+            &opts.branch,
+            opts.new_branch,
+            opts.base_branch.as_deref(),
+        )?;
         None
     };
 
@@ -118,7 +182,8 @@ pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, 
         opts.yolo,
         opts.task_key.as_deref(),
         opts.base_branch.as_deref(),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     // Notify the GUI via socket (fire-and-forget)
     if env.socket_path.exists() {

@@ -8,7 +8,9 @@ const APP_ID: &str = "ca.nicolegros.planeai";
 pub fn app_data_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from(home_dir()).join("Library/Application Support").join(APP_ID)
+        PathBuf::from(home_dir())
+            .join("Library/Application Support")
+            .join(APP_ID)
     }
     #[cfg(target_os = "windows")]
     {

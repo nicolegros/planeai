@@ -77,7 +77,19 @@ fn main() {
             }
         },
         Commands::Session { action } => match action {
-            SessionAction::Create { project, branch, name, new_branch, worktree, base_branch, yolo, provider, task_key, prompt, pretty } => {
+            SessionAction::Create {
+                project,
+                branch,
+                name,
+                new_branch,
+                worktree,
+                base_branch,
+                yolo,
+                provider,
+                task_key,
+                prompt,
+                pretty,
+            } => {
                 let cfg_dir = planeai::config::config_dir("planeai");
                 let (cfg, _) = planeai::config::load(&cfg_dir);
                 let backend = planeai::config::resolve_backend(&cfg).to_string();
@@ -89,7 +101,16 @@ fn main() {
                 };
 
                 let opts = planeai::cli::SessionCreateOpts {
-                    project, branch, name, new_branch, worktree, base_branch, yolo, provider, task_key, prompt,
+                    project,
+                    branch,
+                    name,
+                    new_branch,
+                    worktree,
+                    base_branch,
+                    yolo,
+                    provider,
+                    task_key,
+                    prompt,
                 };
 
                 let real_backend = RealBackend;
@@ -115,21 +136,39 @@ fn main() {
 struct RealBackend;
 
 impl planeai::cli::Backend for RealBackend {
-    fn checkout_branch(&self, repo: &str, branch: &str, new: bool, base: Option<&str>) -> Result<(), String> {
+    fn checkout_branch(
+        &self,
+        repo: &str,
+        branch: &str,
+        new: bool,
+        base: Option<&str>,
+    ) -> Result<(), String> {
         planeai::git::checkout_branch(repo, branch, new, base)
     }
-    fn create_worktree(&self, repo: &str, path: &str, branch: &str, base: &str) -> Result<(), String> {
+    fn create_worktree(
+        &self,
+        repo: &str,
+        path: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<(), String> {
         planeai::git::worktree_add(repo, path, branch, base)
     }
-    fn create_tmux_session(&self, name: &str, cwd: &str, cmd: &str, session_id: &str) -> Result<(), String> {
+    fn create_tmux_session(
+        &self,
+        name: &str,
+        cwd: &str,
+        cmd: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
         planeai::tmux::create_session_with_cmd(name, cwd, cmd, session_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use planeai::db;
     use planeai::config::Config;
+    use planeai::db;
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
@@ -142,8 +181,8 @@ mod tests {
         Config::default()
     }
 
-    use std::cell::RefCell;
     use planeai::cli::Backend;
+    use std::cell::RefCell;
 
     struct RecordingBackend {
         calls: RefCell<Vec<String>>,
@@ -151,20 +190,45 @@ mod tests {
 
     impl RecordingBackend {
         fn new() -> Self {
-            Self { calls: RefCell::new(Vec::new()) }
+            Self {
+                calls: RefCell::new(Vec::new()),
+            }
         }
     }
 
     impl Backend for RecordingBackend {
-        fn checkout_branch(&self, _repo: &str, branch: &str, new: bool, base: Option<&str>) -> Result<(), String> {
-            self.calls.borrow_mut().push(format!("checkout:{branch}:new={new}:base={}", base.unwrap_or("none")));
+        fn checkout_branch(
+            &self,
+            _repo: &str,
+            branch: &str,
+            new: bool,
+            base: Option<&str>,
+        ) -> Result<(), String> {
+            self.calls.borrow_mut().push(format!(
+                "checkout:{branch}:new={new}:base={}",
+                base.unwrap_or("none")
+            ));
             Ok(())
         }
-        fn create_worktree(&self, _repo: &str, _path: &str, branch: &str, base: &str) -> Result<(), String> {
-            self.calls.borrow_mut().push(format!("worktree:{branch}:base={base}"));
+        fn create_worktree(
+            &self,
+            _repo: &str,
+            _path: &str,
+            branch: &str,
+            base: &str,
+        ) -> Result<(), String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("worktree:{branch}:base={base}"));
             Ok(())
         }
-        fn create_tmux_session(&self, name: &str, _cwd: &str, _cmd: &str, _session_id: &str) -> Result<(), String> {
+        fn create_tmux_session(
+            &self,
+            name: &str,
+            _cwd: &str,
+            _cmd: &str,
+            _session_id: &str,
+        ) -> Result<(), String> {
             self.calls.borrow_mut().push(format!("tmux:{name}"));
             Ok(())
         }
@@ -324,7 +388,12 @@ mod tests {
             config: test_config(),
         };
 
-        let result = planeai::cli::run_session_create_with_env(&conn, &opts, &planeai::cli::NoOpBackend, &env);
+        let result = planeai::cli::run_session_create_with_env(
+            &conn,
+            &opts,
+            &planeai::cli::NoOpBackend,
+            &env,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("GUI is not running"));
     }
@@ -367,8 +436,8 @@ mod tests {
 
     #[test]
     fn session_create_sends_socket_notification() {
-        use std::os::unix::net::UnixListener;
         use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
 
         let conn = setup_db();
         db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
@@ -397,11 +466,18 @@ mod tests {
             config: test_config(),
         };
 
-        let result = planeai::cli::run_session_create_with_env(&conn, &opts, &planeai::cli::NoOpBackend, &env);
+        let result = planeai::cli::run_session_create_with_env(
+            &conn,
+            &opts,
+            &planeai::cli::NoOpBackend,
+            &env,
+        );
         assert!(result.is_ok());
 
         // Read the message sent to the socket
-        let (stream, _) = listener.accept().expect("should have received a connection");
+        let (stream, _) = listener
+            .accept()
+            .expect("should have received a connection");
         let reader = BufReader::new(stream);
         let line = reader.lines().next().unwrap().unwrap();
         let msg: serde_json::Value = serde_json::from_str(&line).unwrap();
