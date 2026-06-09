@@ -2949,7 +2949,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "planeai"
+name = "planeai-core"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "planeai-s8"
 version = "0.0.0"
 dependencies = [
  "chrono",
@@ -2972,18 +2984,6 @@ dependencies = [
  "trash",
  "uuid",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "planeai-core"
-version = "0.0.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
 ]
 
 [[package]]
