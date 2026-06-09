@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use tokio::process::Command;
-
+use crate::command::run_command;
 use crate::task::{Task, TaskManagerConfig};
 use crate::template;
 
@@ -64,7 +63,7 @@ impl TaskDispatcher {
         let mut vars = HashMap::new();
         vars.insert("project", self.project.as_str());
         let cmd_str = template::render(&self.config.list_tasks, &vars);
-        let output = self.run_command(&cmd_str).await?;
+        let output = self.run_cmd(&cmd_str)?;
         serde_json::from_str(&output)
             .map_err(|e| DispatchError::ParseError(format!("list_tasks: {e}")))
     }
@@ -73,7 +72,7 @@ impl TaskDispatcher {
         let mut vars = HashMap::new();
         vars.insert("key", key);
         let cmd_str = template::render(&self.config.get_task, &vars);
-        let output = self.run_command(&cmd_str).await?;
+        let output = self.run_cmd(&cmd_str)?;
         serde_json::from_str(&output)
             .map_err(|e| DispatchError::ParseError(format!("get_task({key}): {e}")))
     }
@@ -106,22 +105,7 @@ impl TaskDispatcher {
             .any(|s| s.eq_ignore_ascii_case(status))
     }
 
-    async fn run_command(&self, cmd_str: &str) -> Result<String, DispatchError> {
-        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-        if parts.is_empty() {
-            return Err(DispatchError::CommandFailed("empty command".to_string()));
-        }
-        let output = Command::new(parts[0])
-            .args(&parts[1..])
-            .current_dir(&self.cwd)
-            .output()
-            .await
-            .map_err(|e| DispatchError::CommandFailed(format!("{}: {e}", parts[0])))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DispatchError::CommandFailed(stderr.trim().to_string()));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    fn run_cmd(&self, cmd_str: &str) -> Result<String, DispatchError> {
+        run_command(cmd_str, &self.cwd).map_err(|e| DispatchError::CommandFailed(e.to_string()))
     }
 }

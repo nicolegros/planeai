@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::TaskManager;
 use crate::template;
@@ -49,26 +48,7 @@ pub fn move_task(tm: &TaskManager, key: &str, status: &str, cwd: &Path) -> Resul
 }
 
 fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, String> {
-    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err("Empty command".to_string());
-    }
-    let resolved = crate::command::resolve(parts[0]);
-    let output = Command::new(&resolved)
-        .args(&parts[1..])
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| format!("Failed to execute '{}': {e}", resolved))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Command failed ({}): {}",
-            output.status,
-            stderr.trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    planeai_core::command::run_command(cmd_str, cwd).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
