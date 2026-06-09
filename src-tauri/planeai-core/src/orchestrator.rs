@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
 use crate::dispatch::TaskDispatcher;
@@ -79,11 +79,23 @@ impl Orchestrator {
                 }
                 accept = listener.accept() => {
                     if let Ok((stream, _)) = accept {
-                        let reader = tokio::io::BufReader::new(stream);
-                        let mut lines = reader.lines();
-                        if let Ok(Some(line)) = lines.next_line().await {
-                            if line.trim() == "stop" {
-                                return Ok(());
+                        let mut reader = tokio::io::BufReader::new(stream);
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).await.is_ok() {
+                            match line.trim() {
+                                "stop" => return Ok(()),
+                                "status" => {
+                                    let sessions: Vec<&str> = running.keys().map(|k| k.as_str()).collect();
+                                    let json = format!(
+                                        "{{\"running\":{},\"max_concurrent\":{},\"slots_used\":{}}}",
+                                        serde_json::to_string(&sessions).unwrap_or_else(|_| "[]".to_string()),
+                                        self.config.max_concurrent,
+                                        running.len()
+                                    );
+                                    let mut writer = reader.into_inner();
+                                    let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
+                                }
+                                _ => {}
                             }
                         }
                     }

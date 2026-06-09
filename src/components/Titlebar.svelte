@@ -1,7 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest } from "@lucide/svelte";
+  import { GitPullRequest, Zap } from "@lucide/svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -12,12 +12,13 @@
     tabs: Tab[];
     activeTabIndex: number;
     prUrl: string | null;
+    symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
     onSelectTab: (index: number) => void;
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, onSelectTab, onCloseTab, onAddTab }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, symphonyStatus, onSelectTab, onCloseTab, onAddTab }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
 </script>
@@ -41,6 +42,16 @@
     </div>
     <div class="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface-100 dark:from-surface-900 to-transparent"></div>
   </div>
+
+  {#if symphonyStatus?.active}
+    <span
+      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30"
+      title="Orchestrator running"
+    >
+      <Zap class="size-3" />
+      <span>{symphonyStatus.slots_used}/{symphonyStatus.max_concurrent}</span>
+    </span>
+  {/if}
 
   {#if prUrl}
     <button

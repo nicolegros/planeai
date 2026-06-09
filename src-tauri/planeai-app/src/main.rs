@@ -1692,6 +1692,35 @@ fn main() {
                 });
             }
 
+            // Auto-launch symphony daemon if any project has auto_mode enabled
+            {
+                let db = app.state::<DbState>();
+                let conn = db.0.lock().unwrap();
+                let has_auto_mode: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM projects WHERE status = 'active' AND auto_mode = 1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0) > 0;
+                if has_auto_mode {
+                    let symphony_sock = app_dir.join("symphony.sock");
+                    if !symphony_sock.exists() {
+                        // Find the symphony binary next to our own executable
+                        if let Ok(exe) = std::env::current_exe() {
+                            let symphony_bin = exe.parent().unwrap().join("planeai-symphony");
+                            if symphony_bin.exists() {
+                                let _ = std::process::Command::new(&symphony_bin)
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .spawn();
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1751,6 +1780,7 @@ fn main() {
             fetch_pr_url,
             check_cli_installed,
             install_cli,
+            get_symphony_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1760,6 +1790,27 @@ fn main() {
 fn check_cli_installed() -> Result<bool, String> {
     let target = std::path::Path::new("/usr/local/bin/planeai-cli");
     Ok(target.exists())
+}
+
+#[tauri::command]
+fn get_symphony_status(app: tauri::AppHandle) -> Result<String, String> {
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let socket_path = app_dir.join("symphony.sock");
+    if !socket_path.exists() {
+        return Ok("{\"running\":[], \"max_concurrent\":0, \"slots_used\":0, \"active\":false}".to_string());
+    }
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(&socket_path).map_err(|e| e.to_string())?;
+    stream.write_all(b"status\n").map_err(|e| e.to_string())?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let l = line.map_err(|e| e.to_string())?;
+        // Inject active:true into the response
+        let with_active = l.trim_end_matches('}').to_string() + ",\"active\":true}";
+        return Ok(with_active);
+    }
+    Err("no response from orchestrator".to_string())
 }
 
 #[tauri::command]

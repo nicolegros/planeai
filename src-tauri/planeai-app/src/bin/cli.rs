@@ -17,6 +17,10 @@ enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    Symphony {
+        #[command(subcommand)]
+        action: SymphonyAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -53,6 +57,14 @@ enum ProjectAction {
         #[arg(long)]
         pretty: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum SymphonyAction {
+    /// Show orchestrator status (running sessions, concurrency)
+    Status,
+    /// Stop the orchestrator daemon
+    Stop,
 }
 
 fn main() {
@@ -130,7 +142,52 @@ fn main() {
                 }
             }
         },
+        Commands::Symphony { action } => {
+            let socket_path = planeai::paths::app_data_dir().join("symphony.sock");
+            match action {
+                SymphonyAction::Status => {
+                    match symphony_command(&socket_path, "status") {
+                        Ok(response) => println!("{response}"),
+                        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+                    }
+                }
+                SymphonyAction::Stop => {
+                    match symphony_command(&socket_path, "stop") {
+                        Ok(_) => println!("{{\"status\": \"stopped\"}}"),
+                        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+                    }
+                }
+            }
+        },
     }
+}
+
+fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    if !socket_path.exists() {
+        return Err("{\"error\": \"orchestrator is not running\"}".to_string());
+    }
+    let mut stream = UnixStream::connect(socket_path)
+        .map_err(|e| format!("{{\"error\": \"cannot connect to orchestrator: {e}\"}}"))?;
+    stream.write_all(format!("{cmd}\n").as_bytes())
+        .map_err(|e| format!("{{\"error\": \"send failed: {e}\"}}"))?;
+
+    if cmd == "stop" {
+        return Ok(String::new());
+    }
+
+    // Read response
+    let reader = BufReader::new(stream);
+    let mut response = String::new();
+    for line in reader.lines() {
+        match line {
+            Ok(l) => { response.push_str(&l); break; }
+            Err(e) => return Err(format!("{{\"error\": \"read failed: {e}\"}}")),
+        }
+    }
+    Ok(response)
 }
 
 struct RealBackend;
