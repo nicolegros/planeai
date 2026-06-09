@@ -13,6 +13,7 @@ pub trait Backend: Send + Sync {
     fn run_move_task(&self, config: &TaskManagerConfig, key: &str, status: &str, cwd: &Path) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
+    fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
 }
 
 /// Data needed to insert a session into the DB.

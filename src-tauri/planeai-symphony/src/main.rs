@@ -171,6 +171,35 @@ impl Backend for RealBackend {
         ).map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
+        let conn = Connection::open(&self.db_path).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, name, tmux_name, branch, worktree_path, provider, backend, auto_approve, task_key, base_branch
+             FROM sessions WHERE status = 'active' AND auto_dispatched = 1"
+        ).map_err(|e| e.to_string())?;
+        let sessions = stmt.query_map([], |row| {
+            Ok(NewSession {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                project_name: String::new(),
+                name: row.get(2)?,
+                tmux_name: row.get(3)?,
+                branch: row.get(4)?,
+                worktree_path: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                provider: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                backend: row.get(7)?,
+                auto_approve: row.get::<_, i64>(8)? != 0,
+                task_key: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                base_branch: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                auto_dispatched: true,
+                command: String::new(),
+            })
+        }).map_err(|e| e.to_string())?
+          .filter_map(|r| r.ok())
+          .collect();
+        Ok(sessions)
+    }
 }
 
 // ─── Main ───

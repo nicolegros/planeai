@@ -54,8 +54,22 @@ impl Orchestrator {
         let mut interval =
             tokio::time::interval(std::time::Duration::from_millis(self.config.poll_interval_ms));
 
-        // task_key -> running session info
+        // Reattach: load active auto-dispatched sessions from DB
         let mut running: HashMap<String, RunningSession> = HashMap::new();
+        if let Ok(sessions) = self.backend.list_active_sessions() {
+            for session in sessions {
+                // Find the matching project config for reconciliation
+                let project_config = self.config.projects.iter()
+                    .find(|p| p.project_id == session.project_id);
+                if let Some(project) = project_config {
+                    running.insert(session.task_key.clone(), RunningSession {
+                        session,
+                        project_path: project.project_path.clone(),
+                        task_manager_config: project.task_manager_config.clone(),
+                    });
+                }
+            }
+        }
 
         loop {
             tokio::select! {

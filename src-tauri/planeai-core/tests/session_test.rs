@@ -41,6 +41,9 @@ impl Backend for RecordingBackend {
     fn kill_session(&self, _session: &NewSession) -> Result<(), String> {
         Ok(())
     }
+    fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
+        Ok(vec![])
+    }
 }
 
 #[test]
