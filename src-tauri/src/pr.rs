@@ -213,6 +213,7 @@ mod tests {
                 move_to: "in_review".into(),
             }),
             on_pr_merge: None,
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());
@@ -240,6 +241,7 @@ mod tests {
             on_pr_merge: Some(crate::config::LifecycleHook {
                 move_to: "done".into(),
             }),
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Merged, "TASK-1", dir.path());
@@ -260,6 +262,7 @@ mod tests {
             on_complete: None,
             on_pr_open: None,
             on_pr_merge: None,
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());

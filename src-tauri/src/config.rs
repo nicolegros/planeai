@@ -110,7 +110,24 @@ pub struct TaskManager {
     pub on_pr_open: Option<LifecycleHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_pr_merge: Option<LifecycleHook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_dispatch: Option<AutoDispatchConfig>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoDispatchConfig {
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_ms: u64,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_states: Option<Vec<String>>,
+}
+
+fn default_poll_interval() -> u64 { 30000 }
+fn default_max_concurrent() -> usize { 3 }
 
 /// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
 pub fn home_dir() -> String {
