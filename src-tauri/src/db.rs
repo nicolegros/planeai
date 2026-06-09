@@ -425,42 +425,6 @@ pub fn mark_session_exited(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Startup reconciliation: mark stale active sessions as exited.
-/// Direct sessions are always marked exited (process died with app).
-/// Tmux sessions are checked via the provided `has_session` function.
-pub fn reconcile_sessions<F>(conn: &Connection, has_tmux_session: F) -> Result<()>
-where
-    F: Fn(&str) -> bool,
-{
-    let mut stmt =
-        conn.prepare("SELECT id, tmux_name, backend FROM sessions WHERE status = 'active'")?;
-    let stale: Vec<String> = stmt
-        .query_map([], |row| {
-            let id: String = row.get(0)?;
-            let tmux_name: Option<String> = row.get(1)?;
-            let backend: String = row.get(2)?;
-            Ok((id, tmux_name, backend))
-        })?
-        .filter_map(|r| r.ok())
-        .filter(|(_, tmux_name, backend)| {
-            if backend == "direct" {
-                return true;
-            }
-            // tmux backend: mark exited if tmux session is gone
-            match tmux_name {
-                Some(ref name) => !has_tmux_session(name),
-                None => true,
-            }
-        })
-        .map(|(id, _, _)| id)
-        .collect();
-
-    for id in &stale {
-        mark_session_exited(conn, id)?;
-    }
-    Ok(())
-}
-
 pub fn restore_session(conn: &Connection, id: &str) -> Result<()> {
     conn.execute(
         "UPDATE sessions SET status = 'active' WHERE id = ?1",
@@ -978,65 +942,6 @@ mod tests {
         assert!(all.iter().all(|s| s.status == "archived"));
         // tmux_name preserved (caller can check if tmux is still running)
         assert!(all.iter().all(|s| s.tmux_name.is_some()));
-    }
-
-    #[test]
-    fn test_reconcile_sessions_marks_stale_as_exited() {
-        let conn = setup();
-        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
-        // Active direct session → should be marked exited (process died with app)
-        let s1 = create_session_with_id(
-            &conn, "s1", &p.id, "direct", None, "main", None, None, "direct", true, None, None,
-        )
-        .unwrap();
-        // Active tmux session with dead tmux → should be marked exited
-        let s2 = create_session_with_id(
-            &conn,
-            "s2",
-            &p.id,
-            "tmux dead",
-            Some("planeai-dead"),
-            "main",
-            None,
-            None,
-            "tmux",
-            true,
-            None,
-            None,
-        )
-        .unwrap();
-        // Active tmux session with alive tmux → should stay active
-        let s3 = create_session_with_id(
-            &conn,
-            "s3",
-            &p.id,
-            "tmux alive",
-            Some("planeai-alive"),
-            "main",
-            None,
-            None,
-            "tmux",
-            true,
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Reconcile: mock tmux checker that only knows "planeai-alive"
-        reconcile_sessions(&conn, |name| name == "planeai-alive").unwrap();
-
-        assert_eq!(
-            get_session(&conn, &s1.id).unwrap().unwrap().status,
-            "exited"
-        );
-        assert_eq!(
-            get_session(&conn, &s2.id).unwrap().unwrap().status,
-            "exited"
-        );
-        assert_eq!(
-            get_session(&conn, &s3.id).unwrap().unwrap().status,
-            "active"
-        );
     }
 
     #[test]

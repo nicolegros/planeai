@@ -120,7 +120,7 @@ assert_eq "session A still active (no spurious exit)" "active" "$STATUS_A"
 assert_eq "session B still active (no spurious exit)" "active" "$STATUS_B"
 
 echo ""
-echo "Test 4: Dead tmux session IS marked exited on startup"
+echo "Test 4: Dead tmux session IS revived on startup"
 kill "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null || true
 sleep 2
 
@@ -129,15 +129,17 @@ $TMUX_BIN kill-session -t "=planeai-test-e2e-bbb" 2>/dev/null || true
 # Ensure DB still says active
 sqlite3 "$DB_PATH" "UPDATE sessions SET status='active' WHERE id='e2e-sess-bbb';"
 
-# Reopen — reconciliation should mark bbb as exited
+# Reopen — revive_sessions should recreate the tmux session
 "$APP_BIN" &>/dev/null &
 APP_PID=$!
 sleep 5
 
 STATUS_A=$(sqlite3 "$DB_PATH" "SELECT status FROM sessions WHERE id='e2e-sess-aaa';")
 STATUS_B=$(sqlite3 "$DB_PATH" "SELECT status FROM sessions WHERE id='e2e-sess-bbb';")
+TMUX_B_ALIVE=$($TMUX_BIN has-session -t "=planeai-test-e2e-bbb" 2>/dev/null && echo "yes" || echo "no")
 assert_eq "session A (alive tmux) stays active" "active" "$STATUS_A"
-assert_eq "session B (dead tmux) marked exited" "exited" "$STATUS_B"
+assert_eq "session B (dead tmux) revived to active" "active" "$STATUS_B"
+assert_eq "session B tmux recreated" "yes" "$TMUX_B_ALIVE"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

@@ -1582,18 +1582,29 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
 
-            // Startup reconciliation: mark stale sessions as exited
-            #[cfg(not(windows))]
-            let _ = db::reconcile_sessions(&conn, tmux::has_session);
-            #[cfg(windows)]
-            let _ = db::reconcile_sessions(&conn, |_| false);
-
             // Config: migrate from DB if needed, then load
             let config_dir = config::config_dir(&app.package_info().name);
             if let Ok(settings) = db::get_settings(&conn) {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+
+            // Revive sessions: recreate dead tmux sessions and restore exited direct sessions
+            #[cfg(not(windows))]
+            let _ = revive_sessions(
+                &conn,
+                &cfg,
+                tmux::has_session,
+                tmux::create_session_with_cmd,
+            );
+            #[cfg(windows)]
+            let _ = revive_sessions(
+                &conn,
+                &cfg,
+                |_| false,
+                |_, _, _, _| Err("tmux not available".to_string()),
+            );
+
             app.manage(ConfigState(Mutex::new(cfg)));
 
             // Scaffold themes dir with bundled themes if missing
@@ -1751,6 +1762,73 @@ fn sanitize_project_name(name: &str) -> String {
         .replace(' ', "-")
         .replace([':', '?', '*', '<', '>', '|', '"'], "")
         .to_lowercase()
+}
+
+/// Revive sessions on startup: recreate dead tmux sessions and restore exited direct sessions.
+/// Returns IDs of sessions that failed to revive.
+fn revive_sessions<F, G>(
+    conn: &rusqlite::Connection,
+    cfg: &config::Config,
+    has_tmux_session: F,
+    create_tmux: G,
+) -> Vec<String>
+where
+    F: Fn(&str) -> bool,
+    G: Fn(&str, &str, &str, &str) -> Result<(), String>,
+{
+    let sessions = match db::list_sessions(conn) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let projects = db::list_projects(conn).unwrap_or_default();
+    let mut failures = Vec::new();
+
+    for session in &sessions {
+        if session.backend == "tmux" {
+            let tmux_name = match session.tmux_name.as_deref() {
+                Some(n) => n,
+                None => continue,
+            };
+            if has_tmux_session(tmux_name) {
+                continue;
+            }
+            // Build command
+            let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+            let cmd = match cfg.providers.get(provider_key) {
+                Some(provider_def) => config::restart_command_for_provider(
+                    provider_def,
+                    session.provider_session_id.as_deref(),
+                ),
+                None => continue,
+            };
+            let project_path = projects
+                .iter()
+                .find(|p| p.id == session.project_id)
+                .map(|p| p.path.as_str())
+                .unwrap_or("/");
+            let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+
+            match create_tmux(tmux_name, cwd, &cmd, &session.id) {
+                Ok(()) => {
+                    if session.status == "exited" {
+                        let _ = db::restore_session(conn, &session.id);
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[revive] failed to recreate tmux for session {}: {}",
+                        session.id, e
+                    );
+                    let _ = db::mark_session_exited(conn, &session.id);
+                    failures.push(session.id.clone());
+                }
+            }
+        } else if session.status == "exited" {
+            let _ = db::restore_session(conn, &session.id);
+        }
+    }
+
+    failures
 }
 
 #[cfg(test)]
@@ -1923,6 +2001,240 @@ mod tests {
         assert_eq!(
             parse_github_repo("https://github.com/org/repo.git"),
             Some("org/repo".to_string())
+        );
+    }
+
+    #[test]
+    fn revive_recreates_dead_tmux_session_with_resume_command() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let _session = db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "test",
+            Some("planeai-myapp-abc"),
+            "main",
+            Some("/tmp/worktree"),
+            Some("kiro"),
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::set_provider_session_id(&conn, "s1", "sess-123").unwrap();
+
+        let cfg = config::Config::default();
+        let created = std::cell::RefCell::new(Vec::new());
+
+        let failures = revive_sessions(
+            &conn,
+            &cfg,
+            |_| false, // all tmux sessions are dead
+            |tmux_name, cwd, cmd, session_id| {
+                created.borrow_mut().push((
+                    tmux_name.to_string(),
+                    cwd.to_string(),
+                    cmd.to_string(),
+                    session_id.to_string(),
+                ));
+                Ok(())
+            },
+        );
+
+        assert!(failures.is_empty());
+        let calls = created.borrow();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "planeai-myapp-abc");
+        assert_eq!(calls[0].1, "/tmp/worktree");
+        assert!(calls[0].2.contains("--resume-id"));
+        assert!(calls[0].2.contains("sess-123"));
+        assert_eq!(calls[0].3, "s1");
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "active"
+        );
+    }
+
+    #[test]
+    fn revive_restores_exited_tmux_session_and_recreates_tmux() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let _session = db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "test",
+            Some("planeai-myapp-abc"),
+            "main",
+            Some("/tmp/worktree"),
+            Some("kiro"),
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, "s1").unwrap();
+
+        let cfg = config::Config::default();
+        let created = std::cell::RefCell::new(Vec::new());
+
+        let failures = revive_sessions(
+            &conn,
+            &cfg,
+            |_| false,
+            |tmux_name, cwd, cmd, session_id| {
+                created.borrow_mut().push((
+                    tmux_name.to_string(),
+                    cwd.to_string(),
+                    cmd.to_string(),
+                    session_id.to_string(),
+                ));
+                Ok(())
+            },
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(created.borrow().len(), 1);
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "active"
+        );
+    }
+
+    #[test]
+    fn revive_restores_exited_direct_session_without_tmux_creation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let _session = db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "test",
+            None,
+            "main",
+            Some("/tmp/worktree"),
+            Some("kiro"),
+            "direct",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, "s1").unwrap();
+
+        let cfg = config::Config::default();
+        let created = std::cell::RefCell::new(Vec::new());
+
+        let failures = revive_sessions(
+            &conn,
+            &cfg,
+            |_| false,
+            |tmux_name, cwd, cmd, session_id| {
+                created.borrow_mut().push((
+                    tmux_name.to_string(),
+                    cwd.to_string(),
+                    cmd.to_string(),
+                    session_id.to_string(),
+                ));
+                Ok(())
+            },
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(created.borrow().len(), 0); // no tmux created
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "active"
+        );
+    }
+
+    #[test]
+    fn revive_tmux_failure_marks_session_exited() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let _session = db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "test",
+            Some("planeai-myapp-abc"),
+            "main",
+            Some("/tmp/worktree"),
+            Some("kiro"),
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config::default();
+
+        let failures = revive_sessions(
+            &conn,
+            &cfg,
+            |_| false,
+            |_, _, _, _| Err("tmux not found".to_string()),
+        );
+
+        assert_eq!(failures, vec!["s1"]);
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "exited"
+        );
+    }
+
+    #[test]
+    fn revive_leaves_alive_tmux_sessions_untouched() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let _session = db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "test",
+            Some("planeai-myapp-abc"),
+            "main",
+            Some("/tmp/worktree"),
+            Some("kiro"),
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config::default();
+        let created = std::cell::RefCell::new(Vec::new());
+
+        let failures = revive_sessions(
+            &conn,
+            &cfg,
+            |_| true, // all tmux sessions are alive
+            |tmux_name, cwd, cmd, session_id| {
+                created.borrow_mut().push((
+                    tmux_name.to_string(),
+                    cwd.to_string(),
+                    cmd.to_string(),
+                    session_id.to_string(),
+                ));
+                Ok(())
+            },
+        );
+
+        assert!(failures.is_empty());
+        assert_eq!(created.borrow().len(), 0); // no tmux created
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "active"
         );
     }
 
