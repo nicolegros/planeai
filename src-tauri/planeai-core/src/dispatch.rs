@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
+
+use tokio::process::Command;
 
 use crate::task::{Task, TaskManagerConfig};
 use crate::template;
@@ -39,7 +40,7 @@ impl TaskDispatcher {
         &self,
         claimed: &HashSet<String>,
     ) -> Result<Vec<Task>, DispatchError> {
-        let tasks = self.run_list_tasks()?;
+        let tasks = self.run_list_tasks().await?;
 
         let mut eligible = Vec::new();
         for task in &tasks {
@@ -49,7 +50,7 @@ impl TaskDispatcher {
             if self.is_terminal(&task.status) {
                 continue;
             }
-            if self.has_unresolved_blockers(task, &tasks)? {
+            if self.has_unresolved_blockers(task, &tasks).await? {
                 continue;
             }
             eligible.push(task.clone());
@@ -59,25 +60,25 @@ impl TaskDispatcher {
         Ok(eligible)
     }
 
-    fn run_list_tasks(&self) -> Result<Vec<Task>, DispatchError> {
+    async fn run_list_tasks(&self) -> Result<Vec<Task>, DispatchError> {
         let mut vars = HashMap::new();
         vars.insert("project", self.project.as_str());
         let cmd_str = template::render(&self.config.list_tasks, &vars);
-        let output = self.run_command(&cmd_str)?;
+        let output = self.run_command(&cmd_str).await?;
         serde_json::from_str(&output)
             .map_err(|e| DispatchError::ParseError(format!("list_tasks: {e}")))
     }
 
-    fn run_get_task(&self, key: &str) -> Result<Task, DispatchError> {
+    async fn run_get_task(&self, key: &str) -> Result<Task, DispatchError> {
         let mut vars = HashMap::new();
         vars.insert("key", key);
         let cmd_str = template::render(&self.config.get_task, &vars);
-        let output = self.run_command(&cmd_str)?;
+        let output = self.run_command(&cmd_str).await?;
         serde_json::from_str(&output)
             .map_err(|e| DispatchError::ParseError(format!("get_task({key}): {e}")))
     }
 
-    fn has_unresolved_blockers(
+    async fn has_unresolved_blockers(
         &self,
         task: &Task,
         all_tasks: &[Task],
@@ -86,7 +87,7 @@ impl TaskDispatcher {
             let resolved = if let Some(blocker) = all_tasks.iter().find(|t| &t.key == blocker_key) {
                 self.is_terminal(&blocker.status)
             } else {
-                match self.run_get_task(blocker_key) {
+                match self.run_get_task(blocker_key).await {
                     Ok(blocker) => self.is_terminal(&blocker.status),
                     Err(_) => true, // not found = resolved
                 }
@@ -105,7 +106,7 @@ impl TaskDispatcher {
             .any(|s| s.eq_ignore_ascii_case(status))
     }
 
-    fn run_command(&self, cmd_str: &str) -> Result<String, DispatchError> {
+    async fn run_command(&self, cmd_str: &str) -> Result<String, DispatchError> {
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
         if parts.is_empty() {
             return Err(DispatchError::CommandFailed("empty command".to_string()));
@@ -114,6 +115,7 @@ impl TaskDispatcher {
             .args(&parts[1..])
             .current_dir(&self.cwd)
             .output()
+            .await
             .map_err(|e| DispatchError::CommandFailed(format!("{}: {e}", parts[0])))?;
 
         if !output.status.success() {

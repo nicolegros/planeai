@@ -118,19 +118,23 @@ impl Orchestrator {
     }
 
     async fn reconcile(&self, running: &mut HashMap<String, RunningSession>) {
-        let mut to_kill = Vec::new();
+        let futures: Vec<_> = running.iter().map(|(task_key, entry)| {
+            let key = task_key.clone();
+            let config = entry.task_manager_config.clone();
+            let path = entry.project_path.clone();
+            async move {
+                let status = get_task_status(&config, &key, &path).await;
+                (key, config, status)
+            }
+        }).collect();
 
-        for (task_key, entry) in running.iter() {
-            let status =
-                self.get_task_status(&entry.task_manager_config, task_key, &entry.project_path);
+        let results = futures::future::join_all(futures).await;
+
+        let mut to_kill = Vec::new();
+        for (key, config, status) in results {
             if let Some(status) = status {
-                if entry
-                    .task_manager_config
-                    .terminal_states
-                    .iter()
-                    .any(|s| s.eq_ignore_ascii_case(&status))
-                {
-                    to_kill.push(task_key.clone());
+                if config.terminal_states.iter().any(|s| s.eq_ignore_ascii_case(&status)) {
+                    to_kill.push(key);
                 }
             }
         }
@@ -140,33 +144,6 @@ impl Orchestrator {
                 let _ = self.backend.kill_session(&entry.session);
             }
         }
-    }
-
-    fn get_task_status(
-        &self,
-        config: &TaskManagerConfig,
-        key: &str,
-        project_path: &str,
-    ) -> Option<String> {
-        use std::collections::HashMap as StdMap;
-        let mut vars = StdMap::new();
-        vars.insert("key", key);
-        let cmd_str = crate::template::render(&config.get_task, &vars);
-        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-        if parts.is_empty() {
-            return None;
-        }
-        let output = std::process::Command::new(parts[0])
-            .args(&parts[1..])
-            .current_dir(project_path)
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let task: crate::task::Task = serde_json::from_str(&stdout).ok()?;
-        Some(task.status)
     }
 
     async fn dispatch(&self, running: &mut HashMap<String, RunningSession>) {
@@ -217,4 +194,30 @@ impl Orchestrator {
             }
         }
     }
+}
+
+async fn get_task_status(
+    config: &TaskManagerConfig,
+    key: &str,
+    project_path: &str,
+) -> Option<String> {
+    let mut vars = HashMap::new();
+    vars.insert("key", key);
+    let cmd_str = crate::template::render(&config.get_task, &vars);
+    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let output = tokio::process::Command::new(parts[0])
+        .args(&parts[1..])
+        .current_dir(project_path)
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let task: crate::task::Task = serde_json::from_str(&stdout).ok()?;
+    Some(task.status)
 }
