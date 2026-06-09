@@ -1,3 +1,4 @@
+pub mod command;
 pub mod dispatch;
 pub mod orchestrator;
 pub mod session;
