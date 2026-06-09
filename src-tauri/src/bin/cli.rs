@@ -85,6 +85,7 @@ fn main() {
                 let env = planeai::cli::Env {
                     backend,
                     socket_path: planeai::paths::notify_socket_path(),
+                    config: cfg,
                 };
 
                 let opts = planeai::cli::SessionCreateOpts {
@@ -128,12 +129,17 @@ impl planeai::cli::Backend for RealBackend {
 #[cfg(test)]
 mod tests {
     use planeai::db;
+    use planeai::config::Config;
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         conn
+    }
+
+    fn test_config() -> Config {
+        Config::default()
     }
 
     use std::cell::RefCell;
@@ -315,6 +321,7 @@ mod tests {
         let env = planeai::cli::Env {
             backend: "direct".to_string(),
             socket_path: std::path::PathBuf::from("/nonexistent/notify.sock"),
+            config: test_config(),
         };
 
         let result = planeai::cli::run_session_create_with_env(&conn, &opts, &planeai::cli::NoOpBackend, &env);
@@ -344,6 +351,7 @@ mod tests {
         let env = planeai::cli::Env {
             backend: "tmux".to_string(),
             socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
+            config: test_config(),
         };
 
         let result = planeai::cli::run_session_create_with_env(&conn, &opts, &backend, &env);
@@ -386,6 +394,7 @@ mod tests {
         let env = planeai::cli::Env {
             backend: "tmux".to_string(),
             socket_path: sock_path.clone(),
+            config: test_config(),
         };
 
         let result = planeai::cli::run_session_create_with_env(&conn, &opts, &planeai::cli::NoOpBackend, &env);

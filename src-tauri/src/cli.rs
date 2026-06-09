@@ -1,6 +1,11 @@
 use rusqlite::Connection;
 
-use crate::db;
+use crate::{config, db, template};
+
+/// Shell-escape a string by wrapping in single quotes, escaping any internal single quotes.
+fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
 
 pub fn run_project_list(conn: &Connection) -> String {
     let projects = db::list_projects(conn).unwrap_or_default();
@@ -37,12 +42,16 @@ impl Backend for NoOpBackend {
 pub struct Env {
     pub backend: String,
     pub socket_path: std::path::PathBuf,
+    pub config: config::Config,
 }
 
 pub fn run_session_create(conn: &Connection, opts: &SessionCreateOpts, backend: &dyn Backend) -> Result<String, String> {
+    let cfg_dir = config::config_dir("planeai");
+    let (cfg, _) = config::load(&cfg_dir);
     let env = Env {
-        backend: "tmux".to_string(),
+        backend: config::resolve_backend(&cfg).to_string(),
         socket_path: crate::paths::notify_socket_path(),
+        config: cfg,
     };
     run_session_create_with_env(conn, opts, backend, &env)
 }
@@ -55,6 +64,20 @@ pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, 
     let projects = db::list_projects(conn).map_err(|e| e.to_string())?;
     let project = projects.iter().find(|p| p.name == opts.project)
         .ok_or_else(|| format!("unknown project: {}", opts.project))?;
+
+    // Resolve provider and build launch command
+    let provider_key = opts.provider.as_deref().unwrap_or(&env.config.default_provider);
+    let provider_def = env.config.providers.get(provider_key)
+        .ok_or_else(|| format!("unknown provider: {provider_key}"))?;
+    let mut cmd = config::launch_command(provider_def, opts.yolo);
+
+    if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("prompt", prompt.as_str());
+        let rendered = template::render(prompt_tpl, &vars);
+        let escaped = shell_escape(&rendered);
+        cmd = format!("{cmd} {escaped}");
+    }
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let short_id = &session_id.replace('-', "")[..8];
@@ -74,7 +97,7 @@ pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, 
 
     let tmux_name = if env.backend == "tmux" {
         let tn = crate::tmux::session_name(&project.name);
-        backend.create_tmux_session(&tn, working_dir, "", &session_id)?;
+        backend.create_tmux_session(&tn, working_dir, &cmd, &session_id)?;
         Some(tn)
     } else {
         None
@@ -90,7 +113,7 @@ pub fn run_session_create_with_env(conn: &Connection, opts: &SessionCreateOpts, 
         tmux_name.as_deref(),
         &opts.branch,
         worktree_path.as_deref(),
-        opts.provider.as_deref(),
+        Some(provider_key),
         &env.backend,
         opts.yolo,
         opts.task_key.as_deref(),
