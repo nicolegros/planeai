@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
+use tokio_util::sync::CancellationToken;
 
 use crate::dispatch::TaskDispatcher;
 use crate::session::{Backend, DispatchConfig, NewSession, SessionDispatcher};
@@ -46,33 +47,42 @@ impl Orchestrator {
         Self { config, backend }
     }
 
-    /// Run the orchestrator until a stop command is received on the socket.
-    pub async fn run(&self) -> Result<(), String> {
+    /// Run the orchestrator until cancelled or a stop command is received on the socket.
+    pub async fn run(&self, token: CancellationToken) -> Result<(), String> {
+        let _ = std::fs::remove_file(&self.config.socket_path);
         let listener = UnixListener::bind(&self.config.socket_path)
             .map_err(|e| format!("failed to bind socket: {e}"))?;
 
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_millis(self.config.poll_interval_ms));
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+            self.config.poll_interval_ms,
+        ));
 
         // Reattach: load active auto-dispatched sessions from DB
         let mut running: HashMap<String, RunningSession> = HashMap::new();
         if let Ok(sessions) = self.backend.list_active_sessions() {
             for session in sessions {
                 // Find the matching project config for reconciliation
-                let project_config = self.config.projects.iter()
+                let project_config = self
+                    .config
+                    .projects
+                    .iter()
                     .find(|p| p.project_id == session.project_id);
                 if let Some(project) = project_config {
-                    running.insert(session.task_key.clone(), RunningSession {
-                        session,
-                        project_path: project.project_path.clone(),
-                        task_manager_config: project.task_manager_config.clone(),
-                    });
+                    running.insert(
+                        session.task_key.clone(),
+                        RunningSession {
+                            session,
+                            project_path: project.project_path.clone(),
+                            task_manager_config: project.task_manager_config.clone(),
+                        },
+                    );
                 }
             }
         }
 
         loop {
             tokio::select! {
+                _ = token.cancelled() => return Ok(()),
                 _ = interval.tick() => {
                     self.reconcile(&mut running).await;
                     self.dispatch(&mut running).await;
@@ -83,7 +93,10 @@ impl Orchestrator {
                         let mut line = String::new();
                         if reader.read_line(&mut line).await.is_ok() {
                             match line.trim() {
-                                "stop" => return Ok(()),
+                                "stop" => {
+                                    token.cancel();
+                                    return Ok(());
+                                }
                                 "status" => {
                                     let sessions: Vec<&str> = running.keys().map(|k| k.as_str()).collect();
                                     let json = format!(
@@ -108,9 +121,15 @@ impl Orchestrator {
         let mut to_kill = Vec::new();
 
         for (task_key, entry) in running.iter() {
-            let status = self.get_task_status(&entry.task_manager_config, task_key, &entry.project_path);
+            let status =
+                self.get_task_status(&entry.task_manager_config, task_key, &entry.project_path);
             if let Some(status) = status {
-                if entry.task_manager_config.terminal_states.iter().any(|s| s.eq_ignore_ascii_case(&status)) {
+                if entry
+                    .task_manager_config
+                    .terminal_states
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(&status))
+                {
                     to_kill.push(task_key.clone());
                 }
             }
@@ -123,19 +142,28 @@ impl Orchestrator {
         }
     }
 
-    fn get_task_status(&self, config: &TaskManagerConfig, key: &str, project_path: &str) -> Option<String> {
+    fn get_task_status(
+        &self,
+        config: &TaskManagerConfig,
+        key: &str,
+        project_path: &str,
+    ) -> Option<String> {
         use std::collections::HashMap as StdMap;
         let mut vars = StdMap::new();
         vars.insert("key", key);
         let cmd_str = crate::template::render(&config.get_task, &vars);
         let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-        if parts.is_empty() { return None; }
+        if parts.is_empty() {
+            return None;
+        }
         let output = std::process::Command::new(parts[0])
             .args(&parts[1..])
             .current_dir(project_path)
             .output()
             .ok()?;
-        if !output.status.success() { return None; }
+        if !output.status.success() {
+            return None;
+        }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let task: crate::task::Task = serde_json::from_str(&stdout).ok()?;
         Some(task.status)
@@ -177,11 +205,14 @@ impl Orchestrator {
                 };
 
                 if let Ok(session) = session_dispatcher.dispatch(&task, self.backend.as_ref()) {
-                    running.insert(session.task_key.clone(), RunningSession {
-                        session,
-                        project_path: project.project_path.clone(),
-                        task_manager_config: project.task_manager_config.clone(),
-                    });
+                    running.insert(
+                        session.task_key.clone(),
+                        RunningSession {
+                            session,
+                            project_path: project.project_path.clone(),
+                            task_manager_config: project.task_manager_config.clone(),
+                        },
+                    );
                 }
             }
         }

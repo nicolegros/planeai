@@ -17,12 +17,9 @@ dev:
 
 build:
 	pnpm tauri build -b app
-	cd src-tauri && cargo build --release -p planeai-symphony
 
 bundle:
 	pnpm tauri build -b app
-	cd src-tauri && cargo build --release -p planeai-symphony
-	cp src-tauri/target/release/planeai-symphony src-tauri/target/release/bundle/macos/planeai.app/Contents/MacOS/
 
 open: bundle
 	open src-tauri/target/release/bundle/macos/planeai.app
@@ -43,8 +40,6 @@ dev-bundle:
 	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
-	cd src-tauri && cargo build --release -p planeai-symphony
-	cp src-tauri/target/release/planeai-symphony src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app/Contents/MacOS/
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app

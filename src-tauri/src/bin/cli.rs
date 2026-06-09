@@ -145,20 +145,22 @@ fn main() {
         Commands::Symphony { action } => {
             let socket_path = planeai::paths::app_data_dir().join("symphony.sock");
             match action {
-                SymphonyAction::Status => {
-                    match symphony_command(&socket_path, "status") {
-                        Ok(response) => println!("{response}"),
-                        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+                SymphonyAction::Status => match symphony_command(&socket_path, "status") {
+                    Ok(response) => println!("{response}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
                     }
-                }
-                SymphonyAction::Stop => {
-                    match symphony_command(&socket_path, "stop") {
-                        Ok(_) => println!("{{\"status\": \"stopped\"}}"),
-                        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+                },
+                SymphonyAction::Stop => match symphony_command(&socket_path, "stop") {
+                    Ok(_) => println!("{{\"status\": \"stopped\"}}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
                     }
-                }
+                },
             }
-        },
+        }
     }
 }
 
@@ -171,7 +173,8 @@ fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, 
     }
     let mut stream = UnixStream::connect(socket_path)
         .map_err(|e| format!("{{\"error\": \"cannot connect to orchestrator: {e}\"}}"))?;
-    stream.write_all(format!("{cmd}\n").as_bytes())
+    stream
+        .write_all(format!("{cmd}\n").as_bytes())
         .map_err(|e| format!("{{\"error\": \"send failed: {e}\"}}"))?;
 
     if cmd == "stop" {
@@ -181,9 +184,11 @@ fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, 
     // Read response
     let reader = BufReader::new(stream);
     let mut response = String::new();
-    for line in reader.lines() {
+    if let Some(line) = reader.lines().next() {
         match line {
-            Ok(l) => { response.push_str(&l); break; }
+            Ok(l) => {
+                response.push_str(&l);
+            }
             Err(e) => return Err(format!("{{\"error\": \"read failed: {e}\"}}")),
         }
     }

@@ -18,8 +18,9 @@ pub fn app_data_dir() -> PathBuf {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let base = std::env::var("XDG_DATA_HOME")
-            .unwrap_or_else(|_| format!("{}/.local/share", std::env::var("HOME").unwrap_or_default()));
+        let base = std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
+            format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
+        });
         PathBuf::from(base).join(APP_ID)
     }
 }

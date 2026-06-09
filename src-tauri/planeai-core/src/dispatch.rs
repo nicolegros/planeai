@@ -77,7 +77,11 @@ impl TaskDispatcher {
             .map_err(|e| DispatchError::ParseError(format!("get_task({key}): {e}")))
     }
 
-    fn has_unresolved_blockers(&self, task: &Task, all_tasks: &[Task]) -> Result<bool, DispatchError> {
+    fn has_unresolved_blockers(
+        &self,
+        task: &Task,
+        all_tasks: &[Task],
+    ) -> Result<bool, DispatchError> {
         for blocker_key in &task.blocked_by {
             let resolved = if let Some(blocker) = all_tasks.iter().find(|t| &t.key == blocker_key) {
                 self.is_terminal(&blocker.status)
@@ -95,7 +99,10 @@ impl TaskDispatcher {
     }
 
     fn is_terminal(&self, status: &str) -> bool {
-        self.config.terminal_states.iter().any(|s| s.eq_ignore_ascii_case(status))
+        self.config
+            .terminal_states
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(status))
     }
 
     fn run_command(&self, cmd_str: &str) -> Result<String, DispatchError> {

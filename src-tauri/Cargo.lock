@@ -2969,6 +2969,8 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tempfile",
+ "tokio",
+ "tokio-util",
  "trash",
  "uuid",
  "windows-sys 0.52.0",
@@ -2983,20 +2985,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
-]
-
-[[package]]
-name = "planeai-symphony"
-version = "0.0.0"
-dependencies = [
- "chrono",
- "json_comments",
- "planeai-core",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
