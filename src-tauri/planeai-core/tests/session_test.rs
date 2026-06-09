@@ -38,6 +38,9 @@ impl Backend for RecordingBackend {
         self.gui_notified.lock().unwrap().push(session_id.to_string());
         Ok(())
     }
+    fn kill_session(&self, _session: &NewSession) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[test]

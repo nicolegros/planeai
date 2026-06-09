@@ -2990,7 +2990,12 @@ dependencies = [
 name = "planeai-symphony"
 version = "0.0.0"
 dependencies = [
+ "chrono",
+ "json_comments",
  "planeai-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

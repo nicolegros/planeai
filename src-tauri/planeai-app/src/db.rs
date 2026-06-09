@@ -170,6 +170,13 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_url TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_state TEXT");
 
+    // Add auto_dispatched column (0 for manually created sessions)
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN auto_dispatched INTEGER NOT NULL DEFAULT 0");
+
+    // Add auto_mode and task_manager columns to projects (for symphony orchestrator)
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+
     Ok(())
 }
 

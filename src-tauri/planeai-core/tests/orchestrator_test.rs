@@ -32,6 +32,9 @@ impl Backend for TestBackend {
     fn notify_gui(&self, _session_id: &str) -> Result<(), String> {
         Ok(())
     }
+    fn kill_session(&self, _session: &NewSession) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 fn write_script(dir: &Path, name: &str, output: &str) -> String {
@@ -109,4 +112,111 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].task_key, "KAN-1");
     assert!(sessions[0].auto_dispatched);
+}
+
+#[tokio::test]
+async fn orchestrator_kills_session_when_task_becomes_terminal() {
+    let dir = tempdir().unwrap();
+    let socket_path = dir.path().join("symphony.sock");
+
+    // The list script returns "todo" on first call, then "done" on subsequent calls.
+    // We use a state file to track calls.
+    let state_file = dir.path().join("call_count");
+    fs::write(&state_file, "0").unwrap();
+
+    let script_content = format!(
+        r#"#!/bin/sh
+count=$(cat {state})
+if [ "$count" = "0" ]; then
+    echo 1 > {state}
+    printf '[{{"key":"KAN-1","title":"Fix bug","status":"todo","description":"","priority":1,"blocked_by":[]}}]'
+else
+    printf '[{{"key":"KAN-1","title":"Fix bug","status":"done","description":"","priority":1,"blocked_by":[]}}]'
+fi
+"#,
+        state = state_file.display()
+    );
+    let list_script = dir.path().join("list.sh");
+    fs::write(&list_script, &script_content).unwrap();
+    fs::set_permissions(&list_script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // get_task also returns "done" (for reconciliation check)
+    let get_json = r#"{"key":"KAN-1","title":"Fix bug","status":"done","description":"","priority":1,"blocked_by":[]}"#;
+    let get_script = write_script(dir.path(), "get.sh", get_json);
+
+    let config = OrchestratorConfig {
+        poll_interval_ms: 50,
+        max_concurrent: 2,
+        socket_path: socket_path.clone(),
+        projects: vec![AutoProject {
+            project_id: "p1".to_string(),
+            project_name: "testproj".to_string(),
+            project_path: dir.path().to_string_lossy().to_string(),
+            task_manager_config: TaskManagerConfig {
+                list_tasks: format!("{}", list_script.display()),
+                get_task: format!("{} {{key}}", get_script),
+                move_task: String::new(),
+                terminal_states: vec!["done".to_string()],
+                on_start: None,
+            },
+            dispatch_config: planeai_core::session::DispatchConfig {
+                provider: "kiro".to_string(),
+                provider_command: "kiro-cli chat".to_string(),
+                yolo: true,
+                yolo_flag: None,
+                worktree_root: dir.path().join("wt").to_string_lossy().to_string(),
+                base_branch: "main".to_string(),
+                session_backend: "tmux".to_string(),
+                prompt_template: None,
+            },
+        }],
+    };
+
+    /// Backend that tracks kills.
+    #[derive(Default)]
+    struct KillTrackingBackend {
+        sessions: Mutex<Vec<NewSession>>,
+        killed: Mutex<Vec<String>>,
+    }
+
+    impl Backend for KillTrackingBackend {
+        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> { Ok(()) }
+        fn insert_session(&self, session: &NewSession) -> Result<(), String> {
+            self.sessions.lock().unwrap().push(session.clone());
+            Ok(())
+        }
+        fn run_move_task(&self, _: &TaskManagerConfig, _: &str, _: &str, _: &Path) -> Result<(), String> { Ok(()) }
+        fn notify_gui(&self, _: &str) -> Result<(), String> { Ok(()) }
+        fn kill_session(&self, session: &NewSession) -> Result<(), String> {
+            self.killed.lock().unwrap().push(session.task_key.clone());
+            Ok(())
+        }
+    }
+
+    let backend = Arc::new(KillTrackingBackend::default());
+    let orchestrator = Orchestrator::new(config, backend.clone());
+
+    let handle = tokio::spawn(async move { orchestrator.run().await });
+
+    // Wait for dispatch + reconciliation (at least 3 ticks)
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    // Stop the orchestrator
+    let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n").await.unwrap();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await.unwrap().unwrap();
+    assert!(result.is_ok());
+
+    // Session was dispatched
+    let sessions = backend.sessions.lock().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].task_key, "KAN-1");
+
+    // Session was killed due to terminal state
+    let killed = backend.killed.lock().unwrap();
+    assert_eq!(killed.len(), 1);
+    assert_eq!(killed[0], "KAN-1");
 }

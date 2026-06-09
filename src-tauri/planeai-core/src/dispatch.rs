@@ -46,6 +46,9 @@ impl TaskDispatcher {
             if claimed.contains(&task.key) {
                 continue;
             }
+            if self.is_terminal(&task.status) {
+                continue;
+            }
             if self.has_unresolved_blockers(task, &tasks)? {
                 continue;
             }
