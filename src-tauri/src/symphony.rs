@@ -109,8 +109,7 @@ impl Backend for TauriBackend {
         vars.insert("key", key);
         vars.insert("status", status);
         let cmd_str = template::render(&config.move_task, &vars);
-        planeai_core::command::run_command(&cmd_str, cwd)
-            .map_err(|e| e.to_string())?;
+        planeai_core::command::run_command(&cmd_str, cwd).map_err(|e| e.to_string())?;
         Ok(())
     }
 

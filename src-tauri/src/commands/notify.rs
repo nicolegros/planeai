@@ -87,8 +87,7 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to create agents dir: {e}"))?;
     let config_path = format!("{agents_dir}/default.json");
 
-    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path)
-    {
+    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
         serde_json::from_str(&content).map_err(|e| format!("failed to parse default.json: {e}"))?
     } else {
         serde_json::json!({ "name": "default", "tools": ["*"] })

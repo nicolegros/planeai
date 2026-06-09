@@ -123,8 +123,7 @@ pub fn init_symphony(
     let socket_path = app_dir.join("symphony.sock");
 
     let mut state = crate::symphony::SymphonyState::new();
-    if let Some(orch_config) =
-        crate::symphony::build_orchestrator_config(&cfg, &conn, socket_path)
+    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn, socket_path)
     {
         drop(cfg);
         drop(conn);
@@ -136,8 +135,7 @@ pub fn init_symphony(
         });
 
         let token = tokio_util::sync::CancellationToken::new();
-        let orchestrator =
-            planeai_core::orchestrator::Orchestrator::new(orch_config, backend);
+        let orchestrator = planeai_core::orchestrator::Orchestrator::new(orch_config, backend);
         let task_token = token.clone();
         let handle = tauri::async_runtime::spawn(async move {
             let _ = orchestrator.run(task_token).await;

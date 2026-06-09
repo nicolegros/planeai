@@ -125,11 +125,7 @@ pub fn build_session_plan(
         None
     };
 
-    let session_name = opts
-        .name
-        .as_deref()
-        .unwrap_or(&opts.branch)
-        .to_string();
+    let session_name = opts.name.as_deref().unwrap_or(&opts.branch).to_string();
 
     Ok(SessionPlan {
         session_id: session_id.to_string(),
@@ -154,16 +150,31 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
 
     match &plan.branch_strategy {
-        BranchStrategy::Checkout { repo, branch, new, base } => {
+        BranchStrategy::Checkout {
+            repo,
+            branch,
+            new,
+            base,
+        } => {
             git::checkout_branch(repo, branch, *new, base.as_deref())?;
         }
-        BranchStrategy::Worktree { repo, path, branch, base } => {
+        BranchStrategy::Worktree {
+            repo,
+            path,
+            branch,
+            base,
+        } => {
             git::worktree_add(repo, path, branch, base)?;
         }
     }
 
     if let Some(tmux_name) = &plan.tmux_name {
-        tmux::create_session_with_cmd(tmux_name, &plan.working_dir, &plan.command, &plan.session_id)?;
+        tmux::create_session_with_cmd(
+            tmux_name,
+            &plan.working_dir,
+            &plan.command,
+            &plan.session_id,
+        )?;
     }
 
     let session = db::create_session_with_id(
@@ -236,14 +247,23 @@ mod tests {
             prompt: None,
         };
 
-        let plan = build_session_plan("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &opts, &test_env("tmux"), &test_project()).unwrap();
+        let plan = build_session_plan(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &opts,
+            &test_env("tmux"),
+            &test_project(),
+        )
+        .unwrap();
 
-        assert_eq!(plan.branch_strategy, BranchStrategy::Checkout {
-            repo: "/home/user/myapp".to_string(),
-            branch: "feat-x".to_string(),
-            new: true,
-            base: Some("main".to_string()),
-        });
+        assert_eq!(
+            plan.branch_strategy,
+            BranchStrategy::Checkout {
+                repo: "/home/user/myapp".to_string(),
+                branch: "feat-x".to_string(),
+                new: true,
+                base: Some("main".to_string()),
+            }
+        );
         assert_eq!(plan.working_dir, "/home/user/myapp");
         assert_eq!(plan.session_name, "feat-x");
         assert_eq!(plan.tmux_name, Some("planeai-myapp-aaaaaaaa".to_string()));
@@ -264,16 +284,28 @@ mod tests {
             prompt: None,
         };
 
-        let plan = build_session_plan("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &opts, &test_env("tmux"), &test_project()).unwrap();
+        let plan = build_session_plan(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &opts,
+            &test_env("tmux"),
+            &test_project(),
+        )
+        .unwrap();
 
         let home = config::home_dir();
-        assert_eq!(plan.branch_strategy, BranchStrategy::Worktree {
-            repo: "/home/user/myapp".to_string(),
-            path: format!("{home}/.planeai/worktrees/myapp/aaaaaaaa"),
-            branch: "feat-wt".to_string(),
-            base: "develop".to_string(),
-        });
-        assert_eq!(plan.working_dir, format!("{home}/.planeai/worktrees/myapp/aaaaaaaa"));
+        assert_eq!(
+            plan.branch_strategy,
+            BranchStrategy::Worktree {
+                repo: "/home/user/myapp".to_string(),
+                path: format!("{home}/.planeai/worktrees/myapp/aaaaaaaa"),
+                branch: "feat-wt".to_string(),
+                base: "develop".to_string(),
+            }
+        );
+        assert_eq!(
+            plan.working_dir,
+            format!("{home}/.planeai/worktrees/myapp/aaaaaaaa")
+        );
         assert_eq!(plan.session_name, "wt-session");
     }
 
@@ -292,7 +324,13 @@ mod tests {
             prompt: None,
         };
 
-        let plan = build_session_plan("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &opts, &test_env("direct"), &test_project()).unwrap();
+        let plan = build_session_plan(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &opts,
+            &test_env("direct"),
+            &test_project(),
+        )
+        .unwrap();
 
         assert_eq!(plan.tmux_name, None);
         assert_eq!(plan.backend, "direct");
@@ -313,10 +351,19 @@ mod tests {
             prompt: None,
         };
 
-        let plan = build_session_plan("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &opts, &test_env("tmux"), &test_project()).unwrap();
+        let plan = build_session_plan(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &opts,
+            &test_env("tmux"),
+            &test_project(),
+        )
+        .unwrap();
 
         // Default config has claude with --dangerously-skip-permissions
-        assert!(plan.command.contains("--dangerously-skip-permissions") || plan.command.contains("--trust-all-tools"));
+        assert!(
+            plan.command.contains("--dangerously-skip-permissions")
+                || plan.command.contains("--trust-all-tools")
+        );
     }
 
     #[test]
@@ -334,7 +381,12 @@ mod tests {
             prompt: None,
         };
 
-        let result = build_session_plan("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &opts, &test_env("tmux"), &test_project());
+        let result = build_session_plan(
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            &opts,
+            &test_env("tmux"),
+            &test_project(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown provider"));
     }

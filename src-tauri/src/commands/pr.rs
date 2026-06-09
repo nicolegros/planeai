@@ -50,8 +50,7 @@ fn new_pr_url(cwd: &str, branch: &str) -> Result<String, String> {
         return Err("no origin remote configured".to_string());
     }
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let repo_path =
-        parse_github_repo(&raw).ok_or("could not parse GitHub repo from remote URL")?;
+    let repo_path = parse_github_repo(&raw).ok_or("could not parse GitHub repo from remote URL")?;
     Ok(format!(
         "https://github.com/{repo_path}/compare/{branch}?expand=1"
     ))

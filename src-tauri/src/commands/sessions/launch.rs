@@ -5,9 +5,9 @@ use crate::db;
 use crate::git;
 use crate::state::{ConfigState, DbState, NotifyHandle};
 use crate::template;
-use crate::util::{resolve_command, sanitize_project_name, shell_escape};
 #[cfg(not(windows))]
 use crate::tmux;
+use crate::util::{resolve_command, sanitize_project_name, shell_escape};
 
 use super::helpers::{fire_task_hook, provider_has_hook};
 
@@ -35,30 +35,21 @@ pub(crate) fn discover_provider_session_id(
                 continue;
             }
         };
-        eprintln!(
-            "[DEBUG-disc] success, stdout_len={}",
-            output.len(),
-        );
+        eprintln!("[DEBUG-disc] success, stdout_len={}", output.len(),);
         let discovered = config::parse_provider_session_id(&output, pattern);
         eprintln!(
             "[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}",
             discovered, previous_id, is_resume
         );
-        if config::should_accept_provider_session_id(
-            discovered.as_deref(),
-            previous_id,
-            is_resume,
-        ) {
+        if config::should_accept_provider_session_id(discovered.as_deref(), previous_id, is_resume)
+        {
             eprintln!(
                 "[DEBUG-disc] accepted! storing provider_session_id={:?}",
                 discovered
             );
             if let Ok(conn) = rusqlite::Connection::open(db_path) {
-                let _ = db::set_provider_session_id(
-                    &conn,
-                    session_id,
-                    discovered.as_ref().unwrap(),
-                );
+                let _ =
+                    db::set_provider_session_id(&conn, session_id, discovered.as_ref().unwrap());
             }
             return;
         } else {

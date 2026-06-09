@@ -3,9 +3,9 @@ use tauri::State;
 use crate::db;
 use crate::git;
 use crate::state::{DbState, PtyState};
-use crate::util::expand_tilde;
 #[cfg(not(windows))]
 use crate::tmux;
+use crate::util::expand_tilde;
 
 #[tauri::command]
 pub fn create_project(

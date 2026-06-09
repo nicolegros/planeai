@@ -118,22 +118,29 @@ impl Orchestrator {
     }
 
     async fn reconcile(&self, running: &mut HashMap<String, RunningSession>) {
-        let futures: Vec<_> = running.iter().map(|(task_key, entry)| {
-            let key = task_key.clone();
-            let config = entry.task_manager_config.clone();
-            let path = entry.project_path.clone();
-            async move {
-                let status = get_task_status(&config, &key, &path).await;
-                (key, config, status)
-            }
-        }).collect();
+        let futures: Vec<_> = running
+            .iter()
+            .map(|(task_key, entry)| {
+                let key = task_key.clone();
+                let config = entry.task_manager_config.clone();
+                let path = entry.project_path.clone();
+                async move {
+                    let status = get_task_status(&config, &key, &path).await;
+                    (key, config, status)
+                }
+            })
+            .collect();
 
         let results = futures::future::join_all(futures).await;
 
         let mut to_kill = Vec::new();
         for (key, config, status) in results {
             if let Some(status) = status {
-                if config.terminal_states.iter().any(|s| s.eq_ignore_ascii_case(&status)) {
+                if config
+                    .terminal_states
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case(&status))
+                {
                     to_kill.push(key);
                 }
             }
