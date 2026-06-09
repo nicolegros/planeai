@@ -228,6 +228,40 @@ fn restore_project(state: State<DbState>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_project_auto_mode(state: State<DbState>, id: String) -> Result<(bool, Option<String>), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let auto_mode: bool = conn.query_row(
+        "SELECT auto_mode FROM projects WHERE id = ?1", [&id],
+        |row| row.get::<_, i64>(0),
+    ).map(|v| v != 0).unwrap_or(false);
+    let task_manager: Option<String> = conn.query_row(
+        "SELECT task_manager FROM projects WHERE id = ?1", [&id],
+        |row| row.get(0),
+    ).unwrap_or(None);
+    Ok((auto_mode, task_manager))
+}
+
+#[tauri::command]
+fn set_project_auto_mode(state: State<DbState>, id: String, enabled: bool) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE projects SET auto_mode = ?1 WHERE id = ?2",
+        rusqlite::params![enabled as i64, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_project_task_manager(state: State<DbState>, id: String, task_manager: Option<String>) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE projects SET task_manager = ?1 WHERE id = ?2",
+        rusqlite::params![task_manager, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn delete_project(
     state: State<DbState>,
     pty_state: State<PtyState>,
@@ -1729,6 +1763,9 @@ fn main() {
             list_archived_projects,
             archive_project,
             restore_project,
+            get_project_auto_mode,
+            set_project_auto_mode,
+            set_project_task_manager,
             delete_project,
             create_session,
             list_sessions,

@@ -4,7 +4,8 @@
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge } from "@lucide/svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap } from "@lucide/svelte";
 
   interface Project {
     id: string;
@@ -79,6 +80,26 @@
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
 
+  // Track auto_mode per project
+  let projectAutoMode = $state<Record<string, boolean>>({});
+
+  async function loadAutoModes() {
+    for (const p of projects) {
+      try {
+        const [enabled] = await invoke<[boolean, string | null]>("get_project_auto_mode", { id: p.id });
+        projectAutoMode[p.id] = enabled;
+      } catch { /* ignore */ }
+    }
+  }
+
+  $effect(() => { if (projects.length) loadAutoModes(); });
+
+  async function toggleAutoMode(project: Project) {
+    const current = projectAutoMode[project.id] ?? false;
+    await invoke("set_project_auto_mode", { id: project.id, enabled: !current });
+    projectAutoMode[project.id] = !current;
+  }
+
   function onContextMenu(e: MouseEvent, session: Session) {
     e.preventDefault();
     contextMenu = { x: e.clientX, y: e.clientY, session };
@@ -152,8 +173,9 @@
     {:else}
       {#each grouped as { project, sessions: projectSessions } (project.id)}
         <div>
-          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate" title={project.path} oncontextmenu={(e) => onProjectContextMenu(e, project)}>
+          <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1" title={project.path} oncontextmenu={(e) => onProjectContextMenu(e, project)}>
             {project.name}
+            {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-amber-500" />{/if}
           </h3>
           <ul class="space-y-0.5">
             {#each projectSessions as session (session.id)}
@@ -263,6 +285,7 @@
     y={projectContextMenu.y}
     onClose={() => (projectContextMenu = null)}
     items={[
+      { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
       { label: "Archive project", onSelect: () => onArchiveProject(projectContextMenu!.project) },
       { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
     ]}
