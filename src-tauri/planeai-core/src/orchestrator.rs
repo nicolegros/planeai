@@ -204,20 +204,9 @@ async fn get_task_status(
     let mut vars = HashMap::new();
     vars.insert("key", key);
     let cmd_str = crate::template::render(&config.get_task, &vars);
-    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-    if parts.is_empty() {
-        return None;
-    }
-    let output = tokio::process::Command::new(parts[0])
-        .args(&parts[1..])
-        .current_dir(project_path)
-        .output()
-        .await
+    let output = crate::command::run_command(&cmd_str, Path::new(project_path))
+        .map_err(|e| eprintln!("[orchestrator] failed to fetch task status for {key}: {e}"))
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let task: crate::task::Task = serde_json::from_str(&stdout).ok()?;
+    let task: crate::task::Task = serde_json::from_str(&output).ok()?;
     Some(task.status)
 }

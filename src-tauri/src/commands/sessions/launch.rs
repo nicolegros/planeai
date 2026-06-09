@@ -27,62 +27,43 @@ pub(crate) fn discover_provider_session_id(
     let mut last_discovered: Option<String> = None;
     for delay in &delays {
         std::thread::sleep(std::time::Duration::from_secs(*delay));
-        let parts: Vec<&str> = list_cmd.split_whitespace().collect();
-        let resolved = resolve_command(parts[0]);
-        eprintln!("[DEBUG-disc] attempt after {delay}s: running '{resolved}' with args {:?} in cwd '{cwd}'", &parts[1..]);
-        let output = std::process::Command::new(&resolved)
-            .args(&parts[1..])
-            .current_dir(cwd)
-            .output();
-        match &output {
-            Ok(o) => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                eprintln!(
-                    "[DEBUG-disc] exit={}, stdout_len={}, stderr_len={}",
-                    o.status,
-                    stdout.len(),
-                    stderr.len()
-                );
-                if !o.status.success() {
-                    continue;
-                }
-                let combined = if stdout.is_empty() {
-                    stderr.to_string()
-                } else {
-                    stdout.to_string()
-                };
-                let discovered = config::parse_provider_session_id(&combined, pattern);
-                eprintln!(
-                    "[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}",
-                    discovered, previous_id, is_resume
-                );
-                if config::should_accept_provider_session_id(
-                    discovered.as_deref(),
-                    previous_id,
-                    is_resume,
-                ) {
-                    eprintln!(
-                        "[DEBUG-disc] accepted! storing provider_session_id={:?}",
-                        discovered
-                    );
-                    if let Ok(conn) = rusqlite::Connection::open(db_path) {
-                        let _ = db::set_provider_session_id(
-                            &conn,
-                            session_id,
-                            discovered.as_ref().unwrap(),
-                        );
-                    }
-                    return;
-                } else {
-                    eprintln!("[DEBUG-disc] rejected (stale or no match)");
-                    last_discovered = discovered;
-                }
-            }
+        eprintln!("[DEBUG-disc] attempt after {delay}s: running '{list_cmd}' in cwd '{cwd}'");
+        let output = match planeai_core::command::run_command(list_cmd, std::path::Path::new(cwd)) {
+            Ok(stdout) => stdout,
             Err(e) => {
-                eprintln!("[DEBUG-disc] command failed to execute: {e}");
+                eprintln!("[DEBUG-disc] command failed: {e}");
                 continue;
             }
+        };
+        eprintln!(
+            "[DEBUG-disc] success, stdout_len={}",
+            output.len(),
+        );
+        let discovered = config::parse_provider_session_id(&output, pattern);
+        eprintln!(
+            "[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}",
+            discovered, previous_id, is_resume
+        );
+        if config::should_accept_provider_session_id(
+            discovered.as_deref(),
+            previous_id,
+            is_resume,
+        ) {
+            eprintln!(
+                "[DEBUG-disc] accepted! storing provider_session_id={:?}",
+                discovered
+            );
+            if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                let _ = db::set_provider_session_id(
+                    &conn,
+                    session_id,
+                    discovered.as_ref().unwrap(),
+                );
+            }
+            return;
+        } else {
+            eprintln!("[DEBUG-disc] rejected (stale or no match)");
+            last_discovered = discovered;
         }
     }
     if is_resume {
