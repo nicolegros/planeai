@@ -79,6 +79,7 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                name_template: None,
             },
         }],
     };
@@ -171,6 +172,7 @@ fi
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                name_template: None,
             },
         }],
     };
@@ -266,6 +268,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                name_template: None,
             },
         }],
     };

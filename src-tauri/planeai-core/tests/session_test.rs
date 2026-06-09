@@ -67,6 +67,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         base_branch: "main".to_string(),
         session_backend: "tmux".to_string(),
         prompt_template: Some("Implement {key}: {title}\n\n{description}".to_string()),
+        name_template: None,
     };
 
     let dispatcher = SessionDispatcher {

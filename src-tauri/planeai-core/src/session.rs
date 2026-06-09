@@ -46,6 +46,7 @@ pub struct DispatchConfig {
     pub base_branch: String,
     pub session_backend: String,
     pub prompt_template: Option<String>,
+    pub name_template: Option<String>,
 }
 
 pub struct SessionDispatcher {
@@ -105,7 +106,16 @@ impl SessionDispatcher {
             backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?;
         }
 
-        let session_name = format!("{}: {}", task.key, task.title);
+        let session_name = if let Some(tpl) = &self.dispatch_config.name_template {
+            let mut vars = HashMap::new();
+            vars.insert("key", task.key.as_str());
+            vars.insert("title", task.title.as_str());
+            vars.insert("description", task.description.as_str());
+            vars.insert("status", task.status.as_str());
+            template::render(tpl, &vars)
+        } else {
+            format!("{}: {}", task.key, task.title)
+        };
 
         let new_session = NewSession {
             id: session_id.clone(),

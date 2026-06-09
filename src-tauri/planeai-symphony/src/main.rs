@@ -70,6 +70,8 @@ struct HookDef { move_to: String }
 struct TemplatesDef {
     #[serde(default)]
     prompt: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 // ─── DB types ───
@@ -214,10 +216,19 @@ fn load_config(config_dir: &Path) -> Result<Config, String> {
 }
 
 fn load_projects(db_path: &Path) -> Result<Vec<Project>, String> {
+    eprintln!("planeai-symphony: opening db at {}", db_path.display());
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     // Ensure auto_mode and task_manager columns exist
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+
+    // Debug: show all projects
+    let mut debug_stmt = conn.prepare("SELECT id, name, auto_mode, status FROM projects").map_err(|e| e.to_string())?;
+    let debug_rows: Vec<String> = debug_stmt.query_map([], |row| {
+        Ok(format!("  {} auto_mode={} status={}", row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?))
+    }).map_err(|e| e.to_string())?.filter_map(|r| r.ok()).collect();
+    eprintln!("planeai-symphony: all projects:\n{}", debug_rows.join("\n"));
+
     let mut stmt = conn.prepare(
         "SELECT id, name, path, auto_mode, task_manager FROM projects WHERE status = 'active' AND auto_mode = 1"
     ).map_err(|e| e.to_string())?;
@@ -293,6 +304,7 @@ fn build_orchestrator_config(config: &Config, projects: &[Project], socket_path:
                 base_branch: "main".to_string(),
                 session_backend: backend_str.to_string(),
                 prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
+                name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
             },
         });
     }
