@@ -14,7 +14,7 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
       "move_task": "kanban move {key} {status}",
       "list_tasks": "kanban list --status todo --project {project}",
       "templates": {
-        "prompt": "Implement task {key}: {title}\n\n{description}"
+        "prompt": "Implement task {key}: {title}\n\n{description}",
       },
       "on_start": { "move_to": "in_progress" },
       "on_notify": { "move_to": "in_review" },
@@ -22,10 +22,10 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
         "poll_interval_ms": 30000,
         "max_concurrent": 3,
         "provider": "kiro",
-        "terminal_states": ["done", "cancelled"]
-      }
-    }
-  }
+        "terminal_states": ["done", "cancelled"],
+      },
+    },
+  },
 }
 ```
 
@@ -59,12 +59,12 @@ Add `auto_dispatch` inside any task manager definition:
 }
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `poll_interval_ms` | `30000` | Milliseconds between task board polls |
-| `max_concurrent` | `3` | Maximum auto-dispatched sessions running simultaneously |
-| `provider` | `default_provider` | Which provider to use for auto-dispatched sessions |
-| `terminal_states` | `["done", "cancelled", "canceled"]` | Task states that trigger session kill on reconciliation |
+| Field              | Default                             | Description                                             |
+| ------------------ | ----------------------------------- | ------------------------------------------------------- |
+| `poll_interval_ms` | `30000`                             | Milliseconds between task board polls                   |
+| `max_concurrent`   | `3`                                 | Maximum auto-dispatched sessions running simultaneously |
+| `provider`         | `default_provider`                  | Which provider to use for auto-dispatched sessions      |
+| `terminal_states`  | `["done", "cancelled", "canceled"]` | Task states that trigger session kill on reconciliation |
 
 ### list_tasks with {project}
 
@@ -125,11 +125,13 @@ This means 2 of 3 available slots are in use.
 ### Enabling/disabling
 
 Toggle auto-dispatch per project via right-click context menu. When you enable it:
+
 - The daemon starts (if not already running)
 - Polling begins on the next tick
 - Existing "todo" tasks are dispatched immediately
 
 When you disable it on all projects:
+
 - The daemon continues running until stopped
 - No new tasks are dispatched for that project
 - Already-running sessions continue until completion
@@ -143,8 +145,9 @@ planeai-cli symphony status
 ```
 
 Returns JSON:
+
 ```json
-{"running":["KAN-1","KAN-3"],"max_concurrent":3,"slots_used":2,"active":true}
+{ "running": ["KAN-1", "KAN-3"], "max_concurrent": 3, "slots_used": 2, "active": true }
 ```
 
 ### Stop the orchestrator
@@ -158,6 +161,7 @@ Running sessions continue (they're tmux-backed). The daemon just stops polling a
 ## Architecture
 
 The orchestrator runs as a separate binary (`planeai-symphony`) communicating via:
+
 - **Shared SQLite database** — sessions, projects, auto_mode flag
 - **`notify.sock`** — daemon → GUI event notifications (session_created)
 - **`symphony.sock`** — control socket (status, stop commands from CLI/GUI)
