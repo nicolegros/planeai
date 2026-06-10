@@ -11,7 +11,7 @@ pub fn get_symphony_status(state: State<SymphonyHandle>, db_state: State<crate::
     }
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let slots_used: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE auto_dispatched = 1 AND status IN ('active', 'exited')",
+        "SELECT COUNT(*) FROM sessions WHERE auto_dispatched = 1 AND status = 'active'",
         [], |row| row.get(0),
     ).unwrap_or(0);
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
