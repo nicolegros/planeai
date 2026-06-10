@@ -1,6 +1,8 @@
 use rusqlite::Connection;
 
-use crate::{config, db, git, tmux};
+#[cfg(not(windows))]
+use crate::tmux;
+use crate::{config, db, git};
 
 pub fn run_project_list(conn: &Connection) -> String {
     let projects = db::list_projects(conn).unwrap_or_default();
@@ -160,12 +162,15 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
 
     if let Some(tmux_name) = &plan.tmux_name {
+        #[cfg(not(windows))]
         tmux::create_session_with_cmd(
             tmux_name,
             &plan.working_dir,
             &plan.command,
             &plan.session_id,
         )?;
+        #[cfg(windows)]
+        let _ = tmux_name;
     }
 
     let session = db::create_session_with_id(
@@ -194,6 +199,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     serde_json::to_string(&session).map_err(|e| e.to_string())
 }
 
+#[cfg(not(windows))]
 fn notify_gui(socket_path: &std::path::Path, session_id: &str) -> Result<(), String> {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
@@ -201,6 +207,11 @@ fn notify_gui(socket_path: &std::path::Path, session_id: &str) -> Result<(), Str
     let mut stream = UnixStream::connect(socket_path).map_err(|e| e.to_string())?;
     let msg = format!("{{\"event\":\"session_created\",\"session_id\":\"{session_id}\"}}\n");
     stream.write_all(msg.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn notify_gui(_socket_path: &std::path::Path, _session_id: &str) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(test)]
