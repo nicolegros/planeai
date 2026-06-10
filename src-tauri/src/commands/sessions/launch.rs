@@ -4,10 +4,9 @@ use crate::config;
 use crate::db;
 use crate::git;
 use crate::state::{ConfigState, DbState, NotifyHandle};
-use crate::template;
 #[cfg(not(windows))]
 use crate::tmux;
-use crate::util::{sanitize_project_name, shell_escape};
+use crate::util::sanitize_project_name;
 
 use super::helpers::{fire_task_hook, provider_has_hook};
 
@@ -107,11 +106,7 @@ pub fn launch_session(
 
     if let (Some(prompt), Some(prompt_cmd_template)) = (&task_prompt, &provider_def.prompt_command)
     {
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("prompt", prompt.as_str());
-        let rendered = template::render(prompt_cmd_template, &vars);
-        let escaped = shell_escape(&rendered);
-        cmd = format!("{cmd} {escaped}");
+        planeai_core::template::append_prompt(&mut cmd, prompt_cmd_template, prompt);
     }
 
     let hook_enabled = provider_has_hook(&provider_key, &cfg);

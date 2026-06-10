@@ -12,10 +12,6 @@ pub fn expand_tilde(path: &str) -> String {
 }
 
 /// Shell-escape a string by wrapping in single quotes, escaping any internal single quotes.
-pub fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// Resolve a command name to its full path, checking user-local bin directories
 /// that may not be in PATH when launched from a GUI app.
 pub fn resolve_command(cmd: &str) -> String {

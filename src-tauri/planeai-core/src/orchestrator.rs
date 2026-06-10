@@ -182,7 +182,10 @@ impl Orchestrator {
 
                 let session_dispatcher = SessionDispatcher {
                     task_manager_config: project.task_manager_config.clone(),
-                    dispatch_config: project.dispatch_config.clone(),
+                    dispatch_config: self
+                        .backend
+                        .reload_dispatch_config(&project.dispatch_config.provider)
+                        .unwrap_or_else(|| project.dispatch_config.clone()),
                     project_id: project.project_id.clone(),
                     project_name: project.project_name.clone(),
                     project_path: project.project_path.clone(),

@@ -8,6 +8,7 @@ export interface Provider {
   command: string;
   yolo_flag: string | null;
   prompt_command?: string | null;
+  autonomous_prompt_template?: string | null;
 }
 
 export interface LifecycleHook {

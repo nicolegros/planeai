@@ -30,6 +30,7 @@ A provider is a CLI-based AI coding agent. Define one or more providers:
 
 - `command` — the base CLI command to launch the agent
 - `prompt_command` — how to pass a task prompt to the agent (positional or flag-based). Omitted when no task is linked.
+- `autonomous_prompt_template` — wraps the task prompt content in Symphony auto-dispatch mode. Use `{prompt}` to include the rendered task prompt. Example: `"You are autonomous.\n{prompt}"`. Falls back to using the raw task prompt if not set.
 - `yolo_flag` — optional flag appended when "yolo mode" is enabled for a session (auto-approves tool use)
 
 ## Session Backend

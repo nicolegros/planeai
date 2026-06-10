@@ -74,6 +74,8 @@ pub struct Provider {
     pub session_id_pattern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomous_prompt_template: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -172,6 +174,7 @@ impl Default for Config {
                 list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
                 session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
+                autonomous_prompt_template: None,
             },
         );
         providers.insert(
@@ -183,6 +186,7 @@ impl Default for Config {
                 list_sessions_command: None,
                 session_id_pattern: None,
                 prompt_command: Some("-p {prompt}".to_string()),
+                autonomous_prompt_template: None,
             },
         );
         providers.insert(
@@ -194,6 +198,7 @@ impl Default for Config {
                 list_sessions_command: None,
                 session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
+                autonomous_prompt_template: None,
             },
         );
         Config {
@@ -475,6 +480,7 @@ mod tests {
                         list_sessions_command: None,
                         session_id_pattern: None,
                         prompt_command: None,
+                        autonomous_prompt_template: None,
                     },
                 );
                 m
@@ -584,6 +590,7 @@ mod tests {
                 list_sessions_command: None,
                 session_id_pattern: None,
                 prompt_command: None,
+                autonomous_prompt_template: None,
             },
         );
         config.default_provider = "aider".to_string();
@@ -655,6 +662,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(launch_command(&provider, false), "kiro-cli chat");
     }
@@ -668,6 +676,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(
             launch_command(&provider, true),
@@ -684,6 +693,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(launch_command(&provider, true), "aider");
     }
@@ -761,6 +771,7 @@ mod tests {
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
@@ -836,6 +847,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         let result = resume_command(&provider, "abc-123");
         assert_eq!(result, "kiro-cli chat --resume-id abc-123");
@@ -850,6 +862,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(
             resume_command_if_available(&provider, Some("abc-123")),
@@ -866,6 +879,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(resume_command_if_available(&provider, None), None);
     }
@@ -879,6 +893,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         assert_eq!(
             resume_command_if_available(&provider, Some("abc-123")),
@@ -1005,6 +1020,7 @@ mod tests {
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         let cmd = restart_command_for_provider(&provider, Some("f4165541-abc"));
         assert_eq!(cmd, "kiro-cli chat --resume-id f4165541-abc");
@@ -1019,6 +1035,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         let cmd = restart_command_for_provider(&provider, None);
         assert_eq!(cmd, "kiro-cli chat");
@@ -1033,6 +1050,7 @@ mod tests {
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
+            autonomous_prompt_template: None,
         };
         let cmd = restart_command_for_provider(&provider, Some("some-id"));
         assert_eq!(cmd, "aider");

@@ -33,6 +33,8 @@ pub trait Backend: Send + Sync {
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String>;
+    /// Reload the dispatch config for a provider. Called before each dispatch to pick up config changes.
+    fn reload_dispatch_config(&self, provider: &str) -> Option<DispatchConfig>;
 }
 
 /// Data needed to insert a session into the DB.
@@ -65,6 +67,8 @@ pub struct DispatchConfig {
     pub base_branch: String,
     pub session_backend: String,
     pub prompt_template: Option<String>,
+    pub prompt_command: Option<String>,
+    pub prompt_wrapper: Option<String>,
     pub name_template: Option<String>,
 }
 
@@ -108,15 +112,27 @@ impl SessionDispatcher {
             }
         }
 
-        // Render prompt template if configured
-        if let Some(tpl) = &self.dispatch_config.prompt_template {
+        // Render prompt template and inject via prompt_command if both are configured
+        if let (Some(tpl), Some(prompt_cmd)) = (
+            &self.dispatch_config.prompt_template,
+            &self.dispatch_config.prompt_command,
+        ) {
             let mut vars = HashMap::new();
             vars.insert("key", task.key.as_str());
             vars.insert("title", task.title.as_str());
             vars.insert("description", task.description.as_str());
             let rendered = template::render(tpl, &vars);
-            let escaped = format!("'{}'", rendered.replace('\'', "'\\''"));
-            cmd = format!("{cmd} {escaped}");
+
+            // Apply prompt_wrapper if set (wraps content before CLI delivery)
+            let final_prompt = if let Some(wrapper) = &self.dispatch_config.prompt_wrapper {
+                let mut wrap_vars = HashMap::new();
+                wrap_vars.insert("prompt", rendered.as_str());
+                template::render(wrapper, &wrap_vars)
+            } else {
+                rendered
+            };
+
+            template::append_prompt(&mut cmd, prompt_cmd, &final_prompt);
         }
 
         // Create tmux session

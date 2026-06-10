@@ -4,7 +4,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
@@ -176,6 +176,39 @@ impl Backend for TauriBackend {
             .collect();
         Ok(sessions)
     }
+
+    fn reload_dispatch_config(&self, provider_key: &str) -> Option<DispatchConfig> {
+        let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+        let cfg = cfg_state.0.lock().ok()?;
+        let provider = cfg.providers.get(provider_key)?;
+        let home = config::home_dir();
+        let backend_str = config::resolve_backend(&cfg);
+
+        let tm_name = cfg
+            .default_task_manager
+            .as_deref()
+            .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))?;
+        let tm = cfg.task_managers.get(tm_name)?;
+        let auto = tm.auto_dispatch.as_ref()?;
+        let base_branch = auto
+            .base_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
+
+        Some(DispatchConfig {
+            provider: provider_key.to_string(),
+            provider_command: provider.command.clone(),
+            yolo: true,
+            yolo_flag: provider.yolo_flag.clone(),
+            worktree_root: format!("{home}/.planeai/worktrees"),
+            base_branch,
+            session_backend: backend_str.to_string(),
+            prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
+            prompt_command: provider.prompt_command.clone(),
+            prompt_wrapper: provider.autonomous_prompt_template.clone(),
+            name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
+        })
+    }
 }
 
 // ─── Config → OrchestratorConfig conversion ───
@@ -250,6 +283,8 @@ pub fn build_orchestrator_config(
                     .unwrap_or_else(|| "main".to_string()),
                 session_backend: backend_str.to_string(),
                 prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
+                prompt_command: provider.prompt_command.clone(),
+                prompt_wrapper: provider.autonomous_prompt_template.clone(),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
             },
         });
@@ -324,6 +359,7 @@ mod tests {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: None,
+                autonomous_prompt_template: None,
                 session_id_pattern: None,
                 resume_flag: None,
                 list_sessions_command: None,
@@ -375,5 +411,55 @@ mod tests {
         let orch = orch_config.unwrap();
         // Falls back to "main" when no override configured
         assert_eq!(orch.projects[0].dispatch_config.base_branch, "main");
+    }
+
+    #[test]
+    fn autonomous_prompt_template_populates_prompt_wrapper() {
+        let mut config = minimal_config_with_auto_dispatch(None);
+        config.providers.get_mut("kiro").unwrap().prompt_command = Some("{prompt}".to_string());
+        config
+            .providers
+            .get_mut("kiro")
+            .unwrap()
+            .autonomous_prompt_template = Some("Be autonomous.\n{prompt}".to_string());
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, status, auto_mode) VALUES ('p1', 'myapp', '/repo', 'active', 1)",
+            [],
+        ).unwrap();
+
+        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+
+        assert_eq!(
+            orch.projects[0].dispatch_config.prompt_wrapper,
+            Some("Be autonomous.\n{prompt}".to_string()),
+        );
+        assert_eq!(
+            orch.projects[0].dispatch_config.prompt_command,
+            Some("{prompt}".to_string()),
+        );
+    }
+
+    #[test]
+    fn prompt_wrapper_is_none_when_autonomous_prompt_template_not_set() {
+        let mut config = minimal_config_with_auto_dispatch(None);
+        config.providers.get_mut("kiro").unwrap().prompt_command = Some("{prompt}".to_string());
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, status, auto_mode) VALUES ('p1', 'myapp', '/repo', 'active', 1)",
+            [],
+        ).unwrap();
+
+        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+
+        assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);
+        assert_eq!(
+            orch.projects[0].dispatch_config.prompt_command,
+            Some("{prompt}".to_string()),
+        );
     }
 }
