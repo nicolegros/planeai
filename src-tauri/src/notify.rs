@@ -207,6 +207,7 @@ pub enum NotifyEvent {
     Notification,
     Busy,
     SessionCreated,
+    SessionChanged,
 }
 
 pub struct NotifyMessage {
@@ -226,6 +227,7 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("notification") => NotifyEvent::Notification,
             Some("busy") => NotifyEvent::Busy,
             Some("session_created") => NotifyEvent::SessionCreated,
+            Some("session_changed") => NotifyEvent::SessionChanged,
             _ => NotifyEvent::Stop,
         };
         NotifyMessage { session_id, event }
@@ -393,6 +395,10 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
                         eprintln!("[notify] session_created: {}", msg.session_id);
                         let _ = app.emit("session-created", msg.session_id.clone());
                     }
+                    NotifyEvent::SessionChanged => {
+                        eprintln!("[notify] session_changed: {}", msg.session_id);
+                        let _ = app.emit("sessions-changed", ());
+                    }
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();
                         let name = s
@@ -498,6 +504,10 @@ pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: App
                     NotifyEvent::SessionCreated => {
                         eprintln!("[notify] session_created: {}", msg.session_id);
                         let _ = app.emit("session-created", msg.session_id.clone());
+                    }
+                    NotifyEvent::SessionChanged => {
+                        eprintln!("[notify] session_changed: {}", msg.session_id);
+                        let _ = app.emit("sessions-changed", ());
                     }
                     NotifyEvent::Busy => {
                         let mut s = state.lock().unwrap();

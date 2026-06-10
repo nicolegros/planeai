@@ -49,6 +49,23 @@ enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
+    #[command(name = "ls")]
+    List {
+        #[arg(long)]
+        archived: bool,
+        #[arg(long)]
+        pretty: bool,
+    },
+    Delete {
+        id: String,
+        #[arg(long)]
+        pretty: bool,
+    },
+    Archive {
+        id: String,
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -161,6 +178,90 @@ fn main() {
                     }
                 }
             }
+            SessionAction::List { archived, pretty } => {
+                match planeai::session_ops::list(&conn, archived) {
+                    Ok(sessions) => {
+                        if pretty {
+                            let projects = planeai::db::list_projects(&conn).unwrap_or_default();
+                            print!(
+                                "{}",
+                                planeai::session_ops::format_table(&sessions, &projects)
+                            );
+                        } else {
+                            println!("{}", serde_json::to_string(&sessions).unwrap());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Delete { id, pretty } => {
+                let session = match planeai::session_ops::resolve_session_by_prefix(&conn, &id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let cfg_dir = planeai::config::config_dir("planeai");
+                let (cfg, _) = planeai::config::load(&cfg_dir);
+                let cleanup_ops = planeai::cleanup::real_ops();
+
+                match planeai::session_ops::destroy(&conn, &session.id, &Some(cfg), &cleanup_ops) {
+                    Ok(result) => {
+                        notify_session_changed(&result.session.id);
+                        let output = serde_json::to_string(&result.session).unwrap();
+                        if pretty {
+                            let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                        if !result.cleanup_errors.is_empty() {
+                            for e in &result.cleanup_errors {
+                                eprintln!("{{\"warning\": \"{e}\"}}");
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Archive { id, pretty } => {
+                let session = match planeai::session_ops::resolve_session_by_prefix(&conn, &id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let cfg_dir = planeai::config::config_dir("planeai");
+                let (cfg, _) = planeai::config::load(&cfg_dir);
+
+                match planeai::session_ops::archive(&conn, &session.id, &Some(cfg)) {
+                    Ok(session) => {
+                        notify_session_changed(&session.id);
+                        let output = serde_json::to_string(&session).unwrap();
+                        if pretty {
+                            let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
         },
         Commands::Symphony { action } => {
             let socket_path = planeai::paths::app_data_dir().join("symphony.sock");
@@ -180,6 +281,19 @@ fn main() {
                     }
                 },
             }
+        }
+    }
+}
+
+fn notify_session_changed(session_id: &str) {
+    let socket_path = planeai::paths::notify_socket_path();
+    if socket_path.exists() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+            let msg =
+                format!("{{\"event\":\"session_changed\",\"session_id\":\"{session_id}\"}}\n");
+            let _ = stream.write_all(msg.as_bytes());
         }
     }
 }

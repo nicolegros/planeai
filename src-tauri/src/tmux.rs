@@ -63,9 +63,9 @@ pub fn kill_session(tmux_name: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 
     if !output.status.success() {
-        // Ignore "no such session" errors (already dead)
+        // Ignore "no such session" / "can't find session" errors (already dead)
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("no such session") {
+        if !stderr.contains("no such session") && !stderr.contains("can't find session") {
             return Err(stderr.to_string());
         }
     }
