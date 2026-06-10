@@ -32,6 +32,7 @@ pub trait Backend: Send + Sync {
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
+    fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String>;
 }
 
 /// Data needed to insert a session into the DB.
@@ -83,17 +84,21 @@ impl SessionDispatcher {
         // Build branch name from task key
         let branch = task.key.to_lowercase().replace(' ', "-");
 
+        // Resolve base branch: task-level wins over config default
+        let base = task
+            .base_branch
+            .as_deref()
+            .unwrap_or(&self.dispatch_config.base_branch);
+
+        // Fetch base branch to ensure we have the latest remote ref
+        let resolved_base = backend.fetch_base(&self.project_path, base)?;
+
         // Create worktree
         let wt_path = format!(
             "{}/{}/{}",
             self.dispatch_config.worktree_root, self.project_name, short_id
         );
-        backend.create_worktree(
-            &self.project_path,
-            &wt_path,
-            &branch,
-            &self.dispatch_config.base_branch,
-        )?;
+        backend.create_worktree(&self.project_path, &wt_path, &branch, &resolved_base)?;
 
         // Build agent launch command
         let mut cmd = self.dispatch_config.provider_command.clone();
@@ -143,7 +148,7 @@ impl SessionDispatcher {
             backend: self.dispatch_config.session_backend.clone(),
             auto_approve: self.dispatch_config.yolo,
             task_key: task.key.clone(),
-            base_branch: self.dispatch_config.base_branch.clone(),
+            base_branch: resolved_base,
             auto_dispatched: true,
             command: cmd,
         };

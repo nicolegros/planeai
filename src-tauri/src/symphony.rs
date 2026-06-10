@@ -133,6 +133,19 @@ impl Backend for TauriBackend {
         Ok(())
     }
 
+    fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String> {
+        use std::process::Command;
+        let output = Command::new("git")
+            .args(["fetch", "origin", base])
+            .current_dir(repo)
+            .output()
+            .map_err(|e| format!("git fetch: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(format!("origin/{base}"))
+    }
+
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(
@@ -231,7 +244,10 @@ pub fn build_orchestrator_config(
                 yolo: true,
                 yolo_flag: provider.yolo_flag.clone(),
                 worktree_root: format!("{home}/.planeai/worktrees"),
-                base_branch: "main".to_string(),
+                base_branch: auto
+                    .base_branch
+                    .clone()
+                    .unwrap_or_else(|| "main".to_string()),
                 session_backend: backend_str.to_string(),
                 prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
@@ -264,4 +280,100 @@ fn load_auto_projects(conn: &Connection) -> Vec<Project> {
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())
     .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        AutoDispatchConfig, Config, LifecycleHook as ConfigLifecycleHook, Provider, TaskManager,
+    };
+    use std::collections::HashMap;
+
+    fn minimal_config_with_auto_dispatch(base_branch: Option<String>) -> Config {
+        let mut task_managers = HashMap::new();
+        task_managers.insert(
+            "kanban".to_string(),
+            TaskManager {
+                get_task: "kanban get {key}".to_string(),
+                move_task: "kanban move {key} {status}".to_string(),
+                list_tasks: "kanban list".to_string(),
+                templates: None,
+                on_start: Some(ConfigLifecycleHook {
+                    move_to: "in_progress".to_string(),
+                }),
+                on_notify: None,
+                on_restart: None,
+                on_complete: None,
+                on_pr_open: None,
+                on_pr_merge: None,
+                auto_dispatch: Some(AutoDispatchConfig {
+                    poll_interval_ms: 30000,
+                    max_concurrent: 2,
+                    provider: Some("kiro".to_string()),
+                    terminal_states: None,
+                    base_branch,
+                }),
+            },
+        );
+
+        let mut providers = HashMap::new();
+        providers.insert(
+            "kiro".to_string(),
+            Provider {
+                command: "kiro-cli chat".to_string(),
+                yolo_flag: Some("--trust-all-tools".to_string()),
+                prompt_command: None,
+                session_id_pattern: None,
+                resume_flag: None,
+                list_sessions_command: None,
+            },
+        );
+
+        Config {
+            default_provider: "kiro".to_string(),
+            default_task_manager: Some("kanban".to_string()),
+            task_managers,
+            providers,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn build_orchestrator_config_uses_auto_dispatch_base_branch_override() {
+        let config = minimal_config_with_auto_dispatch(Some("develop".to_string()));
+
+        // We need a DB with an active auto_mode project
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, status, auto_mode) VALUES ('p1', 'myapp', '/repo', 'active', 1)",
+            [],
+        ).unwrap();
+
+        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        assert!(orch_config.is_some());
+
+        let orch = orch_config.unwrap();
+        assert_eq!(orch.projects[0].dispatch_config.base_branch, "develop");
+    }
+
+    #[test]
+    fn build_orchestrator_config_falls_back_to_main_when_no_base_branch_override() {
+        let config = minimal_config_with_auto_dispatch(None);
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, status, auto_mode) VALUES ('p1', 'myapp', '/repo', 'active', 1)",
+            [],
+        ).unwrap();
+
+        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        assert!(orch_config.is_some());
+
+        let orch = orch_config.unwrap();
+        // Falls back to "main" when no override configured
+        assert_eq!(orch.projects[0].dispatch_config.base_branch, "main");
+    }
 }

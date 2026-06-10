@@ -18,6 +18,8 @@ pub struct TaskItem {
     pub priority: i32,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 /// Fetch a single task by key.

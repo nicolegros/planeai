@@ -13,6 +13,8 @@ pub struct Task {
     pub priority: i32,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone)]
