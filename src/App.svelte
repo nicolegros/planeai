@@ -54,6 +54,8 @@
   let activeSessionId = $state<string | null>(null);
   let showProjectForm = $state(false);
   let sidebarVisible = $state(true);
+  let sidebarTab = $state<"sessions" | "tasks">("sessions");
+  let taskCreateRequested = $state(false);
 
   // Orchestrator status
   let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(null);
@@ -459,6 +461,9 @@
         handleToggleDiff();
       } else if (action.type === "toggle_file_explorer") {
         handleToggleFileExplorer();
+      } else if (action.type === "toggle_task_panel") {
+        sidebarTab = sidebarTab === "tasks" ? "sessions" : "tasks";
+        if (!sidebarVisible) sidebarVisible = true;
       } else if (action.type === "open_file") {
         commandMenuFileMode = true;
         commandMenuOpen = true;
@@ -643,6 +648,8 @@
       {zone}
       {agentStates}
       {renamingSessionId}
+      {sidebarTab}
+      {taskCreateRequested}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
@@ -653,6 +660,12 @@
       onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
+      onPickTask={(task) => {
+        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
+        showSessionForm = true;
+      }}
+      onSidebarTabChange={(tab) => { sidebarTab = tab; }}
+      onTaskCreateConsumed={() => { taskCreateRequested = false; }}
     />
   {/if}
 
@@ -743,6 +756,11 @@
       onPickTask={(task) => {
         taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
         showSessionForm = true;
+      }}
+      onCreateTask={() => {
+        sidebarTab = "tasks";
+        if (!sidebarVisible) sidebarVisible = true;
+        requestAnimationFrame(() => { taskCreateRequested = true; });
       }}
       onToggleDiff={handleToggleDiff}
       onOpenFile={handleOpenFile}

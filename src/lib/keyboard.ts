@@ -31,6 +31,7 @@ export type KeyboardAction =
   | { type: "prev_tab" }
   | { type: "toggle_diff" }
   | { type: "toggle_file_explorer" }
+  | { type: "toggle_task_panel" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" };
@@ -71,6 +72,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+T — new tab
   if (mod && !e.shiftKey && key === "t") {
     return { type: "new_tab" };
+  }
+
+  // Mod+Shift+T — toggle task panel
+  if (mod && e.shiftKey && key === "t") {
+    return { type: "toggle_task_panel" };
   }
 
   // Mod+W — close tab
