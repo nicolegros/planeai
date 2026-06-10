@@ -99,23 +99,33 @@ pub fn worktree_add(
     Ok(())
 }
 
-/// Resolve a base branch reference. If prefixed with "remote:", fetches from origin and returns "origin/<name>".
+/// Resolve a base branch reference.
+/// Always attempts to fetch the branch from origin first and uses "origin/<name>".
+/// Falls back to the local branch name if origin fetch fails.
+/// Accepts an optional "remote:" prefix for backward compatibility (stripped before use).
 pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String> {
-    let Some(name) = base.strip_prefix("remote:") else {
-        return Ok(base.to_string());
-    };
+    let name = base.strip_prefix("remote:").unwrap_or(base);
 
     let output = Command::new("git")
         .args(["fetch", "origin", name])
         .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("failed to run git fetch: {e}"))?;
+        .output();
 
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    match output {
+        Ok(o) if o.status.success() => Ok(format!("origin/{name}")),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            eprintln!(
+                "[warn] git fetch origin {name} failed, using local ref: {}",
+                stderr.trim()
+            );
+            Ok(name.to_string())
+        }
+        Err(e) => {
+            eprintln!("[warn] git fetch origin {name} failed, using local ref: {e}");
+            Ok(name.to_string())
+        }
     }
-
-    Ok(format!("origin/{name}"))
 }
 
 /// Remove a git worktree forcefully.
@@ -470,11 +480,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_base_branch_remote_returns_error_when_fetch_fails() {
+    fn resolve_base_branch_fetches_without_remote_prefix() {
+        let (repo, _remote) = init_repo_with_remote();
+        let result = resolve_base_branch(repo.path().to_str().unwrap(), "feat/new").unwrap();
+        assert_eq!(result, "origin/feat/new");
+    }
+
+    #[test]
+    fn resolve_base_branch_remote_falls_back_to_local_when_fetch_fails() {
         let (repo, _remote) = init_repo_with_remote();
         let result =
-            resolve_base_branch(repo.path().to_str().unwrap(), "remote:nonexistent-branch");
-        assert!(result.is_err());
+            resolve_base_branch(repo.path().to_str().unwrap(), "remote:nonexistent-branch")
+                .unwrap();
+        assert_eq!(result, "nonexistent-branch");
     }
 
     fn init_repo_with_feature_branch() -> tempfile::TempDir {
