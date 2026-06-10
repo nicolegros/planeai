@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 
@@ -50,7 +51,13 @@ impl Orchestrator {
     /// Run the orchestrator until cancelled or a stop command is received on the socket.
     pub async fn run(&self, token: CancellationToken) -> Result<(), String> {
         let _ = std::fs::remove_file(&self.config.socket_path);
+
+        #[cfg(unix)]
         let listener = UnixListener::bind(&self.config.socket_path)
+            .map_err(|e| format!("failed to bind socket: {e}"))?;
+        #[cfg(windows)]
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
             .map_err(|e| format!("failed to bind socket: {e}"))?;
 
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
