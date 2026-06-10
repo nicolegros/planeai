@@ -10,6 +10,7 @@ mod git;
 mod notify;
 mod pr;
 mod pty;
+mod session_ops;
 mod startup;
 mod state;
 mod symphony;

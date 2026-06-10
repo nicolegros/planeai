@@ -82,17 +82,9 @@ pub fn archive_session(
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-
-    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
-        if session.task_key.is_some() {
-            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-            if let Some(cwd) = session_cwd(&conn, &session) {
-                fire_task_hook(&cfg, &session, "on_complete", &cwd);
-            }
-        }
-    }
-
-    db::archive_session(&conn, &id).map_err(|e| e.to_string())
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+    crate::session_ops::archive(&conn, &id, &Some(cfg))?;
+    Ok(())
 }
 
 #[tauri::command]
