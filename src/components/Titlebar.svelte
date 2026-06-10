@@ -55,7 +55,7 @@
 
   {#if prUrl}
     <button
-      class="ml-2 mr-3 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
       title="Open pull request"
       tabindex="-1"
       onmousedown={(e: MouseEvent) => e.preventDefault()}
@@ -65,4 +65,6 @@
       <span>Open PR</span>
     </button>
   {/if}
+
+  <div class="w-3 shrink-0"></div>
 </header>
