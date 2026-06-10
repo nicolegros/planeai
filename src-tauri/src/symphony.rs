@@ -134,16 +134,7 @@ impl Backend for TauriBackend {
     }
 
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String> {
-        use std::process::Command;
-        let output = Command::new("git")
-            .args(["fetch", "origin", base])
-            .current_dir(repo)
-            .output()
-            .map_err(|e| format!("git fetch: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-        Ok(format!("origin/{base}"))
+        crate::git::resolve_base_branch(repo, base)
     }
 
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
