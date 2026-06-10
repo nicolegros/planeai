@@ -458,6 +458,65 @@
                 <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
               </div>
             {/each}
+
+            <!-- Auto-dispatch -->
+            <div class="mt-3 pt-3 border-t border-surface-200 dark:border-surface-700 space-y-2">
+              <div class="flex items-center gap-2">
+                <label class="text-xs font-medium text-surface-700 dark:text-surface-300 flex items-center gap-1">
+                  <input type="checkbox" class="rounded" checked={!!(tm as any).auto_dispatch} onchange={(e) => {
+                    const tms = { ...taskManagers };
+                    if ((e.currentTarget as HTMLInputElement).checked) {
+                      (tms[key] as any).auto_dispatch = { poll_interval_ms: 30000, max_concurrent: 3 };
+                    } else {
+                      delete (tms[key] as any).auto_dispatch;
+                    }
+                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                  }} />
+                  Auto-dispatch
+                </label>
+                <span class="text-[10px] text-surface-500">Automatically spawn sessions for tasks</span>
+              </div>
+              {#if (tm as any).auto_dispatch}
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="space-y-1">
+                    <!-- svelte-ignore a11y_label_has_associated_control -->
+                    <label class="text-xs text-surface-700 dark:text-surface-400">Poll interval (ms)</label>
+                    <Input value={String((tm as any).auto_dispatch.poll_interval_ms ?? 30000)} onchange={(e) => {
+                      const tms = { ...taskManagers };
+                      (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, poll_interval_ms: parseInt(e.currentTarget.value) || 30000 };
+                      updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                    }} class="font-mono" />
+                  </div>
+                  <div class="space-y-1">
+                    <!-- svelte-ignore a11y_label_has_associated_control -->
+                    <label class="text-xs text-surface-700 dark:text-surface-400">Max concurrent</label>
+                    <Input value={String((tm as any).auto_dispatch.max_concurrent ?? 3)} onchange={(e) => {
+                      const tms = { ...taskManagers };
+                      (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, max_concurrent: parseInt(e.currentTarget.value) || 3 };
+                      updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                    }} class="font-mono" />
+                  </div>
+                </div>
+                <div class="space-y-1">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
+                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
+                  <Input value={(tm as any).auto_dispatch.provider || ""} onchange={(e) => {
+                    const tms = { ...taskManagers };
+                    (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, provider: e.currentTarget.value || undefined };
+                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                  }} class="font-mono" placeholder={config.default_provider} />
+                </div>
+                <div class="space-y-1">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
+                  <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
+                  <Input value={((tm as any).auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
+                    const tms = { ...taskManagers };
+                    (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) };
+                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                  }} class="font-mono" placeholder="done, cancelled" />
+                </div>
+              {/if}
+            </div>
           </div>
         {/each}
       </div>

@@ -55,6 +55,9 @@
   let showProjectForm = $state(false);
   let sidebarVisible = $state(true);
 
+  // Orchestrator status
+  let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(null);
+
   let showSessionForm = $state(false);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string } | null>(null);
 
@@ -330,6 +333,16 @@
     loadSessions();
     loadSettings().then(() => loadTheme());
 
+    // Poll orchestrator status every 5 seconds
+    const pollSymphony = async () => {
+      try {
+        const raw = await invoke<string>("get_symphony_status");
+        symphonyStatus = JSON.parse(raw);
+      } catch { symphonyStatus = null; }
+    };
+    pollSymphony();
+    const symphonyInterval = setInterval(pollSymphony, 5000);
+
     // Reload settings/theme when changed from preferences window
     const unlistenSettings = listen("settings-changed", () => {
       loadSettings().then(() => loadTheme());
@@ -482,6 +495,7 @@
 
     return () => {
       cleanup();
+      clearInterval(symphonyInterval);
       unlistenState.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
       unlistenCleanup.then((fn) => fn());
@@ -617,6 +631,7 @@
       else { removeTab(activeSessionId, i); invoke("close_tab", { sessionId: activeSessionId, tabIndex: i }); }
     }}
     onAddTab={handleNewTab}
+    {symphonyStatus}
   />
 
   <div class="flex flex-1 min-h-0">

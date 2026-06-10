@@ -17,6 +17,10 @@ enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    Symphony {
+        #[command(subcommand)]
+        action: SymphonyAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -53,6 +57,14 @@ enum ProjectAction {
         #[arg(long)]
         pretty: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum SymphonyAction {
+    /// Show orchestrator status (running sessions, concurrency)
+    Status,
+    /// Stop the orchestrator daemon
+    Stop,
 }
 
 fn main() {
@@ -101,7 +113,7 @@ fn main() {
                 };
 
                 let opts = planeai::cli::SessionCreateOpts {
-                    project,
+                    project: project.clone(),
                     branch,
                     name,
                     new_branch,
@@ -113,8 +125,28 @@ fn main() {
                     prompt,
                 };
 
-                let real_backend = RealBackend;
-                match planeai::cli::run_session_create_with_env(&conn, &opts, &real_backend, &env) {
+                let projects = planeai::db::list_projects(&conn).unwrap_or_else(|e| {
+                    eprintln!("{{\"error\": \"{e}\"}}");
+                    std::process::exit(1);
+                });
+                let proj = match projects.iter().find(|p| p.name == project) {
+                    Some(p) => p,
+                    None => {
+                        eprintln!("{{\"error\": \"unknown project: {project}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                let session_id = uuid::Uuid::new_v4().to_string();
+                let plan = match planeai::cli::build_session_plan(&session_id, &opts, &env, proj) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                match planeai::cli::execute_plan(&plan, &conn, &env) {
                     Ok(output) => {
                         if pretty {
                             let v: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -130,358 +162,55 @@ fn main() {
                 }
             }
         },
-    }
-}
-
-struct RealBackend;
-
-impl planeai::cli::Backend for RealBackend {
-    fn checkout_branch(
-        &self,
-        repo: &str,
-        branch: &str,
-        new: bool,
-        base: Option<&str>,
-    ) -> Result<(), String> {
-        planeai::git::checkout_branch(repo, branch, new, base)
-    }
-    fn create_worktree(
-        &self,
-        repo: &str,
-        path: &str,
-        branch: &str,
-        base: &str,
-    ) -> Result<(), String> {
-        planeai::git::worktree_add(repo, path, branch, base)
-    }
-    fn create_tmux_session(
-        &self,
-        name: &str,
-        cwd: &str,
-        cmd: &str,
-        session_id: &str,
-    ) -> Result<(), String> {
-        planeai::tmux::create_session_with_cmd(name, cwd, cmd, session_id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use planeai::config::Config;
-    use planeai::db;
-    use rusqlite::Connection;
-
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        db::migrate(&conn).unwrap();
-        conn
-    }
-
-    fn test_config() -> Config {
-        Config::default()
-    }
-
-    use planeai::cli::Backend;
-    use std::cell::RefCell;
-
-    struct RecordingBackend {
-        calls: RefCell<Vec<String>>,
-    }
-
-    impl RecordingBackend {
-        fn new() -> Self {
-            Self {
-                calls: RefCell::new(Vec::new()),
+        Commands::Symphony { action } => {
+            let socket_path = planeai::paths::app_data_dir().join("symphony.sock");
+            match action {
+                SymphonyAction::Status => match symphony_command(&socket_path, "status") {
+                    Ok(response) => println!("{response}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                },
+                SymphonyAction::Stop => match symphony_command(&socket_path, "stop") {
+                    Ok(_) => println!("{{\"status\": \"stopped\"}}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                },
             }
         }
     }
+}
 
-    impl Backend for RecordingBackend {
-        fn checkout_branch(
-            &self,
-            _repo: &str,
-            branch: &str,
-            new: bool,
-            base: Option<&str>,
-        ) -> Result<(), String> {
-            self.calls.borrow_mut().push(format!(
-                "checkout:{branch}:new={new}:base={}",
-                base.unwrap_or("none")
-            ));
-            Ok(())
-        }
-        fn create_worktree(
-            &self,
-            _repo: &str,
-            _path: &str,
-            branch: &str,
-            base: &str,
-        ) -> Result<(), String> {
-            self.calls
-                .borrow_mut()
-                .push(format!("worktree:{branch}:base={base}"));
-            Ok(())
-        }
-        fn create_tmux_session(
-            &self,
-            name: &str,
-            _cwd: &str,
-            _cmd: &str,
-            _session_id: &str,
-        ) -> Result<(), String> {
-            self.calls.borrow_mut().push(format!("tmux:{name}"));
-            Ok(())
+fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    if !socket_path.exists() {
+        return Err("{\"error\": \"orchestrator is not running\"}".to_string());
+    }
+    let mut stream = UnixStream::connect(socket_path)
+        .map_err(|e| format!("{{\"error\": \"cannot connect to orchestrator: {e}\"}}"))?;
+    stream
+        .write_all(format!("{cmd}\n").as_bytes())
+        .map_err(|e| format!("{{\"error\": \"send failed: {e}\"}}"))?;
+
+    if cmd == "stop" {
+        return Ok(String::new());
+    }
+
+    // Read response
+    let reader = BufReader::new(stream);
+    let mut response = String::new();
+    if let Some(line) = reader.lines().next() {
+        match line {
+            Ok(l) => {
+                response.push_str(&l);
+            }
+            Err(e) => return Err(format!("{{\"error\": \"read failed: {e}\"}}")),
         }
     }
-
-    #[test]
-    fn project_list_returns_registered_projects_as_json() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-        db::create_project(&conn, "backend", "/home/user/backend").unwrap();
-
-        let output = planeai::cli::run_project_list(&conn);
-
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0]["name"], "myapp");
-        assert_eq!(parsed[0]["path"], "/home/user/myapp");
-        assert_eq!(parsed[1]["name"], "backend");
-        assert_eq!(parsed[1]["path"], "/home/user/backend");
-    }
-
-    #[test]
-    fn session_create_with_valid_project_creates_db_record() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "main".to_string(),
-            name: Some("fix-bug".to_string()),
-            new_branch: false,
-            worktree: false,
-            base_branch: None,
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let result = planeai::cli::run_session_create(&conn, &opts, &planeai::cli::NoOpBackend);
-
-        assert!(result.is_ok());
-        let output = result.unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed["name"], "fix-bug");
-        assert_eq!(parsed["branch"], "main");
-        assert_eq!(parsed["status"], "active");
-
-        // Verify DB record exists
-        let sessions = db::list_sessions(&conn).unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].name, "fix-bug");
-        assert_eq!(sessions[0].branch, "main");
-    }
-
-    #[test]
-    fn session_create_with_new_branch_calls_backend_with_new_flag() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-        let backend = RecordingBackend::new();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "feat-x".to_string(),
-            name: None,
-            new_branch: true,
-            worktree: false,
-            base_branch: Some("main".to_string()),
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let result = planeai::cli::run_session_create(&conn, &opts, &backend);
-        assert!(result.is_ok());
-
-        let calls = backend.calls.borrow();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], "checkout:feat-x:new=true:base=main");
-        assert!(calls[1].starts_with("tmux:"));
-    }
-
-    #[test]
-    fn session_create_with_worktree_calls_create_worktree() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-        let backend = RecordingBackend::new();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "feat-wt".to_string(),
-            name: Some("wt-session".to_string()),
-            new_branch: false,
-            worktree: true,
-            base_branch: Some("main".to_string()),
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let result = planeai::cli::run_session_create(&conn, &opts, &backend);
-        assert!(result.is_ok());
-
-        let calls = backend.calls.borrow();
-        assert!(calls[0].starts_with("worktree:feat-wt:base=main"));
-
-        // Session should have worktree_path set
-        let sessions = db::list_sessions(&conn).unwrap();
-        assert!(sessions[0].worktree_path.is_some());
-    }
-
-    #[test]
-    fn session_create_with_unknown_project_errors() {
-        let conn = setup_db();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "nonexistent".to_string(),
-            branch: "main".to_string(),
-            name: None,
-            new_branch: false,
-            worktree: false,
-            base_branch: None,
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let result = planeai::cli::run_session_create(&conn, &opts, &planeai::cli::NoOpBackend);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown project"));
-    }
-
-    #[test]
-    fn session_create_with_direct_backend_and_no_socket_errors() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "main".to_string(),
-            name: None,
-            new_branch: false,
-            worktree: false,
-            base_branch: None,
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let env = planeai::cli::Env {
-            backend: "direct".to_string(),
-            socket_path: std::path::PathBuf::from("/nonexistent/notify.sock"),
-            config: test_config(),
-        };
-
-        let result = planeai::cli::run_session_create_with_env(
-            &conn,
-            &opts,
-            &planeai::cli::NoOpBackend,
-            &env,
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("GUI is not running"));
-    }
-
-    #[test]
-    fn session_create_with_tmux_backend_spawns_tmux_session() {
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-        let backend = RecordingBackend::new();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "main".to_string(),
-            name: Some("my-session".to_string()),
-            new_branch: false,
-            worktree: false,
-            base_branch: None,
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let env = planeai::cli::Env {
-            backend: "tmux".to_string(),
-            socket_path: std::path::PathBuf::from("/tmp/fake.sock"),
-            config: test_config(),
-        };
-
-        let result = planeai::cli::run_session_create_with_env(&conn, &opts, &backend, &env);
-        assert!(result.is_ok());
-
-        let calls = backend.calls.borrow();
-        assert!(calls.iter().any(|c| c.starts_with("tmux:")));
-
-        // Session should have tmux_name set
-        let sessions = db::list_sessions(&conn).unwrap();
-        assert!(sessions[0].tmux_name.is_some());
-    }
-
-    #[test]
-    fn session_create_sends_socket_notification() {
-        use std::io::{BufRead, BufReader};
-        use std::os::unix::net::UnixListener;
-
-        let conn = setup_db();
-        db::create_project(&conn, "myapp", "/home/user/myapp").unwrap();
-
-        let tmp = tempfile::tempdir().unwrap();
-        let sock_path = tmp.path().join("notify.sock");
-        let listener = UnixListener::bind(&sock_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-
-        let opts = planeai::cli::SessionCreateOpts {
-            project: "myapp".to_string(),
-            branch: "main".to_string(),
-            name: None,
-            new_branch: false,
-            worktree: false,
-            base_branch: None,
-            yolo: false,
-            provider: None,
-            task_key: None,
-            prompt: None,
-        };
-
-        let env = planeai::cli::Env {
-            backend: "tmux".to_string(),
-            socket_path: sock_path.clone(),
-            config: test_config(),
-        };
-
-        let result = planeai::cli::run_session_create_with_env(
-            &conn,
-            &opts,
-            &planeai::cli::NoOpBackend,
-            &env,
-        );
-        assert!(result.is_ok());
-
-        // Read the message sent to the socket
-        let (stream, _) = listener
-            .accept()
-            .expect("should have received a connection");
-        let reader = BufReader::new(stream);
-        let line = reader.lines().next().unwrap().unwrap();
-        let msg: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(msg["event"], "session_created");
-        assert!(msg["session_id"].as_str().is_some());
-    }
+    Ok(response)
 }

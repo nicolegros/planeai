@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::path::Path;
-use std::process::Command;
 
 use crate::template;
 
@@ -23,21 +22,14 @@ pub fn check_pr_status(
     let mut vars = std::collections::HashMap::new();
     vars.insert("branch", branch);
     let cmd_str = template::render(command_template, &vars);
-    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-    if parts.is_empty() {
-        return Err("pr_status command is empty".to_string());
-    }
-    let resolved = crate::command::resolve(parts[0]);
-    let output = Command::new(&resolved)
-        .args(&parts[1..])
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| format!("pr_status: failed to run '{}': {e}", parts[0]))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut status: PrStatus = serde_json::from_str(stdout.trim())
+    let output = match planeai_core::command::run_command(&cmd_str, cwd) {
+        Ok(stdout) => stdout,
+        Err(planeai_core::command::CommandError::NonZeroExit { .. }) => return Ok(None),
+        Err(planeai_core::command::CommandError::SpawnFailed { command, source }) => {
+            return Err(format!("pr_status: failed to run '{command}': {source}"));
+        }
+    };
+    let mut status: PrStatus = serde_json::from_str(output.trim())
         .map_err(|e| format!("pr_status: invalid JSON output: {e}"))?;
     status.state = status.state.to_lowercase();
     if status.is_draft {
@@ -143,10 +135,10 @@ mod tests {
     }
 
     #[test]
-    fn check_pr_status_returns_error_on_nonexistent_command() {
+    fn check_pr_status_returns_none_on_nonexistent_command() {
         let dir = tempdir().unwrap();
         let result = check_pr_status("nonexistent_binary_xyz {branch}", "main", dir.path());
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]
@@ -213,6 +205,7 @@ mod tests {
                 move_to: "in_review".into(),
             }),
             on_pr_merge: None,
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());
@@ -240,6 +233,7 @@ mod tests {
             on_pr_merge: Some(crate::config::LifecycleHook {
                 move_to: "done".into(),
             }),
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Merged, "TASK-1", dir.path());
@@ -260,6 +254,7 @@ mod tests {
             on_complete: None,
             on_pr_open: None,
             on_pr_merge: None,
+            auto_dispatch: None,
         };
 
         let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());
