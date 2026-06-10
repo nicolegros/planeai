@@ -60,6 +60,12 @@ impl Backend for TestBackend {
     fn fetch_base(&self, _repo: &str, base: &str) -> Result<String, String> {
         Ok(format!("origin/{base}"))
     }
+    fn reload_dispatch_config(
+        &self,
+        _provider: &str,
+    ) -> Option<planeai_core::session::DispatchConfig> {
+        None
+    }
 }
 
 fn write_script(dir: &Path, name: &str, output: &str) -> String {
@@ -103,6 +109,8 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                prompt_command: None,
+                prompt_wrapper: None,
                 name_template: None,
             },
         }],
@@ -194,6 +202,8 @@ fi
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                prompt_command: None,
+                prompt_wrapper: None,
                 name_template: None,
             },
         }],
@@ -238,6 +248,12 @@ fi
         }
         fn fetch_base(&self, _repo: &str, base: &str) -> Result<String, String> {
             Ok(format!("origin/{base}"))
+        }
+        fn reload_dispatch_config(
+            &self,
+            _provider: &str,
+        ) -> Option<planeai_core::session::DispatchConfig> {
+            None
         }
     }
 
@@ -311,6 +327,8 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 base_branch: "main".to_string(),
                 session_backend: "tmux".to_string(),
                 prompt_template: None,
+                prompt_command: None,
+                prompt_wrapper: None,
                 name_template: None,
             },
         }],
@@ -387,6 +405,12 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                     command: "kiro-cli chat".to_string(),
                 },
             ])
+        }
+        fn reload_dispatch_config(
+            &self,
+            _provider: &str,
+        ) -> Option<planeai_core::session::DispatchConfig> {
+            None
         }
     }
 

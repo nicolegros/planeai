@@ -335,6 +335,16 @@
                 placeholder={"{prompt} or --prompt {prompt}"}
               />
             </div>
+            <div class="space-y-1">
+              <!-- svelte-ignore a11y_label_has_associated_control -->
+              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
+              <Input
+                value={provider.autonomous_prompt_template || ""}
+                onchange={(e) => updateProvider(key, "autonomous_prompt_template", e.currentTarget.value)}
+                class="font-mono"
+                placeholder="e.g. Be autonomous.\n{prompt}"
+              />
+            </div>
           </div>
         {/each}
       </div>

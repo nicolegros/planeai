@@ -82,6 +82,9 @@ impl Backend for RecordingBackend {
             .push((repo.to_string(), base.to_string()));
         Ok(format!("origin/{base}"))
     }
+    fn reload_dispatch_config(&self, _provider: &str) -> Option<DispatchConfig> {
+        None
+    }
 }
 
 #[test]
@@ -107,6 +110,8 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         base_branch: "main".to_string(),
         session_backend: "tmux".to_string(),
         prompt_template: Some("Implement {key}: {title}\n\n{description}".to_string()),
+        prompt_command: Some("{prompt}".to_string()),
+        prompt_wrapper: None,
         name_template: None,
     };
 
@@ -186,6 +191,8 @@ fn dispatch_uses_task_base_branch_when_present() {
             base_branch: "main".to_string(),
             session_backend: "tmux".to_string(),
             prompt_template: None,
+            prompt_command: None,
+            prompt_wrapper: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -234,6 +241,8 @@ fn dispatch_fetches_base_before_worktree_creation() {
             base_branch: "main".to_string(),
             session_backend: "tmux".to_string(),
             prompt_template: None,
+            prompt_command: None,
+            prompt_wrapper: None,
             name_template: None,
         },
         project_id: "p1".to_string(),
@@ -261,4 +270,79 @@ fn dispatch_fetches_base_before_worktree_creation() {
     // Worktree should use the fetched ref (origin/develop)
     let wts = backend.worktrees_created.lock().unwrap();
     assert_eq!(wts[0].3, "origin/develop");
+}
+
+#[test]
+fn dispatch_uses_prompt_command_to_format_prompt_in_command() {
+    let backend = RecordingBackend::default();
+    let dispatcher = make_dispatcher("claude", "claude", Some("-p {prompt}"));
+    let task = make_task();
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert!(
+        session.command.contains("-p "),
+        "expected -p flag, got: {}",
+        session.command
+    );
+    assert!(
+        session.command.contains("Implement T-1: Fix bug"),
+        "expected rendered prompt, got: {}",
+        session.command
+    );
+}
+
+#[test]
+fn dispatch_skips_prompt_when_prompt_command_is_none() {
+    let backend = RecordingBackend::default();
+    let dispatcher = make_dispatcher("kiro", "kiro-cli chat", None);
+    let task = make_task();
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert_eq!(session.command, "kiro-cli chat");
+}
+
+fn make_dispatcher(
+    provider: &str,
+    command: &str,
+    prompt_command: Option<&str>,
+) -> SessionDispatcher {
+    SessionDispatcher {
+        task_manager_config: TaskManagerConfig {
+            list_tasks: String::new(),
+            get_task: String::new(),
+            move_task: String::new(),
+            terminal_states: vec![],
+            on_start: None,
+        },
+        dispatch_config: DispatchConfig {
+            provider: provider.to_string(),
+            provider_command: command.to_string(),
+            yolo: false,
+            yolo_flag: None,
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "tmux".to_string(),
+            prompt_template: Some("Implement {key}: {title}".to_string()),
+            prompt_command: prompt_command.map(|s| s.to_string()),
+            prompt_wrapper: None,
+            name_template: None,
+        },
+        project_id: "p1".to_string(),
+        project_name: "proj".to_string(),
+        project_path: "/repo".to_string(),
+    }
+}
+
+fn make_task() -> Task {
+    Task {
+        key: "T-1".to_string(),
+        title: "Fix bug".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 1,
+        blocked_by: vec![],
+        base_branch: None,
+    }
 }

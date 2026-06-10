@@ -1,11 +1,6 @@
 use rusqlite::Connection;
 
-use crate::{config, db, git, template, tmux};
-
-/// Shell-escape a string by wrapping in single quotes, escaping any internal single quotes.
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
+use crate::{config, db, git, tmux};
 
 pub fn run_project_list(conn: &Connection) -> String {
     let projects = db::list_projects(conn).unwrap_or_default();
@@ -85,11 +80,7 @@ pub fn build_session_plan(
     let mut cmd = config::launch_command(provider_def, opts.yolo);
 
     if let (Some(prompt), Some(prompt_tpl)) = (&opts.prompt, &provider_def.prompt_command) {
-        let mut vars = std::collections::HashMap::new();
-        vars.insert("prompt", prompt.as_str());
-        let rendered = template::render(prompt_tpl, &vars);
-        let escaped = shell_escape(&rendered);
-        cmd = format!("{cmd} {escaped}");
+        planeai_core::template::append_prompt(&mut cmd, prompt_tpl, prompt);
     }
 
     let short_id = &session_id.replace('-', "")[..8];

@@ -24,3 +24,18 @@ fn slugify(s: &str) -> String {
         .collect::<Vec<_>>()
         .join("-")
 }
+
+/// Shell-escape a string using single quotes.
+pub fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Render a prompt_command template with a shell-escaped prompt value, appending to cmd.
+/// Escapes the prompt text first, then substitutes into the template.
+pub fn append_prompt(cmd: &mut String, prompt_command: &str, prompt_text: &str) {
+    let escaped = shell_escape(prompt_text);
+    let mut vars = HashMap::new();
+    vars.insert("prompt", escaped.as_str());
+    let rendered = render(prompt_command, &vars);
+    *cmd = format!("{cmd} {rendered}");
+}
