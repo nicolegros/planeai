@@ -205,6 +205,9 @@ mod tests {
                 move_to: "in_review".into(),
             }),
             on_pr_merge: None,
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             auto_dispatch: None,
         };
 
@@ -233,6 +236,9 @@ mod tests {
             on_pr_merge: Some(crate::config::LifecycleHook {
                 move_to: "done".into(),
             }),
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             auto_dispatch: None,
         };
 
@@ -254,6 +260,9 @@ mod tests {
             on_complete: None,
             on_pr_open: None,
             on_pr_merge: None,
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             auto_dispatch: None,
         };
 
