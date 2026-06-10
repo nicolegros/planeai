@@ -11,6 +11,7 @@ struct RecordingBackend {
     sessions_inserted: Mutex<Vec<NewSession>>,
     task_moves: Mutex<Vec<(String, String)>>,
     gui_notified: Mutex<Vec<String>>,
+    fetches: Mutex<Vec<(String, String)>>,
 }
 
 impl Backend for RecordingBackend {
@@ -74,6 +75,13 @@ impl Backend for RecordingBackend {
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
         Ok(vec![])
     }
+    fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String> {
+        self.fetches
+            .lock()
+            .unwrap()
+            .push((repo.to_string(), base.to_string()));
+        Ok(format!("origin/{base}"))
+    }
 }
 
 #[test]
@@ -117,6 +125,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         description: "Full dark mode support".to_string(),
         priority: 1,
         blocked_by: vec![],
+        base_branch: None,
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -127,7 +136,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
     assert_eq!(wts[0].0, "/home/user/myapp"); // repo
     assert!(wts[0].1.starts_with("/tmp/worktrees/myapp/")); // worktree path
     assert_eq!(wts[0].2, "kan-3"); // branch
-    assert_eq!(wts[0].3, "main"); // base
+    assert_eq!(wts[0].3, "origin/main"); // base (fetched)
 
     // Tmux session was created
     let tmux = backend.tmux_sessions.lock().unwrap();
@@ -154,4 +163,102 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
     let notified = backend.gui_notified.lock().unwrap();
     assert_eq!(notified.len(), 1);
     assert_eq!(notified[0], session.id);
+}
+
+#[test]
+fn dispatch_uses_task_base_branch_when_present() {
+    let backend = RecordingBackend::default();
+
+    let dispatcher = SessionDispatcher {
+        task_manager_config: TaskManagerConfig {
+            list_tasks: String::new(),
+            get_task: String::new(),
+            move_task: String::new(),
+            terminal_states: vec![],
+            on_start: None,
+        },
+        dispatch_config: DispatchConfig {
+            provider: "kiro".to_string(),
+            provider_command: "kiro-cli chat".to_string(),
+            yolo: false,
+            yolo_flag: None,
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "tmux".to_string(),
+            prompt_template: None,
+            name_template: None,
+        },
+        project_id: "p1".to_string(),
+        project_name: "proj".to_string(),
+        project_path: "/repo".to_string(),
+    };
+
+    let task = Task {
+        key: "T-1".to_string(),
+        title: "Fix".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 0,
+        blocked_by: vec![],
+        base_branch: Some("develop".to_string()),
+    };
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    // Worktree should use the task's base_branch (fetched via fetch_base)
+    let wts = backend.worktrees_created.lock().unwrap();
+    assert_eq!(wts[0].3, "origin/develop");
+
+    // Session record should store the resolved base_branch
+    assert_eq!(session.base_branch, "origin/develop");
+}
+
+#[test]
+fn dispatch_fetches_base_before_worktree_creation() {
+    let backend = RecordingBackend::default();
+
+    let dispatcher = SessionDispatcher {
+        task_manager_config: TaskManagerConfig {
+            list_tasks: String::new(),
+            get_task: String::new(),
+            move_task: String::new(),
+            terminal_states: vec![],
+            on_start: None,
+        },
+        dispatch_config: DispatchConfig {
+            provider: "kiro".to_string(),
+            provider_command: "kiro-cli chat".to_string(),
+            yolo: false,
+            yolo_flag: None,
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "tmux".to_string(),
+            prompt_template: None,
+            name_template: None,
+        },
+        project_id: "p1".to_string(),
+        project_name: "proj".to_string(),
+        project_path: "/repo".to_string(),
+    };
+
+    let task = Task {
+        key: "T-2".to_string(),
+        title: "Fix".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 0,
+        blocked_by: vec![],
+        base_branch: Some("develop".to_string()),
+    };
+
+    dispatcher.dispatch(&task, &backend).unwrap();
+
+    // Should have fetched the base branch before creating worktree
+    let fetches = backend.fetches.lock().unwrap();
+    assert_eq!(fetches.len(), 1);
+    assert_eq!(fetches[0], ("/repo".to_string(), "develop".to_string()));
+
+    // Worktree should use the fetched ref (origin/develop)
+    let wts = backend.worktrees_created.lock().unwrap();
+    assert_eq!(wts[0].3, "origin/develop");
 }

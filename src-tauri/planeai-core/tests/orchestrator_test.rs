@@ -57,6 +57,9 @@ impl Backend for TestBackend {
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
         Ok(vec![])
     }
+    fn fetch_base(&self, _repo: &str, base: &str) -> Result<String, String> {
+        Ok(format!("origin/{base}"))
+    }
 }
 
 fn write_script(dir: &Path, name: &str, output: &str) -> String {
@@ -233,6 +236,9 @@ fi
         fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
             Ok(vec![])
         }
+        fn fetch_base(&self, _repo: &str, base: &str) -> Result<String, String> {
+            Ok(format!("origin/{base}"))
+        }
     }
 
     let backend = Arc::new(KillTrackingBackend::default());
@@ -341,6 +347,9 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
         }
         fn kill_session(&self, _: &NewSession) -> Result<(), String> {
             Ok(())
+        }
+        fn fetch_base(&self, _repo: &str, base: &str) -> Result<String, String> {
+            Ok(format!("origin/{base}"))
         }
         fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
             // Simulate 2 sessions already running from a previous daemon lifecycle

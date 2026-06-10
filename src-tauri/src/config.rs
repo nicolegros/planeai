@@ -124,6 +124,8 @@ pub struct AutoDispatchConfig {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_states: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 fn default_poll_interval() -> u64 {

@@ -1,5 +1,6 @@
 pub mod command;
 pub mod dispatch;
+pub mod git;
 pub mod orchestrator;
 pub mod session;
 pub mod task;
