@@ -7,7 +7,9 @@ mod config;
 mod db;
 mod file_explorer;
 mod git;
+mod logging;
 mod notify;
+mod paths;
 mod pr;
 mod pty;
 mod session_ops;
@@ -31,6 +33,14 @@ use commands::*;
 use state::*;
 
 fn main() {
+    let app_dir = paths::app_data_dir();
+    std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
+    let log_dir = app_dir.join("logs");
+    std::fs::create_dir_all(&log_dir).expect("failed to create log dir");
+    let _log_guard = logging::init(&log_dir);
+
+    tracing::info!("planeai starting");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -89,6 +99,7 @@ fn main() {
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
+            tracing::info!("database initialized");
 
             // Config: migrate from DB if needed, then load
             let config_dir = config::config_dir(&app.package_info().name);
@@ -96,6 +107,7 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+            tracing::info!("config loaded");
 
             // Revive sessions
             #[cfg(not(windows))]
@@ -172,6 +184,8 @@ fn main() {
             // Symphony orchestrator
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
+
+            tracing::info!("app setup complete");
 
             Ok(())
         })
