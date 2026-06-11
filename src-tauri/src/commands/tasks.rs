@@ -50,10 +50,19 @@ pub fn create_task_item(
 ) -> Result<task_manager::TaskItem, String> {
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let tm = resolve_task_manager(&cfg)?;
-    task_manager::create_task(tm, &title, &description, priority, &tags, &blocked_by, std::path::Path::new(&repo_path))
+    task_manager::create_task(
+        tm,
+        &title,
+        &description,
+        priority,
+        &tags,
+        &blocked_by,
+        std::path::Path::new(&repo_path),
+    )
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn edit_task_item(
     config_state: State<ConfigState>,
     repo_path: String,

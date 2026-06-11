@@ -92,6 +92,7 @@ pub fn create_task(
 
 /// Edit an existing task (fetch-merge-interpolate).
 /// Only provided fields override the existing values.
+#[allow(clippy::too_many_arguments)]
 pub fn edit_task(
     tm: &TaskManager,
     key: &str,
@@ -108,9 +109,7 @@ pub fn edit_task(
     let merged_title = title.unwrap_or(&current.title);
     let merged_desc = description.unwrap_or(&current.description);
     let merged_priority = priority.unwrap_or(current.priority);
-    let merged_tags = tags
-        .map(|t| t.to_vec())
-        .unwrap_or(current.tags.clone());
+    let merged_tags = tags.map(|t| t.to_vec()).unwrap_or(current.tags.clone());
     let merged_blocked = blocked_by
         .map(|b| b.to_vec())
         .unwrap_or(current.blocked_by.clone());
