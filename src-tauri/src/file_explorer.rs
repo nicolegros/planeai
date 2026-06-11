@@ -133,7 +133,6 @@ pub fn list_directory(path: &str) -> Result<Vec<DirEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::fs;
     use std::sync::mpsc;
     use tempfile::TempDir;
@@ -295,10 +294,9 @@ mod tests {
         while let Ok(event) = rx.try_recv() {
             paths.push(event.path);
         }
-        // All events should reference the same file, deduplicated to 1
-        let unique: HashSet<&String> = paths.iter().collect();
-        assert_eq!(unique.len(), 1);
-        assert!(paths[0].contains("rapid.txt"));
+        // All events should reference the same file (debounced from 5 rapid writes)
+        assert!(!paths.is_empty(), "expected at least one debounced event");
+        assert!(paths.iter().all(|p| p.contains("rapid.txt")));
 
         manager.unwatch("session-2");
     }
