@@ -409,7 +409,9 @@
     const cleanup = installKeyboardRouter(
       (action) => {
       if (action.type === "new_session") {
-        if (projects.length === 0) {
+        if (sidebarTab === "tasks") {
+          taskCreateRequested = true;
+        } else if (projects.length === 0) {
           showProjectForm = true;
         } else {
           showSessionForm = true;
