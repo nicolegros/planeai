@@ -72,4 +72,30 @@ describe("matchTerminalKey (Windows/Linux)", () => {
       });
     });
   });
+
+  describe("scroll", () => {
+    it("Shift+PageUp returns scroll_page_up", () => {
+      expect(matchTerminalKey(key({ key: "PageUp", shiftKey: true }), false)).toEqual({
+        type: "scroll_page_up",
+      });
+    });
+
+    it("Shift+PageDown returns scroll_page_down", () => {
+      expect(matchTerminalKey(key({ key: "PageDown", shiftKey: true }), false)).toEqual({
+        type: "scroll_page_down",
+      });
+    });
+
+    it("Shift+ArrowUp returns scroll_line_up", () => {
+      expect(matchTerminalKey(key({ key: "ArrowUp", shiftKey: true }), false)).toEqual({
+        type: "scroll_line_up",
+      });
+    });
+
+    it("Shift+ArrowDown returns scroll_line_down", () => {
+      expect(matchTerminalKey(key({ key: "ArrowDown", shiftKey: true }), false)).toEqual({
+        type: "scroll_line_down",
+      });
+    });
+  });
 });

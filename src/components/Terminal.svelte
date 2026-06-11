@@ -153,6 +153,22 @@
             if (text) invoke("write_to_pty", { sessionId, data: [...new TextEncoder().encode(text)] });
           }).catch(() => {});
           return false;
+        case "scroll_page_up":
+          ev.preventDefault();
+          term.scrollPages(-1);
+          return false;
+        case "scroll_page_down":
+          ev.preventDefault();
+          term.scrollPages(1);
+          return false;
+        case "scroll_line_up":
+          ev.preventDefault();
+          term.scrollLines(-1);
+          return false;
+        case "scroll_line_down":
+          ev.preventDefault();
+          term.scrollLines(1);
+          return false;
         case "passthrough":
           return true;
         case "send_bytes":
