@@ -140,6 +140,7 @@ pub fn init_symphony(
         let task_token = token.clone();
 
         let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let bridge_tx = tx.clone();
 
         let handle = tauri::async_runtime::spawn(async move {
             let _ = orchestrator.run(task_token, rx).await;
@@ -156,10 +157,7 @@ pub fn init_symphony(
             let _ = app_handle.emit("symphony-stopped", ());
         });
 
-        // Spawn the IPC bridge thread for symphony commands
-        if let Some(tx) = state.command_tx.clone() {
-            crate::symphony::start_ipc_bridge(app_dir, tx);
-        }
+        crate::symphony::start_ipc_bridge(app_dir, bridge_tx);
     }
     state
 }
