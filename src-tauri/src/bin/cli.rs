@@ -66,6 +66,12 @@ enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
+    Prompt {
+        id: String,
+        text: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -252,6 +258,43 @@ fn main() {
                         if pretty {
                             let v: serde_json::Value = serde_json::from_str(&output).unwrap();
                             println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Prompt { id, text, pretty } => {
+                let prompt_text = match text {
+                    Some(t) => t,
+                    None => {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .read_to_string(&mut buf)
+                            .unwrap_or_else(|e| {
+                                eprintln!("{{\"error\": \"failed to read stdin: {e}\"}}");
+                                std::process::exit(1);
+                            });
+                        buf
+                    }
+                };
+
+                let ops =
+                    planeai::session_ops::real_prompt_ops(planeai::paths::notify_socket_path());
+                match planeai::session_ops::send_prompt(&conn, &id, &prompt_text, &ops) {
+                    Ok(result) => {
+                        let output = serde_json::json!({
+                            "status": "sent",
+                            "session_id": result.session_id,
+                            "backend": result.backend,
+                        });
+                        if pretty {
+                            println!("{}", serde_json::to_string_pretty(&output).unwrap());
                         } else {
                             println!("{output}");
                         }
