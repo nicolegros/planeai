@@ -1,4 +1,4 @@
-use planeai_core::orchestrator::{AutoProject, Orchestrator, OrchestratorConfig};
+use planeai_core::orchestrator::{AutoProject, Orchestrator, OrchestratorCommand, OrchestratorConfig};
 use planeai_core::session::{Backend, NewSession};
 use planeai_core::task::{LifecycleHook, TaskManagerConfig};
 use std::fs;
@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Backend that records dispatched sessions.
@@ -76,9 +77,8 @@ fn write_script(dir: &Path, name: &str, output: &str) -> String {
 }
 
 #[tokio::test]
-async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
+async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
     let dir = tempdir().unwrap();
-    let socket_path = dir.path().join("symphony.sock");
 
     let list_json = r#"[{"key":"KAN-1","title":"Fix bug","status":"todo","description":"desc","priority":1,"blocked_by":[]}]"#;
     let list_script = write_script(dir.path(), "list.sh", list_json);
@@ -86,7 +86,6 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
     let config = OrchestratorConfig {
         poll_interval_ms: 50,
         max_concurrent: 2,
-        socket_path: socket_path.clone(),
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
@@ -119,19 +118,16 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
     let backend = Arc::new(TestBackend::default());
     let orchestrator = Orchestrator::new(config, backend.clone());
 
+    let (tx, rx) = mpsc::channel(8);
+
     // Spawn orchestrator in background
-    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new(), rx).await });
 
     // Wait for at least one poll tick to fire
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
-    // Send stop command via socket
-    let mut stream = tokio::net::UnixStream::connect(&socket_path)
-        .await
-        .expect("should connect to symphony.sock");
-    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n")
-        .await
-        .expect("should send stop");
+    // Send stop command via channel
+    tx.send(OrchestratorCommand::Stop).await.unwrap();
 
     // Orchestrator should exit cleanly
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
@@ -151,10 +147,8 @@ async fn orchestrator_polls_dispatches_and_stops_on_socket_command() {
 #[tokio::test]
 async fn orchestrator_kills_session_when_task_becomes_terminal() {
     let dir = tempdir().unwrap();
-    let socket_path = dir.path().join("symphony.sock");
 
     // The list script returns "todo" on first call, then "done" on subsequent calls.
-    // We use a state file to track calls.
     let state_file = dir.path().join("call_count");
     fs::write(&state_file, "0").unwrap();
 
@@ -181,7 +175,6 @@ fi
     let config = OrchestratorConfig {
         poll_interval_ms: 50,
         max_concurrent: 2,
-        socket_path: socket_path.clone(),
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
@@ -260,16 +253,15 @@ fi
     let backend = Arc::new(KillTrackingBackend::default());
     let orchestrator = Orchestrator::new(config, backend.clone());
 
-    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
+    let (tx, rx) = mpsc::channel(8);
+
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new(), rx).await });
 
     // Wait for dispatch + reconciliation (at least 3 ticks)
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
     // Stop the orchestrator
-    let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
-    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n")
-        .await
-        .unwrap();
+    tx.send(OrchestratorCommand::Stop).await.unwrap();
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
         .await
@@ -291,7 +283,6 @@ fi
 #[tokio::test]
 async fn orchestrator_reattaches_active_sessions_on_startup() {
     let dir = tempdir().unwrap();
-    let socket_path = dir.path().join("symphony.sock");
 
     // list_tasks returns 3 tasks
     let list_json = r#"[
@@ -306,7 +297,6 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
     let config = OrchestratorConfig {
         poll_interval_ms: 50,
         max_concurrent: 3, // only 3 slots total
-        socket_path: socket_path.clone(),
         projects: vec![AutoProject {
             project_id: "p1".to_string(),
             project_name: "testproj".to_string(),
@@ -417,16 +407,15 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
     let backend = Arc::new(PreloadedBackend::default());
     let orchestrator = Orchestrator::new(config, backend.clone());
 
-    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new()).await });
+    let (tx, rx) = mpsc::channel(8);
+
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new(), rx).await });
 
     // Wait for dispatch
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     // Stop
-    let mut stream = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
-    tokio::io::AsyncWriteExt::write_all(&mut stream, b"stop\n")
-        .await
-        .unwrap();
+    tx.send(OrchestratorCommand::Stop).await.unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
         .await
         .unwrap()
