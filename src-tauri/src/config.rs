@@ -1134,6 +1134,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn config_dir_uses_app_name_for_directory() {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", "/mock/home");
@@ -1148,6 +1149,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn config_dir_isolates_dev_bundle_by_name() {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", "/mock/home");
@@ -1162,6 +1164,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn normalize_base_path_expands_tilde() {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", "/Users/testuser");
@@ -1171,6 +1174,40 @@ mod tests {
 
         if let Some(h) = original_home {
             std::env::set_var("HOME", h);
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn config_dir_uses_appdata_on_windows() {
+        let original = std::env::var("APPDATA").ok();
+        std::env::set_var("APPDATA", "C:\\Users\\test\\AppData\\Roaming");
+
+        let path = config_dir("planeai");
+        assert_eq!(
+            path,
+            PathBuf::from("C:\\Users\\test\\AppData\\Roaming\\planeai")
+        );
+
+        if let Some(v) = original {
+            std::env::set_var("APPDATA", v);
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn config_dir_isolates_dev_bundle_on_windows() {
+        let original = std::env::var("APPDATA").ok();
+        std::env::set_var("APPDATA", "C:\\Users\\test\\AppData\\Roaming");
+
+        let path = config_dir("planeai-feat-foo");
+        assert_eq!(
+            path,
+            PathBuf::from("C:\\Users\\test\\AppData\\Roaming\\planeai-feat-foo")
+        );
+
+        if let Some(v) = original {
+            std::env::set_var("APPDATA", v);
         }
     }
 

@@ -133,7 +133,7 @@ fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, String> {
     planeai_core::command::run_command(cmd_str, cwd).map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;

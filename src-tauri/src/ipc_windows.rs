@@ -2,13 +2,13 @@ use std::io::{Read, Write};
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
+    CreateFileW, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND,
-    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 
 use crate::ipc::Channel;

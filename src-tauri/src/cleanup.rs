@@ -58,10 +58,10 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
 /// Production operations that call real tmux/git/fs commands.
 pub fn real_ops() -> CleanupOps {
     CleanupOps {
-        kill_tmux: Box::new(|name| {
+        kill_tmux: Box::new(|_name| {
             #[cfg(not(windows))]
             {
-                crate::tmux::kill_session(name)
+                crate::tmux::kill_session(_name)
             }
             #[cfg(windows)]
             {
