@@ -31,7 +31,7 @@ pub fn restart_session(
         .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
-    let cmd = if has_resume {
+    let _cmd = if has_resume {
         config::restart_command_for_provider(provider_def, session.provider_session_id.as_deref())
     } else {
         config::launch_command(provider_def, session.auto_approve)
@@ -52,7 +52,7 @@ pub fn restart_session(
                 .map(|p| p.path.as_str())
                 .unwrap_or("/");
             let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
-            tmux::create_session_with_cmd(tmux_name, cwd, &cmd, &session_id)?;
+            tmux::create_session_with_cmd(tmux_name, cwd, &_cmd, &session_id)?;
         }
         #[cfg(windows)]
         return Err("tmux backend not available on Windows".to_string());
