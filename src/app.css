@@ -148,7 +148,7 @@
 }
 
 .xterm-viewport {
-  overflow-y: hidden !important;
+  overflow-y: auto !important;
   scrollbar-width: none;
 }
 

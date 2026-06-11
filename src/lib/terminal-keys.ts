@@ -4,6 +4,10 @@ export type TerminalKeyAction =
   | { type: "copy" }
   | { type: "paste" }
   | { type: "send_bytes"; bytes: number[] }
+  | { type: "scroll_page_up" }
+  | { type: "scroll_page_down" }
+  | { type: "scroll_line_up" }
+  | { type: "scroll_line_down" }
   | { type: "passthrough" }
   | null;
 
@@ -66,6 +70,21 @@ export function matchTerminalKey(
     if (e.ctrlKey && !e.shiftKey && !e.metaKey && e.key === "Backspace") {
       return { type: "send_bytes", bytes: [0x15] };
     }
+  }
+
+  // Shift+PageUp/PageDown → scroll terminal buffer
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageUp") {
+    return { type: "scroll_page_up" };
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "PageDown") {
+    return { type: "scroll_page_down" };
+  }
+  // Shift+ArrowUp/ArrowDown → scroll terminal buffer line by line
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "ArrowUp") {
+    return { type: "scroll_line_up" };
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key === "ArrowDown") {
+    return { type: "scroll_line_down" };
   }
 
   // Shift+Enter → Ctrl+J (newline without submit)
