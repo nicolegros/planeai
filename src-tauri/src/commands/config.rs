@@ -61,6 +61,14 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+pub fn get_log_dir() -> String {
+    crate::paths::app_data_dir()
+        .join("logs")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[tauri::command]
 pub async fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::family_name::FamilyName;
     use font_kit::properties::Properties;
