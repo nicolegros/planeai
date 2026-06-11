@@ -150,6 +150,12 @@
     if (sessions.length > 0 && !activeSessionId) {
       seedMru(sessions.map((s) => s.id));
       selectSession(sessions[0].id);
+    } else {
+      // Add any new sessions (e.g. from symphony) to MRU so they appear in tab switcher
+      const mru = getMruList();
+      for (const s of sessions) {
+        if (!mru.includes(s.id)) touchMru(s.id);
+      }
     }
   }
 
