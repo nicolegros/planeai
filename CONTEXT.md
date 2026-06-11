@@ -160,6 +160,15 @@ Sessions table has `worktree_path TEXT NULL`. Non-null indicates worktree mode.
 
 Project → Session name → ✅ Create worktree → Base branch (existing) → New branch name (editable, defaults to session name slugified)
 
+## Logging
+
+Uses the `tracing` crate with a rolling daily file appender. Logs go to `<app_data_dir>/logs/planeai.log`.
+
+- **Initialization**: `planeai::logging::init(&log_dir)` — returns a `WorkerGuard` that must be held for the app lifetime.
+- **Both binaries init logging**: the Tauri app (`main.rs`) and the CLI (`bin/cli.rs`).
+- **Filter**: `RUST_LOG` env var (defaults to `info`).
+- **Convention**: Use `tracing::info!` for happy-path events, `tracing::warn!` for recoverable failures, `tracing::error!` for unrecoverable failures. Include relevant identifiers (session_id, tmux_name) as structured fields.
+
 ## Architecture decisions
 
 See `docs/adr/` for recorded decisions.

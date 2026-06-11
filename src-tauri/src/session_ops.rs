@@ -293,14 +293,18 @@ pub fn send_prompt(
     text: &str,
     ops: &dyn PromptOps,
 ) -> Result<PromptResult, String> {
+    tracing::info!(prefix = id_prefix, "send_prompt: resolving session");
     let session = resolve_session_by_prefix(conn, id_prefix).map_err(|e| e.to_string())?;
 
     if session.status != "active" {
+        tracing::warn!(session_id = %session.id, status = %session.status, "send_prompt: session not active");
         return Err(format!(
             "session is not active (status: {})",
             session.status
         ));
     }
+
+    tracing::info!(session_id = %session.id, backend = %session.backend, "send_prompt: dispatching");
 
     match session.backend.as_str() {
         "tmux" => {
@@ -309,12 +313,15 @@ pub fn send_prompt(
                 .as_deref()
                 .ok_or("tmux session has no tmux_name")?;
             if !ops.tmux_has_session(tmux_name) {
+                tracing::warn!(tmux_name, "send_prompt: tmux session not running");
                 return Err("tmux session is not running".to_string());
             }
             ops.tmux_send_keys(tmux_name, text)?;
+            tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
         "direct" => {
             ops.notify_socket_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket");
         }
         other => return Err(format!("unsupported backend: {other}")),
     }

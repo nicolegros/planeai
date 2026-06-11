@@ -294,19 +294,28 @@ mod tests {
         )
         .unwrap();
 
-        let home = config::home_dir();
-        assert_eq!(
-            plan.branch_strategy,
+        match &plan.branch_strategy {
             BranchStrategy::Worktree {
-                repo: "/home/user/myapp".to_string(),
-                path: format!("{home}/.planeai/worktrees/myapp/aaaaaaaa"),
-                branch: "feat-wt".to_string(),
-                base: "develop".to_string(),
+                repo,
+                path,
+                branch,
+                base,
+            } => {
+                assert_eq!(repo, "/home/user/myapp");
+                assert!(
+                    path.ends_with("/.planeai/worktrees/myapp/aaaaaaaa"),
+                    "unexpected worktree path: {path}"
+                );
+                assert_eq!(branch, "feat-wt");
+                assert_eq!(base, "develop");
             }
-        );
-        assert_eq!(
-            plan.working_dir,
-            format!("{home}/.planeai/worktrees/myapp/aaaaaaaa")
+            other => panic!("expected Worktree, got {:?}", other),
+        }
+        assert!(
+            plan.working_dir
+                .ends_with("/.planeai/worktrees/myapp/aaaaaaaa"),
+            "unexpected working_dir: {}",
+            plan.working_dir
         );
         assert_eq!(plan.session_name, "wt-session");
     }

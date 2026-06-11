@@ -93,6 +93,9 @@ enum SymphonyAction {
 fn main() {
     let cli = Cli::parse();
 
+    let log_dir = planeai::paths::app_data_dir().join("logs");
+    let _guard = planeai::logging::init(&log_dir);
+
     let db_path = planeai::paths::db_path();
     let conn = rusqlite::Connection::open(&db_path).unwrap_or_else(|e| {
         eprintln!("{{\"error\": \"failed to open database: {e}\"}}");
