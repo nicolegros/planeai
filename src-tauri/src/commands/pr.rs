@@ -123,6 +123,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn fetch_pr_url_returns_url_when_pr_exists() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("pr.sh");
@@ -169,6 +170,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn fetch_pr_url_returns_create_url_when_no_pr() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("pr.sh");

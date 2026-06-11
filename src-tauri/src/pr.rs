@@ -85,6 +85,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    #[cfg(unix)]
     fn check_pr_status_parses_valid_json() {
         let dir = tempdir().unwrap();
         let script = dir.path().join("pr.sh");
@@ -106,6 +107,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn check_pr_status_returns_none_on_non_zero_exit() {
         let dir = tempdir().unwrap();
         let script = dir.path().join("pr.sh");
@@ -120,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn check_pr_status_returns_error_on_invalid_json() {
         let dir = tempdir().unwrap();
         let script = dir.path().join("pr.sh");
@@ -185,6 +188,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn fire_pr_hook_on_opened_calls_move_task() {
         let dir = tempdir().unwrap();
         let script = dir.path().join("move.sh");
@@ -216,6 +220,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn fire_pr_hook_on_merged_calls_move_task() {
         let dir = tempdir().unwrap();
         let script = dir.path().join("move.sh");
