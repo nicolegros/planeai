@@ -63,7 +63,12 @@
   $effect(() => {
     if (mode === "task" && selectedProject) {
       invoke<TaskItem[]>("list_task_items", { repoPath: selectedProject.path }).then(
-        (items) => (taskItems = items),
+        (items) => {
+          taskItems = items;
+          if (taskPrefill?.key && items.some((t) => t.key === taskPrefill.key)) {
+            onTaskSelected(taskPrefill.key);
+          }
+        },
         (e) => { taskItems = []; showSnackbar(String(e)); },
       );
     }
