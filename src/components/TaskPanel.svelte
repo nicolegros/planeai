@@ -247,7 +247,7 @@
                       {#each items as task (task.key)}
                         <li>
                           <button
-                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800"
+                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none"
                             onclick={() => handleClick(task)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >
