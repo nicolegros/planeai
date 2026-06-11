@@ -29,7 +29,7 @@ pub fn install_cli(app: tauri::AppHandle) -> Result<(), String> {
     symlink_cli(&cli_bin)
 }
 
-fn symlink_cli(_source: &std::path::Path) -> Result<(), String> {
+fn symlink_cli(source: &std::path::Path) -> Result<(), String> {
     let target = std::path::Path::new("/usr/local/bin/planeai-cli");
     if target.exists() || target.symlink_metadata().is_ok() {
         std::fs::remove_file(target)
@@ -37,11 +37,12 @@ fn symlink_cli(_source: &std::path::Path) -> Result<(), String> {
     }
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(_source, target)
+        std::os::unix::fs::symlink(source, target)
             .map_err(|e| format!("failed to create symlink: {e}"))
     }
     #[cfg(windows)]
     {
+        let _ = source;
         Err("symlink_cli not supported on Windows".to_string())
     }
 }
