@@ -163,7 +163,10 @@
       if (status === "done") {
         const linked = sessionForTask(key);
         if (linked) {
+          console.log(`[task-panel] task ${key} → done, archiving session ${linked.id}`);
           try { await onArchiveSession?.(linked); } catch (e: any) { showSnackbar(`Archive failed: ${e}`); }
+        } else {
+          console.log(`[task-panel] task ${key} → done, no linked session`);
         }
       }
       await refresh();
