@@ -159,6 +159,10 @@
     if (!repoPath) return;
     try {
       await invoke("move_task_item", { key, status, repoPath });
+      if (status === "done") {
+        const linked = sessionForTask(key);
+        if (linked) await invoke("archive_session", { id: linked.id });
+      }
       await refresh();
     } catch (e: any) { showSnackbar(e.toString()); }
   }
