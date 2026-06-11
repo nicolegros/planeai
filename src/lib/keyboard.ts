@@ -32,7 +32,6 @@ export type KeyboardAction =
   | { type: "toggle_diff" }
   | { type: "toggle_file_explorer" }
   | { type: "toggle_task_panel" }
-  | { type: "pick_task" }
   | { type: "create_task" }
   | { type: "open_file" }
   | { type: "save_file" }
@@ -79,11 +78,6 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+Shift+T — toggle task panel
   if (mod && e.shiftKey && key === "t") {
     return { type: "toggle_task_panel" };
-  }
-
-  // Mod+I — pick task
-  if (mod && !e.shiftKey && key === "i") {
-    return { type: "pick_task" };
   }
 
   // Mod+Shift+I — create task
@@ -173,7 +167,6 @@ export function installKeyboardRouter(
     "next_tab",
     "prev_tab",
     "open_preferences",
-    "pick_task",
     "create_task",
   ]);
 
