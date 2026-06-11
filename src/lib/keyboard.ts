@@ -173,6 +173,8 @@ export function installKeyboardRouter(
     "next_tab",
     "prev_tab",
     "open_preferences",
+    "pick_task",
+    "create_task",
   ]);
 
   function handler(e: KeyboardEvent) {
