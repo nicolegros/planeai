@@ -49,6 +49,9 @@ impl TaskDispatcher {
             if self.is_terminal(&task.status) {
                 continue;
             }
+            if !task.subtasks.is_empty() {
+                continue;
+            }
             if self.has_unresolved_blockers(task, &tasks).await? {
                 continue;
             }

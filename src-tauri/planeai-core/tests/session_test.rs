@@ -130,6 +130,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         description: "Full dark mode support".to_string(),
         priority: 1,
         blocked_by: vec![],
+        subtasks: vec![],
         base_branch: None,
     };
 
@@ -207,6 +208,7 @@ fn dispatch_uses_task_base_branch_when_present() {
         description: String::new(),
         priority: 0,
         blocked_by: vec![],
+        subtasks: vec![],
         base_branch: Some("develop".to_string()),
     };
 
@@ -257,6 +259,7 @@ fn dispatch_fetches_base_before_worktree_creation() {
         description: String::new(),
         priority: 0,
         blocked_by: vec![],
+        subtasks: vec![],
         base_branch: Some("develop".to_string()),
     };
 
@@ -343,6 +346,7 @@ fn make_task() -> Task {
         description: String::new(),
         priority: 1,
         blocked_by: vec![],
+        subtasks: vec![],
         base_branch: None,
     }
 }
