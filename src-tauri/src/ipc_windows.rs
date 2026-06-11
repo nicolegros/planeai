@@ -3,13 +3,10 @@ use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
-    PIPE_ACCESS_INBOUND,
-};
+use windows_sys::Win32::Storage::FileSystem::{CreateFileW, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING};
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
-    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND,
+    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 
 use crate::ipc::Channel;
@@ -58,6 +55,11 @@ impl IpcListener {
     }
 }
 
+/// Returns the platform-specific address string for a channel.
+pub fn address(channel: Channel, _app_dir: &Path) -> String {
+    pipe_name(channel)
+}
+
 pub fn connect(channel: Channel, _app_dir: &Path) -> Result<IpcStream, String> {
     let name = pipe_name(channel);
     let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
@@ -85,7 +87,7 @@ pub fn channel_exists(_channel: Channel, _app_dir: &Path) -> bool {
 }
 
 fn pipe_name(channel: Channel) -> String {
-    format!("{}{}", PIPE_PREFIX, channel.socket_name())
+    format!("{}{}", PIPE_PREFIX, channel.name())
 }
 
 impl Read for IpcStream {

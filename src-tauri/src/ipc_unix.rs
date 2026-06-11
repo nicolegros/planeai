@@ -15,7 +15,6 @@ pub struct IpcStream {
 impl IpcListener {
     pub fn bind(channel: Channel, app_dir: &Path) -> Result<Self, String> {
         let path = socket_path(channel, app_dir);
-        // Remove stale socket
         let _ = std::fs::remove_file(&path);
         let inner = StdUnixListener::bind(&path).map_err(|e| format!("bind failed: {e}"))?;
         Ok(Self { inner })
@@ -28,15 +27,12 @@ impl IpcListener {
             .map_err(|e| format!("accept failed: {e}"))?;
         Ok(IpcStream { inner: stream })
     }
+}
 
-    /// Returns an iterator over incoming connections (mirrors UnixListener::incoming).
-    #[allow(dead_code)]
-    pub fn incoming(&self) -> impl Iterator<Item = Result<IpcStream, String>> + '_ {
-        self.inner.incoming().map(|r| match r {
-            Ok(s) => Ok(IpcStream { inner: s }),
-            Err(e) => Err(format!("accept failed: {e}")),
-        })
-    }
+/// Returns the platform-specific address string for a channel.
+#[allow(dead_code)]
+pub fn address(channel: Channel, app_dir: &Path) -> String {
+    socket_path(channel, app_dir).to_string_lossy().into_owned()
 }
 
 #[allow(dead_code)]
@@ -52,7 +48,7 @@ pub fn channel_exists(channel: Channel, app_dir: &Path) -> bool {
 }
 
 fn socket_path(channel: Channel, app_dir: &Path) -> PathBuf {
-    app_dir.join(format!("{}.sock", channel.socket_name()))
+    app_dir.join(format!("{}.sock", channel.name()))
 }
 
 impl Read for IpcStream {

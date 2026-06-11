@@ -129,7 +129,7 @@ pub fn init_symphony(
         let backend = Arc::new(crate::symphony::TauriBackend {
             db: db_arc.clone(),
             app_handle: app.handle().clone(),
-            notify_socket: std::path::PathBuf::from(crate::ipc::channel_address(
+            notify_socket: std::path::PathBuf::from(crate::ipc::address(
                 crate::ipc::Channel::Notify,
                 app_dir,
             )),
