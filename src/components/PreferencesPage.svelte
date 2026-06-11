@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
   import { Select, Input, Button } from "./ui";
@@ -87,6 +88,11 @@
     } catch (e) {
       console.error("Failed to install CLI:", e);
     }
+  }
+
+  async function openLogFolder() {
+    const logDir = await invoke<string>("get_log_dir");
+    await revealItemInDir(logDir);
   }
 
   function setAppearance(mode: AppearanceMode) {
@@ -632,6 +638,18 @@
         {:else}
           <Button type="button" onclick={installCli}>Install</Button>
         {/if}
+      </div>
+    </section>
+
+    <!-- Logs -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Logs</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-surface-700 dark:text-surface-300">Application logs</p>
+          <p class="text-xs text-surface-500 dark:text-surface-400">Open the folder containing log files for debugging.</p>
+        </div>
+        <Button type="button" onclick={openLogFolder}>Open Logs Folder</Button>
       </div>
     </section>
     {/if}

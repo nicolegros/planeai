@@ -26,10 +26,12 @@ pub fn app_data_dir() -> PathBuf {
     }
 }
 
+#[allow(dead_code)]
 pub fn db_path() -> PathBuf {
     app_data_dir().join("planeai.db")
 }
 
+#[allow(dead_code)]
 pub fn notify_socket_path() -> PathBuf {
     app_data_dir().join("notify.sock")
 }

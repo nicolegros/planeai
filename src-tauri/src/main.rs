@@ -215,6 +215,7 @@ fn main() {
             write_file,
             list_monospace_fonts,
             get_config,
+            get_log_dir,
             update_config,
             get_theme_css,
             list_themes,
