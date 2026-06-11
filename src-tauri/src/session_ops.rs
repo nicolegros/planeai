@@ -207,10 +207,8 @@ pub trait PromptOps {
 }
 
 #[cfg(not(windows))]
-pub fn real_prompt_ops(socket_path: std::path::PathBuf) -> impl PromptOps {
-    struct RealPromptOps {
-        socket_path: std::path::PathBuf,
-    }
+pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
+    struct RealPromptOps;
     impl PromptOps for RealPromptOps {
         fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
             crate::tmux::send_keys(tmux_name, text)
@@ -218,10 +216,11 @@ pub fn real_prompt_ops(socket_path: std::path::PathBuf) -> impl PromptOps {
         fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             use std::io::Write;
             use std::os::unix::net::UnixStream;
-            if !self.socket_path.exists() {
+            let sock = crate::paths::app_data_dir().join("notify.sock");
+            if !sock.exists() {
                 return Err("GUI is not running (socket not found)".to_string());
             }
-            let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| e.to_string())?;
+            let mut stream = UnixStream::connect(&sock).map_err(|e| e.to_string())?;
             let msg = serde_json::json!({
                 "event": "send_prompt",
                 "session_id": session_id,
@@ -235,7 +234,57 @@ pub fn real_prompt_ops(socket_path: std::path::PathBuf) -> impl PromptOps {
             crate::tmux::has_session(tmux_name)
         }
     }
-    RealPromptOps { socket_path }
+    RealPromptOps
+}
+
+#[cfg(windows)]
+pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
+    struct WindowsPromptOps;
+    impl PromptOps for WindowsPromptOps {
+        fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
+            use std::process::Command;
+            let output = Command::new("tmux")
+                .args(["send-keys", "-t", tmux_name, "-l", text])
+                .output()
+                .map_err(|e| format!("failed to run tmux: {e}"))?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).to_string());
+            }
+            let output = Command::new("tmux")
+                .args(["send-keys", "-t", tmux_name, "Enter"])
+                .output()
+                .map_err(|e| format!("failed to run tmux: {e}"))?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).to_string());
+            }
+            Ok(())
+        }
+        fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            use std::io::Write;
+            let pipe_name = format!("\\\\.\\pipe\\planeai-notify");
+            let mut stream = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&pipe_name)
+                .map_err(|e| format!("GUI is not running (pipe not found): {e}"))?;
+            let msg = serde_json::json!({
+                "event": "send_prompt",
+                "session_id": session_id,
+                "text": text,
+            });
+            stream
+                .write_all(format!("{}\n", msg).as_bytes())
+                .map_err(|e| e.to_string())
+        }
+        fn tmux_has_session(&self, tmux_name: &str) -> bool {
+            use std::process::Command;
+            Command::new("tmux")
+                .args(["has-session", "-t", tmux_name])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+    }
+    WindowsPromptOps
 }
 
 pub fn send_prompt(
