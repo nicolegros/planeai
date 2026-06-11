@@ -307,7 +307,7 @@
       {taskCreateRequested}
       {onPickTask}
       {onSelectSession}
-      onArchiveSession={(s) => { const full = sessions.find(x => x.id === s.id); if (full) onArchiveSession(full); }}
+      onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
       onTaskCreateConsumed={onTaskCreateConsumed}
     />
   {/if}

@@ -34,7 +34,7 @@
     taskCreateRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
-    onArchiveSession?: (session: Session) => void;
+    onArchiveSession?: (session: Session) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
   }
 
@@ -162,7 +162,9 @@
       await invoke("move_task_item", { key, status, repoPath });
       if (status === "done") {
         const linked = sessionForTask(key);
-        if (linked) onArchiveSession?.(linked);
+        if (linked) {
+          try { await onArchiveSession?.(linked); } catch (e: any) { showSnackbar(`Archive failed: ${e}`); }
+        }
       }
       await refresh();
     } catch (e: any) { showSnackbar(e.toString()); }
