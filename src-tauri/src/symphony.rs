@@ -16,25 +16,86 @@ use crate::config::{self, Config};
 
 // ─── SymphonyState (managed as Tauri state) ───
 
+#[allow(dead_code)]
+pub struct RunningOrchestrator {
+    pub token: CancellationToken,
+    pub handle: tauri::async_runtime::JoinHandle<()>,
+    pub command_tx: tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>,
+}
+
 pub struct SymphonyState {
-    pub token: Option<CancellationToken>,
-    pub handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    pub running: Option<RunningOrchestrator>,
 }
 
 impl SymphonyState {
     pub fn new() -> Self {
-        Self {
-            token: None,
-            handle: None,
-        }
+        Self { running: None }
     }
 
     pub fn is_running(&self) -> bool {
-        self.token
+        self.running
             .as_ref()
-            .map(|t| !t.is_cancelled())
+            .map(|r| !r.token.is_cancelled())
             .unwrap_or(false)
     }
+}
+
+/// Spawn a std::thread that listens on the Symphony IPC channel and forwards
+/// commands to the orchestrator via the mpsc sender.
+pub fn start_ipc_bridge(
+    app_dir: &std::path::Path,
+    tx: tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>,
+) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let app_dir = app_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let listener =
+            match planeai::ipc::IpcListener::bind(planeai::ipc::Channel::Symphony, &app_dir) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[symphony-ipc] bind failed: {e}");
+                    return;
+                }
+            };
+
+        loop {
+            let mut stream = match listener.accept() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[symphony-ipc] accept failed: {e}");
+                    continue;
+                }
+            };
+
+            let mut line = String::new();
+            if BufReader::new(&mut stream).read_line(&mut line).is_err() {
+                continue;
+            }
+
+            match line.trim() {
+                "stop" => {
+                    let _ = tx.blocking_send(planeai_core::orchestrator::OrchestratorCommand::Stop);
+                    break;
+                }
+                "status" => {
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    if tx
+                        .blocking_send(planeai_core::orchestrator::OrchestratorCommand::Status {
+                            reply: reply_tx,
+                        })
+                        .is_ok()
+                    {
+                        if let Ok(response) = reply_rx.blocking_recv() {
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.write_all(b"\n");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 // ─── TauriBackend ───
@@ -211,11 +272,7 @@ struct Project {
     task_manager: Option<String>,
 }
 
-pub fn build_orchestrator_config(
-    config: &Config,
-    db: &Connection,
-    socket_path: std::path::PathBuf,
-) -> Option<OrchestratorConfig> {
+pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
     let projects = load_auto_projects(db);
     if projects.is_empty() {
         return None;
@@ -284,7 +341,6 @@ pub fn build_orchestrator_config(
     Some(OrchestratorConfig {
         poll_interval_ms,
         max_concurrent,
-        socket_path,
         projects: auto_projects,
     })
 }
@@ -381,7 +437,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        let orch_config = build_orchestrator_config(&config, &conn);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -399,7 +455,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        let orch_config = build_orchestrator_config(&config, &conn);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -424,7 +480,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+        let orch = build_orchestrator_config(&config, &conn).unwrap();
 
         assert_eq!(
             orch.projects[0].dispatch_config.prompt_wrapper,
@@ -448,7 +504,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+        let orch = build_orchestrator_config(&config, &conn).unwrap();
 
         assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);
         assert_eq!(

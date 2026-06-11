@@ -42,6 +42,7 @@ fn symlink_cli(source: &std::path::Path) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
+        let _ = source;
         Err("symlink_cli not supported on Windows".to_string())
     }
 }

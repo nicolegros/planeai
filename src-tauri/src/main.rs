@@ -166,10 +166,10 @@ fn main() {
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_notify_state(notify_state);
-            #[cfg(unix)]
-            pty_mgr.set_socket_path(notify::socket_path(&app_dir).to_string_lossy().into_owned());
-            #[cfg(windows)]
-            pty_mgr.set_socket_path(notify::PIPE_NAME.to_string());
+            pty_mgr.set_socket_path(planeai::ipc::address(
+                planeai::ipc::Channel::Notify,
+                &app_dir,
+            ));
             app.manage(PtyState(pty_mgr));
             app.manage(FileExplorerState(Mutex::new(
                 file_explorer::WatcherManager::new(),

@@ -120,36 +120,46 @@ pub fn init_symphony(
     let conn = db_arc.lock().unwrap();
     let cfg_state = app.state::<ConfigState>();
     let cfg = cfg_state.0.lock().unwrap();
-    let socket_path = app_dir.join("symphony.sock");
 
     let mut state = crate::symphony::SymphonyState::new();
-    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn, socket_path)
-    {
+    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn) {
         drop(cfg);
         drop(conn);
 
         let backend = Arc::new(crate::symphony::TauriBackend {
             db: db_arc.clone(),
             app_handle: app.handle().clone(),
-            notify_socket: crate::notify::socket_path(app_dir),
+            notify_socket: std::path::PathBuf::from(planeai::ipc::address(
+                planeai::ipc::Channel::Notify,
+                app_dir,
+            )),
         });
 
         let token = tokio_util::sync::CancellationToken::new();
         let orchestrator = planeai_core::orchestrator::Orchestrator::new(orch_config, backend);
         let task_token = token.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let bridge_tx = tx.clone();
+
         let handle = tauri::async_runtime::spawn(async move {
-            let _ = orchestrator.run(task_token).await;
+            let _ = orchestrator.run(task_token, rx).await;
         });
 
-        state.token = Some(token);
-        state.handle = Some(handle);
+        state.running = Some(crate::symphony::RunningOrchestrator {
+            token: token.clone(),
+            handle,
+            command_tx: tx,
+        });
 
         let app_handle = app.handle().clone();
-        let watch_token = state.token.as_ref().unwrap().clone();
+        let watch_token = token;
         tauri::async_runtime::spawn(async move {
             watch_token.cancelled().await;
             let _ = app_handle.emit("symphony-stopped", ());
         });
+
+        crate::symphony::start_ipc_bridge(app_dir, bridge_tx);
     }
     state
 }

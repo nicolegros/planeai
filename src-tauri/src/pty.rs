@@ -131,7 +131,10 @@ impl PtyManager {
                     c
                 }
                 #[cfg(windows)]
-                return Err("tmux not available on Windows".to_string());
+                {
+                    let _ = tmux_name;
+                    return Err("tmux not available on Windows".to_string());
+                }
             }
             PtyTarget::Direct { command, args, cwd } => {
                 let mut c = CommandBuilder::new(command);

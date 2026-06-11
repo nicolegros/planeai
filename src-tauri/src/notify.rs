@@ -1,20 +1,16 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-#[cfg(unix)]
-use std::os::unix::net::UnixListener;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
+use planeai::ipc::{Channel, IpcListener};
+
 const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const DEBOUNCE_THRESHOLD: Duration = Duration::from_secs(2);
-#[cfg(unix)]
-const SOCK_NAME: &str = "notify.sock";
-#[cfg(windows)]
-pub const PIPE_NAME: &str = r"\\.\pipe\planeai-notify";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AgentState {
@@ -362,206 +358,92 @@ pub struct SessionMeta {
     pub hook_enabled: bool,
 }
 
-/// Returns the socket path inside the given app data directory.
-#[cfg(unix)]
-pub fn socket_path(app_dir: &Path) -> PathBuf {
-    app_dir.join(SOCK_NAME)
-}
-
-/// Start the Unix socket listener thread. Incoming JSONL lines are parsed and dispatched
+/// Start the IPC listener thread. Incoming JSONL lines are parsed and dispatched
 /// to immediate or debounced notification paths.
-#[cfg(unix)]
 pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
-    let sock = socket_path(app_dir);
-    // Remove stale socket
-    let _ = std::fs::remove_file(&sock);
+    let listener =
+        IpcListener::bind(Channel::Notify, app_dir).expect("failed to bind notify IPC listener");
 
-    let listener = UnixListener::bind(&sock).expect("failed to bind notify socket");
-
-    thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let reader = BufReader::new(stream);
-            for line in reader.lines().map_while(Result::ok) {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
-                let msg = parse_notify_message(&line);
-                if msg.session_id.is_empty() {
-                    continue;
-                }
-                match msg.event {
-                    NotifyEvent::SessionCreated => {
-                        eprintln!("[notify] session_created: {}", msg.session_id);
-                        let _ = app.emit("session-created", msg.session_id.clone());
-                    }
-                    NotifyEvent::SessionChanged => {
-                        eprintln!("[notify] session_changed: {}", msg.session_id);
-                        let _ = app.emit("sessions-changed", ());
-                    }
-                    NotifyEvent::Busy => {
-                        let mut s = state.lock().unwrap();
-                        let name = s
-                            .get_meta(&msg.session_id)
-                            .map(|m| m.name.as_str())
-                            .unwrap_or("?");
-                        eprintln!("[notify] \"{name}\" is now busy (hook)");
-                        s.notify_output(&msg.session_id);
-                        drop(s);
-                        emit_state_change(&app, &msg.session_id, AgentState::Busy);
-                    }
-                    NotifyEvent::Notification => {
-                        let fired = {
-                            let mut s = state.lock().unwrap();
-                            let name = s
-                                .get_meta(&msg.session_id)
-                                .map(|m| m.name.as_str())
-                                .unwrap_or("?");
-                            eprintln!(
-                                "[notify] \"{name}\" received immediate signal (notification)"
-                            );
-                            s.notify_stop_immediate(&msg.session_id)
-                        };
-                        if fired {
-                            emit_state_change(&app, &msg.session_id, AgentState::Idle);
-                            fire_notification(&app, &msg.session_id, &state);
-                        }
-                    }
-                    NotifyEvent::Stop => {
-                        let mut s = state.lock().unwrap();
-                        let name = s
-                            .get_meta(&msg.session_id)
-                            .map(|m| m.name.clone())
-                            .unwrap_or_else(|| "?".into());
-                        let hook_enabled =
-                            s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
-                        if hook_enabled {
-                            eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
-                            s.notify_stop_debounced(&msg.session_id);
-                        } else {
-                            eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
-                            let fired = s.notify_stop(&msg.session_id);
-                            drop(s);
-                            if fired {
-                                emit_state_change(&app, &msg.session_id, AgentState::Idle);
-                                fire_notification(&app, &msg.session_id, &state);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-/// Start the named pipe listener thread (Windows).
-#[cfg(windows)]
-pub fn start_socket_listener(_app_dir: &Path, state: SharedNotifyState, app: AppHandle) {
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Storage::FileSystem::{ReadFile, PIPE_ACCESS_INBOUND};
-    use windows_sys::Win32::System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
-        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-    };
-
-    thread::spawn(move || {
-        let pipe_name: Vec<u16> = PIPE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
-        loop {
-            let handle = unsafe {
-                CreateNamedPipeW(
-                    pipe_name.as_ptr(),
-                    PIPE_ACCESS_INBOUND,
-                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                    PIPE_UNLIMITED_INSTANCES,
-                    512,
-                    512,
-                    0,
-                    std::ptr::null(),
-                )
-            };
-            if handle == INVALID_HANDLE_VALUE {
-                eprintln!("[notify] failed to create named pipe");
-                thread::sleep(Duration::from_secs(1));
+    thread::spawn(move || loop {
+        let stream = match listener.accept() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[notify] accept error: {e}");
                 continue;
             }
+        };
+        let reader = BufReader::new(stream);
+        for line in reader.lines().map_while(Result::ok) {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let msg = parse_notify_message(&line);
+            if msg.session_id.is_empty() {
+                continue;
+            }
+            dispatch_message(&msg, &state, &app);
+        }
+    });
+}
 
-            let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
-            if connected == 0 {}
-
-            let file = unsafe { std::fs::File::from_raw_handle(handle as *mut _) };
-            let reader = BufReader::new(file);
-            for line in reader.lines().map_while(Result::ok) {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
-                let msg = parse_notify_message(&line);
-                if msg.session_id.is_empty() {
-                    continue;
-                }
-                match msg.event {
-                    NotifyEvent::SessionCreated => {
-                        eprintln!("[notify] session_created: {}", msg.session_id);
-                        let _ = app.emit("session-created", msg.session_id.clone());
-                    }
-                    NotifyEvent::SessionChanged => {
-                        eprintln!("[notify] session_changed: {}", msg.session_id);
-                        let _ = app.emit("sessions-changed", ());
-                    }
-                    NotifyEvent::Busy => {
-                        let mut s = state.lock().unwrap();
-                        let name = s
-                            .get_meta(&msg.session_id)
-                            .map(|m| m.name.as_str())
-                            .unwrap_or("?");
-                        eprintln!("[notify] \"{name}\" is now busy (hook)");
-                        s.notify_output(&msg.session_id);
-                        drop(s);
-                        emit_state_change(&app, &msg.session_id, AgentState::Busy);
-                    }
-                    NotifyEvent::Notification => {
-                        let fired = {
-                            let mut s = state.lock().unwrap();
-                            let name = s
-                                .get_meta(&msg.session_id)
-                                .map(|m| m.name.as_str())
-                                .unwrap_or("?");
-                            eprintln!(
-                                "[notify] \"{name}\" received immediate signal (notification)"
-                            );
-                            s.notify_stop_immediate(&msg.session_id)
-                        };
-                        if fired {
-                            emit_state_change(&app, &msg.session_id, AgentState::Idle);
-                            fire_notification(&app, &msg.session_id, &state);
-                        }
-                    }
-                    NotifyEvent::Stop => {
-                        let mut s = state.lock().unwrap();
-                        let name = s
-                            .get_meta(&msg.session_id)
-                            .map(|m| m.name.clone())
-                            .unwrap_or_else(|| "?".into());
-                        let hook_enabled =
-                            s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
-                        if hook_enabled {
-                            eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
-                            s.notify_stop_debounced(&msg.session_id);
-                        } else {
-                            eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
-                            let fired = s.notify_stop(&msg.session_id);
-                            drop(s);
-                            if fired {
-                                emit_state_change(&app, &msg.session_id, AgentState::Idle);
-                                fire_notification(&app, &msg.session_id, &state);
-                            }
-                        }
-                    }
+fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHandle) {
+    match msg.event {
+        NotifyEvent::SessionCreated => {
+            eprintln!("[notify] session_created: {}", msg.session_id);
+            let _ = app.emit("session-created", msg.session_id.clone());
+        }
+        NotifyEvent::SessionChanged => {
+            eprintln!("[notify] session_changed: {}", msg.session_id);
+            let _ = app.emit("sessions-changed", ());
+        }
+        NotifyEvent::Busy => {
+            let mut s = state.lock().unwrap();
+            let name = s
+                .get_meta(&msg.session_id)
+                .map(|m| m.name.as_str())
+                .unwrap_or("?");
+            eprintln!("[notify] \"{name}\" is now busy (hook)");
+            s.notify_output(&msg.session_id);
+            drop(s);
+            emit_state_change(app, &msg.session_id, AgentState::Busy);
+        }
+        NotifyEvent::Notification => {
+            let fired = {
+                let mut s = state.lock().unwrap();
+                let name = s
+                    .get_meta(&msg.session_id)
+                    .map(|m| m.name.as_str())
+                    .unwrap_or("?");
+                eprintln!("[notify] \"{name}\" received immediate signal (notification)");
+                s.notify_stop_immediate(&msg.session_id)
+            };
+            if fired {
+                emit_state_change(app, &msg.session_id, AgentState::Idle);
+                fire_notification(app, &msg.session_id, state);
+            }
+        }
+        NotifyEvent::Stop => {
+            let mut s = state.lock().unwrap();
+            let name = s
+                .get_meta(&msg.session_id)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| "?".into());
+            let hook_enabled = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+            if hook_enabled {
+                eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
+                s.notify_stop_debounced(&msg.session_id);
+            } else {
+                eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
+                let fired = s.notify_stop(&msg.session_id);
+                drop(s);
+                if fired {
+                    emit_state_change(app, &msg.session_id, AgentState::Idle);
+                    fire_notification(app, &msg.session_id, state);
                 }
             }
         }
-    });
+    }
 }
 
 /// Start the silence checker thread. Periodically checks all busy sessions
