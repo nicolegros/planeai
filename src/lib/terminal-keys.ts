@@ -42,9 +42,9 @@ export function matchTerminalKey(
       return { type: "send_bytes", bytes: [0x05] };
     }
   } else {
-    // Ctrl+Shift+C → copy (if selection)
+    // Ctrl+Shift+C → copy (always consume to prevent WebView2 opening devtools)
     if (e.ctrlKey && e.shiftKey && !e.metaKey && e.key === "C") {
-      return hasSelection ? { type: "copy" } : null;
+      return { type: "copy" };
     }
     // Ctrl+C with selection → copy
     if (e.ctrlKey && !e.shiftKey && !e.metaKey && e.key === "c") {
