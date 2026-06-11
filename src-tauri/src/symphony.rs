@@ -16,26 +16,26 @@ use crate::config::{self, Config};
 
 // ─── SymphonyState (managed as Tauri state) ───
 
+#[allow(dead_code)]
+pub struct RunningOrchestrator {
+    pub token: CancellationToken,
+    pub handle: tauri::async_runtime::JoinHandle<()>,
+    pub command_tx: tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>,
+}
+
 pub struct SymphonyState {
-    pub token: Option<CancellationToken>,
-    pub handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    pub command_tx:
-        Option<tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>>,
+    pub running: Option<RunningOrchestrator>,
 }
 
 impl SymphonyState {
     pub fn new() -> Self {
-        Self {
-            token: None,
-            handle: None,
-            command_tx: None,
-        }
+        Self { running: None }
     }
 
     pub fn is_running(&self) -> bool {
-        self.token
+        self.running
             .as_ref()
-            .map(|t| !t.is_cancelled())
+            .map(|r| !r.token.is_cancelled())
             .unwrap_or(false)
     }
 }

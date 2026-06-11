@@ -146,12 +146,14 @@ pub fn init_symphony(
             let _ = orchestrator.run(task_token, rx).await;
         });
 
-        state.token = Some(token);
-        state.handle = Some(handle);
-        state.command_tx = Some(tx);
+        state.running = Some(crate::symphony::RunningOrchestrator {
+            token: token.clone(),
+            handle,
+            command_tx: tx,
+        });
 
         let app_handle = app.handle().clone();
-        let watch_token = state.token.as_ref().unwrap().clone();
+        let watch_token = token;
         tauri::async_runtime::spawn(async move {
             watch_token.cancelled().await;
             let _ = app_handle.emit("symphony-stopped", ());
