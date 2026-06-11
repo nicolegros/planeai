@@ -8,7 +8,6 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     Notify,
-    #[allow(dead_code)]
     Symphony,
 }
 

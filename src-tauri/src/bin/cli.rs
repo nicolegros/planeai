@@ -263,34 +263,31 @@ fn main() {
                 }
             }
         },
-        Commands::Symphony { action } => {
-            let socket_path = planeai::paths::app_data_dir().join("symphony.sock");
-            match action {
-                SymphonyAction::Status => match symphony_command(&socket_path, "status") {
-                    Ok(response) => println!("{response}"),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                },
-                SymphonyAction::Stop => match symphony_command(&socket_path, "stop") {
-                    Ok(_) => println!("{{\"status\": \"stopped\"}}"),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
-                },
-            }
+        Commands::Symphony { action } => match action {
+            SymphonyAction::Status => match symphony_command("status") {
+                Ok(response) => println!("{response}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            },
+            SymphonyAction::Stop => match symphony_command("stop") {
+                Ok(_) => println!("{{\"status\": \"stopped\"}}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            },
         }
     }
 }
 
 fn notify_session_changed(session_id: &str) {
-    let socket_path = planeai::paths::notify_socket_path();
-    if socket_path.exists() {
-        use std::io::Write;
-        use std::os::unix::net::UnixStream;
-        if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+    use planeai::ipc::{self, Channel};
+    let app_dir = planeai::paths::app_data_dir();
+    if ipc::channel_exists(Channel::Notify, &app_dir) {
+        if let Ok(mut stream) = ipc::connect(Channel::Notify, &app_dir) {
+            use std::io::Write;
             let msg =
                 format!("{{\"event\":\"session_changed\",\"session_id\":\"{session_id}\"}}\n");
             let _ = stream.write_all(msg.as_bytes());
@@ -298,14 +295,15 @@ fn notify_session_changed(session_id: &str) {
     }
 }
 
-fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, String> {
+fn symphony_command(cmd: &str) -> Result<String, String> {
+    use planeai::ipc::{self, Channel};
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
 
-    if !socket_path.exists() {
+    let app_dir = planeai::paths::app_data_dir();
+    if !ipc::channel_exists(Channel::Symphony, &app_dir) {
         return Err("{\"error\": \"orchestrator is not running\"}".to_string());
     }
-    let mut stream = UnixStream::connect(socket_path)
+    let mut stream = ipc::connect(Channel::Symphony, &app_dir)
         .map_err(|e| format!("{{\"error\": \"cannot connect to orchestrator: {e}\"}}"))?;
     stream
         .write_all(format!("{cmd}\n").as_bytes())
@@ -315,14 +313,11 @@ fn symphony_command(socket_path: &std::path::Path, cmd: &str) -> Result<String, 
         return Ok(String::new());
     }
 
-    // Read response
     let reader = BufReader::new(stream);
     let mut response = String::new();
     if let Some(line) = reader.lines().next() {
         match line {
-            Ok(l) => {
-                response.push_str(&l);
-            }
+            Ok(l) => response.push_str(&l),
             Err(e) => return Err(format!("{{\"error\": \"read failed: {e}\"}}")),
         }
     }
