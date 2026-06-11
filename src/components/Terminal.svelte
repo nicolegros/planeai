@@ -13,6 +13,7 @@
   import { getSettings, isDark } from "../lib/settings.svelte";
   import { extractTerminalTheme } from "../lib/theme-loader";
   import { matchTerminalKey } from "../lib/terminal-keys";
+  import { matchChord } from "../lib/keyboard";
 
   interface Props {
     sessionId: string;
@@ -140,7 +141,11 @@
       if (ev.type !== "keydown") return true;
 
       const action = matchTerminalKey(ev, term.hasSelection());
-      if (!action) return true;
+      if (!action) {
+        // Let app-level shortcuts pass through to the window handler
+        if (matchChord(ev)) return false;
+        return true;
+      }
 
       switch (action.type) {
         case "copy": {
