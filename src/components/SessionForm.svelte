@@ -62,11 +62,15 @@
   // Fetch tasks when in task mode and project changes
   $effect(() => {
     if (mode === "task" && selectedProject) {
-      invoke<TaskItem[]>("list_task_items", { repoPath: selectedProject.path }).then(
+      const cmd = taskPrefill?.key ? "list_all_task_items" : "list_task_items";
+      invoke<TaskItem[]>(cmd, { repoPath: selectedProject.path }).then(
         (items) => {
           taskItems = items;
-          if (taskPrefill?.key && items.some((t) => t.key === taskPrefill.key)) {
-            onTaskSelected(taskPrefill.key);
+          if (taskPrefill?.key) {
+            taskSearchValue = taskPrefill.key;
+            if (items.some((t) => t.key === taskPrefill.key)) {
+              onTaskSelected(taskPrefill.key);
+            }
           }
         },
         (e) => { taskItems = []; showSnackbar(String(e)); },
