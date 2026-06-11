@@ -82,7 +82,7 @@
     const repoPath = project?.path;
     if (!repoPath) { close(); return; }
     try {
-      taskItems = await invoke<TaskItem[]>("list_task_items", { repoPath });
+      taskItems = await invoke<TaskItem[]>("list_all_task_items", { repoPath });
     } catch {
       taskItems = [];
     }
