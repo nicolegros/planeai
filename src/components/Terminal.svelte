@@ -143,10 +143,12 @@
       if (!action) return true;
 
       switch (action.type) {
-        case "copy":
+        case "copy": {
           ev.preventDefault();
-          navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+          const sel = term.getSelection();
+          if (sel) navigator.clipboard.writeText(sel).catch(() => {});
           return false;
+        }
         case "paste":
           ev.preventDefault();
           navigator.clipboard.readText().then((text) => {

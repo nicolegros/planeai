@@ -23,8 +23,10 @@ describe("matchTerminalKey (Windows/Linux)", () => {
       });
     });
 
-    it("Ctrl+Shift+C without selection returns null", () => {
-      expect(matchTerminalKey(key({ key: "C", ctrlKey: true, shiftKey: true }), false)).toBeNull();
+    it("Ctrl+Shift+C without selection returns copy (consumed to block devtools)", () => {
+      expect(matchTerminalKey(key({ key: "C", ctrlKey: true, shiftKey: true }), false)).toEqual({
+        type: "copy",
+      });
     });
 
     it("Ctrl+C with selection returns copy", () => {
