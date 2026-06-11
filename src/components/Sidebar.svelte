@@ -50,7 +50,7 @@
     onStartRename: (id: string) => void;
     onArchiveProject: (project: Project) => void;
     onDeleteProject: (project: Project) => void;
-    onPickTask: (task: any) => void;
+    onPickTask: (task: any, repoPath: string) => void;
     onSidebarTabChange?: (tab: "sessions" | "tasks") => void;
     onTaskCreateConsumed?: () => void;
   }

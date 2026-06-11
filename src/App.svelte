@@ -61,7 +61,7 @@
   let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(null);
 
   let showSessionForm = $state(false);
-  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string } | null>(null);
+  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; projectId?: string | null } | null>(null);
 
   // Command menu state
   let commandMenuOpen = $state(false);
@@ -660,8 +660,9 @@
       onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
-      onPickTask={(task) => {
-        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
+      onPickTask={(task, repoPath) => {
+        const proj = projects.find(p => p.path === repoPath);
+        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null };
         showSessionForm = true;
       }}
       onSidebarTabChange={(tab) => { sidebarTab = tab; }}
@@ -688,7 +689,7 @@
             {projects}
             {sessions}
             {taskPrefill}
-            currentProjectId={sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
+            currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
             onCreated={onSessionCreated}
             onCancel={() => { showSessionForm = false; taskPrefill = null; }}
           />

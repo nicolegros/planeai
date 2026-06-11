@@ -32,7 +32,7 @@
     sessions: Session[];
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
-    onPickTask: (task: TaskItem) => void;
+    onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
     onTaskCreateConsumed?: () => void;
   }
@@ -122,7 +122,7 @@
     if (linked) {
       onSelectSession(linked.id);
     } else {
-      onPickTask(task);
+      onPickTask(task, repoPathForTask(task.key) ?? "");
     }
   }
 
@@ -187,7 +187,7 @@
     if (linked) {
       items.push({ label: "Go to session", onSelect: () => onSelectSession(linked.id) });
     } else {
-      items.push({ label: "Start session", onSelect: () => onPickTask(task) });
+      items.push({ label: "Start session", onSelect: () => onPickTask(task, repoPathForTask(task.key) ?? "") });
     }
     items.push({ label: "Edit", onSelect: () => openEdit(task) });
     if (task.status !== "in_progress") items.push({ label: "→ In Progress", onSelect: () => moveTask(task.key, "in_progress") });
