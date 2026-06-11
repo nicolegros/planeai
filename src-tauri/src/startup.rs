@@ -129,8 +129,8 @@ pub fn init_symphony(
         let backend = Arc::new(crate::symphony::TauriBackend {
             db: db_arc.clone(),
             app_handle: app.handle().clone(),
-            notify_socket: std::path::PathBuf::from(crate::ipc::address(
-                crate::ipc::Channel::Notify,
+            notify_socket: std::path::PathBuf::from(planeai::ipc::address(
+                planeai::ipc::Channel::Notify,
                 app_dir,
             )),
         });
@@ -174,7 +174,7 @@ fn start_symphony_ipc_bridge(
 
     let app_dir = app_dir.to_path_buf();
     std::thread::spawn(move || {
-        let listener = match crate::ipc::IpcListener::bind(crate::ipc::Channel::Symphony, &app_dir)
+        let listener = match planeai::ipc::IpcListener::bind(planeai::ipc::Channel::Symphony, &app_dir)
         {
             Ok(l) => l,
             Err(e) => {

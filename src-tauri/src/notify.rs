@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-use crate::ipc::{Channel, IpcListener};
+use planeai::ipc::{Channel, IpcListener};
 
 const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);

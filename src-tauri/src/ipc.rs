@@ -1,6 +1,5 @@
 //! Cross-platform IPC abstraction over Unix sockets / Windows named pipes.
 
-#[allow(unused_imports)]
 pub use crate::ipc_platform::{address, channel_exists, connect, IpcListener, IpcStream};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

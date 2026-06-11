@@ -30,19 +30,16 @@ impl IpcListener {
 }
 
 /// Returns the platform-specific address string for a channel.
-#[allow(dead_code)]
 pub fn address(channel: Channel, app_dir: &Path) -> String {
     socket_path(channel, app_dir).to_string_lossy().into_owned()
 }
 
-#[allow(dead_code)]
 pub fn connect(channel: Channel, app_dir: &Path) -> Result<IpcStream, String> {
     let path = socket_path(channel, app_dir);
     let inner = StdUnixStream::connect(&path).map_err(|e| format!("connect failed: {e}"))?;
     Ok(IpcStream { inner })
 }
 
-#[allow(dead_code)]
 pub fn channel_exists(channel: Channel, app_dir: &Path) -> bool {
     socket_path(channel, app_dir).exists()
 }
