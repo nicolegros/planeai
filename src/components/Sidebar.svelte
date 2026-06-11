@@ -1,11 +1,13 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
+  import { getSettings } from "../lib/settings.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { invoke } from "@tauri-apps/api/core";
   import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap } from "@lucide/svelte";
+  import TaskPanel from "./TaskPanel.svelte";
 
   interface Project {
     id: string;
@@ -37,6 +39,8 @@
     zone: FocusZone;
     agentStates: Record<string, string>;
     renamingSessionId: string | null;
+    sidebarTab?: "sessions" | "tasks";
+    taskCreateRequested?: boolean;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
@@ -47,9 +51,12 @@
     onStartRename: (id: string) => void;
     onArchiveProject: (project: Project) => void;
     onDeleteProject: (project: Project) => void;
+    onPickTask: (task: any, repoPath: string) => void;
+    onSidebarTabChange?: (tab: "sessions" | "tasks") => void;
+    onTaskCreateConsumed?: () => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed }: Props = $props();
 
   let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
 
@@ -142,13 +149,54 @@
       onSelectSession(flatSessionIds[selectedIndex]);
     }
   }
+
+  // Task panel: all project paths
+  const hasTaskManager = $derived(Object.keys(getSettings().task_managers ?? {}).length > 0);
+  const taskProjects = $derived(projects.map((p) => ({ name: p.name, path: p.path })));
+
+  let taskPanelRef = $state<TaskPanel | undefined>(undefined);
+
+  // Refresh task panel when switching to tasks tab
+  let prevTab = $state(sidebarTab);
+  $effect(() => {
+    if (sidebarTab === "tasks" && prevTab !== "tasks") {
+      taskPanelRef?.refresh();
+    }
+    prevTab = sidebarTab;
+  });
+
+  // Refresh task panel on window focus
+  function onWindowFocus() {
+    if (sidebarTab === "tasks") taskPanelRef?.refresh();
+  }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
 <aside class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
-  <!-- Header -->
+  <!-- Tab bar -->
+  {#if hasTaskManager}
+  <div class="flex items-center border-b border-surface-200 dark:border-surface-800">
+    <button
+      class="flex-1 px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors {sidebarTab === 'sessions' ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-500' : 'text-surface-500 dark:text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'}"
+      onclick={() => onSidebarTabChange?.("sessions")}
+    >Sessions</button>
+    <button
+      class="flex-1 px-3 py-2 text-xs font-semibold uppercase tracking-wider transition-colors {sidebarTab === 'tasks' ? 'text-primary-600 dark:text-primary-400 border-b-2 border-primary-500' : 'text-surface-500 dark:text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'}"
+      onclick={() => onSidebarTabChange?.("tasks")}
+    >Tasks</button>
+    {#if sidebarTab === "sessions"}
+      <button
+        onclick={onAddProject}
+        title="Add project ({MOD_LABEL}N)"
+        class="size-6 mr-2 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      >
+        <Plus class="size-4" />
+      </button>
+    {/if}
+  </div>
+  {:else}
   <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
     <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Sessions</span>
     <button
@@ -159,8 +207,10 @@
       <Plus class="size-4" />
     </button>
   </div>
+  {/if}
 
   <!-- Session list -->
+  {#if sidebarTab === "sessions"}
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-4">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
@@ -248,6 +298,18 @@
       {/each}
     {/if}
   </nav>
+  {:else}
+    <TaskPanel
+      bind:this={taskPanelRef}
+      projects={taskProjects}
+      sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
+      {agentStates}
+      {taskCreateRequested}
+      {onPickTask}
+      {onSelectSession}
+      onTaskCreateConsumed={onTaskCreateConsumed}
+    />
+  {/if}
 
   <!-- Settings -->
   <div class="px-3 py-2 border-t border-surface-200 dark:border-surface-800">

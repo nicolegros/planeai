@@ -20,6 +20,10 @@ pub struct TaskItem {
     pub blocked_by: Vec<String>,
     #[serde(default)]
     pub base_branch: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// Fetch a single task by key.
@@ -47,6 +51,82 @@ pub fn move_task(tm: &TaskManager, key: &str, status: &str, cwd: &Path) -> Resul
     let cmd_str = template::render(&tm.move_task, &vars);
     run_command(&cmd_str, cwd)?;
     Ok(())
+}
+
+/// List all tasks (all statuses). Falls back to list_tasks if list_all_tasks is not configured.
+pub fn list_all_tasks(tm: &TaskManager, cwd: &Path) -> Result<Vec<TaskItem>, String> {
+    let cmd_template = tm.list_all_tasks.as_deref().unwrap_or(&tm.list_tasks);
+    let vars = HashMap::new();
+    let cmd_str = template::render(cmd_template, &vars);
+    let output = run_command(&cmd_str, cwd)?;
+    serde_json::from_str(&output).map_err(|e| format!("Failed to parse task list JSON: {e}"))
+}
+
+/// Create a new task.
+pub fn create_task(
+    tm: &TaskManager,
+    title: &str,
+    description: &str,
+    priority: i32,
+    tags: &[String],
+    blocked_by: &[String],
+    cwd: &Path,
+) -> Result<TaskItem, String> {
+    let cmd_template = tm
+        .create_task
+        .as_deref()
+        .ok_or("create_task not configured")?;
+    let priority_str = priority.to_string();
+    let tags_str = tags.join(",");
+    let blocked_by_str = blocked_by.join(",");
+    let mut vars = HashMap::new();
+    vars.insert("title", title);
+    vars.insert("description", description);
+    vars.insert("priority", priority_str.as_str());
+    vars.insert("tags", tags_str.as_str());
+    vars.insert("blocked_by", blocked_by_str.as_str());
+    let cmd_str = template::render(cmd_template, &vars);
+    let output = run_command(&cmd_str, cwd)?;
+    serde_json::from_str(&output).map_err(|e| format!("Failed to parse created task JSON: {e}"))
+}
+
+/// Edit an existing task (fetch-merge-interpolate).
+/// Only provided fields override the existing values.
+#[allow(clippy::too_many_arguments)]
+pub fn edit_task(
+    tm: &TaskManager,
+    key: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+    priority: Option<i32>,
+    tags: Option<&[String]>,
+    blocked_by: Option<&[String]>,
+    cwd: &Path,
+) -> Result<TaskItem, String> {
+    let cmd_template = tm.edit_task.as_deref().ok_or("edit_task not configured")?;
+    // Fetch current task to merge
+    let current = get_task(tm, key, cwd)?;
+    let merged_title = title.unwrap_or(&current.title);
+    let merged_desc = description.unwrap_or(&current.description);
+    let merged_priority = priority.unwrap_or(current.priority);
+    let merged_tags = tags.map(|t| t.to_vec()).unwrap_or(current.tags.clone());
+    let merged_blocked = blocked_by
+        .map(|b| b.to_vec())
+        .unwrap_or(current.blocked_by.clone());
+
+    let priority_str = merged_priority.to_string();
+    let tags_str = merged_tags.join(",");
+    let blocked_by_str = merged_blocked.join(",");
+    let mut vars = HashMap::new();
+    vars.insert("key", key);
+    vars.insert("title", merged_title);
+    vars.insert("description", merged_desc);
+    vars.insert("priority", priority_str.as_str());
+    vars.insert("tags", tags_str.as_str());
+    vars.insert("blocked_by", blocked_by_str.as_str());
+    let cmd_str = template::render(cmd_template, &vars);
+    let output = run_command(&cmd_str, cwd)?;
+    serde_json::from_str(&output).map_err(|e| format!("Failed to parse edited task JSON: {e}"))
 }
 
 fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, String> {
@@ -89,6 +169,9 @@ mod tests {
             get_task: format!("{} {{key}}", get_script.display()),
             move_task: format!("{} {{key}} {{status}}", move_script.display()),
             list_tasks: format!("{}", list_script.display()),
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             templates: None,
             on_start: None,
             on_notify: None,
@@ -142,6 +225,9 @@ mod tests {
             get_task: "nonexistent_binary_xyz {key}".to_string(),
             move_task: String::new(),
             list_tasks: String::new(),
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             templates: None,
             on_start: None,
             on_notify: None,
@@ -167,6 +253,9 @@ mod tests {
             get_task: format!("{} {{key}}", script.display()),
             move_task: String::new(),
             list_tasks: String::new(),
+            list_all_tasks: None,
+            create_task: None,
+            edit_task: None,
             templates: None,
             on_start: None,
             on_notify: None,

@@ -62,8 +62,17 @@
   // Fetch tasks when in task mode and project changes
   $effect(() => {
     if (mode === "task" && selectedProject) {
-      invoke<TaskItem[]>("list_task_items", { repoPath: selectedProject.path }).then(
-        (items) => (taskItems = items),
+      const cmd = taskPrefill?.key ? "list_all_task_items" : "list_task_items";
+      invoke<TaskItem[]>(cmd, { repoPath: selectedProject.path }).then(
+        (items) => {
+          taskItems = items;
+          if (taskPrefill?.key) {
+            taskSearchValue = taskPrefill.key;
+            if (items.some((t) => t.key === taskPrefill.key)) {
+              onTaskSelected(taskPrefill.key);
+            }
+          }
+        },
         (e) => { taskItems = []; showSnackbar(String(e)); },
       );
     }
@@ -91,6 +100,7 @@
     const task = taskItems.find((t) => t.key === key);
     if (!task) return;
     taskKey = task.key;
+    taskSearchValue = task.key;
     const templates = getTaskManagerTemplates();
     sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);

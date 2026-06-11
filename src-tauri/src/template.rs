@@ -3,17 +3,30 @@ use std::collections::HashMap;
 
 /// Render a template string with `{var}` and `{var:transform}` syntax.
 /// Supported transforms: `slug`, `lower`, `upper`. Default is raw (no transform).
+/// When a variable resolves to empty, any preceding `--flag ` is also stripped.
 pub fn render(template: &str, vars: &HashMap<&str, &str>) -> String {
-    let re = Regex::new(r"\{(\w+)(?::(\w+))?\}").unwrap();
-    re.replace_all(template, |caps: &regex::Captures| {
-        let var = caps.get(1).unwrap().as_str();
-        let value = vars.get(var).copied().unwrap_or("");
-        match caps.get(2).map(|m| m.as_str()) {
-            Some(t) => apply_transform(value, t),
-            None => value.to_string(),
-        }
-    })
-    .into_owned()
+    let re = Regex::new(r"(?:--[\w-]+\s+)?\{(\w+)(?::(\w+))?\}").unwrap();
+    let result = re
+        .replace_all(template, |caps: &regex::Captures| {
+            let var = caps.get(1).unwrap().as_str();
+            let value = vars.get(var).copied().unwrap_or("");
+            let resolved = match caps.get(2).map(|m| m.as_str()) {
+                Some(t) => apply_transform(value, t),
+                None => value.to_string(),
+            };
+            if resolved.is_empty() {
+                String::new()
+            } else {
+                let full_match = caps.get(0).unwrap().as_str();
+                let placeholder_start = full_match.find('{').unwrap();
+                let prefix = &full_match[..placeholder_start];
+                format!("{}{}", prefix, resolved)
+            }
+        })
+        .into_owned();
+    // Collapse multiple spaces (from removed flags) into single space
+    let space_re = Regex::new(r" {2,}").unwrap();
+    space_re.replace_all(result.trim(), " ").into_owned()
 }
 
 fn apply_transform(value: &str, transform: &str) -> String {

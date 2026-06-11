@@ -43,6 +43,7 @@
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
     onPickTask: (task: TaskItem) => void;
+    onCreateTask: () => void;
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
     openFileMode?: boolean;
@@ -57,7 +58,7 @@
     blocked_by: string[];
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
+  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
   let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile">("none");
@@ -412,6 +413,14 @@
                   onSelect={openTaskPicker}
                 >
                   Pick task…
+                </Command.Item>
+                <Command.Item
+                  value="create task"
+                  keywords={["task", "new", "add", "create", "ticket"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  onSelect={() => { onCreateTask(); close(); }}
+                >
+                  Create task…
                 </Command.Item>
                 <Command.Item
                   value="reset terminal"

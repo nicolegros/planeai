@@ -99,6 +99,12 @@ pub struct TaskManager {
     pub move_task: String,
     pub list_tasks: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_all_tasks: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<TaskManagerTemplates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_start: Option<LifecycleHook>,

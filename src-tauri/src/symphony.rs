@@ -324,6 +324,9 @@ mod tests {
                 get_task: "kanban get {key}".to_string(),
                 move_task: "kanban move {key} {status}".to_string(),
                 list_tasks: "kanban list".to_string(),
+                list_all_tasks: None,
+                create_task: None,
+                edit_task: None,
                 templates: None,
                 on_start: Some(ConfigLifecycleHook {
                     move_to: "in_progress".to_string(),
