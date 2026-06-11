@@ -42,7 +42,7 @@
 
   // Task picker state
   let taskItems = $state<TaskItem[]>([]);
-  let taskSearchValue = $state(taskPrefill?.key ?? "");
+  let taskSearchValue = $state("");
 
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
@@ -96,6 +96,7 @@
     const task = taskItems.find((t) => t.key === key);
     if (!task) return;
     taskKey = task.key;
+    taskSearchValue = task.key;
     const templates = getTaskManagerTemplates();
     sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
