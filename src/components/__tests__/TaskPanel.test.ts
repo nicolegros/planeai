@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mount, flushSync } from "svelte";
+import { mount } from "svelte";
 
-const mockInvoke = vi.fn(() => Promise.resolve([]));
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: any[]) => mockInvoke(...args),
+  invoke: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
@@ -19,7 +18,10 @@ vi.mock("../../lib/focus.svelte", () => ({
   focusTerminal: vi.fn(),
 }));
 
+import { invoke } from "@tauri-apps/api/core";
 import TaskPanel from "../TaskPanel.svelte";
+
+const mockInvoke = vi.mocked(invoke);
 
 describe("TaskPanel move-to-done archives session", () => {
   let onArchiveSession: ReturnType<typeof vi.fn>;
@@ -28,7 +30,7 @@ describe("TaskPanel move-to-done archives session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     onArchiveSession = vi.fn();
-    mockInvoke.mockImplementation((cmd: string) => {
+    mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === "list_all_task_items") {
         return Promise.resolve([
           { key: "TASK-1", title: "Fix bug", status: "in_progress", description: "", priority: 1, blocked_by: [], tags: [], url: null },
@@ -36,7 +38,7 @@ describe("TaskPanel move-to-done archives session", () => {
       }
       if (cmd === "move_task_item") return Promise.resolve();
       return Promise.resolve([]);
-    });
+    }) as any);
 
     target = document.createElement("div");
     document.body.appendChild(target);

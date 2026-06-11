@@ -38,7 +38,12 @@ pub fn archive(conn: &Connection, id: &str, config: &Option<Config>) -> Result<S
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
 
-    eprintln!("[session] archiving \"{}\" (id={}, status={})", session.name, &id[..8], session.status);
+    eprintln!(
+        "[session] archiving \"{}\" (id={}, status={})",
+        session.name,
+        &id[..8],
+        session.status
+    );
     tracing::info!(name = %session.name, id = &id[..8], status = %session.status, "archiving session");
 
     // Fire task hook before mutation
