@@ -70,6 +70,13 @@
     done: "Done",
   };
 
+  const statusColors: Record<string, string> = {
+    todo: "text-blue-500 dark:text-blue-400",
+    in_progress: "text-amber-500 dark:text-amber-400",
+    in_review: "text-green-500 dark:text-green-400",
+    done: "text-purple-500 dark:text-purple-400",
+  };
+
   function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
     const groups: Record<string, TaskItem[]> = {};
     for (const s of statusOrder) groups[s] = [];
@@ -231,13 +238,13 @@
                 {@const sectionKey = `${project.path}:${status}`}
                 <div class="ml-1">
                   <button
-                    class="w-full flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-surface-500 dark:text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
+                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-surface-500'} hover:opacity-80"
                     onclick={() => toggleSection(sectionKey)}
                   >
                     {#if collapsedSections[sectionKey]}
-                      <ChevronRight class="size-2.5" />
+                      <ChevronRight class="size-3" />
                     {:else}
-                      <ChevronDown class="size-2.5" />
+                      <ChevronDown class="size-3" />
                     {/if}
                     {statusLabels[status] ?? status}
                     <span class="font-normal ml-0.5">({items.length})</span>
