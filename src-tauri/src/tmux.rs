@@ -120,6 +120,29 @@ pub fn create_session_with_cmd(
     Ok(())
 }
 
+/// Send literal text to a tmux session, followed by Enter.
+pub fn send_keys(tmux_name: &str, text: &str) -> Result<(), String> {
+    // Send literal text (no key-name interpretation)
+    let output = Command::new(tmux_bin())
+        .args(["send-keys", "-t", tmux_name, "-l", text])
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    // Send Enter separately
+    let output = Command::new(tmux_bin())
+        .args(["send-keys", "-t", tmux_name, "Enter"])
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

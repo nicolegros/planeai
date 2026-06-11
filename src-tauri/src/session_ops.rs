@@ -194,6 +194,88 @@ fn resolve_task_manager(cfg: &Config) -> Option<&crate::config::TaskManager> {
     cfg.task_managers.get(key)
 }
 
+#[derive(Debug)]
+pub struct PromptResult {
+    pub session_id: String,
+    pub backend: String,
+}
+
+pub trait PromptOps {
+    fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String>;
+    fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
+    fn tmux_has_session(&self, tmux_name: &str) -> bool;
+}
+
+#[cfg(not(windows))]
+pub fn real_prompt_ops(socket_path: std::path::PathBuf) -> impl PromptOps {
+    struct RealPromptOps {
+        socket_path: std::path::PathBuf,
+    }
+    impl PromptOps for RealPromptOps {
+        fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
+            crate::tmux::send_keys(tmux_name, text)
+        }
+        fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            use std::io::Write;
+            use std::os::unix::net::UnixStream;
+            if !self.socket_path.exists() {
+                return Err("GUI is not running (socket not found)".to_string());
+            }
+            let mut stream = UnixStream::connect(&self.socket_path).map_err(|e| e.to_string())?;
+            let msg = serde_json::json!({
+                "event": "send_prompt",
+                "session_id": session_id,
+                "text": text,
+            });
+            stream
+                .write_all(format!("{}\n", msg).as_bytes())
+                .map_err(|e| e.to_string())
+        }
+        fn tmux_has_session(&self, tmux_name: &str) -> bool {
+            crate::tmux::has_session(tmux_name)
+        }
+    }
+    RealPromptOps { socket_path }
+}
+
+pub fn send_prompt(
+    conn: &Connection,
+    id_prefix: &str,
+    text: &str,
+    ops: &dyn PromptOps,
+) -> Result<PromptResult, String> {
+    let session = resolve_session_by_prefix(conn, id_prefix).map_err(|e| e.to_string())?;
+
+    if session.status != "active" {
+        return Err(format!(
+            "session is not active (status: {})",
+            session.status
+        ));
+    }
+
+    match session.backend.as_str() {
+        "tmux" => {
+            let tmux_name = session
+                .tmux_name
+                .as_deref()
+                .ok_or("tmux session has no tmux_name")?;
+            if !ops.tmux_has_session(tmux_name) {
+                return Err("tmux session is not running".to_string());
+            }
+            ops.tmux_send_keys(tmux_name, text)?;
+        }
+        "direct" => {
+            ops.notify_socket_send(&session.id, text)?;
+        }
+        other => return Err(format!("unsupported backend: {other}")),
+    }
+
+    Ok(PromptResult {
+        session_id: session.id,
+        backend: session.backend,
+    })
+}
+
 pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Session, ResolveError> {
     if prefix.len() < MIN_PREFIX_LEN {
         return Err(ResolveError::TooShort);
@@ -245,6 +327,41 @@ mod tests {
     use crate::cleanup::CleanupOps;
     use crate::config::Config;
     use crate::db;
+    use std::cell::RefCell;
+
+    struct MockPromptOps {
+        sent_keys: RefCell<Vec<(String, String)>>,
+        sent_socket: RefCell<Vec<(String, String)>>,
+        has_session: bool,
+    }
+
+    impl MockPromptOps {
+        fn new(has_session: bool) -> Self {
+            Self {
+                sent_keys: RefCell::new(vec![]),
+                sent_socket: RefCell::new(vec![]),
+                has_session,
+            }
+        }
+    }
+
+    impl PromptOps for MockPromptOps {
+        fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String> {
+            self.sent_keys
+                .borrow_mut()
+                .push((tmux_name.to_string(), text.to_string()));
+            Ok(())
+        }
+        fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            self.sent_socket
+                .borrow_mut()
+                .push((session_id.to_string(), text.to_string()));
+            Ok(())
+        }
+        fn tmux_has_session(&self, _tmux_name: &str) -> bool {
+            self.has_session
+        }
+    }
 
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -616,5 +733,136 @@ mod tests {
         assert!(lines[1].contains("feat-x"));
         assert!(lines[1].contains("active"));
         assert!(lines[1].contains("2026-01-15"));
+    }
+
+    #[test]
+    fn send_prompt_resolves_prefix_and_returns_result() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "aaaabbbb-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "my-session",
+            Some("planeai-myapp-aaaa"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let result = send_prompt(&conn, "aaaa", "fix the bug", &ops).unwrap();
+
+        assert_eq!(result.session_id, id);
+        assert_eq!(result.backend, "tmux");
+        assert_eq!(ops.sent_keys.borrow().len(), 1);
+        assert_eq!(
+            ops.sent_keys.borrow()[0],
+            ("planeai-myapp-aaaa".to_string(), "fix the bug".to_string())
+        );
+    }
+
+    #[test]
+    fn send_prompt_direct_backend_sends_to_socket() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "bbbbcccc-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "direct-session",
+            None,
+            "main",
+            None,
+            None,
+            "direct",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let result = send_prompt(&conn, "bbbb", "hello agent", &ops).unwrap();
+
+        assert_eq!(result.session_id, id);
+        assert_eq!(result.backend, "direct");
+        assert_eq!(ops.sent_socket.borrow().len(), 1);
+        assert_eq!(
+            ops.sent_socket.borrow()[0],
+            (id.to_string(), "hello agent".to_string())
+        );
+    }
+
+    #[test]
+    fn send_prompt_rejects_exited_session() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ccccdddd-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "exited",
+            Some("planeai-x"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let err = send_prompt(&conn, "cccc", "hi", &ops).unwrap_err();
+        assert!(err.contains("not active"));
+    }
+
+    #[test]
+    fn send_prompt_rejects_tmux_session_not_running() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ddddeeee-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "dead-tmux",
+            Some("planeai-dead"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(false); // has_session returns false
+        let err = send_prompt(&conn, "dddd", "hi", &ops).unwrap_err();
+        assert!(err.contains("not running"));
     }
 }
