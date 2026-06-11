@@ -163,7 +163,7 @@ Running sessions continue (they're tmux-backed). The daemon just stops polling a
 The orchestrator runs as a separate binary (`planeai-symphony`) communicating via:
 
 - **Shared SQLite database** — sessions, projects, auto_mode flag
-- **`notify.sock`** — daemon → GUI event notifications (session_created)
+- **`notify.sock`** — daemon → GUI event notifications (session_created), CLI → GUI commands (send_prompt)
 - **`symphony.sock`** — control socket (status, stop commands from CLI/GUI)
 
 The daemon is automatically launched by the GUI when needed and runs detached (survives app restarts).

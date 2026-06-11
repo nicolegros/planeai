@@ -66,6 +66,21 @@ create → active → exited → deleted
 | **Font enumeration**  | font-kit (cross-platform)                         | font-kit (cross-platform)                              |
 | **Window style**      | Overlay title bar                                 | Overlay title bar (Tauri handles caption buttons)      |
 
+## Notification IPC events
+
+The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL messages. Each message has an `event` field and a `session_id` field.
+
+| Event             | Direction        | Payload                                                   | Purpose                                                        |
+| ----------------- | ---------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
+| `stop`            | Hook → GUI       | `{"event":"stop","session_id":"..."}`                     | Agent finished (debounced idle detection)                      |
+| `notification`    | Hook → GUI       | `{"event":"notification","session_id":"..."}`             | Agent needs human attention                                    |
+| `busy`            | Hook → GUI       | `{"event":"busy","session_id":"..."}`                     | Agent started working                                          |
+| `session_created` | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}`          | New session created, GUI should refresh                        |
+| `session_changed` | CLI → GUI        | `{"event":"session_changed","session_id":"..."}`          | Session state changed (archived/destroyed), GUI should refresh |
+| `send_prompt`     | CLI → GUI        | `{"event":"send_prompt","session_id":"...","text":"..."}` | Write prompt text to the session's PTY (direct backend)        |
+
+For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
+
 ## Session backend
 
 ### Resolution
