@@ -42,7 +42,7 @@
 
   // Task picker state
   let taskItems = $state<TaskItem[]>([]);
-  let taskSearchValue = $state("");
+  let taskSearchValue = $state(taskPrefill?.key ?? "");
 
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
