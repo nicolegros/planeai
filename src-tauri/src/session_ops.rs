@@ -38,14 +38,18 @@ pub fn archive(conn: &Connection, id: &str, config: &Option<Config>) -> Result<S
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
 
+    eprintln!("[session] archiving \"{}\" (id={}, status={})", session.name, &id[..8], session.status);
+
     // Fire task hook before mutation
-    if let (Some(cfg), Some(_)) = (config, &session.task_key) {
+    if let (Some(cfg), Some(ref key)) = (config, &session.task_key) {
         if let Some(cwd) = session_cwd(conn, &session) {
+            eprintln!("[session] firing on_complete hook for task {key}");
             fire_task_hook(cfg, &session, "on_complete", &cwd);
         }
     }
 
     db::archive_session(conn, id).map_err(|e| e.to_string())?;
+    eprintln!("[session] archived \"{}\"", session.name);
 
     Ok(session)
 }
