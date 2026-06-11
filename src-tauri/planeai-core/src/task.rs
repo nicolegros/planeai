@@ -14,6 +14,8 @@ pub struct Task {
     #[serde(default)]
     pub blocked_by: Vec<String>,
     #[serde(default)]
+    pub subtasks: Vec<String>,
+    #[serde(default)]
     pub base_branch: Option<String>,
 }
 

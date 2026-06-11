@@ -61,3 +61,35 @@ async fn filters_blocked_and_claimed_tasks_returns_sorted_eligible() {
     assert_eq!(tasks[0].key, "KAN-2");
     assert_eq!(tasks[1].key, "KAN-1");
 }
+
+#[tokio::test]
+async fn skips_parent_tasks_with_subtasks() {
+    let dir = tempdir().unwrap();
+
+    let list_json = r#"[
+        {"key":"KAN-1","title":"Parent task","status":"todo","description":"","priority":1,"blocked_by":[],"subtasks":["KAN-2","KAN-3"]},
+        {"key":"KAN-2","title":"Child one","status":"todo","description":"","priority":2,"blocked_by":[],"subtasks":[]},
+        {"key":"KAN-3","title":"Child two","status":"todo","description":"","priority":3,"blocked_by":[],"subtasks":[]}
+    ]"#;
+
+    let list_script = write_script(dir.path(), "list.sh", list_json);
+
+    let config = TaskManagerConfig {
+        list_tasks: format!("{list_script} --project {{project}}"),
+        get_task: String::new(),
+        move_task: String::new(),
+        terminal_states: vec!["done".to_string()],
+        on_start: None,
+    };
+
+    let dispatcher = TaskDispatcher::new(&config, "myproject", dir.path());
+    let tasks = dispatcher
+        .fetch_dispatchable_tasks(&HashSet::new())
+        .await
+        .unwrap();
+
+    // KAN-1 is a parent (has subtasks) → should be skipped
+    assert_eq!(tasks.len(), 2);
+    assert_eq!(tasks[0].key, "KAN-2");
+    assert_eq!(tasks[1].key, "KAN-3");
+}
