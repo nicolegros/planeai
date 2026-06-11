@@ -1,15 +1,21 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-#[cfg(unix)]
-use tokio::net::UnixListener;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::dispatch::TaskDispatcher;
 use crate::session::{Backend, DispatchConfig, NewSession, SessionDispatcher};
 use crate::task::TaskManagerConfig;
+
+/// Commands the orchestrator can receive via its channel.
+pub enum OrchestratorCommand {
+    Stop,
+    Status {
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
+}
 
 /// Configuration for one project in auto-mode.
 #[derive(Debug, Clone)]
@@ -26,7 +32,6 @@ pub struct AutoProject {
 pub struct OrchestratorConfig {
     pub poll_interval_ms: u64,
     pub max_concurrent: usize,
-    pub socket_path: PathBuf,
     pub projects: Vec<AutoProject>,
 }
 
@@ -37,7 +42,7 @@ struct RunningSession {
     task_manager_config: TaskManagerConfig,
 }
 
-/// The orchestrator loop. Polls tasks, dispatches sessions, listens for stop.
+/// The orchestrator loop. Polls tasks, dispatches sessions, listens for commands.
 pub struct Orchestrator {
     config: OrchestratorConfig,
     backend: Arc<dyn Backend>,
@@ -48,18 +53,12 @@ impl Orchestrator {
         Self { config, backend }
     }
 
-    /// Run the orchestrator until cancelled or a stop command is received on the socket.
-    pub async fn run(&self, token: CancellationToken) -> Result<(), String> {
-        let _ = std::fs::remove_file(&self.config.socket_path);
-
-        #[cfg(unix)]
-        let listener = UnixListener::bind(&self.config.socket_path)
-            .map_err(|e| format!("failed to bind socket: {e}"))?;
-        #[cfg(windows)]
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| format!("failed to bind socket: {e}"))?;
-
+    /// Run the orchestrator until cancelled or a Stop command is received.
+    pub async fn run(
+        &self,
+        token: CancellationToken,
+        mut commands: mpsc::Receiver<OrchestratorCommand>,
+    ) -> Result<(), String> {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
             self.config.poll_interval_ms,
         ));
@@ -68,7 +67,6 @@ impl Orchestrator {
         let mut running: HashMap<String, RunningSession> = HashMap::new();
         if let Ok(sessions) = self.backend.list_active_sessions() {
             for session in sessions {
-                // Find the matching project config for reconciliation
                 let project_config = self
                     .config
                     .projects
@@ -94,29 +92,21 @@ impl Orchestrator {
                     self.reconcile(&mut running).await;
                     self.dispatch(&mut running).await;
                 }
-                accept = listener.accept() => {
-                    if let Ok((stream, _)) = accept {
-                        let mut reader = tokio::io::BufReader::new(stream);
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).await.is_ok() {
-                            match line.trim() {
-                                "stop" => {
-                                    token.cancel();
-                                    return Ok(());
-                                }
-                                "status" => {
-                                    let sessions: Vec<&str> = running.keys().map(|k| k.as_str()).collect();
-                                    let json = format!(
-                                        "{{\"running\":{},\"max_concurrent\":{},\"slots_used\":{}}}",
-                                        serde_json::to_string(&sessions).unwrap_or_else(|_| "[]".to_string()),
-                                        self.config.max_concurrent,
-                                        running.len()
-                                    );
-                                    let mut writer = reader.into_inner();
-                                    let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
-                                }
-                                _ => {}
-                            }
+                Some(cmd) = commands.recv() => {
+                    match cmd {
+                        OrchestratorCommand::Stop => {
+                            token.cancel();
+                            return Ok(());
+                        }
+                        OrchestratorCommand::Status { reply } => {
+                            let sessions: Vec<&str> = running.keys().map(|k| k.as_str()).collect();
+                            let json = format!(
+                                "{{\"running\":{},\"max_concurrent\":{},\"slots_used\":{}}}",
+                                serde_json::to_string(&sessions).unwrap_or_else(|_| "[]".to_string()),
+                                self.config.max_concurrent,
+                                running.len()
+                            );
+                            let _ = reply.send(json);
                         }
                     }
                 }
