@@ -472,10 +472,6 @@
       } else if (action.type === "toggle_task_panel") {
         sidebarTab = sidebarTab === "tasks" ? "sessions" : "tasks";
         if (!sidebarVisible) sidebarVisible = true;
-      } else if (action.type === "create_task") {
-        sidebarTab = "tasks";
-        if (!sidebarVisible) sidebarVisible = true;
-        requestAnimationFrame(() => { taskCreateRequested = true; });
       } else if (action.type === "open_file") {
         commandMenuFileMode = true;
         commandMenuOpen = true;
