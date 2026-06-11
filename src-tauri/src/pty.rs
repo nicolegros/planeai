@@ -122,10 +122,10 @@ impl PtyManager {
             .map_err(|e| format!("failed to open pty: {e}"))?;
 
         let mut cmd = match &target {
-            PtyTarget::TmuxAttach { tmux_name } => {
+            PtyTarget::TmuxAttach { tmux_name: _tmux_name } => {
                 #[cfg(not(windows))]
                 {
-                    let target = format!("={}", tmux_name);
+                    let target = format!("={}", _tmux_name);
                     let mut c = CommandBuilder::new(tmux::tmux_bin());
                     c.args(["attach-session", "-t", &target]);
                     c

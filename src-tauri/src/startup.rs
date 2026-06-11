@@ -120,11 +120,9 @@ pub fn init_symphony(
     let conn = db_arc.lock().unwrap();
     let cfg_state = app.state::<ConfigState>();
     let cfg = cfg_state.0.lock().unwrap();
-    let socket_path = app_dir.join("symphony.sock");
 
     let mut state = crate::symphony::SymphonyState::new();
-    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn, socket_path)
-    {
+    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn) {
         drop(cfg);
         drop(conn);
 
@@ -140,12 +138,16 @@ pub fn init_symphony(
         let token = tokio_util::sync::CancellationToken::new();
         let orchestrator = planeai_core::orchestrator::Orchestrator::new(orch_config, backend);
         let task_token = token.clone();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+
         let handle = tauri::async_runtime::spawn(async move {
-            let _ = orchestrator.run(task_token).await;
+            let _ = orchestrator.run(task_token, rx).await;
         });
 
         state.token = Some(token);
         state.handle = Some(handle);
+        state.command_tx = Some(tx);
 
         let app_handle = app.handle().clone();
         let watch_token = state.token.as_ref().unwrap().clone();
@@ -153,8 +155,76 @@ pub fn init_symphony(
             watch_token.cancelled().await;
             let _ = app_handle.emit("symphony-stopped", ());
         });
+
+        // Spawn the IPC bridge thread for symphony commands
+        if let Some(tx) = state.command_tx.clone() {
+            start_symphony_ipc_bridge(app_dir, tx);
+        }
     }
     state
+}
+
+/// Spawn a std::thread that listens on the Symphony IPC channel and forwards
+/// commands to the orchestrator via the mpsc sender.
+fn start_symphony_ipc_bridge(
+    app_dir: &std::path::Path,
+    tx: tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>,
+) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let app_dir = app_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let listener = match crate::ipc::IpcListener::bind(crate::ipc::Channel::Symphony, &app_dir)
+        {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[symphony-ipc] bind failed: {e}");
+                return;
+            }
+        };
+
+        loop {
+            let mut stream = match listener.accept() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[symphony-ipc] accept failed: {e}");
+                    continue;
+                }
+            };
+
+            let mut line = String::new();
+            if BufReader::new(&mut stream).read_line(&mut line).is_err() {
+                continue;
+            }
+            let cmd = line.trim();
+
+            match cmd {
+                "stop" => {
+                    let _ = tx.blocking_send(
+                        planeai_core::orchestrator::OrchestratorCommand::Stop,
+                    );
+                    break;
+                }
+                "status" => {
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                    if tx
+                        .blocking_send(
+                            planeai_core::orchestrator::OrchestratorCommand::Status {
+                                reply: reply_tx,
+                            },
+                        )
+                        .is_ok()
+                    {
+                        if let Ok(response) = reply_rx.blocking_recv() {
+                            let _ = stream.write_all(response.as_bytes());
+                            let _ = stream.write_all(b"\n");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 #[cfg(test)]

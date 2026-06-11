@@ -19,6 +19,7 @@ use crate::config::{self, Config};
 pub struct SymphonyState {
     pub token: Option<CancellationToken>,
     pub handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    pub command_tx: Option<tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>>,
 }
 
 impl SymphonyState {
@@ -26,6 +27,7 @@ impl SymphonyState {
         Self {
             token: None,
             handle: None,
+            command_tx: None,
         }
     }
 
@@ -214,7 +216,6 @@ struct Project {
 pub fn build_orchestrator_config(
     config: &Config,
     db: &Connection,
-    socket_path: std::path::PathBuf,
 ) -> Option<OrchestratorConfig> {
     let projects = load_auto_projects(db);
     if projects.is_empty() {
@@ -284,7 +285,6 @@ pub fn build_orchestrator_config(
     Some(OrchestratorConfig {
         poll_interval_ms,
         max_concurrent,
-        socket_path,
         projects: auto_projects,
     })
 }
@@ -378,7 +378,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        let orch_config = build_orchestrator_config(&config, &conn);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -396,7 +396,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into());
+        let orch_config = build_orchestrator_config(&config, &conn);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -421,7 +421,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+        let orch = build_orchestrator_config(&config, &conn).unwrap();
 
         assert_eq!(
             orch.projects[0].dispatch_config.prompt_wrapper,
@@ -445,7 +445,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn, "/tmp/symphony.sock".into()).unwrap();
+        let orch = build_orchestrator_config(&config, &conn).unwrap();
 
         assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);
         assert_eq!(
