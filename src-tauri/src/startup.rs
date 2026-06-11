@@ -200,19 +200,15 @@ fn start_symphony_ipc_bridge(
 
             match cmd {
                 "stop" => {
-                    let _ = tx.blocking_send(
-                        planeai_core::orchestrator::OrchestratorCommand::Stop,
-                    );
+                    let _ = tx.blocking_send(planeai_core::orchestrator::OrchestratorCommand::Stop);
                     break;
                 }
                 "status" => {
                     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                     if tx
-                        .blocking_send(
-                            planeai_core::orchestrator::OrchestratorCommand::Status {
-                                reply: reply_tx,
-                            },
-                        )
+                        .blocking_send(planeai_core::orchestrator::OrchestratorCommand::Status {
+                            reply: reply_tx,
+                        })
                         .is_ok()
                     {
                         if let Ok(response) = reply_rx.blocking_recv() {

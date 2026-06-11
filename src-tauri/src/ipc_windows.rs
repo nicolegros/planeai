@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
     PIPE_ACCESS_INBOUND,

@@ -19,7 +19,8 @@ use crate::config::{self, Config};
 pub struct SymphonyState {
     pub token: Option<CancellationToken>,
     pub handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    pub command_tx: Option<tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>>,
+    pub command_tx:
+        Option<tokio::sync::mpsc::Sender<planeai_core::orchestrator::OrchestratorCommand>>,
 }
 
 impl SymphonyState {
@@ -213,10 +214,7 @@ struct Project {
     task_manager: Option<String>,
 }
 
-pub fn build_orchestrator_config(
-    config: &Config,
-    db: &Connection,
-) -> Option<OrchestratorConfig> {
+pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
     let projects = load_auto_projects(db);
     if projects.is_empty() {
         return None;

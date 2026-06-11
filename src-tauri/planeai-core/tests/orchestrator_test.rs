@@ -1,4 +1,7 @@
-use planeai_core::orchestrator::{AutoProject, Orchestrator, OrchestratorCommand, OrchestratorConfig};
+#![cfg(unix)]
+use planeai_core::orchestrator::{
+    AutoProject, Orchestrator, OrchestratorCommand, OrchestratorConfig,
+};
 use planeai_core::session::{Backend, NewSession};
 use planeai_core::task::{LifecycleHook, TaskManagerConfig};
 use std::fs;
