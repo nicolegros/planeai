@@ -145,11 +145,10 @@ pub fn destroy(
     db::destroy_session(conn, id).map_err(|e| e.to_string())?;
 
     // Run cleanup
-    let projects = db::list_projects(conn).unwrap_or_default();
-    let project_path = projects
-        .iter()
-        .find(|p| p.id == session.project_id)
-        .map(|p| p.path.clone());
+    let project_path = db::get_project(conn, &session.project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.path);
 
     let ctx = CleanupContext {
         backend: session.backend.clone(),
@@ -174,9 +173,9 @@ fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
     if let Some(ref wt) = session.worktree_path {
         return Some(wt.clone());
     }
-    db::list_projects(conn)
+    db::get_project(conn, &session.project_id)
         .ok()
-        .and_then(|ps| ps.into_iter().find(|p| p.id == session.project_id))
+        .flatten()
         .map(|p| p.path)
 }
 
@@ -349,33 +348,17 @@ pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Sess
         return Err(ResolveError::TooShort);
     }
 
+    let sql = format!(
+        "SELECT {} FROM sessions WHERE id LIKE ?1",
+        db::SESSION_COLUMNS
+    );
     let mut stmt = conn
-        .prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE id LIKE ?1")
+        .prepare(&sql)
         .map_err(|_| ResolveError::NotFound(prefix.to_string()))?;
 
     let pattern = format!("{prefix}%");
     let sessions: Vec<Session> = stmt
-        .query_map(rusqlite::params![pattern], |row| {
-            Ok(Session {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                name: row.get(2)?,
-                tmux_name: row.get(3)?,
-                branch: row.get(4)?,
-                status: row.get(5)?,
-                created_at: row.get(6)?,
-                worktree_path: row.get(7)?,
-                provider: row.get(8)?,
-                backend: row.get(9)?,
-                provider_session_id: row.get(10)?,
-                tab_count: row.get(11)?,
-                auto_approve: row.get(12)?,
-                task_key: row.get(13)?,
-                base_branch: row.get(14)?,
-                pr_url: row.get(15)?,
-                pr_state: row.get(16)?,
-            })
-        })
+        .query_map(rusqlite::params![pattern], db::row_to_session)
         .map_err(|_| ResolveError::NotFound(prefix.to_string()))?
         .filter_map(|r| r.ok())
         .collect();

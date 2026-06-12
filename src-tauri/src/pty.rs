@@ -2,7 +2,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 use tauri::ipc::{Channel, Response};
@@ -79,7 +79,7 @@ impl Drop for PtyHandle {
 }
 
 pub struct PtyManager {
-    ptys: Mutex<HashMap<String, Arc<Mutex<PtyHandle>>>>,
+    ptys: RwLock<HashMap<String, Arc<Mutex<PtyHandle>>>>,
     notify_state: Mutex<Option<notify::SharedNotifyState>>,
     socket_path: Mutex<Option<String>>,
 }
@@ -87,7 +87,7 @@ pub struct PtyManager {
 impl PtyManager {
     pub fn new() -> Self {
         Self {
-            ptys: Mutex::new(HashMap::new()),
+            ptys: RwLock::new(HashMap::new()),
             notify_state: Mutex::new(None),
             socket_path: Mutex::new(None),
         }
@@ -193,7 +193,7 @@ impl PtyManager {
         let flow_clone = handle.lock().unwrap().flow.clone();
 
         {
-            let mut ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+            let mut ptys = self.ptys.write().map_err(|e| e.to_string())?;
             // If replacing an existing PTY, mark it cancelled so its flusher
             // won't emit pty-exited (this is a re-attach, not a real exit).
             if let Some(old) = ptys.get(session_id) {
@@ -305,7 +305,7 @@ impl PtyManager {
 
     /// Write input bytes to a session's PTY.
     pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let ptys = self.ptys.read().map_err(|e| e.to_string())?;
         let handle = ptys.get(session_id).ok_or("session not attached")?;
         let mut h = handle.lock().map_err(|e| e.to_string())?;
         h.writer
@@ -315,7 +315,7 @@ impl PtyManager {
 
     /// Resize a session's PTY.
     pub fn resize(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
-        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let ptys = self.ptys.read().map_err(|e| e.to_string())?;
         let handle = ptys.get(session_id).ok_or("session not attached")?;
         let h = handle.lock().map_err(|e| e.to_string())?;
         h.master
@@ -331,13 +331,13 @@ impl PtyManager {
     /// Detach a session's PTY (cleanup).
     #[allow(dead_code)]
     pub fn detach(&self, session_id: &str) {
-        let mut ptys = self.ptys.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ptys = self.ptys.write().unwrap_or_else(|e| e.into_inner());
         ptys.remove(session_id);
     }
 
     /// Pause reading from a session's PTY (flow control back pressure).
     pub fn pause(&self, session_id: &str) -> Result<(), String> {
-        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let ptys = self.ptys.read().map_err(|e| e.to_string())?;
         let handle = ptys.get(session_id).ok_or("session not attached")?;
         let h = handle.lock().map_err(|e| e.to_string())?;
         h.flow.pause();
@@ -346,7 +346,7 @@ impl PtyManager {
 
     /// Resume reading from a session's PTY (flow control).
     pub fn resume(&self, session_id: &str) -> Result<(), String> {
-        let ptys = self.ptys.lock().map_err(|e| e.to_string())?;
+        let ptys = self.ptys.read().map_err(|e| e.to_string())?;
         let handle = ptys.get(session_id).ok_or("session not attached")?;
         let h = handle.lock().map_err(|e| e.to_string())?;
         h.flow.resume();

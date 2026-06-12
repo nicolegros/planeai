@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Result};
+use rusqlite::{params, Connection, Result, Row};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,33 @@ pub struct Session {
     pub base_branch: Option<String>,
     pub pr_url: Option<String>,
     pub pr_state: Option<String>,
+}
+
+/// Column list for SELECT statements returning a Session.
+/// Keep in sync with `row_to_session`.
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state";
+
+/// Map a row (selected with SESSION_COLUMNS) to a Session struct.
+pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        name: row.get(2)?,
+        tmux_name: row.get(3)?,
+        branch: row.get(4)?,
+        status: row.get(5)?,
+        created_at: row.get(6)?,
+        worktree_path: row.get(7)?,
+        provider: row.get(8)?,
+        backend: row.get(9)?,
+        provider_session_id: row.get(10)?,
+        tab_count: row.get(11)?,
+        auto_approve: row.get(12)?,
+        task_key: row.get(13)?,
+        base_branch: row.get(14)?,
+        pr_url: row.get(15)?,
+        pr_state: row.get(16)?,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,28 +288,9 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE project_id = ?1")?;
-    let rows = stmt.query_map(params![project_id], |row| {
-        Ok(Session {
-            id: row.get(0)?,
-            project_id: row.get(1)?,
-            name: row.get(2)?,
-            tmux_name: row.get(3)?,
-            branch: row.get(4)?,
-            status: row.get(5)?,
-            created_at: row.get(6)?,
-            worktree_path: row.get(7)?,
-            provider: row.get(8)?,
-            backend: row.get(9)?,
-            provider_session_id: row.get(10)?,
-            tab_count: row.get(11)?,
-            auto_approve: row.get(12)?,
-            task_key: row.get(13)?,
-            base_branch: row.get(14)?,
-            pr_url: row.get(15)?,
-            pr_state: row.get(16)?,
-        })
-    })?;
+    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE project_id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![project_id], row_to_session)?;
     rows.collect()
 }
 
@@ -355,54 +363,16 @@ pub fn create_session_with_id(
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Session {
-            id: row.get(0)?,
-            project_id: row.get(1)?,
-            name: row.get(2)?,
-            tmux_name: row.get(3)?,
-            branch: row.get(4)?,
-            status: row.get(5)?,
-            created_at: row.get(6)?,
-            worktree_path: row.get(7)?,
-            provider: row.get(8)?,
-            backend: row.get(9)?,
-            provider_session_id: row.get(10)?,
-            tab_count: row.get(11)?,
-            auto_approve: row.get(12)?,
-            task_key: row.get(13)?,
-            base_branch: row.get(14)?,
-            pr_url: row.get(15)?,
-            pr_state: row.get(16)?,
-        })
-    })?;
+    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_session)?;
     rows.collect()
 }
 
 pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE status = 'archived'")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Session {
-            id: row.get(0)?,
-            project_id: row.get(1)?,
-            name: row.get(2)?,
-            tmux_name: row.get(3)?,
-            branch: row.get(4)?,
-            status: row.get(5)?,
-            created_at: row.get(6)?,
-            worktree_path: row.get(7)?,
-            provider: row.get(8)?,
-            backend: row.get(9)?,
-            provider_session_id: row.get(10)?,
-            tab_count: row.get(11)?,
-            auto_approve: row.get(12)?,
-            task_key: row.get(13)?,
-            base_branch: row.get(14)?,
-            pr_url: row.get(15)?,
-            pr_state: row.get(16)?,
-        })
-    })?;
+    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE status = 'archived'");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_session)?;
     rows.collect()
 }
 
@@ -504,28 +474,9 @@ pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let mut stmt = conn.prepare("SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state FROM sessions WHERE id = ?1")?;
-    let mut rows = stmt.query_map(params![id], |row| {
-        Ok(Session {
-            id: row.get(0)?,
-            project_id: row.get(1)?,
-            name: row.get(2)?,
-            tmux_name: row.get(3)?,
-            branch: row.get(4)?,
-            status: row.get(5)?,
-            created_at: row.get(6)?,
-            worktree_path: row.get(7)?,
-            provider: row.get(8)?,
-            backend: row.get(9)?,
-            provider_session_id: row.get(10)?,
-            tab_count: row.get(11)?,
-            auto_approve: row.get(12)?,
-            task_key: row.get(13)?,
-            base_branch: row.get(14)?,
-            pr_url: row.get(15)?,
-            pr_state: row.get(16)?,
-        })
-    })?;
+    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query_map(params![id], row_to_session)?;
     rows.next().transpose()
 }
 

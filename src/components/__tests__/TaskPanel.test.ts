@@ -33,7 +33,16 @@ describe("TaskPanel move-to-done archives session", () => {
     mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === "list_all_task_items") {
         return Promise.resolve([
-          { key: "TASK-1", title: "Fix bug", status: "in_progress", description: "", priority: 1, blocked_by: [], tags: [], url: null },
+          {
+            key: "TASK-1",
+            title: "Fix bug",
+            status: "in_progress",
+            description: "",
+            priority: 1,
+            blocked_by: [],
+            tags: [],
+            url: null,
+          },
         ]);
       }
       if (cmd === "move_task_item") return Promise.resolve();
@@ -73,7 +82,9 @@ describe("TaskPanel move-to-done archives session", () => {
     const taskBtn = Array.from(taskButtons).find((b) => b.textContent?.includes("TASK-1"));
     expect(taskBtn).toBeDefined();
 
-    taskBtn!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 50, clientY: 50 }));
+    taskBtn!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 50, clientY: 50 }),
+    );
     await new Promise((r) => setTimeout(r, 10));
 
     // Find the Done menu item in the whole document (context menu may portal)
@@ -115,7 +126,9 @@ describe("TaskPanel move-to-done archives session", () => {
     const taskBtn = Array.from(taskButtons).find((b) => b.textContent?.includes("TASK-1"));
     expect(taskBtn).toBeDefined();
 
-    taskBtn!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 50, clientY: 50 }));
+    taskBtn!.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 50, clientY: 50 }),
+    );
     await new Promise((r) => setTimeout(r, 10));
 
     const allButtons = document.querySelectorAll("button");
