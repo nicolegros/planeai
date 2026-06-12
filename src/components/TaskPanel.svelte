@@ -231,8 +231,10 @@
     return result;
   });
 
-  function handleTaskKeydown(e: KeyboardEvent) {
-    if (getActiveZone() !== "sidebar") return;
+  // Key-based index map for O(1) lookup in template
+  const flatTaskKeys = $derived(flatTasks.map((t) => t.key));
+
+  function handleTaskKeydown(e: KeyboardEvent) {    if (getActiveZone() !== "sidebar") return;
     if (flatTasks.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
@@ -303,7 +305,7 @@
                   {#if !collapsedSections[sectionKey]}
                     <ul class="space-y-0.5 ml-1">
                       {#each items as task (task.key)}
-                        {@const taskFlatIdx = flatTasks.indexOf(task)}
+                        {@const taskFlatIdx = flatTaskKeys.indexOf(task.key)}
                         {@const isTaskSelected = getActiveZone() === 'sidebar' && taskFlatIdx === getSelectedIndex()}
                         <li>
                           <button
