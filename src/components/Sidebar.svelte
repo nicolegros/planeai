@@ -125,7 +125,7 @@
     }))
   );
 
-  const flatSessionIds = $derived(sessions.map((s) => s.id));
+  const flatSessionIds = $derived(grouped.flatMap((g) => g.sessions.map((s) => s.id)));
 
   $effect(() => {
     clampIndex(flatSessionIds.length);
