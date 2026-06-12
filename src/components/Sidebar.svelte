@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
+  import { getSidebarSubZone } from "../lib/focus.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getSettings } from "../lib/settings.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
@@ -117,8 +119,6 @@
     projectContextMenu = { x: e.clientX, y: e.clientY, project };
   }
 
-  let selectedIndex = $state(0);
-
   const grouped = $derived(
     projects.map((p) => ({
       project: p,
@@ -129,24 +129,32 @@
   const flatSessionIds = $derived(sessions.map((s) => s.id));
 
   $effect(() => {
-    if (selectedIndex >= flatSessionIds.length) {
-      selectedIndex = Math.max(0, flatSessionIds.length - 1);
-    }
+    clampIndex(flatSessionIds.length);
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    if (zone !== "sidebar" || flatSessionIds.length === 0) return;
+    if (zone !== "sidebar" || sidebarTab !== "sessions" || getSidebarSubZone() !== "sessions") return;
+    if (flatSessionIds.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.closest("[role='combobox']"))) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, flatSessionIds.length - 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      selectedIndex = Math.max(selectedIndex - 1, 0);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      onSelectSession(flatSessionIds[selectedIndex]);
+
+    const action = handleSidebarKey(e, flatSessionIds.length);
+    if (!action) return;
+
+    const sessionId = flatSessionIds[getSelectedIndex()];
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+
+    if (action.type === "select") {
+      onSelectSession(sessionId);
+    } else if (action.type === "archive") {
+      onArchiveSession(session);
+    } else if (action.type === "delete") {
+      onDeleteSession(session);
+    } else if (action.type === "rename") {
+      startRename(session);
+    } else if (action.type === "restart") {
+      onRestartSession(session);
     }
   }
 
@@ -231,7 +239,7 @@
             {#each projectSessions as session (session.id)}
               {@const globalIndex = flatSessionIds.indexOf(session.id)}
               {@const isActive = session.id === activeSessionId}
-              {@const isSelected = zone === 'sidebar' && globalIndex === selectedIndex}
+              {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
               <li>
                 {#if renamingSessionId === session.id}
                   <input

@@ -2,7 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { focusTerminal } from "../lib/focus.svelte";
+  import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { Plus, RefreshCw, ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
 
@@ -213,7 +214,45 @@
     if (task.status !== "done") items.push({ label: "→ Done", onSelect: () => moveTask(task.key, "done") });
     return items;
   }
+
+  // Flat list of visible tasks for keyboard navigation
+  const flatTasks = $derived.by(() => {
+    const result: TaskItem[] = [];
+    for (const project of projects) {
+      const projectTasks = tasksByProject[project.path] ?? [];
+      if (projectTasks.length === 0) continue;
+      const statusGroups = groupByStatus(projectTasks);
+      for (const status of statusOrder) {
+        const sectionKey = `${project.path}:${status}`;
+        if (collapsedSections[sectionKey]) continue;
+        for (const t of statusGroups[status] ?? []) result.push(t);
+      }
+    }
+    return result;
+  });
+
+  function handleTaskKeydown(e: KeyboardEvent) {
+    if (getActiveZone() !== "sidebar" || getSidebarSubZone() !== "tasks") return;
+    if (flatTasks.length === 0) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
+
+    clampIndex(flatTasks.length);
+    const action = handleSidebarKey(e, flatTasks.length);
+    if (!action) return;
+
+    const task = flatTasks[getSelectedIndex()];
+    if (!task) return;
+
+    if (action.type === "select" || action.type === "start_session") {
+      handleClick(task);
+    } else if (action.type === "status") {
+      moveTask(task.key, action.status);
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleTaskKeydown} />
 
 <div class="flex flex-col h-full">
   <!-- Header -->
@@ -262,9 +301,11 @@
                   {#if !collapsedSections[sectionKey]}
                     <ul class="space-y-0.5 ml-1">
                       {#each items as task (task.key)}
+                        {@const taskFlatIdx = flatTasks.indexOf(task)}
+                        {@const isTaskSelected = getActiveZone() === 'sidebar' && getSidebarSubZone() === 'tasks' && taskFlatIdx === getSelectedIndex()}
                         <li>
                           <button
-                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none"
+                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
                             onclick={() => handleClick(task)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >

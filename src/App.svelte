@@ -470,7 +470,10 @@
       } else if (action.type === "toggle_file_explorer") {
         handleToggleFileExplorer();
       } else if (action.type === "toggle_task_panel") {
-        sidebarTab = sidebarTab === "tasks" ? "sessions" : "tasks";
+        sidebarTab = "tasks";
+        if (!sidebarVisible) sidebarVisible = true;
+      } else if (action.type === "toggle_sessions_panel") {
+        sidebarTab = "sessions";
         if (!sidebarVisible) sidebarVisible = true;
       } else if (action.type === "open_file") {
         commandMenuFileMode = true;

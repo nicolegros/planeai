@@ -16,6 +16,15 @@ vi.mock("../../lib/keyboard", () => ({
 
 vi.mock("../../lib/focus.svelte", () => ({
   focusTerminal: vi.fn(),
+  getActiveZone: () => "terminal",
+  getSidebarSubZone: () => "sessions",
+}));
+
+vi.mock("../../lib/sidebar-nav.svelte", () => ({
+  getSelectedIndex: () => 0,
+  setSelectedIndex: vi.fn(),
+  clampIndex: vi.fn(),
+  handleSidebarKey: () => null,
 }));
 
 import { invoke } from "@tauri-apps/api/core";
