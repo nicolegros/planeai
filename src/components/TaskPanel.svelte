@@ -248,6 +248,8 @@
       handleClick(task);
     } else if (action.type === "status") {
       moveTask(task.key, action.status);
+    } else if (action.type === "edit") {
+      openEdit(task);
     }
   }
 </script>

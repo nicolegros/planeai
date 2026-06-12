@@ -57,6 +57,7 @@
     { keys: `a`, description: "Archive" },
     { keys: `dd`, description: "Delete" },
     { keys: `r`, description: "Rename" },
+    { keys: `e`, description: "Edit task" },
     { keys: `R`, description: "Restart" },
     { keys: `st`, description: "Status → Todo" },
     { keys: `sp`, description: "Status → In Progress" },
