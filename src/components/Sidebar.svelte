@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
-  import { getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getSettings } from "../lib/settings.svelte";
@@ -133,7 +132,7 @@
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    if (zone !== "sidebar" || sidebarTab !== "sessions" || getSidebarSubZone() !== "sessions") return;
+    if (zone !== "sidebar" || sidebarTab !== "sessions") return;
     if (flatSessionIds.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.closest("[role='combobox']"))) return;

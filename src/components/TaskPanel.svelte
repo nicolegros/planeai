@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
+  import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { Plus, RefreshCw, ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
@@ -232,7 +232,7 @@
   });
 
   function handleTaskKeydown(e: KeyboardEvent) {
-    if (getActiveZone() !== "sidebar" || getSidebarSubZone() !== "tasks") return;
+    if (getActiveZone() !== "sidebar") return;
     if (flatTasks.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
@@ -304,7 +304,7 @@
                     <ul class="space-y-0.5 ml-1">
                       {#each items as task (task.key)}
                         {@const taskFlatIdx = flatTasks.indexOf(task)}
-                        {@const isTaskSelected = getActiveZone() === 'sidebar' && getSidebarSubZone() === 'tasks' && taskFlatIdx === getSelectedIndex()}
+                        {@const isTaskSelected = getActiveZone() === 'sidebar' && taskFlatIdx === getSelectedIndex()}
                         <li>
                           <button
                             class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
