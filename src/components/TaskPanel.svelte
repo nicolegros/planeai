@@ -34,10 +34,11 @@
     taskCreateRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
+    onArchiveSession?: (session: Session) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
   }
 
-  let { projects, sessions, agentStates, taskCreateRequested = false, onPickTask, onSelectSession, onTaskCreateConsumed }: Props = $props();
+  let { projects, sessions, agentStates, taskCreateRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
@@ -159,6 +160,15 @@
     if (!repoPath) return;
     try {
       await invoke("move_task_item", { key, status, repoPath });
+      if (status === "done") {
+        const linked = sessionForTask(key);
+        if (linked) {
+          console.log(`[task-panel] task ${key} → done, archiving session ${linked.id}`);
+          try { await onArchiveSession?.(linked); } catch (e: any) { showSnackbar(`Archive failed: ${e}`); }
+        } else {
+          console.log(`[task-panel] task ${key} → done, no linked session`);
+        }
+      }
       await refresh();
     } catch (e: any) { showSnackbar(e.toString()); }
   }

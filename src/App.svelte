@@ -150,6 +150,12 @@
     if (sessions.length > 0 && !activeSessionId) {
       seedMru(sessions.map((s) => s.id));
       selectSession(sessions[0].id);
+    } else {
+      // Add any new sessions (e.g. from symphony) to MRU so they appear in tab switcher
+      const mru = getMruList();
+      for (const s of sessions) {
+        if (!mru.includes(s.id)) touchMru(s.id);
+      }
     }
   }
 
@@ -403,7 +409,9 @@
     const cleanup = installKeyboardRouter(
       (action) => {
       if (action.type === "new_session") {
-        if (projects.length === 0) {
+        if (sidebarTab === "tasks") {
+          taskCreateRequested = true;
+        } else if (projects.length === 0) {
           showProjectForm = true;
         } else {
           showSessionForm = true;
