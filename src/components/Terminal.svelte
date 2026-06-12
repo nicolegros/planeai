@@ -280,13 +280,15 @@
     }
   });
 
+  let prevFocused = false;
   $effect(() => {
     if (!term) return;
-    if (focused) {
+    if (focused && !prevFocused) {
       term.focus();
-    } else {
+    } else if (!focused && prevFocused) {
       term.blur();
     }
+    prevFocused = focused;
   });
 
   $effect(() => {
