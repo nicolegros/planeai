@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, OnceLock};
+
+/// Pre-compiled ANSI escape code regex (avoids recompilation per call).
+static ANSI_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\x1B\[[0-9;]*m").unwrap());
+
+/// Cached result of tmux availability check (runs once per process).
+static TMUX_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -353,8 +361,7 @@ pub fn restart_command_for_provider(
 /// Parse a provider session ID from command output using a regex pattern.
 /// Strips ANSI escape codes before matching. Returns the first capture group of the first match.
 pub fn parse_provider_session_id(output: &str, pattern: &str) -> Option<String> {
-    let ansi_re = regex::Regex::new(r"\x1B\[[0-9;]*m").unwrap();
-    let stripped = ansi_re.replace_all(output, "");
+    let stripped = ANSI_RE.replace_all(output, "");
     let re = regex::Regex::new(pattern).ok()?;
     re.captures(&stripped)
         .and_then(|caps| caps.get(1))
@@ -395,14 +402,16 @@ pub fn resolve_backend(config: &Config) -> &str {
     }
 }
 
-/// Check if tmux binary is available on PATH.
+/// Check if tmux binary is available on PATH (cached — checked once per process).
 #[cfg(not(windows))]
 pub fn tmux_available() -> bool {
-    std::process::Command::new("which")
-        .arg("tmux")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    *TMUX_AVAILABLE.get_or_init(|| {
+        std::process::Command::new("which")
+            .arg("tmux")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(windows)]

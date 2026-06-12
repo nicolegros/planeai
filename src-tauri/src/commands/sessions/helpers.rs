@@ -7,9 +7,9 @@ pub(crate) fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) ->
     if let Some(ref wt) = session.worktree_path {
         return Some(wt.clone());
     }
-    db::list_projects(conn)
+    db::get_project(conn, &session.project_id)
         .ok()
-        .and_then(|ps| ps.into_iter().find(|p| p.id == session.project_id))
+        .flatten()
         .map(|p| p.path)
 }
 

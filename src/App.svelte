@@ -41,6 +41,7 @@
     status: string;
     created_at: string;
     worktree_path: string | null;
+    provider: string | null;
     backend: string;
     tab_count: number;
     base_branch: string | null;
@@ -629,7 +630,7 @@
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
     tabs={(() => {
       if (!activeSessionId) return [];
-      const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: getSettings().default_provider || "Agent" } : t);
+      const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
       const extra = [];
       if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
       if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });

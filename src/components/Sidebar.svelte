@@ -24,6 +24,7 @@
     status: string;
     created_at: string;
     worktree_path: string | null;
+    provider: string | null;
     backend: string;
     tab_count: number;
     base_branch: string | null;

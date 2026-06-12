@@ -145,17 +145,26 @@ impl Backend for TauriBackend {
 
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
-        let created_at = chrono::Utc::now().to_rfc3339();
+        crate::db::create_session_with_id(
+            &conn,
+            &session.id,
+            &session.project_id,
+            &session.name,
+            session.tmux_name.as_deref(),
+            &session.branch,
+            Some(session.worktree_path.as_str()).filter(|s| !s.is_empty()),
+            Some(session.provider.as_str()).filter(|s| !s.is_empty()),
+            &session.backend,
+            session.auto_approve,
+            Some(session.task_key.as_str()).filter(|s| !s.is_empty()),
+            Some(session.base_branch.as_str()).filter(|s| !s.is_empty()),
+        )
+        .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)",
-            params![
-                session.id, session.project_id, session.name,
-                session.tmux_name, session.branch, created_at,
-                session.worktree_path, session.provider, session.backend,
-                session.auto_approve, session.task_key, session.base_branch,
-            ],
-        ).map_err(|e| e.to_string())?;
+            "UPDATE sessions SET auto_dispatched = 1 WHERE id = ?1",
+            params![session.id],
+        )
+        .map_err(|e| e.to_string())?;
         Ok(())
     }
 
