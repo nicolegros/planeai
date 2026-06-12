@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Dialog } from "bits-ui";
   import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
+  import { getActiveZone } from "../lib/focus.svelte";
 
   interface Props {
     open: boolean;
@@ -30,6 +31,8 @@
     ]},
     { section: "View", items: [
       { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
+      { keys: `${MOD_LABEL}⇧S`, description: "Focus sessions panel" },
+      { keys: `${MOD_LABEL}⇧T`, description: "Focus tasks panel" },
       { keys: `${MOD_LABEL}E`, description: "Toggle file explorer" },
       { keys: `${MOD_LABEL}D`, description: "Toggle diff" },
     ]},
@@ -46,6 +49,27 @@
       { keys: MOD_ENTER_HINT, description: "Submit form" },
     ]},
   ];
+
+  const sidebarShortcuts = { section: "Sidebar Navigation", items: [
+    { keys: `j / ↓`, description: "Next item" },
+    { keys: `k / ↑`, description: "Previous item" },
+    { keys: `Enter`, description: "Select / open" },
+    { keys: `a`, description: "Archive" },
+    { keys: `dd`, description: "Delete" },
+    { keys: `r`, description: "Rename" },
+    { keys: `R`, description: "Restart" },
+    { keys: `st`, description: "Status → Todo" },
+    { keys: `sp`, description: "Status → In Progress" },
+    { keys: `sr`, description: "Status → In Review" },
+    { keys: `sd`, description: "Status → Done" },
+    { keys: `ss`, description: "Start session" },
+  ]};
+
+  const visibleShortcuts = $derived(
+    getActiveZone() === "sidebar"
+      ? [sidebarShortcuts, ...shortcuts]
+      : shortcuts
+  );
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
@@ -57,7 +81,7 @@
       <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Keyboard Shortcuts</Dialog.Title>
       <Dialog.Description class="sr-only">List of keyboard shortcuts available in planeai.</Dialog.Description>
       <div class="space-y-4">
-        {#each shortcuts as group}
+        {#each visibleShortcuts as group}
           <div>
             <h3 class="text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">{group.section}</h3>
             <div class="space-y-1">
