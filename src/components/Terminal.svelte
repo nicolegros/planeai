@@ -281,8 +281,11 @@
   });
 
   $effect(() => {
-    if (focused && term) {
+    if (!term) return;
+    if (focused) {
       term.focus();
+    } else {
+      term.blur();
     }
   });
 

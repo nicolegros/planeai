@@ -2,9 +2,10 @@
   import { invoke } from "@tauri-apps/api/core";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
-  import { focusTerminal } from "../lib/focus.svelte";
+  import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
-  import { Plus, RefreshCw, ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
   interface TaskItem {
     key: string;
@@ -29,22 +30,32 @@
 
   interface Props {
     projects: Project[];
+    projectAutoMode?: Record<string, boolean>;
     sessions: Session[];
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
+    taskRefreshRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession?: (session: Session) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
+    onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, sessions, agentStates, taskCreateRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed }: Props = $props();
+  let { projects, projectAutoMode = {}, sessions, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
     if (taskCreateRequested) {
       openCreate();
       onTaskCreateConsumed?.();
+    }
+  });
+
+  $effect(() => {
+    if (taskRefreshRequested) {
+      refresh();
+      onTaskRefreshConsumed?.();
     }
   });
 
@@ -129,6 +140,7 @@
     const linked = sessionForTask(task.key);
     if (linked) {
       onSelectSession(linked.id);
+      focusTerminal();
     } else {
       onPickTask(task, repoPathForTask(task.key) ?? "");
     }
@@ -139,7 +151,7 @@
     contextMenu = { x: e.clientX, y: e.clientY, task };
   }
 
-  function openCreate() {
+  export function openCreate() {
     formTitle = "";
     formDescription = "";
     formPriority = 0;
@@ -213,22 +225,51 @@
     if (task.status !== "done") items.push({ label: "→ Done", onSelect: () => moveTask(task.key, "done") });
     return items;
   }
+
+  // Flat list of visible tasks for keyboard navigation
+  const flatTasks = $derived.by(() => {
+    const result: TaskItem[] = [];
+    for (const project of projects) {
+      const projectTasks = tasksByProject[project.path] ?? [];
+      if (projectTasks.length === 0) continue;
+      const statusGroups = groupByStatus(projectTasks);
+      for (const status of statusOrder) {
+        const sectionKey = `${project.path}:${status}`;
+        if (collapsedSections[sectionKey]) continue;
+        for (const t of statusGroups[status] ?? []) result.push(t);
+      }
+    }
+    return result;
+  });
+
+  // Key-based index map for O(1) lookup in template
+  const flatTaskKeys = $derived(flatTasks.map((t) => t.key));
+
+  function handleTaskKeydown(e: KeyboardEvent) {    if (getActiveZone() !== "sidebar") return;
+    if (flatTasks.length === 0) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
+
+    clampIndex(flatTasks.length);
+    const action = handleSidebarKey(e, flatTasks.length);
+    if (!action) return;
+
+    const task = flatTasks[getSelectedIndex()];
+    if (!task) return;
+
+    if (action.type === "select" || action.type === "start_session") {
+      handleClick(task);
+    } else if (action.type === "status") {
+      moveTask(task.key, action.status);
+    } else if (action.type === "edit") {
+      openEdit(task);
+    }
+  }
 </script>
 
-<div class="flex flex-col h-full">
-  <!-- Header -->
-  <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
-    <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Tasks</span>
-    <div class="flex items-center gap-1">
-      <button onclick={() => refresh()} title="Refresh" class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors">
-        <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
-      </button>
-      <button onclick={openCreate} title="Create task" class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors">
-        <Plus class="size-4" />
-      </button>
-    </div>
-  </div>
+<svelte:window onkeydown={handleTaskKeydown} />
 
+<div class="flex flex-col h-full">
   <!-- Task list: project > status -->
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3">
     {#if projects.length === 0}
@@ -241,7 +282,7 @@
         {#if projectTasks.length > 0}
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
-            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate">{project.name}</h3>
+            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}{#if projectAutoMode[project.path]}<Zap class="size-2.5 text-amber-500" />{/if}</h3>
             {#each statusOrder as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
@@ -262,9 +303,11 @@
                   {#if !collapsedSections[sectionKey]}
                     <ul class="space-y-0.5 ml-1">
                       {#each items as task (task.key)}
+                        {@const taskFlatIdx = flatTaskKeys.indexOf(task.key)}
+                        {@const isTaskSelected = getActiveZone() === 'sidebar' && taskFlatIdx === getSelectedIndex()}
                         <li>
                           <button
-                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none"
+                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
                             onclick={() => handleClick(task)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >

@@ -4,6 +4,7 @@
   import { CmDiffRenderer } from "../lib/cm-diff-renderer";
   import type { DiffRenderer } from "../lib/diff-renderer";
   import { getSettings } from "../lib/settings.svelte";
+  import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
 
@@ -97,6 +98,7 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (!visible) return;
+    if (getActiveZone() !== "terminal") return;
 
     // File navigation: ↑/↓, j/k, Tab/Shift+Tab, Ctrl+n/Ctrl+p
     if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {

@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
+  import { focusTerminal } from "../lib/focus.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getSettings } from "../lib/settings.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
@@ -42,6 +44,7 @@
     renamingSessionId: string | null;
     sidebarTab?: "sessions" | "tasks";
     taskCreateRequested?: boolean;
+    taskRefreshRequested?: boolean;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
@@ -55,9 +58,10 @@
     onPickTask: (task: any, repoPath: string) => void;
     onSidebarTabChange?: (tab: "sessions" | "tasks") => void;
     onTaskCreateConsumed?: () => void;
+    onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, taskRefreshRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
 
@@ -118,8 +122,6 @@
     projectContextMenu = { x: e.clientX, y: e.clientY, project };
   }
 
-  let selectedIndex = $state(0);
-
   const grouped = $derived(
     projects.map((p) => ({
       project: p,
@@ -127,33 +129,45 @@
     }))
   );
 
-  const flatSessionIds = $derived(sessions.map((s) => s.id));
+  const flatSessionIds = $derived(grouped.flatMap((g) => g.sessions.map((s) => s.id)));
 
   $effect(() => {
-    if (selectedIndex >= flatSessionIds.length) {
-      selectedIndex = Math.max(0, flatSessionIds.length - 1);
-    }
+    if (sidebarTab === "sessions") clampIndex(flatSessionIds.length);
   });
 
   function handleKeydown(e: KeyboardEvent) {
-    if (zone !== "sidebar" || flatSessionIds.length === 0) return;
+    if (zone !== "sidebar" || sidebarTab !== "sessions") return;
+    if (flatSessionIds.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "SELECT" || el.closest("[role='combobox']"))) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, flatSessionIds.length - 1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      selectedIndex = Math.max(selectedIndex - 1, 0);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      onSelectSession(flatSessionIds[selectedIndex]);
+
+    const action = handleSidebarKey(e, flatSessionIds.length);
+    if (!action) return;
+
+    const sessionId = flatSessionIds[getSelectedIndex()];
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+
+    if (action.type === "select") {
+      onSelectSession(sessionId);
+      focusTerminal();
+    } else if (action.type === "archive") {
+      onArchiveSession(session);
+    } else if (action.type === "delete") {
+      onDeleteSession(session);
+    } else if (action.type === "rename") {
+      startRename(session);
+    } else if (action.type === "restart") {
+      onRestartSession(session);
     }
   }
 
   // Task panel: all project paths
   const hasTaskManager = $derived(Object.keys(getSettings().task_managers ?? {}).length > 0);
   const taskProjects = $derived(projects.map((p) => ({ name: p.name, path: p.path })));
+  const taskProjectAutoMode = $derived(
+    Object.fromEntries(projects.map((p) => [p.path, projectAutoMode[p.id] ?? false]))
+  );
 
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
 
@@ -195,6 +209,14 @@
       >
         <Plus class="size-4" />
       </button>
+    {:else}
+      <button
+        onclick={() => taskPanelRef?.openCreate()}
+        title="Create task"
+        class="size-6 mr-2 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      >
+        <Plus class="size-4" />
+      </button>
     {/if}
   </div>
   {:else}
@@ -232,7 +254,7 @@
             {#each projectSessions as session (session.id)}
               {@const globalIndex = flatSessionIds.indexOf(session.id)}
               {@const isActive = session.id === activeSessionId}
-              {@const isSelected = zone === 'sidebar' && globalIndex === selectedIndex}
+              {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
               <li>
                 {#if renamingSessionId === session.id}
                   <input
@@ -303,13 +325,16 @@
     <TaskPanel
       bind:this={taskPanelRef}
       projects={taskProjects}
+      projectAutoMode={taskProjectAutoMode}
       sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
       {agentStates}
       {taskCreateRequested}
+      {taskRefreshRequested}
       {onPickTask}
       {onSelectSession}
       onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
       onTaskCreateConsumed={onTaskCreateConsumed}
+      onTaskRefreshConsumed={onTaskRefreshConsumed}
     />
   {/if}
 

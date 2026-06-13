@@ -1,4 +1,4 @@
-import { focusTerminal, getActiveZone, toggleSidebar } from "./focus.svelte";
+import { focusTerminal, getActiveZone, toggleSidebar, toggleSessionsPanel, toggleTaskPanel } from "./focus.svelte";
 
 /** True on macOS/iOS, false on Windows/Linux */
 export const IS_MAC =
@@ -31,7 +31,9 @@ export type KeyboardAction =
   | { type: "prev_tab" }
   | { type: "toggle_diff" }
   | { type: "toggle_file_explorer" }
+  | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
+  | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" };
@@ -109,9 +111,19 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "open_file" };
   }
 
+  // Mod+Shift+S — toggle sessions panel
+  if (mod && e.shiftKey && key === "s") {
+    return { type: "toggle_sessions_panel" };
+  }
+
   // Mod+S — save file
   if (mod && !e.shiftKey && key === "s") {
     return { type: "save_file" };
+  }
+
+  // Mod+R — refresh tasks
+  if (mod && !e.shiftKey && key === "r") {
+    return { type: "refresh_tasks" };
   }
 
   // Mod+/ — keyboard shortcuts
@@ -188,6 +200,10 @@ export function installKeyboardRouter(
         focusTerminal();
       } else if (action.type === "toggle_sidebar") {
         toggleSidebar();
+      } else if (action.type === "toggle_sessions_panel") {
+        toggleSessionsPanel();
+      } else if (action.type === "toggle_task_panel") {
+        toggleTaskPanel();
       }
 
       onAction(action);

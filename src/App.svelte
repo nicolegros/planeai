@@ -57,6 +57,7 @@
   let sidebarVisible = $state(true);
   let sidebarTab = $state<"sessions" | "tasks">("sessions");
   let taskCreateRequested = $state(false);
+  let taskRefreshRequested = $state(false);
 
   // Orchestrator status
   let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(null);
@@ -471,8 +472,15 @@
       } else if (action.type === "toggle_file_explorer") {
         handleToggleFileExplorer();
       } else if (action.type === "toggle_task_panel") {
-        sidebarTab = sidebarTab === "tasks" ? "sessions" : "tasks";
+        sidebarTab = "tasks";
         if (!sidebarVisible) sidebarVisible = true;
+      } else if (action.type === "toggle_sessions_panel") {
+        sidebarTab = "sessions";
+        if (!sidebarVisible) sidebarVisible = true;
+      } else if (action.type === "refresh_tasks") {
+        sidebarTab = "tasks";
+        if (!sidebarVisible) sidebarVisible = true;
+        taskRefreshRequested = true;
       } else if (action.type === "open_file") {
         commandMenuFileMode = true;
         commandMenuOpen = true;
@@ -659,6 +667,7 @@
       {renamingSessionId}
       {sidebarTab}
       {taskCreateRequested}
+      {taskRefreshRequested}
       onAddProject={() => (showProjectForm = true)}
       onSelectSession={selectSession}
       onArchiveSession={(s) => archiveSession(s)}
@@ -676,6 +685,7 @@
       }}
       onSidebarTabChange={(tab) => { sidebarTab = tab; }}
       onTaskCreateConsumed={() => { taskCreateRequested = false; }}
+      onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
     />
   {/if}
 

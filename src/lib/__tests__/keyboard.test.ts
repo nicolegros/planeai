@@ -127,4 +127,16 @@ describe("matchChord", () => {
       type: "prev_tab",
     });
   });
+
+  it("returns toggle_sessions_panel on platform mod+Shift+S", () => {
+    expect(matchChord(key({ key: "s", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "toggle_sessions_panel",
+    });
+  });
+
+  it("returns toggle_task_panel on platform mod+Shift+T", () => {
+    expect(matchChord(key({ key: "t", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "toggle_task_panel",
+    });
+  });
 });
