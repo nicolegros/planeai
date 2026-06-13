@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { FocusZone } from "../lib/focus.svelte";
+  import { focusTerminal } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getSettings } from "../lib/settings.svelte";
@@ -146,6 +147,7 @@
 
     if (action.type === "select") {
       onSelectSession(sessionId);
+      focusTerminal();
     } else if (action.type === "archive") {
       onArchiveSession(session);
     } else if (action.type === "delete") {

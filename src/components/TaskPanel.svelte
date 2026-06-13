@@ -130,6 +130,7 @@
     const linked = sessionForTask(task.key);
     if (linked) {
       onSelectSession(linked.id);
+      focusTerminal();
     } else {
       onPickTask(task, repoPathForTask(task.key) ?? "");
     }
