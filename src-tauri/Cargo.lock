@@ -2993,6 +2993,7 @@ dependencies = [
  "json_comments",
  "notify",
  "planeai-core",
+ "planeai-tasks",
  "portable-pty",
  "regex",
  "rusqlite",
@@ -3026,6 +3027,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "planeai-tasks"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

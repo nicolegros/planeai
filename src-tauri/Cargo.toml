@@ -1,5 +1,5 @@
 [workspace]
-members = ["planeai-core"]
+members = ["planeai-core", "planeai-tasks"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -39,6 +39,7 @@ path = "src/bin/cli.rs"
 
 [dependencies]
 planeai-core = { path = "planeai-core" }
+planeai-tasks = { path = "planeai-tasks" }
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }

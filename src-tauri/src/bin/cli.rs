@@ -17,6 +17,10 @@ enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
+    },
     Symphony {
         #[command(subcommand)]
         action: SymphonyAction,
@@ -88,6 +92,83 @@ enum SymphonyAction {
     Status,
     /// Stop the orchestrator daemon
     Stop,
+}
+
+#[derive(Subcommand)]
+enum TaskAction {
+    /// Create a new task
+    Add {
+        title: String,
+        #[arg(long, default_value = "")]
+        desc: String,
+        #[arg(long, default_value_t = 0)]
+        priority: i32,
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        #[arg(long, value_delimiter = ',')]
+        blocked_by: Vec<String>,
+        #[arg(long)]
+        parent: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Show a task by key
+    Show {
+        key: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// List tasks
+    #[command(name = "ls")]
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Move a task to a new status
+    Move {
+        key: String,
+        status: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Edit an existing task
+    Edit {
+        key: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        desc: Option<String>,
+        #[arg(long)]
+        priority: Option<i32>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long, value_delimiter = ',')]
+        blocked_by: Option<Vec<String>>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Delete a task
+    Delete {
+        key: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        pretty: bool,
+    },
 }
 
 fn main() {
@@ -325,6 +406,137 @@ fn main() {
                 }
             },
         },
+        Commands::Task { action } => {
+            let cwd = std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let project_flag = match &action {
+                TaskAction::Add { project, .. }
+                | TaskAction::Show { project, .. }
+                | TaskAction::List { project, .. }
+                | TaskAction::Move { project, .. }
+                | TaskAction::Edit { project, .. }
+                | TaskAction::Delete { project, .. } => project.as_deref(),
+            };
+
+            let prefix = match planeai::task_cli::resolve_prefix(&conn, project_flag, &cwd) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("{{\"error\": \"{e}\"}}");
+                    std::process::exit(1);
+                }
+            };
+
+            let repo = match planeai_tasks::sqlite::SqliteRepository::open(
+                db_path.to_str().unwrap(),
+                &prefix,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{{\"error\": \"{e}\"}}");
+                    std::process::exit(1);
+                }
+            };
+
+            let (result, pretty, key_for_notify) = match action {
+                TaskAction::Add {
+                    title,
+                    desc,
+                    priority,
+                    tags,
+                    blocked_by,
+                    parent,
+                    pretty,
+                    ..
+                } => {
+                    let r = planeai::task_cli::run_task_add(
+                        &repo,
+                        &title,
+                        &desc,
+                        priority,
+                        &tags,
+                        &blocked_by,
+                        parent.as_deref(),
+                    );
+                    let key = r.as_ref().ok().and_then(|json| {
+                        serde_json::from_str::<serde_json::Value>(json)
+                            .ok()?
+                            .get("key")?
+                            .as_str()
+                            .map(|s| s.to_string())
+                    });
+                    (r, pretty, key)
+                }
+                TaskAction::Show { key, pretty, .. } => {
+                    (planeai::task_cli::run_task_show(&repo, &key), pretty, None)
+                }
+                TaskAction::List {
+                    status,
+                    tags,
+                    pretty,
+                    ..
+                } => (
+                    planeai::task_cli::run_task_list(&repo, status.as_deref(), &tags),
+                    pretty,
+                    None,
+                ),
+                TaskAction::Move {
+                    key,
+                    status,
+                    pretty,
+                    ..
+                } => {
+                    let r = planeai::task_cli::run_task_move(&repo, &key, &status);
+                    (r, pretty, Some(key))
+                }
+                TaskAction::Edit {
+                    key,
+                    title,
+                    desc,
+                    priority,
+                    tags,
+                    blocked_by,
+                    pretty,
+                    ..
+                } => {
+                    let r = planeai::task_cli::run_task_edit(
+                        &repo,
+                        &key,
+                        title.as_deref(),
+                        desc.as_deref(),
+                        priority,
+                        tags.as_deref(),
+                        blocked_by.as_deref(),
+                    );
+                    (r, pretty, Some(key))
+                }
+                TaskAction::Delete { key, pretty, .. } => {
+                    let r = planeai::task_cli::run_task_delete(&repo, &key);
+                    (r, pretty, Some(key))
+                }
+            };
+
+            match result {
+                Ok(output) => {
+                    if let Some(key) = &key_for_notify {
+                        planeai::task_cli::notify_task_changed(key);
+                    }
+                    if pretty {
+                        let v: serde_json::Value = serde_json::from_str(&output)
+                            .unwrap_or(serde_json::Value::String(output.clone()));
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                    } else {
+                        println!("{output}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{{\"error\": \"{e}\"}}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }
 

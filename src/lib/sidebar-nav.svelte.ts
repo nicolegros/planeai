@@ -119,7 +119,9 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
 function setPending(key: string) {
   clearPending();
   pendingKey = key;
-  pendingTimeout = setTimeout(() => { pendingKey = null; }, 500);
+  pendingTimeout = setTimeout(() => {
+    pendingKey = null;
+  }, 500);
 }
 
 function clearPending() {
