@@ -164,6 +164,9 @@
   // Task panel: all project paths
   const hasTaskManager = $derived(Object.keys(getSettings().task_managers ?? {}).length > 0);
   const taskProjects = $derived(projects.map((p) => ({ name: p.name, path: p.path })));
+  const taskProjectAutoMode = $derived(
+    Object.fromEntries(projects.map((p) => [p.path, projectAutoMode[p.id] ?? false]))
+  );
 
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
 
@@ -321,6 +324,7 @@
     <TaskPanel
       bind:this={taskPanelRef}
       projects={taskProjects}
+      projectAutoMode={taskProjectAutoMode}
       sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
       {agentStates}
       {taskCreateRequested}

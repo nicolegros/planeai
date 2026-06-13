@@ -5,7 +5,7 @@
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
-  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
   interface TaskItem {
     key: string;
@@ -30,6 +30,7 @@
 
   interface Props {
     projects: Project[];
+    projectAutoMode?: Record<string, boolean>;
     sessions: Session[];
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
@@ -41,7 +42,7 @@
     onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, sessions, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { projects, projectAutoMode = {}, sessions, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
@@ -281,7 +282,7 @@
         {#if projectTasks.length > 0}
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
-            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate">{project.name}</h3>
+            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}{#if projectAutoMode[project.path]}<Zap class="size-2.5 text-amber-500" />{/if}</h3>
             {#each statusOrder as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
