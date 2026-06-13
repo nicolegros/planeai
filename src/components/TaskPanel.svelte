@@ -5,7 +5,7 @@
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
-  import { Plus, RefreshCw, ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
 
   interface TaskItem {
     key: string;
@@ -141,7 +141,7 @@
     contextMenu = { x: e.clientX, y: e.clientY, task };
   }
 
-  function openCreate() {
+  export function openCreate() {
     formTitle = "";
     formDescription = "";
     formPriority = 0;
@@ -260,19 +260,6 @@
 <svelte:window onkeydown={handleTaskKeydown} />
 
 <div class="flex flex-col h-full">
-  <!-- Header -->
-  <div class="flex items-center justify-between px-4 py-3 border-b border-surface-200 dark:border-surface-800">
-    <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Tasks</span>
-    <div class="flex items-center gap-1">
-      <button onclick={() => refresh()} title="Refresh" class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors">
-        <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
-      </button>
-      <button onclick={openCreate} title="Create task" class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors">
-        <Plus class="size-4" />
-      </button>
-    </div>
-  </div>
-
   <!-- Task list: project > status -->
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3">
     {#if projects.length === 0}

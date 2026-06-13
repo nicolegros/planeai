@@ -8,7 +8,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { invoke } from "@tauri-apps/api/core";
-  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap } from "@lucide/svelte";
+  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap, RefreshCw } from "@lucide/svelte";
   import TaskPanel from "./TaskPanel.svelte";
 
   interface Project {
@@ -199,6 +199,21 @@
       <button
         onclick={onAddProject}
         title="Add project ({MOD_LABEL}N)"
+        class="size-6 mr-2 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      >
+        <Plus class="size-4" />
+      </button>
+    {:else}
+      <button
+        onclick={() => taskPanelRef?.refresh()}
+        title="Refresh tasks"
+        class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      >
+        <RefreshCw class="size-3.5" />
+      </button>
+      <button
+        onclick={() => taskPanelRef?.openCreate()}
+        title="Create task"
         class="size-6 mr-2 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
       >
         <Plus class="size-4" />
