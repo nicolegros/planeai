@@ -33,6 +33,7 @@ export type KeyboardAction =
   | { type: "toggle_file_explorer" }
   | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
+  | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
   | { type: "show_shortcuts" };
@@ -118,6 +119,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+S — save file
   if (mod && !e.shiftKey && key === "s") {
     return { type: "save_file" };
+  }
+
+  // Mod+R — refresh tasks
+  if (mod && !e.shiftKey && key === "r") {
+    return { type: "refresh_tasks" };
   }
 
   // Mod+/ — keyboard shortcuts

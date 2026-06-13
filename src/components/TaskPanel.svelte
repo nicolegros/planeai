@@ -33,19 +33,28 @@
     sessions: Session[];
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
+    taskRefreshRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession?: (session: Session) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
+    onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, sessions, agentStates, taskCreateRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed }: Props = $props();
+  let { projects, sessions, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
     if (taskCreateRequested) {
       openCreate();
       onTaskCreateConsumed?.();
+    }
+  });
+
+  $effect(() => {
+    if (taskRefreshRequested) {
+      refresh();
+      onTaskRefreshConsumed?.();
     }
   });
 

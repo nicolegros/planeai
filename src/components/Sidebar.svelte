@@ -8,7 +8,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { invoke } from "@tauri-apps/api/core";
-  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap, RefreshCw } from "@lucide/svelte";
+  import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap } from "@lucide/svelte";
   import TaskPanel from "./TaskPanel.svelte";
 
   interface Project {
@@ -43,6 +43,7 @@
     renamingSessionId: string | null;
     sidebarTab?: "sessions" | "tasks";
     taskCreateRequested?: boolean;
+    taskRefreshRequested?: boolean;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
@@ -56,9 +57,10 @@
     onPickTask: (task: any, repoPath: string) => void;
     onSidebarTabChange?: (tab: "sessions" | "tasks") => void;
     onTaskCreateConsumed?: () => void;
+    onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, taskRefreshRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
 
@@ -205,13 +207,6 @@
       </button>
     {:else}
       <button
-        onclick={() => taskPanelRef?.refresh()}
-        title="Refresh tasks"
-        class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
-      >
-        <RefreshCw class="size-3.5" />
-      </button>
-      <button
         onclick={() => taskPanelRef?.openCreate()}
         title="Create task"
         class="size-6 mr-2 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
@@ -329,10 +324,12 @@
       sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
       {agentStates}
       {taskCreateRequested}
+      {taskRefreshRequested}
       {onPickTask}
       {onSelectSession}
       onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
       onTaskCreateConsumed={onTaskCreateConsumed}
+      onTaskRefreshConsumed={onTaskRefreshConsumed}
     />
   {/if}
 
