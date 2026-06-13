@@ -129,7 +129,7 @@
   const flatSessionIds = $derived(grouped.flatMap((g) => g.sessions.map((s) => s.id)));
 
   $effect(() => {
-    clampIndex(flatSessionIds.length);
+    if (sidebarTab === "sessions") clampIndex(flatSessionIds.length);
   });
 
   function handleKeydown(e: KeyboardEvent) {
