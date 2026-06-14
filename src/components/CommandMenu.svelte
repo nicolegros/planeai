@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { getSettings, updateSettings } from "../lib/settings.svelte";
 
   interface Session {
     id: string;
@@ -421,6 +422,14 @@
                   onSelect={() => { onCreateTask(); close(); }}
                 >
                   Create task…
+                </Command.Item>
+                <Command.Item
+                  value={getSettings().hide_done_tasks ? "show done tasks" : "hide done tasks"}
+                  keywords={["done", "tasks", "hide", "show", "toggle", "completed"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }); close(); }}
+                >
+                  {getSettings().hide_done_tasks ? "Show done tasks" : "Hide done tasks"}
                 </Command.Item>
                 <Command.Item
                   value="reset terminal"

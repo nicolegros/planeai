@@ -52,6 +52,7 @@ export interface AppConfig {
   default_task_manager?: string | null;
   projects_base_path?: string | null;
   pr_status?: string | null;
+  hide_done_tasks?: boolean | null;
 }
 
 let config = $state<AppConfig>({

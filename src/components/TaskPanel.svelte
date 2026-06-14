@@ -4,6 +4,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
+  import { getSettings } from "../lib/settings.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
@@ -283,7 +284,7 @@
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
             <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}{#if projectAutoMode[project.path]}<Zap class="size-2.5 text-amber-500" />{/if}</h3>
-            {#each statusOrder as status}
+            {#each statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks)) as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
                 {@const sectionKey = `${project.path}:${status}`}

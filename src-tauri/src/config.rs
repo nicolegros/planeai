@@ -28,6 +28,8 @@ pub struct Config {
     pub projects_base_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_done_tasks: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -237,6 +239,7 @@ impl Default for Config {
             default_task_manager: None,
             projects_base_path: None,
             pr_status: None,
+            hide_done_tasks: None,
         }
     }
 }
@@ -507,6 +510,7 @@ mod tests {
             default_task_manager: None,
             projects_base_path: None,
             pr_status: None,
+            hide_done_tasks: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
