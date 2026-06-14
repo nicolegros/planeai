@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::dispatch::TaskDispatcher;
-use crate::session::{Backend, DispatchConfig, NewSession, SessionDispatcher};
-use crate::task::TaskManagerConfig;
+use crate::session::{Backend, DispatchConfig, NewSession, OnStartHook, SessionDispatcher};
+use crate::task::TaskSource;
 
 /// Commands the orchestrator can receive via its channel.
 pub enum OrchestratorCommand {
@@ -18,17 +17,17 @@ pub enum OrchestratorCommand {
 }
 
 /// Configuration for one project in auto-mode.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AutoProject {
     pub project_id: String,
     pub project_name: String,
     pub project_path: String,
-    pub task_manager_config: TaskManagerConfig,
+    pub task_source: Arc<dyn TaskSource>,
+    pub on_start: Option<OnStartHook>,
     pub dispatch_config: DispatchConfig,
 }
 
 /// Top-level orchestrator config.
-#[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
     pub poll_interval_ms: u64,
     pub max_concurrent: usize,
@@ -38,8 +37,7 @@ pub struct OrchestratorConfig {
 /// Tracks a running session and its project context.
 struct RunningSession {
     session: NewSession,
-    project_path: String,
-    task_manager_config: TaskManagerConfig,
+    task_source: Arc<dyn TaskSource>,
 }
 
 /// The orchestrator loop. Polls tasks, dispatches sessions, listens for commands.
@@ -59,6 +57,13 @@ impl Orchestrator {
         token: CancellationToken,
         mut commands: mpsc::Receiver<OrchestratorCommand>,
     ) -> Result<(), String> {
+        tracing::info!(
+            poll_interval_ms = self.config.poll_interval_ms,
+            max_concurrent = self.config.max_concurrent,
+            projects = self.config.projects.len(),
+            "orchestrator starting"
+        );
+
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(
             self.config.poll_interval_ms,
         ));
@@ -66,6 +71,7 @@ impl Orchestrator {
         // Reattach: load active auto-dispatched sessions from DB
         let mut running: HashMap<String, RunningSession> = HashMap::new();
         if let Ok(sessions) = self.backend.list_active_sessions() {
+            tracing::info!(count = sessions.len(), "reattaching active sessions");
             for session in sessions {
                 let project_config = self
                     .config
@@ -77,8 +83,7 @@ impl Orchestrator {
                         session.task_key.clone(),
                         RunningSession {
                             session,
-                            project_path: project.project_path.clone(),
-                            task_manager_config: project.task_manager_config.clone(),
+                            task_source: project.task_source.clone(),
                         },
                     );
                 }
@@ -87,7 +92,10 @@ impl Orchestrator {
 
         loop {
             tokio::select! {
-                _ = token.cancelled() => return Ok(()),
+                _ = token.cancelled() => {
+                    tracing::info!("orchestrator cancelled");
+                    return Ok(());
+                }
                 _ = interval.tick() => {
                     self.reconcile(&mut running).await;
                     self.dispatch(&mut running).await;
@@ -95,6 +103,7 @@ impl Orchestrator {
                 Some(cmd) = commands.recv() => {
                     match cmd {
                         OrchestratorCommand::Stop => {
+                            tracing::info!("orchestrator received stop command");
                             token.cancel();
                             return Ok(());
                         }
@@ -115,36 +124,18 @@ impl Orchestrator {
     }
 
     async fn reconcile(&self, running: &mut HashMap<String, RunningSession>) {
-        let futures: Vec<_> = running
-            .iter()
-            .map(|(task_key, entry)| {
-                let key = task_key.clone();
-                let config = entry.task_manager_config.clone();
-                let path = entry.project_path.clone();
-                async move {
-                    let status = get_task_status(&config, &key, &path).await;
-                    (key, config, status)
-                }
-            })
-            .collect();
-
-        let results = futures::future::join_all(futures).await;
-
         let mut to_kill = Vec::new();
-        for (key, config, status) in results {
-            if let Some(status) = status {
-                if config
-                    .terminal_states
-                    .iter()
-                    .any(|s| s.eq_ignore_ascii_case(&status))
-                {
-                    to_kill.push(key);
+        for (task_key, entry) in running.iter() {
+            if let Ok(task) = entry.task_source.get_task(task_key) {
+                if entry.task_source.is_terminal(&task.status) {
+                    to_kill.push(task_key.clone());
                 }
             }
         }
 
         for key in to_kill {
             if let Some(entry) = running.remove(&key) {
+                tracing::info!(task_key = %key, session_id = %entry.session.id, "killing session — task reached terminal state");
                 let _ = self.backend.kill_session(&entry.session);
             }
         }
@@ -158,15 +149,14 @@ impl Orchestrator {
                 break;
             }
 
-            let dispatcher = TaskDispatcher::new(
-                &project.task_manager_config,
-                &project.project_name,
-                Path::new(&project.project_path),
-            );
+            let dispatcher = TaskDispatcher::new(project.task_source.clone());
 
             let tasks = match dispatcher.fetch_dispatchable_tasks(&claimed).await {
                 Ok(t) => t,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!(project = %project.project_name, error = %e, "failed to fetch dispatchable tasks");
+                    continue;
+                }
             };
 
             for task in tasks {
@@ -178,7 +168,8 @@ impl Orchestrator {
                 }
 
                 let session_dispatcher = SessionDispatcher {
-                    task_manager_config: project.task_manager_config.clone(),
+                    task_source: project.task_source.clone(),
+                    on_start: project.on_start.clone(),
                     dispatch_config: self
                         .backend
                         .reload_dispatch_config(&project.dispatch_config.provider)
@@ -188,32 +179,27 @@ impl Orchestrator {
                     project_path: project.project_path.clone(),
                 };
 
-                if let Ok(session) = session_dispatcher.dispatch(&task, self.backend.as_ref()) {
-                    running.insert(
-                        session.task_key.clone(),
-                        RunningSession {
-                            session,
-                            project_path: project.project_path.clone(),
-                            task_manager_config: project.task_manager_config.clone(),
-                        },
-                    );
+                match session_dispatcher.dispatch(&task, self.backend.as_ref()) {
+                    Ok(session) => {
+                        tracing::info!(
+                            task_key = %task.key,
+                            session_id = %session.id,
+                            project = %project.project_name,
+                            "dispatched session for task"
+                        );
+                        running.insert(
+                            session.task_key.clone(),
+                            RunningSession {
+                                session,
+                                task_source: project.task_source.clone(),
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(task_key = %task.key, project = %project.project_name, error = %e, "failed to dispatch session");
+                    }
                 }
             }
         }
     }
-}
-
-async fn get_task_status(
-    config: &TaskManagerConfig,
-    key: &str,
-    project_path: &str,
-) -> Option<String> {
-    let mut vars = HashMap::new();
-    vars.insert("key", key);
-    let cmd_str = crate::template::render(&config.get_task, &vars);
-    let output = crate::command::run_command(&cmd_str, Path::new(project_path))
-        .map_err(|e| eprintln!("[orchestrator] failed to fetch task status for {key}: {e}"))
-        .ok()?;
-    let task: crate::task::Task = serde_json::from_str(&output).ok()?;
-    Some(task.status)
 }

@@ -1,9 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::collections::HashSet;
+use std::sync::Arc;
 
-use crate::command::run_command;
-use crate::task::{Task, TaskManagerConfig};
-use crate::template;
+use crate::task::{Task, TaskSource};
 
 #[derive(Debug)]
 pub enum DispatchError {
@@ -21,38 +19,35 @@ impl std::fmt::Display for DispatchError {
 }
 
 pub struct TaskDispatcher {
-    config: TaskManagerConfig,
-    project: String,
-    cwd: std::path::PathBuf,
+    source: Arc<dyn TaskSource>,
 }
 
 impl TaskDispatcher {
-    pub fn new(config: &TaskManagerConfig, project_name: &str, cwd: &Path) -> Self {
-        Self {
-            config: config.clone(),
-            project: project_name.to_string(),
-            cwd: cwd.to_path_buf(),
-        }
+    pub fn new(source: Arc<dyn TaskSource>) -> Self {
+        Self { source }
     }
 
     pub async fn fetch_dispatchable_tasks(
         &self,
         claimed: &HashSet<String>,
     ) -> Result<Vec<Task>, DispatchError> {
-        let tasks = self.run_list_tasks().await?;
+        let tasks = self
+            .source
+            .list_tasks()
+            .map_err(DispatchError::CommandFailed)?;
 
         let mut eligible = Vec::new();
         for task in &tasks {
             if claimed.contains(&task.key) {
                 continue;
             }
-            if self.is_terminal(&task.status) {
+            if self.source.is_terminal(&task.status) {
                 continue;
             }
             if !task.subtasks.is_empty() {
                 continue;
             }
-            if self.has_unresolved_blockers(task, &tasks).await? {
+            if self.has_unresolved_blockers(task, &tasks) {
                 continue;
             }
             eligible.push(task.clone());
@@ -62,53 +57,20 @@ impl TaskDispatcher {
         Ok(eligible)
     }
 
-    async fn run_list_tasks(&self) -> Result<Vec<Task>, DispatchError> {
-        let mut vars = HashMap::new();
-        vars.insert("project", self.project.as_str());
-        let cmd_str = template::render(&self.config.list_tasks, &vars);
-        let output = self.run_cmd(&cmd_str)?;
-        serde_json::from_str(&output)
-            .map_err(|e| DispatchError::ParseError(format!("list_tasks: {e}")))
-    }
-
-    async fn run_get_task(&self, key: &str) -> Result<Task, DispatchError> {
-        let mut vars = HashMap::new();
-        vars.insert("key", key);
-        let cmd_str = template::render(&self.config.get_task, &vars);
-        let output = self.run_cmd(&cmd_str)?;
-        serde_json::from_str(&output)
-            .map_err(|e| DispatchError::ParseError(format!("get_task({key}): {e}")))
-    }
-
-    async fn has_unresolved_blockers(
-        &self,
-        task: &Task,
-        all_tasks: &[Task],
-    ) -> Result<bool, DispatchError> {
+    fn has_unresolved_blockers(&self, task: &Task, all_tasks: &[Task]) -> bool {
         for blocker_key in &task.blocked_by {
             let resolved = if let Some(blocker) = all_tasks.iter().find(|t| &t.key == blocker_key) {
-                self.is_terminal(&blocker.status)
+                self.source.is_terminal(&blocker.status)
             } else {
-                match self.run_get_task(blocker_key).await {
-                    Ok(blocker) => self.is_terminal(&blocker.status),
+                match self.source.get_task(blocker_key) {
+                    Ok(blocker) => self.source.is_terminal(&blocker.status),
                     Err(_) => true, // not found = resolved
                 }
             };
             if !resolved {
-                return Ok(true);
+                return true;
             }
         }
-        Ok(false)
-    }
-
-    fn is_terminal(&self, status: &str) -> bool {
-        self.config
-            .terminal_states
-            .iter()
-            .any(|s| s.eq_ignore_ascii_case(status))
-    }
-
-    fn run_cmd(&self, cmd_str: &str) -> Result<String, DispatchError> {
-        run_command(cmd_str, &self.cwd).map_err(|e| DispatchError::CommandFailed(e.to_string()))
+        false
     }
 }

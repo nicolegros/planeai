@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::path::Path;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
@@ -8,9 +5,12 @@ use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
-use planeai_core::session::{Backend, DispatchConfig, NewSession};
-use planeai_core::task::{LifecycleHook, TaskManagerConfig};
-use planeai_core::template;
+use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
+use planeai_core::task::{Task, TaskSource};
+
+use planeai_tasks::model::Status;
+use planeai_tasks::provider::TaskProvider;
+use planeai_tasks::sqlite::SqliteRepository;
 
 use crate::config::{self, Config};
 
@@ -115,7 +115,7 @@ impl Backend for TauriBackend {
         branch: &str,
         base: &str,
     ) -> Result<(), String> {
-        let output = Command::new("git")
+        let output = std::process::Command::new("git")
             .args(["worktree", "add", "-b", branch, path, base])
             .current_dir(repo)
             .output()
@@ -133,7 +133,7 @@ impl Backend for TauriBackend {
         cmd: &str,
         _session_id: &str,
     ) -> Result<(), String> {
-        let output = Command::new("tmux")
+        let output = std::process::Command::new("tmux")
             .args(["new-session", "-d", "-s", name, "-c", cwd, cmd])
             .output()
             .map_err(|e| format!("tmux new-session: {e}"))?;
@@ -168,21 +168,6 @@ impl Backend for TauriBackend {
         Ok(())
     }
 
-    fn run_move_task(
-        &self,
-        config: &TaskManagerConfig,
-        key: &str,
-        status: &str,
-        cwd: &Path,
-    ) -> Result<(), String> {
-        let mut vars = HashMap::new();
-        vars.insert("key", key);
-        vars.insert("status", status);
-        let cmd_str = template::render(&config.move_task, &vars);
-        planeai_core::command::run_command(&cmd_str, cwd).map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     fn notify_gui(&self, _session_id: &str) -> Result<(), String> {
         let _ = self.app_handle.emit("sessions-changed", ());
         Ok(())
@@ -190,7 +175,7 @@ impl Backend for TauriBackend {
 
     fn kill_session(&self, session: &NewSession) -> Result<(), String> {
         if let Some(tmux_name) = &session.tmux_name {
-            let _ = Command::new("tmux")
+            let _ = std::process::Command::new("tmux")
                 .args(["kill-session", "-t", tmux_name])
                 .output();
         }
@@ -272,6 +257,77 @@ impl Backend for TauriBackend {
     }
 }
 
+// ─── SqliteTaskSource: adapts planeai-tasks SqliteRepository to TaskSource ───
+
+/// Adapter implementing TaskSource using the internal planeai-tasks SqliteRepository.
+pub struct SqliteTaskSource {
+    repo: SqliteRepository,
+    terminal_states: Vec<String>,
+}
+
+impl SqliteTaskSource {
+    pub fn new(
+        repo: SqliteRepository,
+        terminal_states: Vec<String>,
+    ) -> Self {
+        Self {
+            repo,
+            terminal_states,
+        }
+    }
+}
+
+impl TaskSource for SqliteTaskSource {
+    fn list_tasks(&self) -> Result<Vec<Task>, String> {
+        let tasks = self
+            .repo
+            .list(planeai_tasks::model::ListFilter::default())
+            .map_err(|e| e.to_string())?;
+        tracing::debug!(count = tasks.len(), "listed tasks from internal provider");
+        Ok(tasks.into_iter().map(into_core_task).collect())
+    }
+
+    fn get_task(&self, key: &str) -> Result<Task, String> {
+        let task = self.repo.get(key).map_err(|e| e.to_string())?;
+        Ok(into_core_task(task))
+    }
+
+    fn move_task(&self, key: &str, status: &str) -> Result<(), String> {
+        tracing::info!(task_key = %key, status = %status, "moving task via internal provider");
+        let new_status =
+            Status::parse(status).ok_or_else(|| format!("invalid status: {status}"))?;
+        self.repo
+            .update(
+                key,
+                planeai_tasks::model::UpdateParams {
+                    status: Some(new_status),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn is_terminal(&self, status: &str) -> bool {
+        self.terminal_states
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(status))
+    }
+}
+
+fn into_core_task(t: planeai_tasks::model::Task) -> Task {
+    Task {
+        key: t.key,
+        title: t.title,
+        status: t.status.as_str().to_string(),
+        description: t.description,
+        priority: t.priority,
+        blocked_by: t.blocked_by,
+        subtasks: vec![],
+        base_branch: None,
+    }
+}
+
 // ─── Config → OrchestratorConfig conversion ───
 
 struct Project {
@@ -315,19 +371,26 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
             .clone()
             .unwrap_or_else(|| vec!["done".into(), "cancelled".into(), "canceled".into()]);
 
+        // Build SqliteTaskSource from a new connection to the same DB
+        let prefix = planeai_tasks::sqlite::derive_prefix(&project.name);
+        let db_path = crate::paths::app_data_dir().join("planeai.db");
+        let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let task_source = Arc::new(SqliteTaskSource::new(task_repo, terminal_states));
+
+        let on_start = tm.on_start.as_ref().map(|h| OnStartHook {
+            move_to: h.move_to.clone(),
+        });
+
         auto_projects.push(AutoProject {
             project_id: project.id.clone(),
             project_name: project.name.clone(),
             project_path: project.path.clone(),
-            task_manager_config: TaskManagerConfig {
-                list_tasks: tm.list_tasks.clone(),
-                get_task: tm.get_task.clone(),
-                move_task: tm.move_task.clone(),
-                terminal_states,
-                on_start: tm.on_start.as_ref().map(|h| LifecycleHook {
-                    move_to: h.move_to.clone(),
-                }),
-            },
+            task_source,
+            on_start,
             dispatch_config: DispatchConfig {
                 provider: provider_key.to_string(),
                 provider_command: provider.command.clone(),
@@ -346,6 +409,13 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
             },
         });
     }
+
+    tracing::info!(
+        projects = auto_projects.len(),
+        poll_interval_ms,
+        max_concurrent,
+        "built orchestrator config with internal task provider"
+    );
 
     Some(OrchestratorConfig {
         poll_interval_ms,
@@ -438,7 +508,6 @@ mod tests {
     fn build_orchestrator_config_uses_auto_dispatch_base_branch_override() {
         let config = minimal_config_with_auto_dispatch(Some("develop".to_string()));
 
-        // We need a DB with an active auto_mode project
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
@@ -468,7 +537,6 @@ mod tests {
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
-        // Falls back to "main" when no override configured
         assert_eq!(orch.projects[0].dispatch_config.base_branch, "main");
     }
 
