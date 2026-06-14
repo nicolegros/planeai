@@ -196,7 +196,7 @@ impl Backend for TauriBackend {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         let mut stmt = conn.prepare(
             "SELECT id, project_id, name, tmux_name, branch, worktree_path, provider, backend, auto_approve, task_key, base_branch
-             FROM sessions WHERE status = 'active' AND auto_dispatched = 1"
+             FROM sessions WHERE status = 'active' AND task_key IS NOT NULL AND task_key != ''"
         ).map_err(|e| e.to_string())?;
         let sessions = stmt
             .query_map([], |row| {
