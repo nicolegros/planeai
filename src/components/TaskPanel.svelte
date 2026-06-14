@@ -16,6 +16,7 @@
     priority: number;
     blocked_by: string[];
     tags: string[];
+    parent_key: string | null;
     url: string | null;
   }
 
@@ -33,6 +34,7 @@
     projects: Project[];
     projectAutoMode?: Record<string, boolean>;
     sessions: Session[];
+    activeSessionId?: string | null;
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
     taskRefreshRequested?: boolean;
@@ -43,7 +45,7 @@
     onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, projectAutoMode = {}, sessions, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
@@ -63,6 +65,10 @@
   let tasksByProject = $state<Record<string, TaskItem[]>>({});
   let loading = $state(false);
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
+
+  const activeTaskKey = $derived(
+    activeSessionId ? sessions.find(s => s.id === activeSessionId)?.task_key ?? null : null
+  );
 
   // Modal state
   let modalMode = $state<"create" | "edit" | null>(null);
@@ -89,6 +95,10 @@
     in_review: "text-green-500 dark:text-green-400",
     done: "text-purple-500 dark:text-purple-400",
   };
+
+  function isParentTask(task: TaskItem, allTasks: TaskItem[]): boolean {
+    return allTasks.some(t => t.parent_key === task.key);
+  }
 
   function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
     const groups: Record<string, TaskItem[]> = {};
@@ -137,7 +147,9 @@
     return projects[0]?.path ?? null;
   }
 
-  function handleClick(task: TaskItem) {
+  function handleClick(task: TaskItem, projectPath: string) {
+    // Parents are not pickable
+    if (isParentTask(task, tasksByProject[projectPath] ?? [])) return;
     const linked = sessionForTask(task.key);
     if (linked) {
       onSelectSession(linked.id);
@@ -227,8 +239,8 @@
     return items;
   }
 
-  // Flat navigation list: includes tasks and collapsed section headers
-  type NavItem = { type: "task"; task: TaskItem; sectionKey: string } | { type: "section"; sectionKey: string; label: string };
+  // Flat navigation list
+  type NavItem = { type: "task"; task: TaskItem; sectionKey: string; projectPath: string } | { type: "section"; sectionKey: string; label: string };
 
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
@@ -243,14 +255,13 @@
         if (collapsedSections[sectionKey]) {
           result.push({ type: "section", sectionKey, label: `${statusLabels[status] ?? status} (${items.length})` });
         } else {
-          for (const t of items) result.push({ type: "task", task: t, sectionKey });
+          for (const t of items) result.push({ type: "task", task: t, sectionKey, projectPath: project.path });
         }
       }
     }
     return result;
   });
 
-  // For template: map task keys to their flat index
   const flatTaskKeys = $derived(flatNav.map((item) => item.type === "task" ? item.task.key : `§${item.sectionKey}`));
 
   function handleTaskKeydown(e: KeyboardEvent) {
@@ -292,7 +303,7 @@
 
     const task = current.task;
     if (action.type === "select" || action.type === "start_session") {
-      handleClick(task);
+      handleClick(task, current.projectPath);
     } else if (action.type === "status") {
       moveTask(task.key, action.status);
     } else if (action.type === "edit") {
@@ -341,14 +352,21 @@
                       {#each items as task (task.key)}
                         {@const taskFlatIdx = flatTaskKeys.indexOf(task.key)}
                         {@const isTaskSelected = getActiveZone() === 'sidebar' && taskFlatIdx === getSelectedIndex()}
+                        {@const isActive = task.key === activeTaskKey}
+                        {@const isParent = isParentTask(task, projectTasks)}
                         <li>
                           <button
-                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1.5 transition-colors hover:bg-surface-200 dark:hover:bg-surface-800 select-none {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
-                            onclick={() => handleClick(task)}
+                            class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors select-none
+                              {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
+                              {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                            onclick={() => handleClick(task, project.path)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >
-                            <span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{task.key}</span>
-                            <span class="truncate text-xs text-surface-700 dark:text-surface-300">{task.title}</span>
+                            {#if task.parent_key}
+                              <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
+                            {/if}
+                            <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
+                            <span class="truncate">{task.title}</span>
                             {#if sessionForTask(task.key)}
                               {@const linked = sessionForTask(task.key)!}
                               {#if agentStates[linked.id] === 'Busy'}

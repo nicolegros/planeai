@@ -327,6 +327,7 @@
       projects={taskProjects}
       projectAutoMode={taskProjectAutoMode}
       sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
+      {activeSessionId}
       {agentStates}
       {taskCreateRequested}
       {taskRefreshRequested}
