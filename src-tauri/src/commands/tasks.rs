@@ -62,6 +62,7 @@ pub fn get_task_details(
     key: String,
     repo_path: String,
 ) -> Result<TaskItem, String> {
+    tracing::info!(key = %key, "get_task_details");
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.get(&key)
         .map(TaskItem::from)
@@ -104,6 +105,7 @@ pub fn create_task_item(
     tags: Vec<String>,
     blocked_by: Vec<String>,
 ) -> Result<TaskItem, String> {
+    tracing::info!(title = %title, "create_task_item");
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.create(CreateParams {
         title,
@@ -152,6 +154,7 @@ pub fn move_task_item(
     status: String,
     repo_path: String,
 ) -> Result<(), String> {
+    tracing::info!(key = %key, status = %status, "move_task_item");
     let s = Status::parse(&status).ok_or_else(|| format!("invalid status: {status}"))?;
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.update(

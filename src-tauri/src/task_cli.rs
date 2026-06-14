@@ -36,6 +36,7 @@ pub fn run_task_add(
     blocked_by: &[String],
     parent: Option<&str>,
 ) -> Result<String, String> {
+    tracing::info!(title, priority, "creating task");
     let task = repo
         .create(CreateParams {
             title: title.to_string(),
@@ -46,6 +47,7 @@ pub fn run_task_add(
             parent_key: parent.map(|s| s.to_string()),
         })
         .map_err(|e| e.to_string())?;
+    tracing::info!(key = %task.key, "task created");
     serde_json::to_string(&task).map_err(|e| e.to_string())
 }
 
@@ -70,6 +72,7 @@ pub fn run_task_list(
 
 pub fn run_task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> Result<String, String> {
     let s = Status::parse(status).ok_or_else(|| format!("invalid status: {status}"))?;
+    tracing::info!(key, status, "moving task");
     let task = repo
         .update(
             key,
@@ -91,6 +94,7 @@ pub fn run_task_edit(
     tags: Option<&[String]>,
     blocked_by: Option<&[String]>,
 ) -> Result<String, String> {
+    tracing::info!(key, "editing task");
     let task = repo
         .update(
             key,
@@ -108,6 +112,7 @@ pub fn run_task_edit(
 }
 
 pub fn run_task_delete(repo: &dyn TaskProvider, key: &str) -> Result<String, String> {
+    tracing::info!(key, "deleting task");
     repo.delete(key).map_err(|e| e.to_string())?;
     Ok(format!("{{\"deleted\":\"{key}\"}}"))
 }
