@@ -1,6 +1,6 @@
 ---
 name: planeai-create-task
-description: 'Create a single task in the kanban CLI. Use when the user says "add a task", "create a ticket", "track this", "log this as a task", mentions wanting to remember or follow up on something, or describes a unit of work that should be tracked. Even if they don''t say "kanban" explicitly — if they''re describing something that sounds like a task to track, use this skill.'
+description: 'Create a single task in the internal task tracker. Use when the user says "add a task", "create a ticket", "track this", "log this as a task", mentions wanting to remember or follow up on something, or describes a unit of work that should be tracked. If they''re describing something that sounds like a task to track, use this skill.'
 ---
 
 ## What this does
