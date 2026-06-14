@@ -15,6 +15,8 @@ Create a single, well-formed task in the user's task board using the `planeai-cl
 
 ## How to create the task
 
+**Key principle**: Every task description must be a self-contained handoff. Assume the agent picking up the task is weaker than you — be explicit, thorough, and spare no detail. Include context, reasoning, relevant file paths/modules, and acceptance criteria. The description is the only thing the next agent will have.
+
 ### 1. Figure out the title
 
 Extract a concise, actionable title from what the user said. Good titles start with a verb and are specific enough to act on without reading the description.
@@ -29,7 +31,7 @@ From the user's message, infer what metadata to attach:
 
 | Flag           | When to use it                                                                                                                                                                                     |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--desc`       | If the user provided context beyond what fits in the title — acceptance criteria, reproduction steps, technical notes. Always quote the value.                                                     |
+| `--desc`       | **Always provide a description.** Include: why this task exists, what to build, which modules/files are involved, acceptance criteria, and any decisions or rejected alternatives. The more context the better — a weaker agent will rely entirely on this to do the work. |
 | `--priority`   | If the user signals urgency ("urgent", "critical", "high priority", "before the release"). Use 1 = highest. Only set if there's a real signal; default (0) is fine.                                |
 | `--tags`       | If the user mentions a domain area, component, or category. Must be lowercase-alphanumeric-with-hyphens, max 30 chars. Comma-separated. Examples: `backend`, `auth`, `high-priority`, `tech-debt`. |
 | `--blocked-by` | Only if the user explicitly names a task key that blocks this one (e.g., "this depends on PLA-5"). Comma-separated.                                                                                |
