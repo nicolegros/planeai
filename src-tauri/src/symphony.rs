@@ -371,6 +371,7 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
         // Build SqliteTaskSource from a new connection to the same DB
         let prefix = planeai_tasks::sqlite::derive_prefix(&project.name);
         let db_path = crate::paths::app_data_dir().join("planeai.db");
+        let _ = std::fs::create_dir_all(db_path.parent().unwrap_or(std::path::Path::new(".")));
         let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix) {
             Ok(r) => r,
             Err(_) => continue,
