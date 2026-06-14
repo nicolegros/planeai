@@ -230,11 +230,7 @@ impl Backend for TauriBackend {
         let home = config::home_dir();
         let backend_str = config::resolve_backend(&cfg);
 
-        let tm_name = cfg
-            .default_task_manager
-            .as_deref()
-            .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))?;
-        let tm = cfg.task_managers.get(tm_name)?;
+        let tm = cfg.task_management.as_ref()?;
         let auto = tm.auto_dispatch.as_ref()?;
         let base_branch = auto
             .base_branch
@@ -331,7 +327,6 @@ struct Project {
     id: String,
     name: String,
     path: String,
-    task_manager: Option<String>,
 }
 
 pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
@@ -340,10 +335,7 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
         return None;
     }
 
-    let default_tm_name = config
-        .default_task_manager
-        .as_deref()
-        .or_else(|| config.task_managers.keys().next().map(|s| s.as_str()))?;
+    let tm = config.task_management.as_ref()?;
 
     let backend_str = config::resolve_backend(config);
     let home = config::home_dir();
@@ -353,8 +345,6 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
     let mut max_concurrent = 3usize;
 
     for project in &projects {
-        let tm_name = project.task_manager.as_deref().unwrap_or(default_tm_name);
-        let tm = config.task_managers.get(tm_name)?;
         let auto = tm.auto_dispatch.as_ref()?;
 
         poll_interval_ms = auto.poll_interval_ms;
@@ -423,9 +413,9 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
 }
 
 fn load_auto_projects(conn: &Connection) -> Vec<Project> {
-    let mut stmt = match conn.prepare(
-        "SELECT id, name, path, task_manager FROM projects WHERE status = 'active' AND auto_mode = 1"
-    ) {
+    let mut stmt = match conn
+        .prepare("SELECT id, name, path FROM projects WHERE status = 'active' AND auto_mode = 1")
+    {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -434,7 +424,6 @@ fn load_auto_projects(conn: &Connection) -> Vec<Project> {
             id: row.get(0)?,
             name: row.get(1)?,
             path: row.get(2)?,
-            task_manager: row.get(3)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())
@@ -450,29 +439,6 @@ mod tests {
     use std::collections::HashMap;
 
     fn minimal_config_with_auto_dispatch(base_branch: Option<String>) -> Config {
-        let mut task_managers = HashMap::new();
-        task_managers.insert(
-            "kanban".to_string(),
-            TaskManager {
-                templates: None,
-                on_start: Some(ConfigLifecycleHook {
-                    move_to: "in_progress".to_string(),
-                }),
-                on_notify: None,
-                on_restart: None,
-                on_complete: None,
-                on_pr_open: None,
-                on_pr_merge: None,
-                auto_dispatch: Some(AutoDispatchConfig {
-                    poll_interval_ms: 30000,
-                    max_concurrent: 2,
-                    provider: Some("kiro".to_string()),
-                    terminal_states: None,
-                    base_branch,
-                }),
-            },
-        );
-
         let mut providers = HashMap::new();
         providers.insert(
             "kiro".to_string(),
@@ -489,8 +455,24 @@ mod tests {
 
         Config {
             default_provider: "kiro".to_string(),
-            default_task_manager: Some("kanban".to_string()),
-            task_managers,
+            task_management: Some(TaskManager {
+                templates: None,
+                on_start: Some(ConfigLifecycleHook {
+                    move_to: "in_progress".to_string(),
+                }),
+                on_notify: None,
+                on_restart: None,
+                on_complete: None,
+                on_pr_open: None,
+                on_pr_merge: None,
+                auto_dispatch: Some(AutoDispatchConfig {
+                    poll_interval_ms: 30000,
+                    max_concurrent: 2,
+                    provider: Some("kiro".to_string()),
+                    terminal_states: None,
+                    base_branch,
+                }),
+            }),
             providers,
             ..Config::default()
         }

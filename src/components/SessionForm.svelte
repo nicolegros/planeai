@@ -15,7 +15,6 @@
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
-  const hasTaskManager = true;
 
   // svelte-ignore state_referenced_locally
   let mode = $state<"task" | "manual">(taskPrefill ? "task" : "manual");
@@ -91,9 +90,7 @@
   }
 
   function getTaskManagerTemplates() {
-    const tms = config.task_managers ?? {};
-    const tmKey = config.default_task_manager || Object.keys(tms)[0];
-    return tms[tmKey]?.templates;
+    return config.task_management?.templates;
   }
 
   function onTaskSelected(key: string) {
@@ -129,7 +126,6 @@
 
   function formKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; }
-    if (!hasTaskManager) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.closest("[role='combobox']"))) return;
     if (e.key === "t") { e.preventDefault(); mode = "task"; }
@@ -177,7 +173,6 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form bind:this={formEl} class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={formKeydown}>
   <!-- Mode toggle -->
-  {#if hasTaskManager}
   <!-- svelte-ignore a11y_autofocus -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div class="flex rounded-md border border-surface-200 dark:border-surface-700 overflow-hidden" role="toolbar" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
@@ -194,7 +189,6 @@
       onclick={() => (mode = "task")}
     >From task <span class="text-[10px] opacity-70">T</span></button>
   </div>
-  {/if}
 
   <div class="space-y-1">
     <Label>Project</Label>

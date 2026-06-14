@@ -49,28 +49,25 @@ Controls how agent processes are hosted:
 
 ## Task Manager Integration
 
-planeai has a built-in task manager that tracks tasks per project. The `task_managers` config section controls lifecycle hooks (auto-moving task status on events), templates (branch names, session names, prompts), and auto-dispatch settings.
+planeai has a built-in task manager that tracks tasks per project. The `task_management` config section controls lifecycle hooks (auto-moving task status on events), templates (branch names, session names, prompts), and auto-dispatch settings.
 
 ### Configuration
 
-Add a `task_managers` section to your config file:
+Add a `task_management` section to your config file:
 
 ```jsonc
 {
-  "task_managers": {
-    "kanban": {
-      "templates": {
-        "branch": "{key:lower}/{title:slug}",
-        "name": "{key:upper}: {title}",
-        "prompt": "Implement task {key}: {title}\n\n{description}",
-      },
-      "on_start": { "move_to": "in_progress" },
-      "on_notify": { "move_to": "in_review" },
-      "on_restart": { "move_to": "in_progress" },
-      "on_complete": { "move_to": "done" },
+  "task_management": {
+    "templates": {
+      "branch": "{key:lower}/{title:slug}",
+      "name": "{key:upper}: {title}",
+      "prompt": "Implement task {key}: {title}\n\n{description}",
     },
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    "on_restart": { "move_to": "in_progress" },
+    "on_complete": { "move_to": "done" },
   },
-  "default_task_manager": "kanban",
 }
 ```
 

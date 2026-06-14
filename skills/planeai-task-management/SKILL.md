@@ -1,6 +1,6 @@
 ---
 name: planeai-task-management
-description: 'Manage tasks in the planeai task tracker — update, move, delete, list, and show tasks. Use when the user wants to edit a task, change task status, move a task, delete a task, list tasks, view task details, or any general task management operation that is NOT creating new tasks or breaking plans into tasks.'
+description: "Manage tasks in the planeai task tracker — update, move, delete, list, and show tasks. Use when the user wants to edit a task, change task status, move a task, delete a task, list tasks, view task details, or any general task management operation that is NOT creating new tasks or breaking plans into tasks."
 ---
 
 # Task Management
@@ -64,6 +64,7 @@ planeai-cli task move <key> <status>
 Status values: `todo`, `in_progress`, `done`, `cancelled`.
 
 Common phrasings mapped to statuses:
+
 - "start", "working on", "pick up" → `in_progress`
 - "done", "finish", "complete", "close" → `done`
 - "cancel", "drop", "won't do" → `cancelled`

@@ -21,6 +21,13 @@ export interface TaskManagerTemplates {
   prompt?: string | null;
 }
 
+export interface AutoDispatchConfig {
+  poll_interval_ms?: number;
+  max_concurrent?: number;
+  provider?: string;
+  terminal_states?: string[];
+}
+
 export interface TaskManager {
   templates?: TaskManagerTemplates | null;
   on_start?: LifecycleHook | null;
@@ -29,6 +36,7 @@ export interface TaskManager {
   on_complete?: LifecycleHook | null;
   on_pr_open?: LifecycleHook | null;
   on_pr_merge?: LifecycleHook | null;
+  auto_dispatch?: AutoDispatchConfig | null;
 }
 
 export interface AppConfig {
@@ -45,8 +53,7 @@ export interface AppConfig {
   default_provider: string;
   session_backend?: string | null;
   vim_mode?: boolean | null;
-  task_managers?: Record<string, TaskManager>;
-  default_task_manager?: string | null;
+  task_management?: TaskManager | null;
   projects_base_path?: string | null;
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;

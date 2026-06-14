@@ -97,7 +97,7 @@
   async function loadAutoModes() {
     for (const p of projects) {
       try {
-        const [enabled] = await invoke<[boolean, string | null]>("get_project_auto_mode", { id: p.id });
+        const enabled = await invoke<boolean>("get_project_auto_mode", { id: p.id });
         projectAutoMode[p.id] = enabled;
       } catch { /* ignore */ }
     }

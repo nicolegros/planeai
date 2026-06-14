@@ -137,61 +137,43 @@
     updateSettings({ providers } as Partial<AppConfig>);
   }
 
-  // Task manager state
-  let showAddTaskManager = $state(false);
-  let newTmName = $state("");
+  // Task management state
+  const taskManagement = $derived(config.task_management ?? null);
 
-  const taskManagers = $derived(config.task_managers ?? {});
-
-  function addTaskManager() {
-    if (!newTmName) return;
-    const tms = { ...taskManagers };
-    tms[newTmName] = {
+  function enableTaskManagement() {
+    updateSettings({ task_management: {
       templates: { branch: "{key:lower}/{title:slug}", name: "{key:upper}: {title}", prompt: "Implement task {key}: {title}\n\n{description}" },
       on_start: { move_to: "in_progress" },
       on_notify: { move_to: "in_review" },
       on_restart: { move_to: "in_progress" },
       on_complete: { move_to: "done" },
-    };
-    const patch: Partial<AppConfig> = { task_managers: tms };
-    if (!config.default_task_manager) patch.default_task_manager = newTmName;
-    updateSettings(patch);
-    newTmName = "";
-    showAddTaskManager = false;
+    } } as Partial<AppConfig>);
   }
 
-  function removeTaskManager(key: string) {
-    const tms = { ...taskManagers };
-    delete tms[key];
-    const patch: Partial<AppConfig> = { task_managers: tms };
-    if (config.default_task_manager === key) {
-      patch.default_task_manager = Object.keys(tms)[0] || null;
-    }
-    updateSettings(patch);
+  function updateTmField(field: string, value: any) {
+    const tm = { ...config.task_management };
+    (tm as any)[field] = value || undefined;
+    updateSettings({ task_management: tm } as Partial<AppConfig>);
   }
 
-  function updateTaskManager(key: string, field: string, value: string) {
-    const tms = { ...taskManagers };
-    tms[key] = { ...tms[key], [field]: value || undefined };
-    updateSettings({ task_managers: tms } as Partial<AppConfig>);
-  }
-
-  function updateTmTemplate(key: string, field: string, value: string) {
-    const tms = { ...taskManagers };
-    const templates = { ...(tms[key].templates ?? {}) };
+  function updateTmTemplate(field: string, value: string) {
+    const tm = { ...config.task_management };
+    const templates = { ...tm.templates };
     (templates as any)[field] = value || null;
-    tms[key] = { ...tms[key], templates };
-    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+    tm.templates = templates;
+    updateSettings({ task_management: tm } as Partial<AppConfig>);
   }
 
-  function updateTmHook(key: string, hookName: string, value: string) {
-    const tms = { ...taskManagers };
-    (tms[key] as any)[hookName] = value ? { move_to: value } : null;
-    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+  function updateTmHook(hookName: string, value: string) {
+    const tm = { ...config.task_management };
+    (tm as any)[hookName] = value ? { move_to: value } : null;
+    updateSettings({ task_management: tm } as Partial<AppConfig>);
   }
 
-  function setDefaultTaskManager(key: string) {
-    updateSettings({ default_task_manager: key } as Partial<AppConfig>);
+  function updateAutoDispatch(patch: Partial<import("../lib/settings.svelte").AutoDispatchConfig>) {
+    const tm = { ...config.task_management };
+    tm.auto_dispatch = { ...tm.auto_dispatch, ...patch };
+    updateSettings({ task_management: tm } as Partial<AppConfig>);
   }
 </script>
 
@@ -412,38 +394,26 @@
       </div>
     </section>
 
-    <!-- Task Managers -->
+    <!-- Task Manager -->
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Task Manager</h2>
-      <div class="space-y-3">
-        {#each Object.entries(taskManagers) as [key, tm] (key)}
-          <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-2">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-surface-900 dark:text-surface-50">{key}</span>
-                {#if config.default_task_manager === key}
-                  <span class="text-xs bg-primary-500/20 text-primary-700 dark:text-primary-300 px-2 py-0.5 rounded">default</span>
-                {:else}
-                  <button class="text-xs text-surface-500 hover:text-primary-500" onclick={() => setDefaultTaskManager(key)}>set as default</button>
-                {/if}
-              </div>
-              <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
-            </div>
+      {#if taskManagement}
+        <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-2">
             <!-- Templates -->
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-              <Input value={tm.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate(key, "branch", e.currentTarget.value)} class="font-mono" />
+              <Input value={taskManagement.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate("branch", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-              <Input value={tm.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate(key, "name", e.currentTarget.value)} class="font-mono" />
+              <Input value={taskManagement.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate("name", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
-              <Input value={tm.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate(key, "prompt", e.currentTarget.value)} class="font-mono" />
+              <Input value={taskManagement.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate("prompt", e.currentTarget.value)} class="font-mono" />
             </div>
 
             <!-- Lifecycle hooks -->
@@ -451,7 +421,7 @@
               <div class="space-y-1">
                 <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">{desc}</span></span></label>
-                <Input value={(tm as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(key, hookKey, e.currentTarget.value)} class="font-mono" />
+                <Input value={(taskManagement as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value)} class="font-mono" />
               </div>
             {/each}
 
@@ -459,78 +429,57 @@
             <div class="mt-3 pt-3 border-t border-surface-200 dark:border-surface-700 space-y-2">
               <div class="flex items-center gap-2">
                 <label class="text-xs font-medium text-surface-700 dark:text-surface-300 flex items-center gap-1">
-                  <input type="checkbox" class="rounded" checked={!!(tm as any).auto_dispatch} onchange={(e) => {
-                    const tms = { ...taskManagers };
+                  <input type="checkbox" class="rounded" checked={!!taskManagement.auto_dispatch} onchange={(e) => {
+                    const tm = { ...config.task_management };
                     if ((e.currentTarget as HTMLInputElement).checked) {
-                      (tms[key] as any).auto_dispatch = { poll_interval_ms: 30000, max_concurrent: 3 };
+                      tm.auto_dispatch = { poll_interval_ms: 30000, max_concurrent: 3 };
                     } else {
-                      delete (tms[key] as any).auto_dispatch;
+                      tm.auto_dispatch = null;
                     }
-                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                    updateSettings({ task_management: tm } as Partial<AppConfig>);
                   }} />
                   Auto-dispatch
                 </label>
                 <span class="text-[10px] text-surface-500">Automatically spawn sessions for tasks</span>
               </div>
-              {#if (tm as any).auto_dispatch}
+              {#if taskManagement.auto_dispatch}
                 <div class="grid grid-cols-2 gap-2">
                   <div class="space-y-1">
                     <!-- svelte-ignore a11y_label_has_associated_control -->
                     <label class="text-xs text-surface-700 dark:text-surface-400">Poll interval (ms)</label>
-                    <Input value={String((tm as any).auto_dispatch.poll_interval_ms ?? 30000)} onchange={(e) => {
-                      const tms = { ...taskManagers };
-                      (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, poll_interval_ms: parseInt(e.currentTarget.value) || 30000 };
-                      updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                    <Input value={String(taskManagement.auto_dispatch.poll_interval_ms ?? 30000)} onchange={(e) => {
+                      updateAutoDispatch({ poll_interval_ms: parseInt(e.currentTarget.value) || 30000 });
                     }} class="font-mono" />
                   </div>
                   <div class="space-y-1">
                     <!-- svelte-ignore a11y_label_has_associated_control -->
                     <label class="text-xs text-surface-700 dark:text-surface-400">Max concurrent</label>
-                    <Input value={String((tm as any).auto_dispatch.max_concurrent ?? 3)} onchange={(e) => {
-                      const tms = { ...taskManagers };
-                      (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, max_concurrent: parseInt(e.currentTarget.value) || 3 };
-                      updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                    <Input value={String(taskManagement.auto_dispatch.max_concurrent ?? 3)} onchange={(e) => {
+                      updateAutoDispatch({ max_concurrent: parseInt(e.currentTarget.value) || 3 });
                     }} class="font-mono" />
                   </div>
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
-                  <Input value={(tm as any).auto_dispatch.provider || ""} onchange={(e) => {
-                    const tms = { ...taskManagers };
-                    (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, provider: e.currentTarget.value || undefined };
-                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                  <Input value={taskManagement.auto_dispatch.provider || ""} onchange={(e) => {
+                    updateAutoDispatch({ provider: e.currentTarget.value || undefined });
                   }} class="font-mono" placeholder={config.default_provider} />
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
-                  <Input value={((tm as any).auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
-                    const tms = { ...taskManagers };
-                    (tms[key] as any).auto_dispatch = { ...(tms[key] as any).auto_dispatch, terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) };
-                    updateSettings({ task_managers: tms } as Partial<AppConfig>);
+                  <Input value={(taskManagement.auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
+                    updateAutoDispatch({ terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) });
                   }} class="font-mono" placeholder="done, cancelled" />
                 </div>
               {/if}
             </div>
           </div>
-        {/each}
-      </div>
 
-      {#if showAddTaskManager}
-        <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
-          <div class="space-y-1">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-surface-700 dark:text-surface-400">Name</label>
-            <Input bind:value={newTmName} placeholder="e.g. kanban" />
-          </div>
-          <div class="flex gap-2">
-            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName}>Add</button>
-            <button class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = false; }}>Cancel</button>
-          </div>
-        </div>
+          <button class="px-4 py-2 rounded-md text-sm font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50" onclick={() => updateSettings({ task_management: null } as Partial<AppConfig>)}>Disable Task Management</button>
       {:else}
-        <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = true; }}>+ Add Task Manager</button>
+        <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={enableTaskManagement}>Enable Task Management</button>
       {/if}
     </section>
     {/if}

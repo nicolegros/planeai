@@ -220,11 +220,7 @@ fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, cwd: &str) {
 }
 
 fn resolve_task_manager(cfg: &Config) -> Option<&crate::config::TaskManager> {
-    let key = cfg
-        .default_task_manager
-        .as_deref()
-        .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))?;
-    cfg.task_managers.get(key)
+    cfg.task_management.as_ref()
 }
 
 #[derive(Debug)]

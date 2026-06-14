@@ -4,23 +4,21 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
 
 ## Quick Start
 
-1. Configure a task manager in `~/.config/planeai/config.json` with an `auto_dispatch` section:
+1. Configure task management in `~/.config/planeai/config.json` with an `auto_dispatch` section:
 
 ```jsonc
 {
-  "task_managers": {
-    "kanban": {
-      "templates": {
-        "prompt": "Implement task {key}: {title}\n\n{description}",
-      },
-      "on_start": { "move_to": "in_progress" },
-      "on_notify": { "move_to": "in_review" },
-      "auto_dispatch": {
-        "poll_interval_ms": 30000,
-        "max_concurrent": 3,
-        "provider": "kiro",
-        "terminal_states": ["done", "cancelled"],
-      },
+  "task_management": {
+    "templates": {
+      "prompt": "Implement task {key}: {title}\n\n{description}",
+    },
+    "on_start": { "move_to": "in_progress" },
+    "on_notify": { "move_to": "in_review" },
+    "auto_dispatch": {
+      "poll_interval_ms": 30000,
+      "max_concurrent": 3,
+      "provider": "kiro",
+      "terminal_states": ["done", "cancelled"],
     },
   },
 }
@@ -45,7 +43,7 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
 
 ## Configuration Reference
 
-Add `auto_dispatch` inside any task manager definition:
+Add `auto_dispatch` inside the `task_management` section:
 
 ```jsonc
 "auto_dispatch": {

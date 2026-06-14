@@ -9,8 +9,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({
     providers: { claude: { command: "claude", yolo_flag: null } },
     default_provider: "claude",
-    task_managers: { jira: {} },
-    default_task_manager: "jira",
+    task_management: {},
   }),
 }));
 
