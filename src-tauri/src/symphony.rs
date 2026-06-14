@@ -266,10 +266,7 @@ pub struct SqliteTaskSource {
 }
 
 impl SqliteTaskSource {
-    pub fn new(
-        repo: SqliteRepository,
-        terminal_states: Vec<String>,
-    ) -> Self {
+    pub fn new(repo: SqliteRepository, terminal_states: Vec<String>) -> Self {
         Self {
             repo,
             terminal_states,

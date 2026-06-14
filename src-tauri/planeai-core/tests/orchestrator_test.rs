@@ -1,4 +1,6 @@
-use planeai_core::orchestrator::{AutoProject, Orchestrator, OrchestratorCommand, OrchestratorConfig};
+use planeai_core::orchestrator::{
+    AutoProject, Orchestrator, OrchestratorCommand, OrchestratorConfig,
+};
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
 use planeai_core::task::{Task, TaskSource};
 use std::sync::{Arc, Mutex};

@@ -1,6 +1,5 @@
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook, SessionDispatcher};
 use planeai_core::task::{Task, TaskSource};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 struct MockTaskSource {
