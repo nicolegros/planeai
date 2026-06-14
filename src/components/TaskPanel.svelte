@@ -234,10 +234,26 @@
       const projectTasks = tasksByProject[project.path] ?? [];
       if (projectTasks.length === 0) continue;
       const statusGroups = groupByStatus(projectTasks);
-      for (const status of statusOrder) {
+      for (const status of statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks))) {
         const sectionKey = `${project.path}:${status}`;
         if (collapsedSections[sectionKey]) continue;
         for (const t of statusGroups[status] ?? []) result.push(t);
+      }
+    }
+    return result;
+  });
+
+  // Maps each flat task index to its sectionKey (for fold/unfold)
+  const flatTaskSections = $derived.by(() => {
+    const result: string[] = [];
+    for (const project of projects) {
+      const projectTasks = tasksByProject[project.path] ?? [];
+      if (projectTasks.length === 0) continue;
+      const statusGroups = groupByStatus(projectTasks);
+      for (const status of statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks))) {
+        const sectionKey = `${project.path}:${status}`;
+        if (collapsedSections[sectionKey]) continue;
+        for (const _t of statusGroups[status] ?? []) result.push(sectionKey);
       }
     }
     return result;
@@ -252,6 +268,54 @@
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
 
     clampIndex(flatTasks.length);
+
+    // Fold section with left/h, unfold with right/l
+    if (e.key === "ArrowLeft" || e.key === "h") {
+      const sectionKey = flatTaskSections[getSelectedIndex()];
+      if (sectionKey) {
+        e.preventDefault();
+        collapsedSections = { ...collapsedSections, [sectionKey]: true };
+      }
+      return;
+    }
+    if (e.key === "ArrowRight" || e.key === "l") {
+      // Unfold the section the cursor is adjacent to (first collapsed section)
+      for (const project of projects) {
+        const projectTasks = tasksByProject[project.path] ?? [];
+        if (projectTasks.length === 0) continue;
+        const statusGroups = groupByStatus(projectTasks);
+        for (const status of statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks))) {
+          const sk = `${project.path}:${status}`;
+          if (collapsedSections[sk] && (statusGroups[status] ?? []).length > 0) {
+            e.preventDefault();
+            collapsedSections = { ...collapsedSections, [sk]: false };
+            return;
+          }
+        }
+      }
+      return;
+    }
+    if (e.key === "ArrowRight" || e.key === "l") {
+      // Find all collapsed sections and unfold the one nearest to current position
+      const idx = getSelectedIndex();
+      // Determine which section _would_ be next if collapsed — scan all sections
+      for (const project of projects) {
+        const projectTasks = tasksByProject[project.path] ?? [];
+        if (projectTasks.length === 0) continue;
+        const statusGroups = groupByStatus(projectTasks);
+        for (const status of statusOrder) {
+          const sk = `${project.path}:${status}`;
+          if (collapsedSections[sk] && (statusGroups[status] ?? []).length > 0) {
+            // Unfold the first collapsed section that has items
+            e.preventDefault();
+            collapsedSections = { ...collapsedSections, [sk]: false };
+            return;
+          }
+        }
+      }
+      return;
+    }
+
     const action = handleSidebarKey(e, flatTasks.length);
     if (!action) return;
 
