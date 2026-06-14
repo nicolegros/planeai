@@ -634,7 +634,7 @@
           <p class="text-xs text-surface-500 dark:text-surface-400">Creates a symlink at /usr/local/bin/planeai-cli</p>
         </div>
         {#if cliInstalled}
-          <span class="text-xs text-green-600 dark:text-green-400 font-medium">Installed ✓</span>
+          <Button type="button" onclick={installCli}>Reinstall</Button>
         {:else}
           <Button type="button" onclick={installCli}>Install</Button>
         {/if}

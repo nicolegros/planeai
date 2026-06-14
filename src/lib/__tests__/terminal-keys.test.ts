@@ -75,6 +75,15 @@ describe("matchTerminalKey (Windows/Linux)", () => {
     });
   });
 
+  describe("escape", () => {
+    it("Escape sends escape byte to terminal", () => {
+      expect(matchTerminalKey(key({ key: "Escape" }), false)).toEqual({
+        type: "send_bytes",
+        bytes: [0x1b],
+      });
+    });
+  });
+
   describe("scroll", () => {
     it("Shift+PageUp returns scroll_page_up", () => {
       expect(matchTerminalKey(key({ key: "PageUp", shiftKey: true }), false)).toEqual({

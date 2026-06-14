@@ -1,7 +1,37 @@
-use planeai_core::session::{Backend, DispatchConfig, NewSession, SessionDispatcher};
-use planeai_core::task::{LifecycleHook, Task, TaskManagerConfig};
-use std::path::Path;
-use std::sync::Mutex;
+use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook, SessionDispatcher};
+use planeai_core::task::{Task, TaskSource};
+use std::sync::{Arc, Mutex};
+
+struct MockTaskSource {
+    moves: Mutex<Vec<(String, String)>>,
+}
+
+impl MockTaskSource {
+    fn new() -> Self {
+        Self {
+            moves: Mutex::new(vec![]),
+        }
+    }
+}
+
+impl TaskSource for MockTaskSource {
+    fn list_tasks(&self) -> Result<Vec<Task>, String> {
+        Ok(vec![])
+    }
+    fn get_task(&self, _key: &str) -> Result<Task, String> {
+        Err("not found".into())
+    }
+    fn move_task(&self, key: &str, status: &str) -> Result<(), String> {
+        self.moves
+            .lock()
+            .unwrap()
+            .push((key.to_string(), status.to_string()));
+        Ok(())
+    }
+    fn is_terminal(&self, _status: &str) -> bool {
+        false
+    }
+}
 
 /// Records all calls made to the backend for assertions.
 #[derive(Default)]
@@ -9,7 +39,6 @@ struct RecordingBackend {
     worktrees_created: Mutex<Vec<(String, String, String, String)>>,
     tmux_sessions: Mutex<Vec<(String, String, String, String)>>,
     sessions_inserted: Mutex<Vec<NewSession>>,
-    task_moves: Mutex<Vec<(String, String)>>,
     gui_notified: Mutex<Vec<String>>,
     fetches: Mutex<Vec<(String, String)>>,
 }
@@ -49,19 +78,6 @@ impl Backend for RecordingBackend {
         self.sessions_inserted.lock().unwrap().push(session.clone());
         Ok(())
     }
-    fn run_move_task(
-        &self,
-        _config: &TaskManagerConfig,
-        key: &str,
-        status: &str,
-        _cwd: &Path,
-    ) -> Result<(), String> {
-        self.task_moves
-            .lock()
-            .unwrap()
-            .push((key.to_string(), status.to_string()));
-        Ok(())
-    }
     fn notify_gui(&self, session_id: &str) -> Result<(), String> {
         self.gui_notified
             .lock()
@@ -90,34 +106,26 @@ impl Backend for RecordingBackend {
 #[test]
 fn dispatch_creates_worktree_session_and_fires_on_start() {
     let backend = RecordingBackend::default();
-
-    let task_manager_config = TaskManagerConfig {
-        list_tasks: String::new(),
-        get_task: String::new(),
-        move_task: "kanban move {key} {status}".to_string(),
-        terminal_states: vec!["done".to_string()],
-        on_start: Some(LifecycleHook {
-            move_to: "in_progress".to_string(),
-        }),
-    };
-
-    let dispatch_config = DispatchConfig {
-        provider: "kiro".to_string(),
-        provider_command: "kiro-cli chat".to_string(),
-        yolo: true,
-        yolo_flag: Some("--trust-all-tools".to_string()),
-        worktree_root: "/tmp/worktrees".to_string(),
-        base_branch: "main".to_string(),
-        session_backend: "tmux".to_string(),
-        prompt_template: Some("Implement {key}: {title}\n\n{description}".to_string()),
-        prompt_command: Some("{prompt}".to_string()),
-        prompt_wrapper: None,
-        name_template: None,
-    };
+    let task_source = Arc::new(MockTaskSource::new());
 
     let dispatcher = SessionDispatcher {
-        task_manager_config,
-        dispatch_config,
+        task_source: task_source.clone(),
+        on_start: Some(OnStartHook {
+            move_to: "in_progress".to_string(),
+        }),
+        dispatch_config: DispatchConfig {
+            provider: "kiro".to_string(),
+            provider_command: "kiro-cli chat".to_string(),
+            yolo: true,
+            yolo_flag: Some("--trust-all-tools".to_string()),
+            worktree_root: "/tmp/worktrees".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "tmux".to_string(),
+            prompt_template: Some("Implement {key}: {title}\n\n{description}".to_string()),
+            prompt_command: Some("{prompt}".to_string()),
+            prompt_wrapper: None,
+            name_template: None,
+        },
         project_id: "proj-1".to_string(),
         project_name: "myapp".to_string(),
         project_path: "/home/user/myapp".to_string(),
@@ -139,18 +147,18 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
     // Worktree was created
     let wts = backend.worktrees_created.lock().unwrap();
     assert_eq!(wts.len(), 1);
-    assert_eq!(wts[0].0, "/home/user/myapp"); // repo
-    assert!(wts[0].1.starts_with("/tmp/worktrees/myapp/")); // worktree path
-    assert_eq!(wts[0].2, "kan-3"); // branch
-    assert_eq!(wts[0].3, "origin/main"); // base (fetched)
+    assert_eq!(wts[0].0, "/home/user/myapp");
+    assert!(wts[0].1.starts_with("/tmp/worktrees/myapp/"));
+    assert!(wts[0].2.starts_with("kan-3/")); // branch = key/short_id
+    assert_eq!(wts[0].3, "origin/main");
 
     // Tmux session was created
     let tmux = backend.tmux_sessions.lock().unwrap();
     assert_eq!(tmux.len(), 1);
-    assert!(tmux[0].0.starts_with("planeai-myapp-")); // name
-    assert!(tmux[0].2.contains("kiro-cli chat")); // command contains provider
-    assert!(tmux[0].2.contains("--trust-all-tools")); // yolo flag
-    assert!(tmux[0].2.contains("Implement KAN-3: Add dark mode")); // prompt rendered
+    assert!(tmux[0].0.starts_with("planeai-myapp-"));
+    assert!(tmux[0].2.contains("kiro-cli chat"));
+    assert!(tmux[0].2.contains("--trust-all-tools"));
+    assert!(tmux[0].2.contains("Implement KAN-3: Add dark mode"));
 
     // Session was inserted into DB
     let sessions = backend.sessions_inserted.lock().unwrap();
@@ -160,8 +168,8 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
     assert!(sessions[0].auto_dispatched);
     assert_eq!(sessions[0].backend, "tmux");
 
-    // on_start hook fired (task moved to in_progress)
-    let moves = backend.task_moves.lock().unwrap();
+    // on_start hook fired (task moved to in_progress via TaskSource)
+    let moves = task_source.moves.lock().unwrap();
     assert_eq!(moves.len(), 1);
     assert_eq!(moves[0], ("KAN-3".to_string(), "in_progress".to_string()));
 
@@ -176,13 +184,8 @@ fn dispatch_uses_task_base_branch_when_present() {
     let backend = RecordingBackend::default();
 
     let dispatcher = SessionDispatcher {
-        task_manager_config: TaskManagerConfig {
-            list_tasks: String::new(),
-            get_task: String::new(),
-            move_task: String::new(),
-            terminal_states: vec![],
-            on_start: None,
-        },
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
         dispatch_config: DispatchConfig {
             provider: "kiro".to_string(),
             provider_command: "kiro-cli chat".to_string(),
@@ -214,11 +217,8 @@ fn dispatch_uses_task_base_branch_when_present() {
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
 
-    // Worktree should use the task's base_branch (fetched via fetch_base)
     let wts = backend.worktrees_created.lock().unwrap();
     assert_eq!(wts[0].3, "origin/develop");
-
-    // Session record should store the resolved base_branch
     assert_eq!(session.base_branch, "origin/develop");
 }
 
@@ -227,13 +227,8 @@ fn dispatch_fetches_base_before_worktree_creation() {
     let backend = RecordingBackend::default();
 
     let dispatcher = SessionDispatcher {
-        task_manager_config: TaskManagerConfig {
-            list_tasks: String::new(),
-            get_task: String::new(),
-            move_task: String::new(),
-            terminal_states: vec![],
-            on_start: None,
-        },
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
         dispatch_config: DispatchConfig {
             provider: "kiro".to_string(),
             provider_command: "kiro-cli chat".to_string(),
@@ -265,12 +260,10 @@ fn dispatch_fetches_base_before_worktree_creation() {
 
     dispatcher.dispatch(&task, &backend).unwrap();
 
-    // Should have fetched the base branch before creating worktree
     let fetches = backend.fetches.lock().unwrap();
     assert_eq!(fetches.len(), 1);
     assert_eq!(fetches[0], ("/repo".to_string(), "develop".to_string()));
 
-    // Worktree should use the fetched ref (origin/develop)
     let wts = backend.worktrees_created.lock().unwrap();
     assert_eq!(wts[0].3, "origin/develop");
 }
@@ -312,13 +305,8 @@ fn make_dispatcher(
     prompt_command: Option<&str>,
 ) -> SessionDispatcher {
     SessionDispatcher {
-        task_manager_config: TaskManagerConfig {
-            list_tasks: String::new(),
-            get_task: String::new(),
-            move_task: String::new(),
-            terminal_states: vec![],
-            on_start: None,
-        },
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
         dispatch_config: DispatchConfig {
             provider: provider.to_string(),
             provider_command: command.to_string(),

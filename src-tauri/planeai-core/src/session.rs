@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::sync::Arc;
 
-use crate::task::{Task, TaskManagerConfig};
+use crate::task::{Task, TaskSource};
 use crate::template;
 
-/// Operations that interact with git, tmux, DB, and task manager CLI.
+/// Operations that interact with git, tmux, and DB.
 /// Injected for testability.
 pub trait Backend: Send + Sync {
     fn create_worktree(
@@ -22,13 +22,6 @@ pub trait Backend: Send + Sync {
         session_id: &str,
     ) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
-    fn run_move_task(
-        &self,
-        config: &TaskManagerConfig,
-        key: &str,
-        status: &str,
-        cwd: &Path,
-    ) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
@@ -72,8 +65,15 @@ pub struct DispatchConfig {
     pub name_template: Option<String>,
 }
 
+/// Lifecycle hook config for on_start.
+#[derive(Debug, Clone)]
+pub struct OnStartHook {
+    pub move_to: String,
+}
+
 pub struct SessionDispatcher {
-    pub task_manager_config: TaskManagerConfig,
+    pub task_source: Arc<dyn TaskSource>,
+    pub on_start: Option<OnStartHook>,
     pub dispatch_config: DispatchConfig,
     pub project_id: String,
     pub project_name: String,
@@ -85,8 +85,10 @@ impl SessionDispatcher {
         let session_id = uuid::Uuid::new_v4().to_string();
         let short_id = &session_id.replace('-', "")[..8];
 
-        // Build branch name from task key
-        let branch = task.key.to_lowercase().replace(' ', "-");
+        tracing::info!(task_key = %task.key, session_id = %session_id, project = %self.project_name, "dispatching session");
+
+        // Build branch name from task key + short session id to avoid ref conflicts
+        let branch = format!("{}/{}", task.key.to_lowercase().replace(' ', "-"), short_id);
 
         // Resolve base branch: task-level wins over config default
         let base = task
@@ -172,13 +174,9 @@ impl SessionDispatcher {
         backend.insert_session(&new_session)?;
 
         // Fire on_start hook (move task to in_progress)
-        if let Some(hook) = &self.task_manager_config.on_start {
-            let _ = backend.run_move_task(
-                &self.task_manager_config,
-                &task.key,
-                &hook.move_to,
-                Path::new(&self.project_path),
-            );
+        if let Some(hook) = &self.on_start {
+            tracing::info!(task_key = %task.key, move_to = %hook.move_to, "firing on_start hook");
+            let _ = self.task_source.move_task(&task.key, &hook.move_to);
         }
 
         // Notify GUI

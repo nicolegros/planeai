@@ -92,9 +92,9 @@ export function matchTerminalKey(
     return { type: "send_bytes", bytes: [0x0a] };
   }
 
-  // Escape → Ctrl+C (interrupt)
+  // Escape → send escape character to terminal
   if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    return { type: "send_bytes", bytes: [0x03] };
+    return { type: "send_bytes", bytes: [0x1b] };
   }
 
   return null;

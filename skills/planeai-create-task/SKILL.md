@@ -29,13 +29,13 @@ Extract a concise, actionable title from what the user said. Good titles start w
 
 From the user's message, infer what metadata to attach:
 
-| Flag           | When to use it                                                                                                                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Flag           | When to use it                                                                                                                                                                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--desc`       | **Always provide a description.** Include: why this task exists, what to build, which modules/files are involved, acceptance criteria, and any decisions or rejected alternatives. The more context the better — a weaker agent will rely entirely on this to do the work. |
-| `--priority`   | If the user signals urgency ("urgent", "critical", "high priority", "before the release"). Use 1 = highest. Only set if there's a real signal; default (0) is fine.                                |
-| `--tags`       | If the user mentions a domain area, component, or category. Must be lowercase-alphanumeric-with-hyphens, max 30 chars. Comma-separated. Examples: `backend`, `auth`, `high-priority`, `tech-debt`. |
-| `--blocked-by` | Only if the user explicitly names a task key that blocks this one (e.g., "this depends on PLA-5"). Comma-separated.                                                                                |
-| `--parent`     | Only if the user explicitly says this is a subtask of an existing task.                                                                                                                            |
+| `--priority`   | If the user signals urgency ("urgent", "critical", "high priority", "before the release"). Use 1 = highest. Only set if there's a real signal; default (0) is fine.                                                                                                        |
+| `--tags`       | If the user mentions a domain area, component, or category. Must be lowercase-alphanumeric-with-hyphens, max 30 chars. Comma-separated. Examples: `backend`, `auth`, `high-priority`, `tech-debt`.                                                                         |
+| `--blocked-by` | Only if the user explicitly names a task key that blocks this one (e.g., "this depends on PLA-5"). Comma-separated.                                                                                                                                                        |
+| `--parent`     | Only if the user explicitly says this is a subtask of an existing task.                                                                                                                                                                                                    |
 
 Don't force metadata that isn't there. A bare `planeai-cli task add "Title"` is perfectly fine.
 

@@ -44,7 +44,7 @@
       { keys: IS_MAC ? `${MOD_LABEL}←` : `Home`, description: "Beginning of line" },
       { keys: IS_MAC ? `${MOD_LABEL}→` : `End`, description: "End of line" },
       { keys: `Shift+Enter`, description: "Newline (no submit)" },
-      { keys: `Escape`, description: "Interrupt (Ctrl+C)" },
+      { keys: `Escape`, description: "Send Escape to terminal" },
     ]},
     { section: "Forms", items: [
       { keys: MOD_ENTER_HINT, description: "Submit form" },

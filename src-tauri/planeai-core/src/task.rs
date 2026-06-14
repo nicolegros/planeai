@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Fixed-contract task structure returned by all task manager CLIs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Fixed-contract task structure used by the orchestrator.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Task {
     pub key: String,
     pub title: String,
@@ -19,17 +19,14 @@ pub struct Task {
     pub base_branch: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct LifecycleHook {
-    pub move_to: String,
-}
-
-/// Configuration for a task manager's commands.
-#[derive(Debug, Clone)]
-pub struct TaskManagerConfig {
-    pub get_task: String,
-    pub list_tasks: String,
-    pub move_task: String,
-    pub terminal_states: Vec<String>,
-    pub on_start: Option<LifecycleHook>,
+/// Abstraction over task storage. Replaces CLI-based TaskManagerConfig.
+pub trait TaskSource: Send + Sync {
+    /// List all non-terminal tasks for the project.
+    fn list_tasks(&self) -> Result<Vec<Task>, String>;
+    /// Get a single task by key.
+    fn get_task(&self, key: &str) -> Result<Task, String>;
+    /// Move a task to a new status.
+    fn move_task(&self, key: &str, status: &str) -> Result<(), String>;
+    /// Returns true if `status` is a terminal state (done, cancelled, etc.)
+    fn is_terminal(&self, status: &str) -> bool;
 }
