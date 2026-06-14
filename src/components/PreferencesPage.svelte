@@ -140,17 +140,13 @@
   // Task manager state
   let showAddTaskManager = $state(false);
   let newTmName = $state("");
-  let newTmGetTask = $state("kanban show {key}");
-  let newTmMoveTask = $state("kanban move {key} {status}");
-  let newTmListTasks = $state("kanban list --status todo");
 
   const taskManagers = $derived(config.task_managers ?? {});
 
   function addTaskManager() {
-    if (!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks) return;
+    if (!newTmName) return;
     const tms = { ...taskManagers };
     tms[newTmName] = {
-      get_task: newTmGetTask, move_task: newTmMoveTask, list_tasks: newTmListTasks,
       templates: { branch: "{key:lower}/{title:slug}", name: "{key:upper}: {title}", prompt: "Implement task {key}: {title}\n\n{description}" },
       on_start: { move_to: "in_progress" },
       on_notify: { move_to: "in_review" },
@@ -160,7 +156,7 @@
     const patch: Partial<AppConfig> = { task_managers: tms };
     if (!config.default_task_manager) patch.default_task_manager = newTmName;
     updateSettings(patch);
-    newTmName = ""; newTmGetTask = "kanban show {key}"; newTmMoveTask = "kanban move {key} {status}"; newTmListTasks = "kanban list --status todo";
+    newTmName = "";
     showAddTaskManager = false;
   }
 
@@ -433,22 +429,6 @@
               </div>
               <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeTaskManager(key)}>Remove</button>
             </div>
-            <div class="space-y-1">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Get task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Fetches a single task by key. Must output JSON. Variables: {"{key}"}</span></span></label>
-              <Input value={tm.get_task} onchange={(e) => updateTaskManager(key, "get_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban show {key}"} />
-            </div>
-            <div class="space-y-1">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">Move task command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Moves a task to a new status. Called by lifecycle hooks. Variables: {"{key}"}, {"{status}"}</span></span></label>
-              <Input value={tm.move_task} onchange={(e) => updateTaskManager(key, "move_task", e.currentTarget.value)} class="font-mono" placeholder={"kanban move {key} {status}"} />
-            </div>
-            <div class="space-y-1">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-surface-700 dark:text-surface-400 flex items-center gap-1">List tasks command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-800 dark:bg-surface-200 text-surface-50 dark:text-surface-900 px-2 py-1 text-[10px]">Lists tasks for the task picker. Must output a JSON array. Runs with project path as CWD.</span></span></label>
-              <Input value={tm.list_tasks} onchange={(e) => updateTaskManager(key, "list_tasks", e.currentTarget.value)} class="font-mono" placeholder="kanban list --status todo" />
-            </div>
-
             <!-- Templates -->
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
@@ -544,23 +524,8 @@
             <label class="text-xs text-surface-700 dark:text-surface-400">Name</label>
             <Input bind:value={newTmName} placeholder="e.g. kanban" />
           </div>
-          <div class="space-y-1">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-surface-700 dark:text-surface-400">Get task command</label>
-            <Input bind:value={newTmGetTask} class="font-mono" />
-          </div>
-          <div class="space-y-1">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-surface-700 dark:text-surface-400">Move task command</label>
-            <Input bind:value={newTmMoveTask} class="font-mono" />
-          </div>
-          <div class="space-y-1">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-surface-700 dark:text-surface-400">List tasks command</label>
-            <Input bind:value={newTmListTasks} class="font-mono" />
-          </div>
           <div class="flex gap-2">
-            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName || !newTmGetTask || !newTmMoveTask || !newTmListTasks}>Add</button>
+            <button class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50" onclick={addTaskManager} disabled={!newTmName}>Add</button>
             <button class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={() => { showAddTaskManager = false; }}>Cancel</button>
           </div>
         </div>

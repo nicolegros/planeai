@@ -15,7 +15,7 @@
 
   const config = $derived(getSettings());
   const providerKeys = $derived(Object.keys(config.providers));
-  const hasTaskManager = $derived(Object.keys(config.task_managers ?? {}).length > 0);
+  const hasTaskManager = true;
 
   // svelte-ignore state_referenced_locally
   let mode = $state<"task" | "manual">(taskPrefill ? "task" : "manual");

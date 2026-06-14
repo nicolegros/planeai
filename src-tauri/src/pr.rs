@@ -215,9 +215,6 @@ mod tests {
         fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
         let tm = crate::config::TaskManager {
-            get_task: String::new(),
-            move_task: format!("{} {{key}} {{status}}", script.display()),
-            list_tasks: String::new(),
             templates: None,
             on_start: None,
             on_notify: None,
@@ -227,9 +224,6 @@ mod tests {
                 move_to: "in_review".into(),
             }),
             on_pr_merge: None,
-            list_all_tasks: None,
-            create_task: None,
-            edit_task: None,
             auto_dispatch: None,
         };
 
@@ -247,9 +241,6 @@ mod tests {
         fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
         let tm = crate::config::TaskManager {
-            get_task: String::new(),
-            move_task: format!("{} {{key}} {{status}}", script.display()),
-            list_tasks: String::new(),
             templates: None,
             on_start: None,
             on_notify: None,
@@ -259,9 +250,6 @@ mod tests {
             on_pr_merge: Some(crate::config::LifecycleHook {
                 move_to: "done".into(),
             }),
-            list_all_tasks: None,
-            create_task: None,
-            edit_task: None,
             auto_dispatch: None,
         };
 
@@ -273,9 +261,6 @@ mod tests {
     fn fire_pr_hook_returns_none_when_no_hook_configured() {
         let dir = tempdir().unwrap();
         let tm = crate::config::TaskManager {
-            get_task: String::new(),
-            move_task: String::new(),
-            list_tasks: String::new(),
             templates: None,
             on_start: None,
             on_notify: None,
@@ -283,9 +268,6 @@ mod tests {
             on_complete: None,
             on_pr_open: None,
             on_pr_merge: None,
-            list_all_tasks: None,
-            create_task: None,
-            edit_task: None,
             auto_dispatch: None,
         };
 

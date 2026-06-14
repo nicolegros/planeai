@@ -10,9 +10,6 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
 {
   "task_managers": {
     "kanban": {
-      "get_task": "kanban show {key}",
-      "move_task": "kanban move {key} {status}",
-      "list_tasks": "kanban list --status todo --project {project}",
       "templates": {
         "prompt": "Implement task {key}: {title}\n\n{description}",
       },
@@ -41,7 +38,7 @@ Auto-dispatch turns planeai into an autonomous orchestrator. Instead of manually
                     [reconcile on each tick]
 ```
 
-- **Poll**: runs `list_tasks` to find work, filters out blocked and terminal-state tasks
+- **Poll**: reads from the internal task database, filters out blocked and terminal-state tasks
 - **Dispatch**: creates a git worktree, spawns a tmux session with the agent, moves the task to `in_progress`
 - **Reconcile**: checks if running sessions' tasks moved to a terminal state (done/cancelled) — if so, kills the session
 - **Notify**: when the agent signals idle, the task moves to `in_review` and the session stays alive for human inspection
@@ -66,14 +63,6 @@ Add `auto_dispatch` inside any task manager definition:
 | `provider`         | `default_provider`                  | Which provider to use for auto-dispatched sessions      |
 | `terminal_states`  | `["done", "cancelled", "canceled"]` | Task states that trigger session kill on reconciliation |
 
-### list_tasks with {project}
-
-When auto-dispatch is enabled, the `list_tasks` command supports a `{project}` template variable. This is substituted with the project name so your CLI can filter tasks per project:
-
-```jsonc
-"list_tasks": "kanban list --status todo --project {project}"
-```
-
 ## Behavior Details
 
 ### Yolo mode
@@ -90,7 +79,7 @@ Concurrency is counted as all non-archived auto-dispatched sessions (both active
 
 ### Blocked tasks
 
-Tasks with unresolved blockers are skipped. A blocker is resolved when its status is in `terminal_states`. The orchestrator checks blockers by cross-referencing the task list, falling back to `get_task` for blockers not in the current list.
+Tasks with unresolved blockers are skipped. A blocker is resolved when its status is in `terminal_states`. The orchestrator checks blockers by cross-referencing the task list.
 
 ### Reconciliation
 

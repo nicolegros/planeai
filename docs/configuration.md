@@ -49,7 +49,7 @@ Controls how agent processes are hosted:
 
 ## Task Manager Integration
 
-planeai integrates with external task manager CLIs (kanban, Jira wrappers, etc.) to automatically start sessions from tasks, pre-fill session details, and manage task status through the session lifecycle.
+planeai has a built-in task manager that tracks tasks per project. The `task_managers` config section controls lifecycle hooks (auto-moving task status on events), templates (branch names, session names, prompts), and auto-dispatch settings.
 
 ### Configuration
 
@@ -59,9 +59,6 @@ Add a `task_managers` section to your config file:
 {
   "task_managers": {
     "kanban": {
-      "get_task": "kanban show {key}",
-      "move_task": "kanban move {key} {status}",
-      "list_tasks": "kanban list --status todo",
       "templates": {
         "branch": "{key:lower}/{title:slug}",
         "name": "{key:upper}: {title}",
@@ -76,23 +73,6 @@ Add a `task_managers` section to your config file:
   "default_task_manager": "kanban",
 }
 ```
-
-### Fixed JSON Contract
-
-Task manager commands must output JSON matching this structure:
-
-```json
-{
-  "key": "KAN-3",
-  "title": "Add dark mode support",
-  "status": "todo",
-  "description": "Implement dark mode for accessibility.",
-  "priority": 1,
-  "blocked_by": ["KAN-1"]
-}
-```
-
-`list_tasks` returns an array of the same shape. If your tool outputs a different format, wrap it in a script that normalizes the output.
 
 ### Template Syntax
 
@@ -109,7 +89,7 @@ Available variables: `key`, `title`, `status`, `description`, `priority`, `block
 
 ### Lifecycle Hooks
 
-Each hook is optional. When configured, it calls `move_task` with the specified status:
+Each hook is optional. When configured, it automatically moves the linked task to the specified status:
 
 | Hook          | Fires when                                 |
 | ------------- | ------------------------------------------ |

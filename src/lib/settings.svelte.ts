@@ -22,9 +22,6 @@ export interface TaskManagerTemplates {
 }
 
 export interface TaskManager {
-  get_task: string;
-  move_task: string;
-  list_tasks: string;
   templates?: TaskManagerTemplates | null;
   on_start?: LifecycleHook | null;
   on_notify?: LifecycleHook | null;
