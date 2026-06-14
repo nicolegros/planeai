@@ -1,3 +1,6 @@
+//! Legacy external CLI task manager. Kept for Symphony auto_dispatch (see PLA-72).
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

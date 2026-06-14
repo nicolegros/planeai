@@ -66,7 +66,25 @@ pub fn fire_pr_hook(
         PrTransition::Merged => tm.on_pr_merge.as_ref(),
     };
     let h = hook?;
-    let _ = crate::task_manager::move_task(tm, task_key, &h.move_to, cwd);
+    let db_path = crate::paths::db_path();
+    let prefix = planeai_tasks::sqlite::derive_prefix(
+        &cwd.file_name().unwrap_or_default().to_string_lossy(),
+    );
+    if let Ok(repo) =
+        planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or_default(), &prefix)
+    {
+        use planeai_tasks::model::{Status, UpdateParams};
+        use planeai_tasks::provider::TaskProvider;
+        if let Some(s) = Status::parse(&h.move_to) {
+            let _ = repo.update(
+                task_key,
+                UpdateParams {
+                    status: Some(s),
+                    ..Default::default()
+                },
+            );
+        }
+    }
     Some(h.move_to.clone())
 }
 

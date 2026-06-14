@@ -4,6 +4,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
+  import { getSettings } from "../lib/settings.svelte";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
@@ -226,37 +227,70 @@
     return items;
   }
 
-  // Flat list of visible tasks for keyboard navigation
-  const flatTasks = $derived.by(() => {
-    const result: TaskItem[] = [];
+  // Flat navigation list: includes tasks and collapsed section headers
+  type NavItem = { type: "task"; task: TaskItem; sectionKey: string } | { type: "section"; sectionKey: string; label: string };
+
+  const flatNav = $derived.by(() => {
+    const result: NavItem[] = [];
     for (const project of projects) {
       const projectTasks = tasksByProject[project.path] ?? [];
       if (projectTasks.length === 0) continue;
       const statusGroups = groupByStatus(projectTasks);
-      for (const status of statusOrder) {
+      for (const status of statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks))) {
         const sectionKey = `${project.path}:${status}`;
-        if (collapsedSections[sectionKey]) continue;
-        for (const t of statusGroups[status] ?? []) result.push(t);
+        const items = statusGroups[status] ?? [];
+        if (items.length === 0) continue;
+        if (collapsedSections[sectionKey]) {
+          result.push({ type: "section", sectionKey, label: `${statusLabels[status] ?? status} (${items.length})` });
+        } else {
+          for (const t of items) result.push({ type: "task", task: t, sectionKey });
+        }
       }
     }
     return result;
   });
 
-  // Key-based index map for O(1) lookup in template
-  const flatTaskKeys = $derived(flatTasks.map((t) => t.key));
+  // For template: map task keys to their flat index
+  const flatTaskKeys = $derived(flatNav.map((item) => item.type === "task" ? item.task.key : `§${item.sectionKey}`));
 
-  function handleTaskKeydown(e: KeyboardEvent) {    if (getActiveZone() !== "sidebar") return;
-    if (flatTasks.length === 0) return;
+  function handleTaskKeydown(e: KeyboardEvent) {
+    if (getActiveZone() !== "sidebar") return;
+    if (flatNav.length === 0) return;
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
 
-    clampIndex(flatTasks.length);
-    const action = handleSidebarKey(e, flatTasks.length);
+    clampIndex(flatNav.length);
+
+    const current = flatNav[getSelectedIndex()];
+    if (!current) return;
+
+    // Fold section with left/h
+    if (e.key === "ArrowLeft" || e.key === "h") {
+      e.preventDefault();
+      collapsedSections = { ...collapsedSections, [current.sectionKey]: true };
+      return;
+    }
+    // Unfold section with right/l (only meaningful on collapsed section headers)
+    if (e.key === "ArrowRight" || e.key === "l") {
+      if (current.type === "section") {
+        e.preventDefault();
+        collapsedSections = { ...collapsedSections, [current.sectionKey]: false };
+      }
+      return;
+    }
+
+    const action = handleSidebarKey(e, flatNav.length);
     if (!action) return;
 
-    const task = flatTasks[getSelectedIndex()];
-    if (!task) return;
+    // Enter/select on collapsed section header → unfold
+    if (current.type === "section") {
+      if (action.type === "select" || action.type === "start_session") {
+        collapsedSections = { ...collapsedSections, [current.sectionKey]: false };
+      }
+      return;
+    }
 
+    const task = current.task;
     if (action.type === "select" || action.type === "start_session") {
       handleClick(task);
     } else if (action.type === "status") {
@@ -283,13 +317,15 @@
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
             <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}{#if projectAutoMode[project.path]}<Zap class="size-2.5 text-amber-500" />{/if}</h3>
-            {#each statusOrder as status}
+            {#each statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks)) as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
                 {@const sectionKey = `${project.path}:${status}`}
+                {@const sectionNavIdx = flatTaskKeys.indexOf(`§${sectionKey}`)}
+                {@const isSectionSelected = getActiveZone() === 'sidebar' && sectionNavIdx === getSelectedIndex()}
                 <div class="ml-1">
                   <button
-                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-surface-500'} hover:opacity-80"
+                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-surface-500'} hover:opacity-80 rounded-md {isSectionSelected ? 'ring-1 ring-primary-500/50' : ''}"
                     onclick={() => toggleSection(sectionKey)}
                   >
                     {#if collapsedSections[sectionKey]}

@@ -99,6 +99,7 @@ fn main() {
             let db_path = app_dir.join("planeai.db");
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
+            planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
             tracing::info!("database initialized");
 
             // Config: migrate from DB if needed, then load

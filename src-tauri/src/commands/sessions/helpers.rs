@@ -1,6 +1,5 @@
 use crate::config;
 use crate::db;
-use crate::task_manager;
 
 /// Resolve the working directory for a session's project.
 pub(crate) fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
@@ -36,7 +35,35 @@ pub(crate) fn fire_task_hook(
         _ => None,
     };
     if let Some(h) = hook {
-        let _ = task_manager::move_task(tm, task_key, &h.move_to, std::path::Path::new(cwd));
+        let db_path = crate::paths::db_path();
+        // Derive prefix from project name by looking up the path
+        let conn_result = rusqlite::Connection::open(&db_path);
+        if let Ok(conn) = conn_result {
+            let projects = db::list_projects(&conn).unwrap_or_default();
+            let prefix = projects
+                .iter()
+                .find(|p| cwd.starts_with(&p.path))
+                .map(|p| planeai_tasks::sqlite::derive_prefix(&p.name))
+                .unwrap_or_default();
+            if !prefix.is_empty() {
+                if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
+                    db_path.to_str().unwrap_or_default(),
+                    &prefix,
+                ) {
+                    use planeai_tasks::model::{Status, UpdateParams};
+                    use planeai_tasks::provider::TaskProvider;
+                    if let Some(s) = Status::parse(&h.move_to) {
+                        let _ = repo.update(
+                            task_key,
+                            UpdateParams {
+                                status: Some(s),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 

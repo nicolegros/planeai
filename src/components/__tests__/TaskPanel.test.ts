@@ -27,6 +27,11 @@ vi.mock("../../lib/sidebar-nav.svelte", () => ({
   handleSidebarKey: () => null,
 }));
 
+vi.mock("../../lib/settings.svelte", () => ({
+  getSettings: () => ({ hide_done_tasks: false }),
+  updateSettings: vi.fn(),
+}));
+
 import { invoke } from "@tauri-apps/api/core";
 import TaskPanel from "../TaskPanel.svelte";
 
