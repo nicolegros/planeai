@@ -1,5 +1,5 @@
 ---
-name: kb-plan-to-tasks
+name: planeai-plan-to-tasks
 description: 'Break a plan, spec, PRD, or conversation into a structured set of tasks with parent/subtask relationships and blockers. Use when user wants to turn a plan into tasks, break down work into kanban items, says "create tasks from this plan", "break this down into tasks", "convert this to tickets", or has a multi-step project they want tracked. Even if they just say "let''s track this" after discussing a plan — use this skill.'
 ---
 
