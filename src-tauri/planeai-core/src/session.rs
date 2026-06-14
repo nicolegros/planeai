@@ -87,8 +87,8 @@ impl SessionDispatcher {
 
         tracing::info!(task_key = %task.key, session_id = %session_id, project = %self.project_name, "dispatching session");
 
-        // Build branch name from task key
-        let branch = task.key.to_lowercase().replace(' ', "-");
+        // Build branch name from task key + short session id to avoid ref conflicts
+        let branch = format!("{}/{}", task.key.to_lowercase().replace(' ', "-"), short_id);
 
         // Resolve base branch: task-level wins over config default
         let base = task

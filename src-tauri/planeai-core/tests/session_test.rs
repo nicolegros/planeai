@@ -150,7 +150,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
     assert_eq!(wts.len(), 1);
     assert_eq!(wts[0].0, "/home/user/myapp");
     assert!(wts[0].1.starts_with("/tmp/worktrees/myapp/"));
-    assert_eq!(wts[0].2, "kan-3");
+    assert!(wts[0].2.starts_with("kan-3/")); // branch = key/short_id
     assert_eq!(wts[0].3, "origin/main");
 
     // Tmux session was created
