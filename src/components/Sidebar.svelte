@@ -238,7 +238,6 @@
                   oncontextmenu={(e) => onContextMenu(e, session)}
                 >
                   <span class="w-3 shrink-0 text-center text-surface-600 dark:text-surface-400" title={session.worktree_path ? "Worktree" : ""}>{#if session.worktree_path}<GitFork class="size-3" />{/if}</span>
-                  {#if isActive}<span class="size-1.5 rounded-full bg-primary-500 shrink-0"></span>{/if}
                   {#if session.task_key}<span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{session.task_key}</span>{/if}
                   <span class="truncate">{session.name || session.branch}</span>
                   {#if session.pr_url || session.status === 'exited' || agentStates[session.id]}

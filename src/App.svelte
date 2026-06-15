@@ -3,8 +3,8 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, projects as projectsApi, pty, notify } from "./lib/api";
-  import type { Session, Project } from "./lib/types";
+  import { sessions as sessionsApi, projects as projectsApi, pty, notify, tasks as tasksApi } from "./lib/api";
+  import type { Session, Project, TaskItem } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
@@ -49,6 +49,22 @@
 
   let editorBindRefs = $state<Record<string, EditorTab>>({});
   $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
+
+  // ─── Task statuses for TabSwitcher ──────────────────────────────────────────
+  let taskStatuses = $state<Record<string, string>>({});
+
+  async function loadTaskStatuses() {
+    const statuses: Record<string, string> = {};
+    await Promise.all(projects.map(async (p) => {
+      try {
+        const items = await tasksApi.listAll(p.path);
+        for (const t of items) statuses[t.key] = t.status;
+      } catch { /* ignore */ }
+    }));
+    taskStatuses = statuses;
+  }
+
+  $effect(() => { if (projects.length > 0) loadTaskStatuses(); });
 
   // ─── Derived from orchestrator ──────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -240,7 +256,7 @@
     </Dialog.Root>
 
     {#if getCycleState().isVisible}
-      <TabSwitcher mruSessionIds={getCycleState().cycleList} {sessions} {projects} selectedIndex={getCycleState().index} {agentStates} />
+      <TabSwitcher mruSessionIds={getCycleState().cycleList} {sessions} {projects} selectedIndex={getCycleState().index} {agentStates} {taskStatuses} />
     {/if}
 
     <CommandMenu
