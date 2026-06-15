@@ -15,7 +15,6 @@ pub mod logging;
 pub mod paths;
 pub mod session_ops;
 pub mod task_cli;
-pub mod task_manager;
 pub mod template;
 #[cfg(not(windows))]
 pub mod tmux;

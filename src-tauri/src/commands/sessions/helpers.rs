@@ -68,14 +68,9 @@ pub(crate) fn fire_task_hook(
 }
 
 pub(crate) fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
-    let key = cfg
-        .default_task_manager
-        .as_deref()
-        .or_else(|| cfg.task_managers.keys().next().map(|s| s.as_str()))
-        .ok_or("No task manager configured")?;
-    cfg.task_managers
-        .get(key)
-        .ok_or_else(|| format!("Task manager '{}' not found in config", key))
+    cfg.task_management
+        .as_ref()
+        .ok_or("No task management configured".to_string())
 }
 
 /// Check if a provider has hook-based idle detection.

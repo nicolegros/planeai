@@ -16,7 +16,6 @@ mod session_ops;
 mod startup;
 mod state;
 mod symphony;
-mod task_manager;
 mod template;
 #[cfg(not(windows))]
 mod tmux;
@@ -198,7 +197,6 @@ fn main() {
             restore_project,
             get_project_auto_mode,
             set_project_auto_mode,
-            set_project_task_manager,
             delete_project,
             create_session,
             list_sessions,

@@ -23,11 +23,10 @@ pub fn get_symphony_status(
         .unwrap_or(0);
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let max_concurrent: usize = cfg
-        .task_managers
-        .values()
-        .filter_map(|tm| tm.auto_dispatch.as_ref())
+        .task_management
+        .as_ref()
+        .and_then(|tm| tm.auto_dispatch.as_ref())
         .map(|ad| ad.max_concurrent)
-        .next()
         .unwrap_or(3);
     Ok(format!(
         "{{\"active\":true,\"slots_used\":{slots_used},\"max_concurrent\":{max_concurrent}}}"

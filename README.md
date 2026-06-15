@@ -12,7 +12,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Persistent sessions** — agents keep running when you quit the app (tmux backend)
 - **Provider-agnostic** — works with Kiro, Claude, Copilot, or any CLI agent
 - **Keyboard-first** — command menu (Cmd+K), shortcuts for every action
-- **Task manager integration** — auto-create sessions from Jira, kanban, or custom task CLIs
+- **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows
 
@@ -33,7 +33,7 @@ Download the latest release for your platform:
 
 ## Configuration
 
-planeai is configured via `~/.config/planeai/config.json`. See the full [configuration docs](./docs/configuration.md) for providers, task managers, templates, and lifecycle hooks.
+planeai is configured via `~/.config/planeai/config.json`. See the full [configuration docs](./docs/configuration.md) for providers, templates, lifecycle hooks, and auto-dispatch.
 
 Themes are plain CSS files in `~/.config/planeai/themes/`. See the [theming guide](./docs/theming.md) for creating custom themes.
 

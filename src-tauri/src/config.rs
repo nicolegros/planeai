@@ -20,10 +20,8 @@ pub struct Config {
     pub session_backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vim_mode: Option<bool>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub task_managers: HashMap<String, TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_task_manager: Option<String>,
+    pub task_management: Option<TaskManager>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projects_base_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,15 +103,6 @@ pub struct LifecycleHook {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TaskManager {
-    pub get_task: String,
-    pub move_task: String,
-    pub list_tasks: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_all_tasks: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub create_task: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub edit_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<TaskManagerTemplates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,13 +224,40 @@ impl Default for Config {
             default_provider: "kiro".to_string(),
             session_backend: None,
             vim_mode: None,
-            task_managers: HashMap::new(),
-            default_task_manager: None,
+            task_management: None,
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
         }
     }
+}
+
+/// Migrate legacy `task_managers` HashMap format to flat `task_management`.
+fn migrate_legacy_task_managers(val: &mut serde_json::Value) {
+    let Some(obj) = val.as_object_mut() else {
+        return;
+    };
+    if !obj.contains_key("task_managers") || obj.contains_key("task_management") {
+        return;
+    }
+    let Some(tms) = obj.remove("task_managers") else {
+        return;
+    };
+    if let Some(tms_obj) = tms.as_object() {
+        let default_key = obj
+            .get("default_task_manager")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let key = default_key
+            .as_deref()
+            .or_else(|| tms_obj.keys().next().map(|s| s.as_str()));
+        if let Some(k) = key {
+            if let Some(val) = tms_obj.get(k) {
+                obj.insert("task_management".to_string(), val.clone());
+            }
+        }
+    }
+    obj.remove("default_task_manager");
 }
 
 /// Backfill new provider fields from defaults for known providers.
@@ -269,7 +285,7 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let content = std::fs::read_to_string(&config_path).unwrap();
         // Strip JSONC comments then parse
         let stripped = json_comments::StripComments::new(content.as_bytes());
-        let user_val: serde_json::Value = match serde_json::from_reader(stripped) {
+        let mut user_val: serde_json::Value = match serde_json::from_reader(stripped) {
             Ok(v) => v,
             Err(e) => {
                 return (
@@ -278,6 +294,8 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
                 );
             }
         };
+        // Migrate legacy task_managers → task_management
+        migrate_legacy_task_managers(&mut user_val);
         let default_val = serde_json::to_value(Config::default()).unwrap();
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = serde_json::from_value(merged).unwrap();
@@ -506,8 +524,7 @@ mod tests {
             default_provider: "claude".to_string(),
             session_backend: None,
             vim_mode: None,
-            task_managers: HashMap::new(),
-            default_task_manager: None,
+            task_management: None,
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
@@ -1239,5 +1256,35 @@ mod tests {
 
         assert_eq!(loaded.pr_status, config.pr_status);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn load_migrates_legacy_task_managers_to_task_management() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+        let json = r#"{
+            "providers": { "kiro": { "command": "kiro-cli chat", "yolo_flag": "--trust-all-tools" } },
+            "default_provider": "kiro",
+            "task_managers": {
+                "kanban": {
+                    "templates": { "branch": "{key:lower}/{title:slug}" },
+                    "on_start": { "move_to": "in_progress" }
+                }
+            },
+            "default_task_manager": "kanban"
+        }"#;
+        fs::write(config_dir.join("config.json"), json).unwrap();
+
+        let (config, warnings) = load(config_dir);
+
+        assert!(warnings.is_empty());
+        let tm = config
+            .task_management
+            .expect("task_management should be migrated");
+        assert_eq!(tm.on_start.unwrap().move_to, "in_progress");
+        assert_eq!(
+            tm.templates.unwrap().branch.unwrap(),
+            "{key:lower}/{title:slug}"
+        );
     }
 }
