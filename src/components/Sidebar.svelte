@@ -35,9 +35,10 @@
     onSidebarTabChange?: (tab: "sessions" | "tasks") => void;
     onTaskCreateConsumed?: () => void;
     onTaskRefreshConsumed?: () => void;
+    onSessionsChanged?: () => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, taskRefreshRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, sidebarTab = "sessions", taskCreateRequested = false, taskRefreshRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onSidebarTabChange, onTaskCreateConsumed, onTaskRefreshConsumed, onSessionsChanged }: Props = $props();
 
   let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
 
@@ -300,6 +301,7 @@
       onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
       onTaskCreateConsumed={onTaskCreateConsumed}
       onTaskRefreshConsumed={onTaskRefreshConsumed}
+      onSessionsChanged={onSessionsChanged}
     />
   {/if}
 

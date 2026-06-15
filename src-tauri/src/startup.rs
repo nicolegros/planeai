@@ -172,6 +172,7 @@ mod tests {
     fn revive_recreates_dead_tmux_session_with_resume_command() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let _session = db::create_session_with_id(
             &conn,
@@ -226,6 +227,7 @@ mod tests {
     fn revive_restores_exited_tmux_session_and_recreates_tmux() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let _session = db::create_session_with_id(
             &conn,
@@ -274,6 +276,7 @@ mod tests {
     fn revive_restores_exited_direct_session_without_tmux_creation() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let _session = db::create_session_with_id(
             &conn,
@@ -322,6 +325,7 @@ mod tests {
     fn revive_tmux_failure_marks_session_exited() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let _session = db::create_session_with_id(
             &conn,
@@ -359,6 +363,7 @@ mod tests {
     fn revive_leaves_alive_tmux_sessions_untouched() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let _session = db::create_session_with_id(
             &conn,

@@ -363,7 +363,11 @@ pub fn create_session_with_id(
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE status IN ('active', 'exited') ORDER BY mru_position ASC NULLS LAST, created_at ASC");
+    let sql = format!(
+        "SELECT {SESSION_COLUMNS} FROM sessions WHERE status IN ('active', 'exited') \
+         AND (task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
+         ORDER BY mru_position ASC NULLS LAST, created_at ASC"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_session)?;
     rows.collect()
@@ -495,6 +499,7 @@ mod tests {
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
         conn
     }
 
@@ -1152,5 +1157,77 @@ mod tests {
         .unwrap();
         let s = get_session(&conn, &session.id).unwrap().unwrap();
         assert_eq!(s.pr_state.as_deref(), Some("merged"));
+    }
+
+    #[test]
+    fn test_list_sessions_excludes_done_task_sessions() {
+        let conn = setup();
+        // Run task migrations so the tasks table exists
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+
+        let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Session with no task_key — should always appear
+        let s1 = create_session_with_id(
+            &conn, "s1", &p.id, "no task", None, "main", None, None, "direct", false, None, None,
+        )
+        .unwrap();
+
+        // Session linked to a done task — should be excluded
+        let s2 = create_session_with_id(
+            &conn,
+            "s2",
+            &p.id,
+            "done task",
+            None,
+            "feat-a",
+            None,
+            None,
+            "direct",
+            false,
+            Some("MYA-1"),
+            None,
+        )
+        .unwrap();
+
+        // Session linked to an in_progress task — should appear
+        let s3 = create_session_with_id(
+            &conn,
+            "s3",
+            &p.id,
+            "active task",
+            None,
+            "feat-b",
+            None,
+            None,
+            "direct",
+            false,
+            Some("MYA-2"),
+            None,
+        )
+        .unwrap();
+
+        // Insert tasks
+        conn.execute(
+            "INSERT INTO task_projects (prefix, next_seq) VALUES ('MYA', 3)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-1', 'MYA', 'Done task', 'done', '2024-01-01', '2024-01-01')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('MYA-2', 'MYA', 'Active task', 'in_progress', '2024-01-01', '2024-01-01')",
+            [],
+        )
+        .unwrap();
+
+        let sessions = list_sessions(&conn).unwrap();
+        let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&s1.id.as_str()));
+        assert!(!ids.contains(&s2.id.as_str())); // done task — excluded
+        assert!(ids.contains(&s3.id.as_str()));
     }
 }

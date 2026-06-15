@@ -70,7 +70,8 @@ describe("TaskPanel move-to-done archives session", () => {
     document.body.removeChild(target);
   });
 
-  it("calls onArchiveSession when context menu → Done is clicked for a task with linked session", async () => {
+  it("calls onSessionsChanged when task status changes via context menu", async () => {
+    const onSessionsChanged = vi.fn();
     mount(TaskPanel, {
       target,
       props: {
@@ -80,48 +81,7 @@ describe("TaskPanel move-to-done archives session", () => {
         onPickTask: vi.fn(),
         onSelectSession: vi.fn(),
         onArchiveSession,
-        onTaskCreateConsumed: vi.fn(),
-      },
-    });
-
-    // Wait for tasks to load
-    await vi.waitFor(() => {
-      expect(tasks.listAll).toHaveBeenCalledWith("/tmp/myapp");
-    });
-    await new Promise((r) => setTimeout(r, 10));
-
-    // Find the task item button and right-click it
-    const taskButtons = target.querySelectorAll("button");
-    const taskBtn = Array.from(taskButtons).find((b) => b.textContent?.includes("TASK-1"));
-    expect(taskBtn).toBeDefined();
-
-    taskBtn!.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, clientX: 50, clientY: 50 }),
-    );
-    await new Promise((r) => setTimeout(r, 10));
-
-    // Find the Done menu item in the whole document (context menu may portal)
-    const allButtons = document.querySelectorAll("button");
-    const doneBtn = Array.from(allButtons).find((b) => b.textContent?.trim() === "→ Done");
-    expect(doneBtn).toBeDefined();
-
-    doneBtn!.click();
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
-    expect(onArchiveSession).toHaveBeenCalledWith({ id: "sess-1", task_key: "TASK-1", pr_url: null });
-  });
-
-  it("does NOT call onArchiveSession when no session linked to task", async () => {
-    mount(TaskPanel, {
-      target,
-      props: {
-        projects: [{ name: "myapp", path: "/tmp/myapp" }],
-        sessions: [{ id: "sess-1", task_key: "OTHER", pr_url: null }],
-        agentStates: {},
-        onPickTask: vi.fn(),
-        onSelectSession: vi.fn(),
-        onArchiveSession,
+        onSessionsChanged,
         onTaskCreateConsumed: vi.fn(),
       },
     });
@@ -149,5 +109,6 @@ describe("TaskPanel move-to-done archives session", () => {
 
     expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
     expect(onArchiveSession).not.toHaveBeenCalled();
+    expect(onSessionsChanged).toHaveBeenCalled();
   });
 });
