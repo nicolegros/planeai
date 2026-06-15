@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Channel } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
   import { pty } from "../lib/api";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -221,9 +220,6 @@
       });
     };
 
-    // Listen for exit event
-    const unlisten = listen<void>(`pty-exited-${sessionId}`, () => {});
-
     // ── Attach to the session ─────────────────────────────────────────────
     if (skipAttach) {
       // Non-primary tab: we call spawn_tab ourselves with our data channel
@@ -271,7 +267,6 @@
     return () => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeObserver.disconnect();
-      unlisten.then((fn) => fn());
       term.dispose();
     };
   });

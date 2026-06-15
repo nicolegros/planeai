@@ -117,15 +117,8 @@
     for (const s of sessions) {
       if (getTabCount(s.id) === 0) {
         initSession(s.id, s.tab_count);
-        // Helper tabs are spawned by the Terminal component when it mounts
-        if (s.status === "active") {
-          for (let i = 1; i < s.tab_count; i++) {
-            listenForTabExit(s.id, i);
-          }
-        }
       }
     }
-    listenForExits();
     // On initial load, activate the first session (reconnection)
     if (sessions.length > 0 && !activeSessionId) {
       seedMru(sessions.map((s) => s.id));
@@ -135,23 +128,6 @@
       const mru = getMruList();
       for (const s of sessions) {
         if (!mru.includes(s.id)) touchMru(s.id);
-      }
-    }
-  }
-
-  // Listen for pty-exited events (session process terminated)
-  let exitUnlisteners: Array<() => void> = [];
-  function listenForExits() {
-    exitUnlisteners.forEach((fn) => fn());
-    exitUnlisteners = [];
-    for (const s of sessions) {
-      if (s.status === "active") {
-        listen(`pty-exited-${s.id}`, () => {
-          // Skip if session was already removed (e.g., deleted by user)
-          if (!sessions.find((x) => x.id === s.id)) return;
-          sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
-          sessionsApi.markExited(s.id);
-        }).then((unlisten) => exitUnlisteners.push(unlisten));
       }
     }
   }
@@ -181,7 +157,6 @@
     setActiveTab(activeSessionId, tabIndex);
     diffTabActive = { ...diffTabActive, [activeSessionId]: false };
     editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-    listenForTabExit(activeSessionId, tabIndex);
   }
 
   async function handleCloseTab() {
@@ -309,13 +284,7 @@
     tryOpen();
   }
 
-  function listenForTabExit(sessionId: string, tabIndex: number) {
-    const ptyKey = `${sessionId}:${tabIndex}`;
-    listen(`pty-exited-${ptyKey}`, () => {
-      removeTab(sessionId, tabIndex);
-      pty.closeTab(sessionId, tabIndex);
-    }).then((unlisten) => exitUnlisteners.push(unlisten));
-  }
+
 
   onMount(() => {
     loadProjects();
@@ -340,6 +309,22 @@
     // Show errors from background session cleanup
     const unlistenCleanup = listen<string>("cleanup-error", (event) => {
       showSnackbar(event.payload);
+    });
+
+    // Single listener for all PTY exit events
+    const unlistenPtyExited = listen<{ pty_key: string }>("pty-exited", (event) => {
+      const { pty_key } = event.payload;
+      const colonIdx = pty_key.indexOf(":");
+      if (colonIdx !== -1) {
+        const sessionId = pty_key.slice(0, colonIdx);
+        const tabIndex = parseInt(pty_key.slice(colonIdx + 1), 10);
+        removeTab(sessionId, tabIndex);
+        pty.closeTab(sessionId, tabIndex);
+      } else {
+        if (!sessions.find((x) => x.id === pty_key)) return;
+        sessions = sessions.map((x) => x.id === pty_key ? { ...x, status: "exited" } : x);
+        sessionsApi.markExited(pty_key);
+      }
     });
 
     // Check if notification hook is installed
@@ -500,10 +485,10 @@
       unlistenState.then((fn) => fn());
       unlistenSettings.then((fn) => fn());
       unlistenCleanup.then((fn) => fn());
+      unlistenPtyExited.then((fn) => fn());
       unlistenClose.then((fn) => fn());
       unlistenPr.then((fn) => fn());
       unlistenSessionCreated.then((fn) => fn());
-      exitUnlisteners.forEach((fn) => fn());
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
@@ -515,7 +500,6 @@
     initSession(session.id, 1);
     selectSession(session.id);
     focusTerminal();
-    listenForExits();
   }
 
   async function doDelete(s: Session) {
@@ -592,7 +576,6 @@
     const updated = await sessionsApi.restart(s.id);
     sessions = sessions.map((x) => x.id === s.id ? updated : x);
     selectSession(s.id);
-    listenForExits();
   }
 
   function deleteCurrentSession() {
@@ -791,7 +774,6 @@
           onAttached={() => {
             if (tab.index === 0 && session.status === "exited") {
               sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
-              listenForExits();
             }
           }}
           onUserInput={() => {
