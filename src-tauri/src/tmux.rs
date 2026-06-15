@@ -167,4 +167,19 @@ mod tests {
         let args_no = build_new_session_args("planeai-myapp-abc12345", "/tmp/myapp", false);
         assert_eq!(args_no[6], "kiro-cli chat");
     }
+
+    #[test]
+    fn tmux_bin_resolves_absolute_path_when_binary_exists() {
+        let bin = tmux_bin();
+        // On systems where tmux is installed, tmux_bin() must return an absolute path
+        // so that GUI apps without PATH can find it.
+        if std::path::Path::new("/opt/homebrew/bin/tmux").exists()
+            || std::path::Path::new("/usr/local/bin/tmux").exists()
+        {
+            assert!(
+                bin.starts_with('/'),
+                "tmux_bin() should resolve to absolute path, got: {bin}"
+            );
+        }
+    }
 }

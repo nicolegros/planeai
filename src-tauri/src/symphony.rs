@@ -126,21 +126,26 @@ impl Backend for TauriBackend {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     fn create_tmux_session(
         &self,
         name: &str,
         cwd: &str,
         cmd: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        crate::tmux::create_session_with_cmd(name, cwd, cmd, session_id)
+    }
+
+    #[cfg(windows)]
+    fn create_tmux_session(
+        &self,
+        _name: &str,
+        _cwd: &str,
+        _cmd: &str,
         _session_id: &str,
     ) -> Result<(), String> {
-        let output = std::process::Command::new("tmux")
-            .args(["new-session", "-d", "-s", name, "-c", cwd, cmd])
-            .output()
-            .map_err(|e| format!("tmux new-session: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-        Ok(())
+        Err("tmux is not supported on Windows".to_string())
     }
 
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -174,10 +179,9 @@ impl Backend for TauriBackend {
     }
 
     fn kill_session(&self, session: &NewSession) -> Result<(), String> {
+        #[cfg(not(windows))]
         if let Some(tmux_name) = &session.tmux_name {
-            let _ = std::process::Command::new("tmux")
-                .args(["kill-session", "-t", tmux_name])
-                .output();
+            let _ = crate::tmux::kill_session(tmux_name);
         }
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         conn.execute(
