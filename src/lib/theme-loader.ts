@@ -1,5 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
-import { invoke } from "@tauri-apps/api/core";
+import { preferences } from "./api";
 
 const STYLE_ID = "planeai-theme";
 
@@ -188,7 +188,7 @@ export function extractTerminalTheme(): ITheme {
 
 export async function loadTheme(): Promise<void> {
   try {
-    const css = await invoke<string>("get_theme_css");
+    const css = await preferences.getThemeCss();
     injectTheme(css);
   } catch {
     injectTheme("");

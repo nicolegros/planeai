@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { preferences } from "../lib/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -44,16 +44,16 @@
     window.addEventListener("keydown", handleKeydown, true);
     await loadSettings();
     loadTheme();
-    invoke<string[]>("list_monospace_fonts").then((fonts) => {
+    preferences.listMonospaceFonts().then((fonts) => {
       fontItems = fonts.map((f) => ({ value: f, label: f }));
     });
-    invoke<string[]>("list_themes").then((themes) => {
+    preferences.listThemes().then((themes) => {
       availableThemes = themes;
     });
-    invoke<boolean>("check_tmux_available").then((available) => {
+    preferences.checkTmuxAvailable().then((available) => {
       tmuxAvailable = available;
     });
-    invoke<boolean>("check_cli_installed").then((installed) => {
+    preferences.checkCliInstalled().then((installed) => {
       cliInstalled = installed;
     });
   });
@@ -83,7 +83,7 @@
 
   async function installCli() {
     try {
-      await invoke("install_cli");
+      await preferences.installCli();
       cliInstalled = true;
     } catch (e) {
       console.error("Failed to install CLI:", e);
@@ -91,7 +91,7 @@
   }
 
   async function openLogFolder() {
-    const logDir = await invoke<string>("get_log_dir");
+    const logDir = await preferences.getLogDir();
     await revealItemInDir(logDir);
   }
 

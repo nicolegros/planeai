@@ -6,33 +6,10 @@
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { invoke } from "@tauri-apps/api/core";
+  import { projects as projectsApi } from "../lib/api";
+  import type { Session, Project } from "../lib/types";
   import { GitFork, Plus, LoaderCircle, Lightbulb, Settings, GitPullRequest, GitMerge, Zap } from "@lucide/svelte";
   import TaskPanel from "./TaskPanel.svelte";
-
-  interface Project {
-    id: string;
-    name: string;
-    path: string;
-  }
-
-  interface Session {
-    id: string;
-    project_id: string;
-    name: string;
-    tmux_name: string | null;
-    branch: string;
-    status: string;
-    created_at: string;
-    worktree_path: string | null;
-    provider: string | null;
-    backend: string;
-    tab_count: number;
-    base_branch: string | null;
-    task_key: string | null;
-    pr_url: string | null;
-    pr_state: string | null;
-  }
 
   interface Props {
     projects: Project[];
@@ -97,7 +74,7 @@
   async function loadAutoModes() {
     for (const p of projects) {
       try {
-        const enabled = await invoke<boolean>("get_project_auto_mode", { id: p.id });
+        const enabled = await projectsApi.getAutoMode(p.id);
         projectAutoMode[p.id] = enabled;
       } catch { /* ignore */ }
     }
@@ -107,7 +84,7 @@
 
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
-    await invoke("set_project_auto_mode", { id: project.id, enabled: !current });
+    await projectsApi.setAutoMode(project.id, !current);
     projectAutoMode[project.id] = !current;
   }
 

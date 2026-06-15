@@ -40,6 +40,7 @@ create → active → exited → deleted
 - **tmux** for optional process persistence (auto-detected; see Session backend)
 - **portable-pty** for PTY management (both tmux-attach and direct-spawn go through a local PTY)
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
+- **Typed API layer** (`src/lib/api.ts`) — all `invoke()` calls consolidated behind domain-grouped typed methods; components never call `invoke()` directly (see ADR-0009)
 - **pnpm** for package management
 
 ## Key constraints

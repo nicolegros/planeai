@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { git } from "../lib/api";
+  import type { ChangedFile, FileDiff } from "../lib/types";
   import { onMount, onDestroy } from "svelte";
   import { CmDiffRenderer } from "../lib/cm-diff-renderer";
   import type { DiffRenderer } from "../lib/diff-renderer";
@@ -7,20 +8,6 @@
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
-
-  interface ChangedFile {
-    path: string;
-    status: string;
-    additions: number;
-    deletions: number;
-    old_path: string | null;
-  }
-
-  interface FileDiff {
-    original: string;
-    modified: string;
-    language: string;
-  }
 
   interface Props {
     repoPath: string;
@@ -50,7 +37,7 @@
     loading = true;
     diffCache.clear();
     try {
-      files = await invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch });
+      files = await git.getChangedFiles(repoPath, baseBranch);
       if (files.length > 0 && selectedIndex >= files.length) {
         selectedIndex = 0;
       }
@@ -73,7 +60,7 @@
       return;
     }
     try {
-      const diff = await invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath: file.path, oldPath: file.old_path });
+      const diff = await git.getFileDiff(repoPath, baseBranch, file.path, file.old_path);
       diffCache.set(file.path, diff);
       renderer.setDiff(diff.original, diff.modified, diff.language);
     } catch (e) {

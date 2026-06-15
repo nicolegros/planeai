@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount } from "svelte";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve([])),
+vi.mock("../../lib/api", () => ({
+  tasks: {
+    listAll: vi.fn(() => Promise.resolve([])),
+    list: vi.fn(() => Promise.resolve([])),
+    move: vi.fn(() => Promise.resolve()),
+    create: vi.fn(() => Promise.resolve()),
+    edit: vi.fn(() => Promise.resolve()),
+  },
 }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
@@ -32,10 +38,8 @@ vi.mock("../../lib/settings.svelte", () => ({
   updateSettings: vi.fn(),
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { tasks } from "../../lib/api";
 import TaskPanel from "../TaskPanel.svelte";
-
-const mockInvoke = vi.mocked(invoke);
 
 describe("TaskPanel move-to-done archives session", () => {
   let onArchiveSession: ReturnType<typeof vi.fn>;
@@ -44,24 +48,19 @@ describe("TaskPanel move-to-done archives session", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     onArchiveSession = vi.fn();
-    mockInvoke.mockImplementation(((cmd: string) => {
-      if (cmd === "list_all_task_items") {
-        return Promise.resolve([
-          {
-            key: "TASK-1",
-            title: "Fix bug",
-            status: "in_progress",
-            description: "",
-            priority: 1,
-            blocked_by: [],
-            tags: [],
-            url: null,
-          },
-        ]);
-      }
-      if (cmd === "move_task_item") return Promise.resolve();
-      return Promise.resolve([]);
-    }) as any);
+    vi.mocked(tasks.listAll).mockResolvedValue([
+      {
+        key: "TASK-1",
+        title: "Fix bug",
+        status: "in_progress",
+        description: "",
+        priority: 1,
+        blocked_by: [],
+        tags: [],
+        parent_key: null,
+        url: null,
+      },
+    ]);
 
     target = document.createElement("div");
     document.body.appendChild(target);
@@ -87,7 +86,7 @@ describe("TaskPanel move-to-done archives session", () => {
 
     // Wait for tasks to load
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("list_all_task_items", { repoPath: "/tmp/myapp" });
+      expect(tasks.listAll).toHaveBeenCalledWith("/tmp/myapp");
     });
     await new Promise((r) => setTimeout(r, 10));
 
@@ -109,11 +108,7 @@ describe("TaskPanel move-to-done archives session", () => {
     doneBtn!.click();
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockInvoke).toHaveBeenCalledWith("move_task_item", {
-      key: "TASK-1",
-      status: "done",
-      repoPath: "/tmp/myapp",
-    });
+    expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
     expect(onArchiveSession).toHaveBeenCalledWith({ id: "sess-1", task_key: "TASK-1" });
   });
 
@@ -132,7 +127,7 @@ describe("TaskPanel move-to-done archives session", () => {
     });
 
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("list_all_task_items", { repoPath: "/tmp/myapp" });
+      expect(tasks.listAll).toHaveBeenCalledWith("/tmp/myapp");
     });
     await new Promise((r) => setTimeout(r, 10));
 
@@ -152,11 +147,7 @@ describe("TaskPanel move-to-done archives session", () => {
     doneBtn!.click();
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockInvoke).toHaveBeenCalledWith("move_task_item", {
-      key: "TASK-1",
-      status: "done",
-      repoPath: "/tmp/myapp",
-    });
+    expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
     expect(onArchiveSession).not.toHaveBeenCalled();
   });
 });

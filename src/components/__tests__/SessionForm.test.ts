@@ -1,8 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { mount, flushSync } from "svelte";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve([])),
+vi.mock("../../lib/api", () => ({
+  sessions: { launch: vi.fn(() => Promise.resolve({})) },
+  projects: { listBranches: vi.fn(() => Promise.resolve([])) },
+  tasks: {
+    list: vi.fn(() => Promise.resolve([])),
+    listAll: vi.fn(() => Promise.resolve([])),
+  },
 }));
 
 vi.mock("../../lib/settings.svelte", () => ({

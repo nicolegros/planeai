@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { config as configApi } from "./api";
 import { emit } from "@tauri-apps/api/event";
 import { loadTheme } from "./theme-loader";
 
@@ -113,7 +113,7 @@ export function getSettings(): AppConfig {
 }
 
 export async function loadSettings(): Promise<void> {
-  config = await invoke<AppConfig>("get_config");
+  config = await configApi.get();
   applyDarkClass();
 }
 
@@ -123,7 +123,7 @@ export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
   if (patch.appearance) config.appearance = { ...config.appearance, ...patch.appearance };
   if (patch.terminal) config.terminal = { ...config.terminal, ...patch.terminal };
   applyDarkClass();
-  await invoke("update_config", { newConfig: config });
+  await configApi.update(config);
   if (config.appearance.theme !== prevTheme) {
     loadTheme();
   }

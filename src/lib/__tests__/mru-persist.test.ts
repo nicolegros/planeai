@@ -1,31 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { touchMru, removeMru, getMruList } from "../mru.svelte";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve()),
+vi.mock("../api", () => ({
+  sessions: {
+    saveMruOrder: vi.fn(() => Promise.resolve()),
+  },
 }));
 
-import { invoke } from "@tauri-apps/api/core";
+import { sessions } from "../api";
 
 describe("MRU persistence", () => {
   beforeEach(() => {
-    vi.mocked(invoke).mockClear();
+    vi.mocked(sessions.saveMruOrder).mockClear();
     for (const id of getMruList()) removeMru(id);
-    vi.mocked(invoke).mockClear();
+    vi.mocked(sessions.saveMruOrder).mockClear();
   });
 
   it("persists on every touchMru call", () => {
     touchMru("a");
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("save_mru_order", {
-      sessionIds: ["a"],
-    });
+    expect(sessions.saveMruOrder).toHaveBeenCalledTimes(1);
+    expect(sessions.saveMruOrder).toHaveBeenCalledWith(["a"]);
 
     touchMru("b");
-    expect(invoke).toHaveBeenCalledTimes(2);
-    expect(invoke).toHaveBeenLastCalledWith("save_mru_order", {
-      sessionIds: ["b", "a"],
-    });
+    expect(sessions.saveMruOrder).toHaveBeenCalledTimes(2);
+    expect(sessions.saveMruOrder).toHaveBeenLastCalledWith(["b", "a"]);
   });
 
   it("sends correct order after reordering", () => {
@@ -34,8 +32,6 @@ describe("MRU persistence", () => {
     touchMru("c");
     touchMru("a");
 
-    expect(invoke).toHaveBeenLastCalledWith("save_mru_order", {
-      sessionIds: ["a", "c", "b"],
-    });
+    expect(sessions.saveMruOrder).toHaveBeenLastCalledWith(["a", "c", "b"]);
   });
 });

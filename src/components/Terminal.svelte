@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke, Channel } from "@tauri-apps/api/core";
+  import { Channel } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { pty } from "../lib/api";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -88,7 +89,7 @@
       const text = e.clipboardData?.getData("text");
       if (text) {
         const bytes = Array.from(new TextEncoder().encode(text));
-        invoke("write_to_pty", { sessionId, data: bytes });
+        pty.write(sessionId, bytes);
       }
     });
 
@@ -112,7 +113,7 @@
             const bytes = Array.from(
               new TextEncoder().encode(`\x1b[${mode};0$y`)
             );
-            invoke("write_to_pty", { sessionId, data: bytes });
+            pty.write(sessionId, bytes);
             return true;
           }
         );
@@ -123,7 +124,7 @@
             const bytes = Array.from(
               new TextEncoder().encode(`\x1b[?${mode};0$y`)
             );
-            invoke("write_to_pty", { sessionId, data: bytes });
+            pty.write(sessionId, bytes);
             return true;
           }
         );
@@ -152,7 +153,7 @@
         case "paste":
           ev.preventDefault();
           navigator.clipboard.readText().then((text) => {
-            if (text) invoke("write_to_pty", { sessionId, data: [...new TextEncoder().encode(text)] });
+            if (text) pty.write(sessionId, [...new TextEncoder().encode(text)]);
           }).catch(() => {});
           return false;
         case "scroll_page_up":
@@ -175,7 +176,7 @@
           return true;
         case "send_bytes":
           ev.preventDefault();
-          invoke("write_to_pty", { sessionId, data: action.bytes });
+          pty.write(sessionId, action.bytes);
           return false;
       }
     });
@@ -189,7 +190,7 @@
       }
       if (!filtered) return;
       const bytes = Array.from(new TextEncoder().encode(filtered));
-      invoke("write_to_pty", { sessionId, data: bytes });
+      pty.write(sessionId, bytes);
       onUserInput?.();
     });
 
@@ -207,14 +208,14 @@
 
       if (pendingBytes > FLOW_HIGH && !isPaused) {
         isPaused = true;
-        invoke("pause_pty", { sessionId });
+        pty.pause(sessionId);
       }
 
       term.write(data, () => {
         pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
         if (isPaused && pendingBytes < FLOW_LOW) {
           isPaused = false;
-          invoke("resume_pty", { sessionId });
+          pty.resume(sessionId);
         }
       });
     };
@@ -228,21 +229,21 @@
       const parts = sessionId.split(":");
       const baseSessionId = parts[0];
       const tabIndex = parseInt(parts[1] || "0", 10);
-      invoke("spawn_tab", { sessionId: baseSessionId, tabIndex, darkMode: isDark(), onData }).then(() => {
+      pty.spawnTab(baseSessionId, tabIndex, isDark(), onData).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;
-        invoke("resize_pty", { sessionId, rows, cols });
+        pty.resize(sessionId, rows, cols);
       }).catch((e) => {
         showSnackbar(String(e));
       });
     } else if (!exited) {
       // Attach immediately in onMount to avoid $effect double-fire
-      invoke("attach_session", { sessionId, darkMode: isDark(), onData }).then(() => {
+      pty.attach(sessionId, isDark(), onData).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;
-        invoke("resize_pty", { sessionId, rows, cols });
+        pty.resize(sessionId, rows, cols);
       }).catch((e) => {
         showSnackbar(String(e));
       });
@@ -261,7 +262,7 @@
         const { rows, cols } = term;
         if (lastSentDims?.cols === cols && lastSentDims?.rows === rows) return;
         lastSentDims = { cols, rows };
-        invoke("resize_pty", { sessionId, rows, cols });
+        pty.resize(sessionId, rows, cols);
       }, RESIZE_DEBOUNCE_MS);
     });
     resizeObserver.observe(containerEl);
