@@ -6,20 +6,21 @@
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
   interface Props {
     projects: Pick<Project, "name" | "path">[];
     projectAutoMode?: Record<string, boolean>;
-    sessions: Pick<Session, "id" | "task_key">[];
+    sessions: Pick<Session, "id" | "task_key" | "pr_url">[];
     activeSessionId?: string | null;
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
     taskRefreshRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
-    onArchiveSession?: (session: Pick<Session, "id" | "task_key">) => void | Promise<void>;
+    onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
     onTaskRefreshConsumed?: () => void;
   }
@@ -115,7 +116,7 @@
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
   }
 
-  function sessionForTask(key: string): Pick<Session, "id" | "task_key"> | undefined {
+  function sessionForTask(key: string): Pick<Session, "id" | "task_key" | "pr_url"> | undefined {
     return sessions.find((s) => s.task_key === key);
   }
 
@@ -287,6 +288,9 @@
       moveTask(task.key, action.status);
     } else if (action.type === "edit") {
       openEdit(task);
+    } else if (action.type === "open_pr") {
+      const linked = sessionForTask(task.key);
+      if (linked?.pr_url) openUrl(linked.pr_url);
     }
   }
 </script>

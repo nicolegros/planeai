@@ -75,7 +75,7 @@ describe("TaskPanel move-to-done archives session", () => {
       target,
       props: {
         projects: [{ name: "myapp", path: "/tmp/myapp" }],
-        sessions: [{ id: "sess-1", task_key: "TASK-1" }],
+        sessions: [{ id: "sess-1", task_key: "TASK-1", pr_url: null }],
         agentStates: {},
         onPickTask: vi.fn(),
         onSelectSession: vi.fn(),
@@ -109,7 +109,7 @@ describe("TaskPanel move-to-done archives session", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
-    expect(onArchiveSession).toHaveBeenCalledWith({ id: "sess-1", task_key: "TASK-1" });
+    expect(onArchiveSession).toHaveBeenCalledWith({ id: "sess-1", task_key: "TASK-1", pr_url: null });
   });
 
   it("does NOT call onArchiveSession when no session linked to task", async () => {
@@ -117,7 +117,7 @@ describe("TaskPanel move-to-done archives session", () => {
       target,
       props: {
         projects: [{ name: "myapp", path: "/tmp/myapp" }],
-        sessions: [{ id: "sess-1", task_key: "OTHER" }],
+        sessions: [{ id: "sess-1", task_key: "OTHER", pr_url: null }],
         agentStates: {},
         onPickTask: vi.fn(),
         onSelectSession: vi.fn(),

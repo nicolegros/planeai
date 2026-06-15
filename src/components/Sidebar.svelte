@@ -135,6 +135,8 @@
       startRename(session);
     } else if (action.type === "restart") {
       onRestartSession(session);
+    } else if (action.type === "open_pr") {
+      if (session.pr_url) openUrl(session.pr_url);
     }
   }
 
@@ -288,7 +290,7 @@
       bind:this={taskPanelRef}
       projects={taskProjects}
       projectAutoMode={taskProjectAutoMode}
-      sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key }))}
+      sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key, pr_url: s.pr_url }))}
       {activeSessionId}
       {agentStates}
       {taskCreateRequested}

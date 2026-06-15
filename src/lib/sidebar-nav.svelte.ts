@@ -10,6 +10,7 @@ export type SidebarNavAction =
   | { type: "rename" }
   | { type: "restart" }
   | { type: "edit" }
+  | { type: "open_pr" }
   | { type: "status"; status: string }
   | { type: "start_session" };
 
@@ -93,6 +94,11 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "e") {
     e.preventDefault();
     return { type: "edit" };
+  }
+
+  if (key === "o") {
+    e.preventDefault();
+    return { type: "open_pr" };
   }
 
   if (key === "R") {
