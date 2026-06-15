@@ -188,7 +188,7 @@ pub fn launch_session(
 
     if session.task_key.is_some() {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        fire_task_hook(&cfg, &session, "on_start", &repo_path);
+        fire_task_hook(&cfg, &session, "on_start", &repo_path, &conn);
     }
 
     Ok(session)

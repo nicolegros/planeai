@@ -51,7 +51,7 @@ pub fn archive(conn: &Connection, id: &str, config: &Option<Config>) -> Result<S
         if let Some(cwd) = session_cwd(conn, &session) {
             eprintln!("[session] firing on_complete hook for task {key}");
             tracing::info!(task_key = %key, "firing on_complete hook");
-            fire_task_hook(cfg, &session, "on_complete", &cwd);
+            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
         }
     }
 
@@ -137,7 +137,7 @@ pub fn destroy(
     // Fire task hook before mutation
     if let (Some(cfg), Some(_)) = (config, &session.task_key) {
         if let Some(cwd) = session_cwd(conn, &session) {
-            fire_task_hook(cfg, &session, "on_complete", &cwd);
+            fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
         }
     }
 
@@ -179,48 +179,57 @@ fn session_cwd(conn: &Connection, session: &Session) -> Option<String> {
         .map(|p| p.path)
 }
 
-fn fire_task_hook(cfg: &Config, session: &Session, hook_name: &str, cwd: &str) {
+/// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
+/// Uses the caller's connection — no new DB connections opened.
+pub fn fire_task_hook(
+    cfg: &Config,
+    session: &Session,
+    hook_name: &str,
+    cwd: &str,
+    conn: &Connection,
+) {
     let task_key = match &session.task_key {
         Some(k) => k,
         None => return,
     };
-    let tm = match resolve_task_manager(cfg) {
+    let tm = match cfg.task_management.as_ref() {
         Some(tm) => tm,
         None => return,
     };
     let hook = match hook_name {
+        "on_start" => tm.on_start.as_ref(),
+        "on_notify" => tm.on_notify.as_ref(),
+        "on_restart" => tm.on_restart.as_ref(),
         "on_complete" => tm.on_complete.as_ref(),
         _ => None,
     };
     if let Some(h) = hook {
         let db_path = crate::paths::db_path();
-        let prefix = planeai_tasks::sqlite::derive_prefix(
-            &std::path::Path::new(cwd)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy(),
-        );
-        if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
-            db_path.to_str().unwrap_or_default(),
-            &prefix,
-        ) {
-            use planeai_tasks::model::{Status, UpdateParams};
-            use planeai_tasks::provider::TaskProvider;
-            if let Some(s) = Status::parse(&h.move_to) {
-                let _ = repo.update(
-                    task_key,
-                    UpdateParams {
-                        status: Some(s),
-                        ..Default::default()
-                    },
-                );
+        let projects = db::list_projects(conn).unwrap_or_default();
+        let prefix = projects
+            .iter()
+            .find(|p| cwd.starts_with(&p.path))
+            .map(|p| planeai_tasks::sqlite::derive_prefix(&p.name))
+            .unwrap_or_default();
+        if !prefix.is_empty() {
+            if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
+                db_path.to_str().unwrap_or_default(),
+                &prefix,
+            ) {
+                use planeai_tasks::model::{Status, UpdateParams};
+                use planeai_tasks::provider::TaskProvider;
+                if let Some(s) = Status::parse(&h.move_to) {
+                    let _ = repo.update(
+                        task_key,
+                        UpdateParams {
+                            status: Some(s),
+                            ..Default::default()
+                        },
+                    );
+                }
             }
         }
     }
-}
-
-fn resolve_task_manager(cfg: &Config) -> Option<&crate::config::TaskManager> {
-    cfg.task_management.as_ref()
 }
 
 #[derive(Debug)]
