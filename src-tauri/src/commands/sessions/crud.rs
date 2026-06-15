@@ -19,25 +19,21 @@ pub fn create_session(
     let session = db::create_session(&conn, &project_id, &name, &tmux_name, &branch, None)
         .map_err(|e| e.to_string())?;
 
+    // Register in NotifyState at creation time
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-    let project_name = projects
-        .iter()
-        .find(|p| p.id == session.project_id)
-        .map(|p| p.name.as_str())
-        .unwrap_or("unknown");
-    let display_name = if session.name.is_empty() {
-        &session.branch
-    } else {
-        &session.name
-    };
+    let project_name = db::get_project(&conn, &project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.name)
+        .unwrap_or_else(|| "unknown".to_string());
+    let display_name = if name.is_empty() { &branch } else { &name };
     let hook_enabled = session
         .provider
         .as_deref()
         .map(|pk| provider_has_hook(pk, &cfg))
         .unwrap_or(false);
     let mut ns = notify.0.lock().unwrap();
-    ns.register_session(&session.id, display_name, project_name, hook_enabled);
+    ns.register_session(&session.id, display_name, &project_name, hook_enabled);
 
     Ok(session)
 }
@@ -60,12 +56,11 @@ pub fn rename_session(
     db::rename_session(&conn, &id, &name).map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
-        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_name = projects
-            .iter()
-            .find(|p| p.id == session.project_id)
-            .map(|p| p.name.as_str())
-            .unwrap_or("unknown");
+        let project_name = db::get_project(&conn, &session.project_id)
+            .ok()
+            .flatten()
+            .map(|p| p.name)
+            .unwrap_or_else(|| "unknown".to_string());
         let display_name = if name.is_empty() {
             &session.branch
         } else {
@@ -77,7 +72,7 @@ pub fn rename_session(
             .map(|pk| provider_has_hook(pk, &cfg))
             .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, project_name, hook_enabled);
+        ns.register_session(&id, display_name, &project_name, hook_enabled);
     }
     Ok(())
 }
@@ -98,14 +93,14 @@ pub fn restore_session(
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::restore_session(&conn, &id).map_err(|e| e.to_string())?;
 
+    // Register in NotifyState when restoring
     if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-        let project_name = projects
-            .iter()
-            .find(|p| p.id == session.project_id)
-            .map(|p| p.name.as_str())
-            .unwrap_or("unknown");
+        let project_name = db::get_project(&conn, &session.project_id)
+            .ok()
+            .flatten()
+            .map(|p| p.name)
+            .unwrap_or_else(|| "unknown".to_string());
         let display_name = if session.name.is_empty() {
             &session.branch
         } else {
@@ -117,9 +112,8 @@ pub fn restore_session(
             .map(|pk| provider_has_hook(pk, &cfg))
             .unwrap_or(false);
         let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, project_name, hook_enabled);
+        ns.register_session(&id, display_name, &project_name, hook_enabled);
     }
-
     Ok(())
 }
 

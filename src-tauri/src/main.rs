@@ -164,6 +164,14 @@ fn main() {
             notify::start_silence_checker(notify_state.clone(), app.handle().clone());
             app.manage(NotifyHandle(notify_state.clone()));
 
+            // Register active sessions in NotifyState (must happen after notify_state exists)
+            {
+                let conn = db_arc.lock().unwrap();
+                let cfg_state = app.state::<ConfigState>();
+                let cfg = cfg_state.0.lock().unwrap();
+                startup::register_active_sessions(&conn, &cfg, &notify_state);
+            }
+
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_observer(Arc::new(notify::NotifyObserver::new(

@@ -1206,35 +1206,17 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn config_dir_uses_appdata_on_windows() {
-        let original = std::env::var("APPDATA").ok();
-        std::env::set_var("APPDATA", "C:\\Users\\test\\AppData\\Roaming");
-
+        let appdata = std::env::var("APPDATA").expect("APPDATA must be set on Windows");
         let path = config_dir("planeai");
-        assert_eq!(
-            path,
-            PathBuf::from("C:\\Users\\test\\AppData\\Roaming\\planeai")
-        );
-
-        if let Some(v) = original {
-            std::env::set_var("APPDATA", v);
-        }
+        assert_eq!(path, PathBuf::from(appdata).join("planeai"));
     }
 
     #[test]
     #[cfg(windows)]
     fn config_dir_isolates_dev_bundle_on_windows() {
-        let original = std::env::var("APPDATA").ok();
-        std::env::set_var("APPDATA", "C:\\Users\\test\\AppData\\Roaming");
-
+        let appdata = std::env::var("APPDATA").expect("APPDATA must be set on Windows");
         let path = config_dir("planeai-feat-foo");
-        assert_eq!(
-            path,
-            PathBuf::from("C:\\Users\\test\\AppData\\Roaming\\planeai-feat-foo")
-        );
-
-        if let Some(v) = original {
-            std::env::set_var("APPDATA", v);
-        }
+        assert_eq!(path, PathBuf::from(appdata).join("planeai-feat-foo"));
     }
 
     #[test]
