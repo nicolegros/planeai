@@ -1,5 +1,11 @@
+use std::sync::Mutex;
+
 use crate::config;
 use crate::db;
+
+static KIRO_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static CLAUDE_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static COPILOT_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Resolve the working directory for a session's project.
 pub(crate) fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
@@ -90,23 +96,107 @@ pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> boo
 }
 
 pub(crate) fn is_kiro_hook_installed() -> bool {
-    let home = config::home_dir();
-    let path = format!("{home}/.kiro/agents/default.json");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content.contains("planeai-stop-notify"),
-        Err(_) => false,
-    }
+    let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let home = config::home_dir();
+        let path = format!("{home}/.kiro/agents/default.json");
+        std::fs::read_to_string(&path)
+            .map(|c| c.contains("planeai-stop-notify"))
+            .unwrap_or(false)
+    })
 }
 
 pub(crate) fn is_claude_hook_installed() -> bool {
-    let home = config::home_dir();
-    let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
-    crate::notify::is_claude_hook_installed_at(&path)
+    let mut cache = CLAUDE_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let home = config::home_dir();
+        let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
+        crate::notify::is_claude_hook_installed_at(&path)
+    })
 }
 
 pub(crate) fn is_copilot_hook_installed() -> bool {
-    let copilot_dir = std::env::var("COPILOT_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{}/.copilot", config::home_dir())));
-    crate::notify::is_copilot_hook_installed_at(&copilot_dir)
+    let mut cache = COPILOT_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let copilot_dir = std::env::var("COPILOT_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(format!("{}/.copilot", config::home_dir()))
+            });
+        crate::notify::is_copilot_hook_installed_at(&copilot_dir)
+    })
+}
+
+/// Invalidate the hook cache so next call re-reads from disk.
+pub(crate) fn invalidate_hook_cache() {
+    *KIRO_HOOK_CACHE.lock().unwrap() = None;
+    *CLAUDE_HOOK_CACHE.lock().unwrap() = None;
+    *COPILOT_HOOK_CACHE.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_returns_stored_value_without_re_reading() {
+        // Pre-seed cache with a known value
+        *KIRO_HOOK_CACHE.lock().unwrap() = Some(true);
+
+        // Even though no file exists, cached value is returned
+        assert!(is_kiro_hook_installed());
+
+        // Cleanup
+        *KIRO_HOOK_CACHE.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn invalidate_hook_cache_clears_all_caches() {
+        // Seed all caches
+        *KIRO_HOOK_CACHE.lock().unwrap() = Some(true);
+        *CLAUDE_HOOK_CACHE.lock().unwrap() = Some(true);
+        *COPILOT_HOOK_CACHE.lock().unwrap() = Some(true);
+
+        invalidate_hook_cache();
+
+        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_none());
+        assert!(CLAUDE_HOOK_CACHE.lock().unwrap().is_none());
+        assert!(COPILOT_HOOK_CACHE.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn cache_populated_on_first_call_then_reused() {
+        // Ensure cache is empty
+        *KIRO_HOOK_CACHE.lock().unwrap() = None;
+
+        // First call populates the cache (will be false since no file at test home)
+        let first = is_kiro_hook_installed();
+
+        // Overwrite cache to prove second call uses cache, not disk
+        *KIRO_HOOK_CACHE.lock().unwrap() = Some(!first);
+        let second = is_kiro_hook_installed();
+
+        assert_eq!(second, !first);
+
+        // Cleanup
+        *KIRO_HOOK_CACHE.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn invalidate_causes_re_read_on_next_call() {
+        // Seed cache with true
+        *KIRO_HOOK_CACHE.lock().unwrap() = Some(true);
+        assert!(is_kiro_hook_installed());
+
+        // Invalidate
+        invalidate_hook_cache();
+        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_none());
+
+        // Next call re-reads from disk (re-populates cache)
+        let _ = is_kiro_hook_installed();
+        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_some());
+
+        // Cleanup
+        *KIRO_HOOK_CACHE.lock().unwrap() = None;
+    }
 }
