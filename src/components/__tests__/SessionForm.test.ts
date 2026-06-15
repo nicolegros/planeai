@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "svelte";
+import { mount, flushSync } from "svelte";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(() => Promise.resolve([])),
@@ -57,5 +57,30 @@ describe("SessionForm", () => {
     const buttons = target.querySelectorAll("[role='toolbar'] button");
     expect(buttons[0].textContent).toContain("Manual");
     expect(buttons[1].textContent).toContain("From task");
+  });
+
+  it("clears task-prefilled fields when switching from task to manual mode", async () => {
+    const target = renderForm({
+      taskPrefill: {
+        key: "PROJ-1",
+        title: "Fix bug",
+        description: "A bug to fix",
+        branch: "fix/bug",
+        name: "PROJ-1: Fix bug",
+        prompt: "Fix the bug",
+      },
+    });
+
+    // Verify starts in task mode with prefilled name
+    const nameInput = target.querySelector<HTMLInputElement>("input[placeholder='My session...']")!;
+    expect(nameInput.value).toBe("PROJ-1: Fix bug");
+
+    // Switch to manual mode by clicking the Manual button
+    const manualBtn = target.querySelectorAll("[role='toolbar'] button")[0] as HTMLButtonElement;
+    manualBtn.click();
+    flushSync();
+
+    // Name and branch fields should be cleared
+    expect(nameInput.value).toBe("");
   });
 });
