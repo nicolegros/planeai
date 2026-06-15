@@ -1,18 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-  import { sessions as sessionsApi, projects as projectsApi, pty, symphony, notify, tasks } from "./lib/api";
+  import { listen } from "@tauri-apps/api/event";
+  import { sessions as sessionsApi, projects as projectsApi, pty, notify } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
-  import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./lib/mru.svelte";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
-  import { loadTheme, extractTerminalTheme } from "./lib/theme-loader";
+  import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
-  import { playTaskComplete } from "./lib/soundPlayer";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -25,574 +23,141 @@
   import EditorTab from "./components/EditorTab.svelte";
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
-  import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
-  import { activateSession as poolActivate, removeSession as poolRemove, isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
+  import { getTabs, getActiveTabIndex, removeTab } from "./lib/session-tabs.svelte";
+  import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
+  import * as orchestrator from "./lib/session-orchestrator.svelte";
 
+  // ─── UI-only state ──────────────────────────────────────────────────────────
   let projects = $state<Project[]>([]);
-  let sessions = $state<Session[]>([]);
-  let activeSessionId = $state<string | null>(null);
   let showProjectForm = $state(false);
+  let showSessionForm = $state(false);
   let sidebarVisible = $state(true);
   let sidebarTab = $state<"sessions" | "tasks">("sessions");
   let taskCreateRequested = $state(false);
   let taskRefreshRequested = $state(false);
-
-  // Orchestrator status
-  let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(null);
-
-  let showSessionForm = $state(false);
-  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; projectId?: string | null } | null>(null);
-
-  // Command menu state
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
-
-  // Agent state tracking (Busy/Idle per session)
-  let agentStates = $state<Record<string, string>>({});
-
-  // Preferences state
   let showShortcuts = $state(false);
+  let showHookPrompt = $state(false);
+  let showQuitConfirm = $state(false);
+  let quitDirectCount = $state(0);
+  let fileExplorerVisible = $state(false);
+  let sessionToDelete = $state<Session | null>(null);
+  let projectToDelete = $state<Project | null>(null);
+  let renamingSessionId = $state<string | null>(null);
+  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; projectId?: string | null } | null>(null);
+
+  let editorBindRefs = $state<Record<string, EditorTab>>({});
+  $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
+
+  // ─── Derived from orchestrator ──────────────────────────────────────────────
+  const sessions = $derived(orchestrator.getSessions());
+  const activeSessionId = $derived(orchestrator.getActiveSessionId());
+  const agentStates = $derived(orchestrator.getAgentStates());
+  const diffTabOpen = $derived(orchestrator.getDiffTabOpen());
+  const diffTabActive = $derived(orchestrator.getDiffTabActive());
+  const editorTabOpen = $derived(orchestrator.getEditorTabOpen());
+  const editorTabActive = $derived(orchestrator.getEditorTabActive());
+  const diffFileName = $derived(orchestrator.getDiffFileName());
+  const editorFileName = $derived(orchestrator.getEditorFileName());
+  const editorModified = $derived(orchestrator.getEditorModified());
+  const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
+  const zone = $derived(getActiveZone());
+  const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
+  const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
+
+  // ─── Project management ─────────────────────────────────────────────────────
+  async function loadProjects() { projects = await projectsApi.list(); }
 
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
-    if (existing) {
-      existing.setFocus();
-      return;
-    }
-    new WebviewWindow("preferences", {
-      url: "index.html?page=preferences",
-      title: "Preferences",
-      width: 700,
-      height: 550,
-      parent: getCurrentWindow(),
-      resizable: true,
-      minimizable: false,
-      maximizable: false,
-    });
+    if (existing) { existing.setFocus(); return; }
+    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 700, height: 550, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
   }
-
-  // Hook install prompt
-  let showHookPrompt = $state(false);
-
-  // Quit confirmation
-  let showQuitConfirm = $state(false);
-  let quitDirectCount = $state(0);
-
-  // Diff tab state: set of session IDs that have diff tab open
-  let diffTabOpen = $state<Record<string, boolean>>({});
-  let diffTabActive = $state<Record<string, boolean>>({});
-
-  // Editor tab state
-  let editorTabOpen = $state<Record<string, boolean>>({});
-  let editorTabActive = $state<Record<string, boolean>>({});
-  let editorRefs = $state<Record<string, EditorTab>>({});
-  let diffFileName = $state<Record<string, string>>({});
-  let editorFileName = $state<Record<string, string>>({});
-  let editorModified = $state<Record<string, boolean>>({});
-
-  // File explorer state
-  let fileExplorerVisible = $state(false);
-
-  // Delete confirmation state
-  let sessionToDelete = $state<Session | null>(null);
-  let projectToDelete = $state<Project | null>(null);
-
-  // Rename state
-  let renamingSessionId = $state<string | null>(null);
 
   async function doRename(id: string, name: string) {
     await sessionsApi.rename(id, name);
-    sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
+    orchestrator.updateSessionName(id, name);
     renamingSessionId = null;
     focusTerminal();
   }
 
-  async function loadProjects() {
-    projects = await projectsApi.list();
-  }
-
-  async function loadSessions() {
-    sessions = await sessionsApi.list();
-    // Initialize tab state for each session
-    for (const s of sessions) {
-      if (getTabCount(s.id) === 0) {
-        initSession(s.id, s.tab_count);
-      }
-    }
-    // On initial load, activate the first session (reconnection)
-    if (sessions.length > 0 && !activeSessionId) {
-      seedMru(sessions.map((s) => s.id));
-      selectSession(sessions[0].id);
-    } else {
-      // Add any new sessions (e.g. from symphony) to MRU so they appear in tab switcher
-      const mru = getMruList();
-      for (const s of sessions) {
-        if (!mru.includes(s.id)) touchMru(s.id);
-      }
-    }
-  }
-
-  function selectSession(id: string) {
-    activeSessionId = id;
-    touchMru(id);
-    poolActivate(id);
-    // Clear idle state when user focuses this session
-    if (agentStates[id] === "Idle") {
-      agentStates = { ...agentStates, [id]: "Busy" };
-    }
-    // Tell backend to allow future notifications for this session
-    sessionsApi.acknowledge(id);
-  }
-
-  function jumpToSession(index: number) {
-    if (index < sessions.length) {
-      selectSession(sessions[index].id);
-    }
-  }
-
-  async function handleNewTab() {
-    if (!activeSessionId) return;
-    const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) return;
-    setActiveTab(activeSessionId, tabIndex);
-    diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-    editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-  }
-
-  async function handleCloseTab() {
-    if (!activeSessionId) return;
-    if (diffTabActive[activeSessionId]) {
-      diffTabOpen = { ...diffTabOpen, [activeSessionId]: false };
-      diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-      return;
-    }
-    if (editorTabActive[activeSessionId]) {
-      editorTabOpen = { ...editorTabOpen, [activeSessionId]: false };
-      editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-      return;
-    }
-    const active = getActiveTabIndex(activeSessionId);
-    if (active === 0) {
-      getCurrentWindow().close();
-      return;
-    }
-    removeTab(activeSessionId, active);
-    await pty.closeTab(activeSessionId, active);
-  }
-
-  function getUnifiedTabs(): { index: number }[] {
-    if (!activeSessionId) return [];
-    const shell = getTabs(activeSessionId);
-    const extra: { index: number }[] = [];
-    if (diffTabOpen[activeSessionId]) extra.push({ index: -1 });
-    if (editorTabOpen[activeSessionId]) extra.push({ index: -2 });
-    return [...shell, ...extra];
-  }
-
-  function getUnifiedActiveIndex(): number {
-    if (!activeSessionId) return 0;
-    if (diffTabActive[activeSessionId]) return -1;
-    if (editorTabActive[activeSessionId]) return -2;
-    return getActiveTabIndex(activeSessionId);
-  }
-
-  function selectUnifiedTab(index: number) {
-    if (!activeSessionId) return;
-    if (index === -1) { diffTabActive = { ...diffTabActive, [activeSessionId]: true }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; }
-    else if (index === -2) { editorTabActive = { ...editorTabActive, [activeSessionId]: true }; diffTabActive = { ...diffTabActive, [activeSessionId]: false }; }
-    else { diffTabActive = { ...diffTabActive, [activeSessionId]: false }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; setActiveTab(activeSessionId, index); }
-  }
-
-  function handleNextTab() {
-    const tabs = getUnifiedTabs();
-    if (tabs.length <= 1) return;
-    const active = getUnifiedActiveIndex();
-    const currentPos = tabs.findIndex((t) => t.index === active);
-    const nextPos = (currentPos + 1) % tabs.length;
-    selectUnifiedTab(tabs[nextPos].index);
-  }
-
-  function handlePrevTab() {
-    const tabs = getUnifiedTabs();
-    if (tabs.length <= 1) return;
-    const active = getUnifiedActiveIndex();
-    const currentPos = tabs.findIndex((t) => t.index === active);
-    const prevPos = (currentPos - 1 + tabs.length) % tabs.length;
-    selectUnifiedTab(tabs[prevPos].index);
-  }
-
-  function handleToggleDiff() {
-    if (!activeSessionId) return;
-    if (diffTabOpen[activeSessionId]) {
-      if (diffTabActive[activeSessionId]) {
-        diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-        diffTabOpen = { ...diffTabOpen, [activeSessionId]: false };
-      } else {
-        diffTabActive = { ...diffTabActive, [activeSessionId]: true };
-        editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-      }
-    } else {
-      diffTabOpen = { ...diffTabOpen, [activeSessionId]: true };
-      diffTabActive = { ...diffTabActive, [activeSessionId]: true };
-      editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-    }
-  }
-
-  function handleToggleEditor() {
-    if (!activeSessionId) return;
-    if (editorTabOpen[activeSessionId]) {
-      if (editorTabActive[activeSessionId]) {
-        // If editor is active, deactivate (back to terminal)
-        editorTabActive = { ...editorTabActive, [activeSessionId]: false };
-      } else {
-        // Switch to editor tab
-        editorTabActive = { ...editorTabActive, [activeSessionId]: true };
-        diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-      }
-    } else {
-      editorTabOpen = { ...editorTabOpen, [activeSessionId]: true };
-      editorTabActive = { ...editorTabActive, [activeSessionId]: true };
-      diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-    }
-  }
-
-  function handleToggleFileExplorer() {
-    if (!activeSessionId) return;
-    fileExplorerVisible = !fileExplorerVisible;
-    if (fileExplorerVisible) {
-      focusExplorer();
-    } else {
-      focusTerminal();
-    }
-  }
-
-  function handleOpenFile(filePath: string) {
-    if (!activeSessionId) return;
-    // Ensure editor tab is open and active
-    editorTabOpen = { ...editorTabOpen, [activeSessionId]: true };
-    editorTabActive = { ...editorTabActive, [activeSessionId]: true };
-    diffTabActive = { ...diffTabActive, [activeSessionId]: false };
-    // Open the file in the editor (tick needed for first open when component mounts)
-    const sid = activeSessionId;
-    const tryOpen = () => {
-      if (editorRefs[sid]) {
-        editorRefs[sid].openFile(filePath);
-      } else {
-        requestAnimationFrame(tryOpen);
-      }
-    };
-    tryOpen();
-  }
-
-
-
-  onMount(() => {
-    loadProjects();
-    loadSessions();
-    loadSettings().then(() => loadTheme());
-
-    // Poll orchestrator status every 5 seconds
-    const pollSymphony = async () => {
-      try {
-        const raw = await symphony.getStatus();
-        symphonyStatus = JSON.parse(raw);
-      } catch { symphonyStatus = null; }
-    };
-    pollSymphony();
-    const symphonyInterval = setInterval(pollSymphony, 5000);
-
-    // Reload settings/theme when changed from preferences window
-    const unlistenSettings = listen("settings-changed", () => {
-      loadSettings().then(() => loadTheme());
-    });
-
-    // Show errors from background session cleanup
-    const unlistenCleanup = listen<string>("cleanup-error", (event) => {
-      showSnackbar(event.payload);
-    });
-
-    // Single listener for all PTY exit events
-    const unlistenPtyExited = listen<{ pty_key: string }>("pty-exited", (event) => {
-      const { pty_key } = event.payload;
-      const colonIdx = pty_key.indexOf(":");
-      if (colonIdx !== -1) {
-        const sessionId = pty_key.slice(0, colonIdx);
-        const tabIndex = parseInt(pty_key.slice(colonIdx + 1), 10);
-        removeTab(sessionId, tabIndex);
-        pty.closeTab(sessionId, tabIndex);
-      } else {
-        if (!sessions.find((x) => x.id === pty_key)) return;
-        sessions = sessions.map((x) => x.id === pty_key ? { ...x, status: "exited" } : x);
-        sessionsApi.markExited(pty_key);
-      }
-    });
-
-    // Check if notification hook is installed
-    notify.isInstalled().then((installed) => {
-      if (!installed) showHookPrompt = true;
-    });
-
-    // Quit confirmation for active direct sessions
-    const unlistenClose = getCurrentWindow().onCloseRequested(async (event) => {
-      flushMru().catch(() => {});
-      const activeDirectCount = sessions.filter(
-        (s) => s.status === "active" && s.backend === "direct"
-      ).length;
-      if (activeDirectCount > 0) {
-        event.preventDefault();
-        quitDirectCount = activeDirectCount;
-        showQuitConfirm = true;
-      }
-    });
-
-    // Listen for agent state changes from backend
-    const unlistenState = listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
-      console.log("[notify] agent-state-change:", event.payload.session_id, "→", event.payload.state);
-      agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
-      if (event.payload.state === "Idle") {
-        console.log("[notify] playing task complete sound");
-        playTaskComplete();
-        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
-          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
-        });
-      }
-    });
-
-    // Refresh sessions when PR poll detects changes
-    const unlistenPr = listen("sessions-changed", () => {
-      // Defer reload while tab-switching to avoid reactive re-renders
-      // that could disrupt the overlay
-      if (getCycleState().isCycling) return;
-      loadSessions();
-    });
-
-    // Refresh sessions when CLI creates a new session
-    const unlistenSessionCreated = listen<string>("session-created", async (event) => {
-      await loadSessions();
-      touchMru(event.payload);
-    });
-
-    const cleanup = installKeyboardRouter(
-      (action) => {
-      if (action.type === "new_session") {
-        if (sidebarTab === "tasks") {
-          taskCreateRequested = true;
-        } else if (projects.length === 0) {
-          showProjectForm = true;
-        } else {
-          showSessionForm = true;
-        }
-      } else if (action.type === "new_project") {
-        showProjectForm = true;
-      } else if (action.type === "toggle_sidebar") {
-        sidebarVisible = !sidebarVisible;
-      } else if (action.type === "jump_to_session") {
-        jumpToSession(action.index);
-      } else if (action.type === "tab_switch") {
-        const switcher = getCycleState();
-        if (!switcher.isCycling) {
-          const validIds = new Set(sessions.map((s) => s.id));
-          startCycle(activeSessionId ?? undefined, validIds);
-        } else {
-          advance(1);
-        }
-      } else if (action.type === "tab_switch_reverse") {
-        const switcher = getCycleState();
-        if (!switcher.isCycling) {
-          const validIds = new Set(sessions.map((s) => s.id));
-          startCycle(activeSessionId ?? undefined, validIds);
-          // After startCycle, index is 0 (next MRU). For reverse, go to end.
-          advance(-1);
-        } else {
-          advance(-1);
-        }
-      } else if (action.type === "focus_terminal") {
-        const switcher = getCycleState();
-        if (switcher.isCycling) {
-          cancel();
-        }
-        showSessionForm = false;
-        showProjectForm = false;
-        showShortcuts = false;
-        sessionToDelete = null;
-        commandMenuOpen = false;
-        commandMenuFileMode = false;
-      } else if (action.type === "command_palette") {
-        commandMenuOpen = !commandMenuOpen;
-      } else if (action.type === "open_preferences") {
-        openPreferences();
-      } else if (action.type === "show_shortcuts") {
-        showShortcuts = !showShortcuts;
-      } else if (action.type === "new_tab") {
-        handleNewTab();
-      } else if (action.type === "close_tab") {
-        handleCloseTab();
-      } else if (action.type === "next_tab") {
-        handleNextTab();
-      } else if (action.type === "prev_tab") {
-        handlePrevTab();
-      } else if (action.type === "toggle_diff") {
-        handleToggleDiff();
-      } else if (action.type === "toggle_file_explorer") {
-        handleToggleFileExplorer();
-      } else if (action.type === "toggle_task_panel") {
-        sidebarTab = "tasks";
-        if (!sidebarVisible) sidebarVisible = true;
-      } else if (action.type === "toggle_sessions_panel") {
-        sidebarTab = "sessions";
-        if (!sidebarVisible) sidebarVisible = true;
-      } else if (action.type === "refresh_tasks") {
-        sidebarTab = "tasks";
-        if (!sidebarVisible) sidebarVisible = true;
-        taskRefreshRequested = true;
-      } else if (action.type === "open_file") {
-        commandMenuFileMode = true;
-        commandMenuOpen = true;
-      } else if (action.type === "save_file") {
-        if (activeSessionId && editorTabActive[activeSessionId]) {
-          editorRefs[activeSessionId]?.save();
-        }
-      }
-    },
-    () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling,
-    () => !!(activeSessionId && editorTabActive[activeSessionId])
-    );
-
-    // Listen for Ctrl release to commit tab switch
-    function onKeyUp(e: KeyboardEvent) {
-      const switcher = getCycleState();
-      if (e.key === "Control" && !e.ctrlKey && switcher.isCycling) {
-        const target = commit();
-        if (target) selectSession(target);
-        focusTerminal();
-      }
-    }
-
-    function onBlur() {
-      // Only cancel if the document genuinely lost focus.
-      // WebKit/Tauri can fire spurious blur events during DOM re-renders.
-      setTimeout(() => {
-        if (!document.hasFocus() && getCycleState().isCycling) cancel();
-      }, 0);
-    }
-
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
-
-    return () => {
-      cleanup();
-      clearInterval(symphonyInterval);
-      unlistenState.then((fn) => fn());
-      unlistenSettings.then((fn) => fn());
-      unlistenCleanup.then((fn) => fn());
-      unlistenPtyExited.then((fn) => fn());
-      unlistenClose.then((fn) => fn());
-      unlistenPr.then((fn) => fn());
-      unlistenSessionCreated.then((fn) => fn());
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
-    };
-  });
-
-  function onSessionCreated(session: Session) {
-    showSessionForm = false;
-    sessions = [...sessions, session];
-    initSession(session.id, 1);
-    selectSession(session.id);
-    focusTerminal();
-  }
-
-  async function doDelete(s: Session) {
-    await sessionsApi.destroy(s.id);
-    destroyTabState(s.id);
-    poolRemove(s.id);
-    const { [s.id]: _d1, ...restOpen } = diffTabOpen;
-    const { [s.id]: _d2, ...restActive } = diffTabActive;
-    diffTabOpen = restOpen;
-    diffTabActive = restActive;
-    sessions = sessions.filter((x) => x.id !== s.id);
-    removeMru(s.id);
-    if (activeSessionId === s.id) {
-      activeSessionId = sessions[0]?.id ?? null;
-      if (activeSessionId) touchMru(activeSessionId);
-    }
-  }
-
-  async function confirmDelete() {
-    if (!sessionToDelete) return;
-    const s = sessionToDelete;
-    sessionToDelete = null;
-    await doDelete(s);
-  }
-
-  async function archiveCurrentSession() {
-    if (!activeSessionId) return;
-    const s = sessions.find((x) => x.id === activeSessionId);
-    if (!s) return;
-    await archiveSession(s);
-  }
-
-  async function archiveSession(s: Session) {
-    await sessionsApi.archive(s.id);
-    poolRemove(s.id);
-    sessions = sessions.filter((x) => x.id !== s.id);
-    removeMru(s.id);
-    if (activeSessionId === s.id) {
-      activeSessionId = sessions[0]?.id ?? null;
-      if (activeSessionId) touchMru(activeSessionId);
-    }
-  }
-
   async function archiveProject(p: Project) {
     await projectsApi.archive(p.id);
-    const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
-    for (const id of projectSessionIds) { removeMru(id); poolRemove(id); }
-    sessions = sessions.filter((s) => s.project_id !== p.id);
+    orchestrator.removeProjectSessions(p.id);
     projects = projects.filter((x) => x.id !== p.id);
-    if (activeSessionId && projectSessionIds.includes(activeSessionId)) {
-      activeSessionId = getMruList()[0] ?? null;
-      if (activeSessionId) touchMru(activeSessionId);
-    }
   }
 
   async function deleteProject(p: Project) {
     await projectsApi.delete(p.id);
-    const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
-    for (const id of projectSessionIds) {
-      removeMru(id);
-      destroyTabState(id);
-      poolRemove(id);
-    }
-    sessions = sessions.filter((s) => s.project_id !== p.id);
+    orchestrator.removeProjectSessions(p.id);
     projects = projects.filter((x) => x.id !== p.id);
-    if (activeSessionId && projectSessionIds.includes(activeSessionId)) {
-      activeSessionId = getMruList()[0] ?? null;
-      if (activeSessionId) touchMru(activeSessionId);
-    }
     projectToDelete = null;
   }
 
-  async function restartSession(s: Session) {
-    const updated = await sessionsApi.restart(s.id);
-    sessions = sessions.map((x) => x.id === s.id ? updated : x);
-    selectSession(s.id);
-  }
+  // ─── Lifecycle ──────────────────────────────────────────────────────────────
+  onMount(() => {
+    loadProjects();
+    orchestrator.loadSessions();
+    loadSettings().then(() => loadTheme());
 
-  function deleteCurrentSession() {
-    if (!activeSessionId) return;
-    const s = sessions.find((x) => x.id === activeSessionId);
-    if (s) sessionToDelete = s;
-  }
+    const cleanupEvents = orchestrator.startEventListeners();
+    const cleanupSymphony = orchestrator.startSymphonyPolling();
+    const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
+    const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
-  const zone = $derived(getActiveZone());
+    notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
+    const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; });
 
-  const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
-  const activeProjectName = $derived(
-    activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null
-  );
-  const activeSessionName = $derived(
-    activeSession ? (activeSession.name || activeSession.branch) : null
-  );
+    const cleanup = installKeyboardRouter(
+      (action) => {
+        if (action.type === "new_session") {
+          if (sidebarTab === "tasks") taskCreateRequested = true;
+          else if (projects.length === 0) showProjectForm = true;
+          else showSessionForm = true;
+        } else if (action.type === "new_project") { showProjectForm = true; }
+        else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; }
+        else if (action.type === "jump_to_session") { orchestrator.jumpToSession(action.index); }
+        else if (action.type === "tab_switch") {
+          const sw = getCycleState();
+          if (!sw.isCycling) startCycle(activeSessionId ?? undefined, new Set(sessions.map((s) => s.id)));
+          else advance(1);
+        } else if (action.type === "tab_switch_reverse") {
+          const sw = getCycleState();
+          if (!sw.isCycling) { startCycle(activeSessionId ?? undefined, new Set(sessions.map((s) => s.id))); advance(-1); }
+          else advance(-1);
+        } else if (action.type === "focus_terminal") {
+          if (getCycleState().isCycling) cancel();
+          showSessionForm = false; showProjectForm = false; showShortcuts = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+        } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
+        else if (action.type === "open_preferences") { openPreferences(); }
+        else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
+        else if (action.type === "new_tab") { orchestrator.handleNewTab(); }
+        else if (action.type === "close_tab") { orchestrator.handleCloseTab(); }
+        else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
+        else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
+        else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
+        else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
+        else if (action.type === "toggle_task_panel") { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; }
+        else if (action.type === "toggle_sessions_panel") { sidebarTab = "sessions"; if (!sidebarVisible) sidebarVisible = true; }
+        else if (action.type === "refresh_tasks") { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; taskRefreshRequested = true; }
+        else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
+        else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
+      },
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling,
+      () => !!(activeSessionId && editorTabActive[activeSessionId])
+    );
+
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.key === "Control" && !e.ctrlKey && getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+    }
+    function onBlur() { setTimeout(() => { if (!document.hasFocus() && getCycleState().isCycling) cancel(); }, 0); }
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+  });
 </script>
 
 <main class="flex flex-col h-screen">
@@ -609,15 +174,15 @@
       if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
       return [...shellTabs, ...extra];
     })()}
-    activeTabIndex={getUnifiedActiveIndex()}
-    onSelectTab={selectUnifiedTab}
+    activeTabIndex={orchestrator.getUnifiedActiveIndex()}
+    onSelectTab={orchestrator.selectUnifiedTab}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
-      if (i === -1) { diffTabOpen = { ...diffTabOpen, [activeSessionId]: false }; diffTabActive = { ...diffTabActive, [activeSessionId]: false }; }
-      else if (i === -2) { editorTabOpen = { ...editorTabOpen, [activeSessionId]: false }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; }
+      if (i === -1) orchestrator.closeDiffTab(activeSessionId);
+      else if (i === -2) orchestrator.closeEditorTab(activeSessionId);
       else { removeTab(activeSessionId, i); pty.closeTab(activeSessionId, i); }
     }}
-    onAddTab={handleNewTab}
+    onAddTab={() => orchestrator.handleNewTab()}
     {symphonyStatus}
   />
 
@@ -634,20 +199,16 @@
       {taskCreateRequested}
       {taskRefreshRequested}
       onAddProject={() => (showProjectForm = true)}
-      onSelectSession={selectSession}
-      onArchiveSession={(s) => archiveSession(s)}
+      onSelectSession={(id) => orchestrator.selectSession(id)}
+      onArchiveSession={(s) => orchestrator.archiveSession(s)}
       onDeleteSession={(s) => (sessionToDelete = s)}
-      onRestartSession={restartSession}
+      onRestartSession={(s) => orchestrator.restartSession(s)}
       onOpenPreferences={openPreferences}
       onRenameSession={doRename}
       onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
       onArchiveProject={archiveProject}
       onDeleteProject={(p) => (projectToDelete = p)}
-      onPickTask={(task, repoPath) => {
-        const proj = projects.find(p => p.path === repoPath);
-        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null };
-        showSessionForm = true;
-      }}
+      onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null }; showSessionForm = true; }}
       onSidebarTabChange={(tab) => { sidebarTab = tab; }}
       onTaskCreateConsumed={() => { taskCreateRequested = false; }}
       onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
@@ -657,10 +218,7 @@
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-        <ProjectForm
-          onCreated={() => { showProjectForm = false; loadProjects(); }}
-          onCancel={() => (showProjectForm = false)}
-        />
+        <ProjectForm onCreated={() => { showProjectForm = false; loadProjects(); }} onCancel={() => (showProjectForm = false)} />
       </div>
     {/if}
 
@@ -674,7 +232,7 @@
             {sessions}
             {taskPrefill}
             currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-            onCreated={onSessionCreated}
+            onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
             onCancel={() => { showSessionForm = false; taskPrefill = null; }}
           />
         </Dialog.Content>
@@ -682,13 +240,7 @@
     </Dialog.Root>
 
     {#if getCycleState().isVisible}
-      <TabSwitcher
-        mruSessionIds={getCycleState().cycleList}
-        {sessions}
-        {projects}
-        selectedIndex={getCycleState().index}
-        {agentStates}
-      />
+      <TabSwitcher mruSessionIds={getCycleState().cycleList} {sessions} {projects} selectedIndex={getCycleState().index} {agentStates} />
     {/if}
 
     <CommandMenu
@@ -698,57 +250,21 @@
       {activeSessionId}
       openFileMode={commandMenuFileMode}
       onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
-      onSelectSession={(id) => { selectSession(id); focusTerminal(); }}
-      onArchiveSession={archiveCurrentSession}
-      onDeleteSession={deleteCurrentSession}
-      onRenameSession={() => {
-        if (!activeSessionId) return;
-        sidebarVisible = true;
-        const s = sessions.find((x) => x.id === activeSessionId);
-        if (s) renamingSessionId = s.id;
-      }}
-      onRestoreSession={async (id) => {
-        await sessionsApi.restore(id);
-        await loadSessions();
-      }}
-      onDestroyArchivedSession={async (id) => {
-        await sessionsApi.destroy(id);
-      }}
-      onNewSession={() => {
-        if (projects.length === 0) {
-          showProjectForm = true;
-        } else {
-          showSessionForm = true;
-        }
-      }}
-      onResetTerminal={() => {
-        if (activeSessionId) {
-          pty.write(activeSessionId, [0x0c]);
-        }
-      }}
-      onArchiveProject={async (id) => {
-        const p = projects.find((x) => x.id === id);
-        if (p) await archiveProject(p);
-      }}
-      onDeleteProject={(id) => {
-        const p = projects.find((x) => x.id === id);
-        if (p) projectToDelete = p;
-      }}
-      onRestoreProject={async (id) => {
-        await projectsApi.restore(id);
-        await loadProjects();
-      }}
-      onPickTask={(task) => {
-        taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" };
-        showSessionForm = true;
-      }}
-      onCreateTask={() => {
-        sidebarTab = "tasks";
-        if (!sidebarVisible) sidebarVisible = true;
-        requestAnimationFrame(() => { taskCreateRequested = true; });
-      }}
-      onToggleDiff={handleToggleDiff}
-      onOpenFile={handleOpenFile}
+      onSelectSession={(id) => { orchestrator.selectSession(id); focusTerminal(); }}
+      onArchiveSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) orchestrator.archiveSession(s); } }}
+      onDeleteSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) sessionToDelete = s; } }}
+      onRenameSession={() => { if (activeSessionId) { sidebarVisible = true; renamingSessionId = activeSessionId; } }}
+      onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
+      onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
+      onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
+      onResetTerminal={() => { if (activeSessionId) pty.write(activeSessionId, [0x0c]); }}
+      onArchiveProject={async (id) => { const p = projects.find(x => x.id === id); if (p) await archiveProject(p); }}
+      onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
+      onRestoreProject={async (id) => { await projectsApi.restore(id); await loadProjects(); }}
+      onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
+      onCreateTask={() => { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
+      onToggleDiff={() => orchestrator.toggleDiff()}
+      onOpenFile={(path) => orchestrator.openFile(path)}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
@@ -771,17 +287,8 @@
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           paused={poolIsPaused(session.id)}
-          onAttached={() => {
-            if (tab.index === 0 && session.status === "exited") {
-              sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
-            }
-          }}
-          onUserInput={() => {
-            if (agentStates[session.id]) {
-              const { [session.id]: _, ...rest } = agentStates;
-              agentStates = rest;
-            }
-          }}
+          onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
+          onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); }}
         />
         {/if}
       {/each}
@@ -793,8 +300,8 @@
           {baseBranch}
           visible={session.id === activeSessionId && isDiffActive}
           theme={isDark() ? "vs-dark" : "vs"}
-          onEditFile={(filePath) => handleOpenFile(filePath)}
-          onFileChange={(name) => { diffFileName = { ...diffFileName, [session.id]: name }; }}
+          onEditFile={(filePath) => orchestrator.openFile(filePath)}
+          onFileChange={(name) => orchestrator.setDiffFileName(session.id, name)}
         />
       {/if}
       {#if hasEditor && project}
@@ -803,11 +310,11 @@
           repoPath={editorRepoPath}
           visible={session.id === activeSessionId && isEditorActive}
           theme={isDark() ? "vs-dark" : "vs"}
-          onClose={() => { editorTabOpen = { ...editorTabOpen, [session.id]: false }; editorTabActive = { ...editorTabActive, [session.id]: false }; }}
-          onFocusEditor={() => { editorTabActive = { ...editorTabActive, [session.id]: true }; diffTabActive = { ...diffTabActive, [session.id]: false }; }}
-          onFileChange={(name) => { editorFileName = { ...editorFileName, [session.id]: name }; }}
-          onModifiedChange={(mod) => { editorModified = { ...editorModified, [session.id]: mod }; }}
-          bind:this={editorRefs[session.id]}
+          onClose={() => orchestrator.closeEditorTab(session.id)}
+          onFocusEditor={() => orchestrator.focusEditorTab(session.id)}
+          onFileChange={(name) => orchestrator.setEditorFileName(session.id, name)}
+          onModifiedChange={(mod) => orchestrator.setEditorModified(session.id, mod)}
+          bind:this={editorBindRefs[session.id]}
         />
       {/if}
     {/each}
@@ -821,14 +328,8 @@
     {#if showHookPrompt}
       <div class="absolute top-2 left-4 right-4 z-20 flex items-center gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-2.5 shadow-sm">
         <span class="text-sm text-amber-800 dark:text-amber-200">Install notification hook for instant agent-done alerts?</span>
-        <button
-          class="ml-auto rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
-          onclick={async () => { await notify.install(); showHookPrompt = false; }}
-        >Install</button>
-        <button
-          class="rounded px-2 py-1 text-xs text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200"
-          onclick={() => (showHookPrompt = false)}
-        >Dismiss</button>
+        <button class="ml-auto rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700" onclick={async () => { await notify.install(); showHookPrompt = false; }}>Install</button>
+        <button class="rounded px-2 py-1 text-xs text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200" onclick={() => (showHookPrompt = false)}>Dismiss</button>
       </div>
     {/if}
 
@@ -837,10 +338,7 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content
-            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
-            onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) doDelete(s); } }}
-          >
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); } }}>
             <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
             <div class="flex justify-between">
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
@@ -858,14 +356,9 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content
-            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
-            onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') { deleteProject(ptd); } }}
-          >
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') deleteProject(ptd); }}>
             <Dialog.Title class="text-sm">Delete project <strong>{ptd.name}</strong>?</Dialog.Title>
-            <p class="text-xs text-surface-500 dark:text-surface-400">
-              This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.
-            </p>
+            <p class="text-xs text-surface-500 dark:text-surface-400">This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.</p>
             <div class="flex justify-between">
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
@@ -879,10 +372,7 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content
-            class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
-            onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}
-          >
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}>
             <Dialog.Title class="text-sm font-medium">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</Dialog.Title>
             <p class="text-xs text-surface-500 dark:text-surface-400">Direct sessions don't survive app quit.</p>
             <div class="flex justify-between">
@@ -896,9 +386,9 @@
   </section>
 
   {#if fileExplorerVisible && activeSessionId}
-    {@const activeSession = sessions.find(s => s.id === activeSessionId)}
-    {@const activeProject = projects.find(p => p.id === activeSession?.project_id)}
-    {@const explorerRoot = activeSession?.worktree_path ?? activeProject?.path ?? ""}
+    {@const activeS = sessions.find(s => s.id === activeSessionId)}
+    {@const activeProject = projects.find(p => p.id === activeS?.project_id)}
+    {@const explorerRoot = activeS?.worktree_path ?? activeProject?.path ?? ""}
     {#if explorerRoot}
       <FileExplorer
         rootPath={explorerRoot}
@@ -906,8 +396,8 @@
         visible={true}
         activeFilePath={editorFileName[activeSessionId] ?? null}
         modifiedPaths={editorModified[activeSessionId] ? new Set([editorFileName[activeSessionId] ?? ""].filter(Boolean)) : new Set()}
-        onOpenFile={(path) => handleOpenFile(path)}
-        onPinFile={(path) => handleOpenFile(path)}
+        onOpenFile={(path) => orchestrator.openFile(path)}
+        onPinFile={(path) => orchestrator.openFile(path)}
         onFocus={() => focusExplorer()}
       />
     {/if}
@@ -918,11 +408,7 @@
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg bg-red-600 px-4 py-3 shadow-lg"
-    onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }}
-    title="Click to copy and dismiss"
-  >
+  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg bg-red-600 px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
     <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
     <p class="text-xs text-red-200 mt-1">Click to copy & dismiss</p>
   </div>
