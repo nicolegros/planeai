@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { projects as projectsApi } from "../lib/api";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -55,13 +55,13 @@
       error = "Could not derive a name from the path.";
       return;
     }
-    const valid = await invoke<boolean>("validate_git_repo", { path });
+    const valid = await projectsApi.validateGitRepo(path);
     if (!valid) {
       error = "Not a valid git repository (no .git found).";
       return;
     }
     try {
-      await invoke("create_project", { name, path });
+      await projectsApi.create(name, path);
     } catch (e) {
       showSnackbar(String(e));
       return;

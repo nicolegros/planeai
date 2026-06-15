@@ -2,7 +2,7 @@
  * MRU (Most Recently Used) session tracker.
  * Maintains an ordered list of session IDs, most recent first.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { sessions } from "./api";
 
 let mruList = $state<string[]>([]);
 
@@ -13,7 +13,7 @@ export function getMruList(): string[] {
 /** Push a session to the front of the MRU list. */
 export function touchMru(sessionId: string): void {
   mruList = [sessionId, ...mruList.filter((id) => id !== sessionId)];
-  invoke("save_mru_order", { sessionIds: mruList }).catch(() => {});
+  sessions.saveMruOrder(mruList).catch(() => {});
 }
 
 /** Remove a session from the MRU list. */
@@ -28,5 +28,5 @@ export function seedMru(sessionIds: string[]): void {
 
 /** Flush MRU save (no-op, persists on every switch). */
 export async function flushMru(): Promise<void> {
-  await invoke("save_mru_order", { sessionIds: mruList });
+  await sessions.saveMruOrder(mruList);
 }

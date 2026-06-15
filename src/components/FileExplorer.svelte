@@ -1,17 +1,12 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { fileExplorer } from "../lib/api";
+  import type { DirEntry } from "../lib/types";
   import { listen } from "@tauri-apps/api/event";
   import { onMount, onDestroy } from "svelte";
   import { File, Folder, FolderOpen, ChevronRight, ChevronDown } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { getSettings } from "../lib/settings.svelte";
-
-  interface DirEntry {
-    name: string;
-    path: string;
-    is_dir: boolean;
-  }
 
   interface TreeNode {
     entry: DirEntry;
@@ -61,7 +56,7 @@
   }
 
   async function loadChildren(path: string): Promise<TreeNode[]> {
-    const entries: DirEntry[] = await invoke("fe_list_directory", { path });
+    const entries: DirEntry[] = await fileExplorer.listDir(path);
     return entries.map(e => ({ entry: e, children: e.is_dir ? null : null, expanded: false }));
   }
 
@@ -165,7 +160,7 @@
     if (trimmed && trimmed !== renamingNode.entry.name) {
       const parentPath = renamingNode.entry.path.replace(/\/[^/]+$/, "");
       const newPath = parentPath + "/" + trimmed;
-      await invoke("fe_rename_entry", { oldPath: renamingNode.entry.path, newPath });
+      await fileExplorer.rename(renamingNode.entry.path, newPath);
       renamingNode.entry.name = trimmed;
       renamingNode.entry.path = newPath;
     }
@@ -173,7 +168,7 @@
   }
 
   async function deleteEntry(node: TreeNode) {
-    await invoke("fe_delete_to_trash", { path: node.entry.path });
+    await fileExplorer.deleteToTrash(node.entry.path);
     // Remove from parent's children
     removeNodeFromTree(tree, node);
     rebuildFlat();
@@ -199,9 +194,9 @@
     if (trimmed) {
       const fullPath = creatingIn.parentPath + "/" + trimmed;
       if (creatingIn.isDir) {
-        await invoke("fe_create_directory", { path: fullPath });
+        await fileExplorer.createDir(fullPath);
       } else {
-        await invoke("fe_create_file", { path: fullPath });
+        await fileExplorer.createFile(fullPath);
       }
       // Refresh the parent directory
       await refreshDir(creatingIn.parentPath);
@@ -235,7 +230,7 @@
 
   // Filesystem watcher integration
   async function setupWatcher() {
-    await invoke("fe_watch_directory", { sessionId, path: rootPath });
+    await fileExplorer.watch(sessionId, rootPath);
     const unlistenFn = await listen<{ session_id: string; path: string }>("fs-change", (event) => {
       if (event.payload.session_id !== sessionId) return;
       // Determine which directory was affected and refresh it
@@ -248,7 +243,7 @@
 
   async function teardownWatcher() {
     if (unlisten) { unlisten(); unlisten = null; }
-    await invoke("fe_unwatch_directory", { sessionId }).catch(() => {});
+    await fileExplorer.unwatch(sessionId).catch(() => {});
   }
 
   function autofocus(node: HTMLInputElement) {

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { tasks as tasksApi } from "../lib/api";
+  import type { TaskItem, Session, Project } from "../lib/types";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
@@ -8,39 +9,17 @@
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
 
-  interface TaskItem {
-    key: string;
-    title: string;
-    status: string;
-    description: string;
-    priority: number;
-    blocked_by: string[];
-    tags: string[];
-    parent_key: string | null;
-    url: string | null;
-  }
-
-  interface Session {
-    id: string;
-    task_key: string | null;
-  }
-
-  interface Project {
-    name: string;
-    path: string;
-  }
-
   interface Props {
-    projects: Project[];
+    projects: Pick<Project, "name" | "path">[];
     projectAutoMode?: Record<string, boolean>;
-    sessions: Session[];
+    sessions: Pick<Session, "id" | "task_key">[];
     activeSessionId?: string | null;
     agentStates: Record<string, string>;
     taskCreateRequested?: boolean;
     taskRefreshRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
-    onArchiveSession?: (session: Session) => void | Promise<void>;
+    onArchiveSession?: (session: Pick<Session, "id" | "task_key">) => void | Promise<void>;
     onTaskCreateConsumed?: () => void;
     onTaskRefreshConsumed?: () => void;
   }
@@ -118,7 +97,7 @@
       await Promise.all(
         projects.map(async (p) => {
           try {
-            results[p.path] = await invoke<TaskItem[]>("list_all_task_items", { repoPath: p.path });
+            results[p.path] = await tasksApi.listAll(p.path);
           } catch {
             results[p.path] = [];
           }
@@ -136,7 +115,7 @@
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
   }
 
-  function sessionForTask(key: string): Session | undefined {
+  function sessionForTask(key: string): Pick<Session, "id" | "task_key"> | undefined {
     return sessions.find((s) => s.task_key === key);
   }
 
@@ -184,7 +163,7 @@
     const repoPath = repoPathForTask(key);
     if (!repoPath) return;
     try {
-      await invoke("move_task_item", { key, status, repoPath });
+      await tasksApi.move(key, status, repoPath);
       if (status === "done") {
         const linked = sessionForTask(key);
         if (linked) {
@@ -204,11 +183,11 @@
       if (modalMode === "create") {
         const repoPath = formProjectPath || projects[0]?.path;
         if (!repoPath) return;
-        await invoke("create_task_item", { repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [] });
+        await tasksApi.create({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [] });
       } else if (modalMode === "edit") {
         const repoPath = repoPathForTask(formKey);
         if (!repoPath) return;
-        await invoke("edit_task_item", { repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null });
+        await tasksApi.edit({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null });
       }
       modalMode = null;
       await refresh();

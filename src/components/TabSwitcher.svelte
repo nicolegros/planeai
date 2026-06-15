@@ -1,26 +1,6 @@
 <script lang="ts">
   import { LoaderCircle, Lightbulb } from "@lucide/svelte";
-
-  interface Session {
-    id: string;
-    project_id: string;
-    name: string;
-    tmux_name: string | null;
-    branch: string;
-    status: string;
-    created_at: string;
-    worktree_path: string | null;
-    backend: string;
-    tab_count: number;
-    base_branch: string | null;
-    task_key: string | null;
-  }
-
-  interface Project {
-    id: string;
-    name: string;
-    path: string;
-  }
+  import type { Session, Project } from "../lib/types";
 
   interface Props {
     mruSessionIds: string[];

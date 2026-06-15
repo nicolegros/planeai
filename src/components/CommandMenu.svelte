@@ -1,30 +1,10 @@
 <script lang="ts">
   import { Command, Dialog } from "bits-ui";
-  import { invoke } from "@tauri-apps/api/core";
+  import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi, git } from "../lib/api";
+  import type { Session, Project, TaskItem } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
-
-  interface Session {
-    id: string;
-    project_id: string;
-    name: string;
-    tmux_name: string | null;
-    branch: string;
-    status: string;
-    created_at: string;
-    worktree_path: string | null;
-    backend: string;
-    tab_count: number;
-    base_branch: string | null;
-    pr_url: string | null;
-  }
-
-  interface Project {
-    id: string;
-    name: string;
-    path: string;
-  }
 
   interface Props {
     open: boolean;
@@ -50,15 +30,6 @@
     openFileMode?: boolean;
   }
 
-  interface TaskItem {
-    key: string;
-    title: string;
-    status: string;
-    description: string;
-    priority: number;
-    blocked_by: string[];
-  }
-
   let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
@@ -68,12 +39,12 @@
   let fileList = $state<string[]>([]);
 
   async function openArchived() {
-    archivedSessions = await invoke<Session[]>("list_archived_sessions");
+    archivedSessions = await sessionsApi.listArchived();
     subMenu = "archivedSessions";
   }
 
   async function openArchivedProjects() {
-    archivedProjects = await invoke<Project[]>("list_archived_projects");
+    archivedProjects = await projectsApi.listArchived();
     subMenu = "restoreProject";
   }
 
@@ -83,7 +54,7 @@
     const repoPath = project?.path;
     if (!repoPath) { close(); return; }
     try {
-      taskItems = await invoke<TaskItem[]>("list_task_items", { repoPath });
+      taskItems = await tasksApi.list(repoPath);
     } catch {
       taskItems = [];
     }
@@ -99,7 +70,7 @@
     const repoPath = getActiveRootPath();
     if (!repoPath) { close(); return; }
     try {
-      fileList = await invoke<string[]>("list_files", { repoPath });
+      fileList = await git.listFiles(repoPath);
     } catch {
       fileList = [];
     }
@@ -454,7 +425,7 @@
                   keywords={["pr", "pull request", "github", "link", "review"]}
                   disabled={!activeSessionId}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={async () => { try { const url = await invoke<string | null>("fetch_pr_url", { sessionId: activeSessionId }); if (url) { openUrl(url); } } catch (e: any) { showSnackbar(e.toString()); } close(); }}
+                  onSelect={async () => { try { const url = await git.fetchPrUrl(activeSessionId!); if (url) { openUrl(url); } } catch (e: any) { showSnackbar(e.toString()); } close(); }}
                 >
                   Open pull request
                 </Command.Item>

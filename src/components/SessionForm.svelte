@@ -1,13 +1,11 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi } from "../lib/api";
+  import type { Session, Project, TaskItem } from "../lib/types";
   import { Button, Input, Label, Select, Checkbox } from "./ui";
   import { getSettings } from "../lib/settings.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
 
-  interface Project { id: string; name: string; path: string; }
-  interface Session { id: string; project_id: string; name: string; tmux_name: string | null; branch: string; status: string; created_at: string; worktree_path: string | null; provider: string | null; backend: string; tab_count: number; base_branch: string | null; task_key: string | null; pr_url: string | null; pr_state: string | null; }
-  interface TaskItem { key: string; title: string; status: string; description: string; priority: number; blocked_by: string[]; }
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
   interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
 
@@ -59,7 +57,7 @@
 
   $effect(() => {
     if (selectedProject) {
-      invoke<string[]>("list_branches", { repoPath: selectedProject.path }).then(
+      projectsApi.listBranches(selectedProject.path).then(
         (b) => (branches = b.map((s) => {
           const remote = s.startsWith("remote:");
           const name = remote ? s.slice(7) : s;
@@ -73,8 +71,8 @@
   // Fetch tasks when in task mode and project changes
   $effect(() => {
     if (mode === "task" && selectedProject) {
-      const cmd = taskPrefill?.key ? "list_all_task_items" : "list_task_items";
-      invoke<TaskItem[]>(cmd, { repoPath: selectedProject.path }).then(
+      const taskFn = taskPrefill?.key ? tasksApi.listAll : tasksApi.list;
+      taskFn(selectedProject.path).then(
         (items) => {
           taskItems = items;
           if (taskPrefill?.key) {
@@ -157,7 +155,7 @@
     if (useWorktree) {
       if (!worktreeBranch) { error = "Enter a branch name."; submitting = false; return; }
       try {
-        const session = await invoke<Session>("launch_session", {
+        const session = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
           name: sessionName, useWorktree: true, baseBranch, autoApprove,
@@ -169,7 +167,7 @@
     } else {
       if (!branch) { error = "Enter a branch name."; submitting = false; return; }
       try {
-        const session = await invoke<Session>("launch_session", {
+        const session = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
           useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,

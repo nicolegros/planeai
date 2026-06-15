@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { git } from "../lib/api";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
@@ -153,7 +153,7 @@
 
     const fullPath = `${repoPath}/${filePath}`;
     try {
-      const content = await invoke<string>("read_file", { filePath: fullPath });
+      const content = await git.readFile(fullPath);
       const state = createEditorState(content, filePath);
       buffers.push({ path: filePath, content, modified: false, state });
       switchToBuffer(buffers.length - 1);
@@ -199,7 +199,7 @@
     const content = view.state.doc.toString();
     const fullPath = `${repoPath}/${activeBuffer.path}`;
     try {
-      await invoke("write_file", { filePath: fullPath, content });
+      await git.writeFile(fullPath, content);
       activeBuffer.modified = false;
       activeBuffer.content = content;
       onModifiedChange?.(false);

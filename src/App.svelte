@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+  import { sessions as sessionsApi, projects as projectsApi, pty, symphony, notify, tasks } from "./lib/api";
+  import type { Session, Project } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./lib/mru.svelte";
@@ -25,30 +26,6 @@
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
-
-  interface Project {
-    id: string;
-    name: string;
-    path: string;
-  }
-
-  interface Session {
-    id: string;
-    project_id: string;
-    name: string;
-    tmux_name: string | null;
-    branch: string;
-    status: string;
-    created_at: string;
-    worktree_path: string | null;
-    provider: string | null;
-    backend: string;
-    tab_count: number;
-    base_branch: string | null;
-    task_key: string | null;
-    pr_url: string | null;
-    pr_state: string | null;
-  }
 
   let projects = $state<Project[]>([]);
   let sessions = $state<Session[]>([]);
@@ -123,18 +100,18 @@
   let renamingSessionId = $state<string | null>(null);
 
   async function doRename(id: string, name: string) {
-    await invoke("rename_session", { id, name });
+    await sessionsApi.rename(id, name);
     sessions = sessions.map((s) => s.id === id ? { ...s, name } : s);
     renamingSessionId = null;
     focusTerminal();
   }
 
   async function loadProjects() {
-    projects = await invoke<Project[]>("list_projects");
+    projects = await projectsApi.list();
   }
 
   async function loadSessions() {
-    sessions = await invoke<Session[]>("list_sessions");
+    sessions = await sessionsApi.list();
     // Initialize tab state for each session
     for (const s of sessions) {
       if (getTabCount(s.id) === 0) {
@@ -172,7 +149,7 @@
           // Skip if session was already removed (e.g., deleted by user)
           if (!sessions.find((x) => x.id === s.id)) return;
           sessions = sessions.map((x) => x.id === s.id ? { ...x, status: "exited" } : x);
-          invoke("mark_exited", { sessionId: s.id });
+          sessionsApi.markExited(s.id);
         }).then((unlisten) => exitUnlisteners.push(unlisten));
       }
     }
@@ -186,7 +163,7 @@
       agentStates = { ...agentStates, [id]: "Busy" };
     }
     // Tell backend to allow future notifications for this session
-    invoke("acknowledge_session", { sessionId: id });
+    sessionsApi.acknowledge(id);
   }
 
   function jumpToSession(index: number) {
@@ -223,7 +200,7 @@
       return;
     }
     removeTab(activeSessionId, active);
-    await invoke("close_tab", { sessionId: activeSessionId, tabIndex: active });
+    await pty.closeTab(activeSessionId, active);
   }
 
   function getUnifiedTabs(): { index: number }[] {
@@ -334,7 +311,7 @@
     const ptyKey = `${sessionId}:${tabIndex}`;
     listen(`pty-exited-${ptyKey}`, () => {
       removeTab(sessionId, tabIndex);
-      invoke("close_tab", { sessionId, tabIndex });
+      pty.closeTab(sessionId, tabIndex);
     }).then((unlisten) => exitUnlisteners.push(unlisten));
   }
 
@@ -346,7 +323,7 @@
     // Poll orchestrator status every 5 seconds
     const pollSymphony = async () => {
       try {
-        const raw = await invoke<string>("get_symphony_status");
+        const raw = await symphony.getStatus();
         symphonyStatus = JSON.parse(raw);
       } catch { symphonyStatus = null; }
     };
@@ -364,7 +341,7 @@
     });
 
     // Check if notification hook is installed
-    invoke<boolean>("is_notify_hook_installed").then((installed) => {
+    notify.isInstalled().then((installed) => {
       if (!installed) showHookPrompt = true;
     });
 
@@ -388,7 +365,7 @@
       if (event.payload.state === "Idle") {
         console.log("[notify] playing task complete sound");
         playTaskComplete();
-        invoke("fire_task_notify_hook", { sessionId: event.payload.session_id }).catch((err) => {
+        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
           if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
         });
       }
@@ -540,7 +517,7 @@
   }
 
   async function doDelete(s: Session) {
-    await invoke("destroy_session", { id: s.id });
+    await sessionsApi.destroy(s.id);
     destroyTabState(s.id);
     const { [s.id]: _d1, ...restOpen } = diffTabOpen;
     const { [s.id]: _d2, ...restActive } = diffTabActive;
@@ -569,7 +546,7 @@
   }
 
   async function archiveSession(s: Session) {
-    await invoke("archive_session", { id: s.id });
+    await sessionsApi.archive(s.id);
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -579,7 +556,7 @@
   }
 
   async function archiveProject(p: Project) {
-    await invoke("archive_project", { id: p.id });
+    await projectsApi.archive(p.id);
     const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
     for (const id of projectSessionIds) removeMru(id);
     sessions = sessions.filter((s) => s.project_id !== p.id);
@@ -591,7 +568,7 @@
   }
 
   async function deleteProject(p: Project) {
-    await invoke("delete_project", { id: p.id });
+    await projectsApi.delete(p.id);
     const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
     for (const id of projectSessionIds) {
       removeMru(id);
@@ -607,7 +584,7 @@
   }
 
   async function restartSession(s: Session) {
-    const updated = await invoke<Session>("restart_session", { sessionId: s.id });
+    const updated = await sessionsApi.restart(s.id);
     sessions = sessions.map((x) => x.id === s.id ? updated : x);
     selectSession(s.id);
     listenForExits();
@@ -650,7 +627,7 @@
       if (!activeSessionId) return;
       if (i === -1) { diffTabOpen = { ...diffTabOpen, [activeSessionId]: false }; diffTabActive = { ...diffTabActive, [activeSessionId]: false }; }
       else if (i === -2) { editorTabOpen = { ...editorTabOpen, [activeSessionId]: false }; editorTabActive = { ...editorTabActive, [activeSessionId]: false }; }
-      else { removeTab(activeSessionId, i); invoke("close_tab", { sessionId: activeSessionId, tabIndex: i }); }
+      else { removeTab(activeSessionId, i); pty.closeTab(activeSessionId, i); }
     }}
     onAddTab={handleNewTab}
     {symphonyStatus}
@@ -743,11 +720,11 @@
         if (s) renamingSessionId = s.id;
       }}
       onRestoreSession={async (id) => {
-        await invoke("restore_session", { id });
+        await sessionsApi.restore(id);
         await loadSessions();
       }}
       onDestroyArchivedSession={async (id) => {
-        await invoke("destroy_session", { id });
+        await sessionsApi.destroy(id);
       }}
       onNewSession={() => {
         if (projects.length === 0) {
@@ -758,7 +735,7 @@
       }}
       onResetTerminal={() => {
         if (activeSessionId) {
-          invoke("write_to_pty", { sessionId: activeSessionId, data: [0x0c] });
+          pty.write(activeSessionId, [0x0c]);
         }
       }}
       onArchiveProject={async (id) => {
@@ -770,7 +747,7 @@
         if (p) projectToDelete = p;
       }}
       onRestoreProject={async (id) => {
-        await invoke("restore_project", { id });
+        await projectsApi.restore(id);
         await loadProjects();
       }}
       onPickTask={(task) => {
@@ -856,7 +833,7 @@
         <span class="text-sm text-amber-800 dark:text-amber-200">Install notification hook for instant agent-done alerts?</span>
         <button
           class="ml-auto rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
-          onclick={async () => { await invoke("install_notify_hook"); showHookPrompt = false; }}
+          onclick={async () => { await notify.install(); showHookPrompt = false; }}
         >Install</button>
         <button
           class="rounded px-2 py-1 text-xs text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200"
