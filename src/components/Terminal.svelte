@@ -21,11 +21,12 @@
     focused: boolean;
     exited?: boolean;
     skipAttach?: boolean;
+    paused?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, paused = false, onUserInput, onAttached }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -299,6 +300,16 @@
     term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;
     if (fitAddon) fitAddon.fit();
+  });
+
+  // Pause/resume PTY data flow for MRU neighbors
+  $effect(() => {
+    if (!attached) return;
+    if (paused) {
+      pty.pause(sessionId);
+    } else {
+      pty.resume(sessionId);
+    }
   });
 
 

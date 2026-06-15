@@ -26,6 +26,7 @@
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import { initSession, getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex, getTabCount, destroySession as destroyTabState } from "./lib/session-tabs.svelte";
+  import { activateSession as poolActivate, removeSession as poolRemove, isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
 
   let projects = $state<Project[]>([]);
   let sessions = $state<Session[]>([]);
@@ -158,6 +159,7 @@
   function selectSession(id: string) {
     activeSessionId = id;
     touchMru(id);
+    poolActivate(id);
     // Clear idle state when user focuses this session
     if (agentStates[id] === "Idle") {
       agentStates = { ...agentStates, [id]: "Busy" };
@@ -519,6 +521,7 @@
   async function doDelete(s: Session) {
     await sessionsApi.destroy(s.id);
     destroyTabState(s.id);
+    poolRemove(s.id);
     const { [s.id]: _d1, ...restOpen } = diffTabOpen;
     const { [s.id]: _d2, ...restActive } = diffTabActive;
     diffTabOpen = restOpen;
@@ -547,6 +550,7 @@
 
   async function archiveSession(s: Session) {
     await sessionsApi.archive(s.id);
+    poolRemove(s.id);
     sessions = sessions.filter((x) => x.id !== s.id);
     removeMru(s.id);
     if (activeSessionId === s.id) {
@@ -558,7 +562,7 @@
   async function archiveProject(p: Project) {
     await projectsApi.archive(p.id);
     const projectSessionIds = sessions.filter((s) => s.project_id === p.id).map((s) => s.id);
-    for (const id of projectSessionIds) removeMru(id);
+    for (const id of projectSessionIds) { removeMru(id); poolRemove(id); }
     sessions = sessions.filter((s) => s.project_id !== p.id);
     projects = projects.filter((x) => x.id !== p.id);
     if (activeSessionId && projectSessionIds.includes(activeSessionId)) {
@@ -573,6 +577,7 @@
     for (const id of projectSessionIds) {
       removeMru(id);
       destroyTabState(id);
+      poolRemove(id);
     }
     sessions = sessions.filter((s) => s.project_id !== p.id);
     projects = projects.filter((x) => x.id !== p.id);
@@ -775,12 +780,14 @@
       {@const project = projects.find((p) => p.id === session.project_id)}
       {#each tabs as tab (tab.index)}
         {@const ptyKey = tab.index === 0 ? session.id : `${session.id}:${tab.index}`}
+        {#if poolIsMounted(session.id)}
         <Terminal
           sessionId={ptyKey}
           visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
           focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal"}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
+          paused={poolIsPaused(session.id)}
           onAttached={() => {
             if (tab.index === 0 && session.status === "exited") {
               sessions = sessions.map((s) => s.id === session.id ? { ...s, status: "active" } : s);
@@ -794,6 +801,7 @@
             }
           }}
         />
+        {/if}
       {/each}
       {#if hasDiff && project}
         {@const repoPath = session.worktree_path ?? project.path}
