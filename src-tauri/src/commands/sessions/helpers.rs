@@ -1,5 +1,18 @@
+use std::sync::Mutex;
+
 use crate::config;
 use crate::db;
+
+static KIRO_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static CLAUDE_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+static COPILOT_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Invalidate cached hook-installed results (call after hook installation).
+pub fn invalidate_hook_cache() {
+    *KIRO_HOOK_CACHE.lock().unwrap() = None;
+    *CLAUDE_HOOK_CACHE.lock().unwrap() = None;
+    *COPILOT_HOOK_CACHE.lock().unwrap() = None;
+}
 
 /// Resolve the working directory for a session's project.
 pub(crate) fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) -> Option<String> {
@@ -90,23 +103,91 @@ pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> boo
 }
 
 pub(crate) fn is_kiro_hook_installed() -> bool {
-    let home = config::home_dir();
-    let path = format!("{home}/.kiro/agents/default.json");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content.contains("planeai-stop-notify"),
-        Err(_) => false,
-    }
+    let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let home = config::home_dir();
+        let path = format!("{home}/.kiro/agents/default.json");
+        match std::fs::read_to_string(&path) {
+            Ok(content) => content.contains("planeai-stop-notify"),
+            Err(_) => false,
+        }
+    })
 }
 
 pub(crate) fn is_claude_hook_installed() -> bool {
-    let home = config::home_dir();
-    let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
-    crate::notify::is_claude_hook_installed_at(&path)
+    let mut cache = CLAUDE_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let home = config::home_dir();
+        let path = std::path::PathBuf::from(format!("{home}/.claude/settings.json"));
+        crate::notify::is_claude_hook_installed_at(&path)
+    })
 }
 
 pub(crate) fn is_copilot_hook_installed() -> bool {
-    let copilot_dir = std::env::var("COPILOT_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{}/.copilot", config::home_dir())));
-    crate::notify::is_copilot_hook_installed_at(&copilot_dir)
+    let mut cache = COPILOT_HOOK_CACHE.lock().unwrap();
+    *cache.get_or_insert_with(|| {
+        let copilot_dir = std::env::var("COPILOT_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::path::PathBuf::from(format!("{}/.copilot", config::home_dir()))
+            });
+        crate::notify::is_copilot_hook_installed_at(&copilot_dir)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hook_cache_returns_consistent_value() {
+        // First call populates cache, subsequent calls return same value
+        let first = is_kiro_hook_installed();
+        let second = is_kiro_hook_installed();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn invalidate_resets_all_caches() {
+        // Populate caches
+        is_kiro_hook_installed();
+        is_claude_hook_installed();
+        is_copilot_hook_installed();
+
+        // Invalidate
+        invalidate_hook_cache();
+
+        // Verify caches are cleared
+        assert!(KIRO_HOOK_CACHE.lock().unwrap().is_none());
+        assert!(CLAUDE_HOOK_CACHE.lock().unwrap().is_none());
+        assert!(COPILOT_HOOK_CACHE.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn provider_has_hook_unknown_provider_returns_false() {
+        let cfg = config::Config {
+            appearance: config::Appearance {
+                mode: "dark".into(),
+                terminal_theme_dark: String::new(),
+                terminal_theme_light: String::new(),
+                diff_theme_dark: String::new(),
+                diff_theme_light: String::new(),
+                theme: "default".into(),
+            },
+            terminal: config::Terminal {
+                font_family: "monospace".into(),
+                font_size: 14,
+                option_as_meta: false,
+            },
+            providers: std::collections::HashMap::new(),
+            default_provider: "kiro".into(),
+            session_backend: None,
+            vim_mode: None,
+            task_management: None,
+            projects_base_path: None,
+            pr_status: None,
+            hide_done_tasks: None,
+        };
+        assert!(!provider_has_hook("nonexistent", &cfg));
+    }
 }

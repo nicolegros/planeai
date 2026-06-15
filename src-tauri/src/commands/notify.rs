@@ -5,7 +5,8 @@ use crate::notify;
 use crate::state::ConfigState;
 
 use crate::commands::sessions::helpers::{
-    is_claude_hook_installed, is_copilot_hook_installed, is_kiro_hook_installed,
+    invalidate_hook_cache, is_claude_hook_installed, is_copilot_hook_installed,
+    is_kiro_hook_installed,
 };
 
 #[tauri::command]
@@ -54,6 +55,8 @@ pub fn install_notify_hook(config_state: State<ConfigState>) -> Result<(), Strin
     {
         install_copilot_hook(&home)?;
     }
+
+    invalidate_hook_cache();
 
     Ok(())
 }
