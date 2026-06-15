@@ -95,7 +95,18 @@ pub fn create_session_with_cmd(
     cmd: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    let args = vec!["new-session", "-d", "-s", tmux_name, "-c", working_dir, cmd];
+    let env_flag = format!("PLANEAI_SESSION_ID={}", session_id);
+    let args = vec![
+        "new-session",
+        "-d",
+        "-s",
+        tmux_name,
+        "-c",
+        working_dir,
+        "-e",
+        &env_flag,
+        cmd,
+    ];
     let output = Command::new(tmux_bin())
         .args(&args)
         .output()
@@ -104,18 +115,6 @@ pub fn create_session_with_cmd(
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
-
-    // Set PLANEAI_SESSION_ID so the stop hook can identify this session
-    let target = format!("={}", tmux_name);
-    let _ = Command::new(tmux_bin())
-        .args([
-            "set-environment",
-            "-t",
-            &target,
-            "PLANEAI_SESSION_ID",
-            session_id,
-        ])
-        .output();
 
     Ok(())
 }
