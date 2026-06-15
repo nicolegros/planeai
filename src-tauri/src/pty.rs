@@ -211,7 +211,7 @@ impl PtyManager {
 
         // ── Reader thread: reads PTY → pushes into pending buffer ─────────
         let pending_r = pending.clone();
-        let exit_event_name = format!("pty-exited-{session_id}");
+        let pty_key_for_exit = session_id.to_string();
         let observer = self.observer.read().unwrap().clone();
         let sid = session_id.to_string();
         let done_r = done.clone();
@@ -240,7 +240,7 @@ impl PtyManager {
         // ── Flusher thread: coalesces pending data → sends via Channel ────
         let pending_f = pending.clone();
         let done_f = done.clone();
-        let exit_event = exit_event_name.clone();
+        let exit_key = pty_key_for_exit.clone();
         let app_flusher = app.clone();
         let cancelled_f = cancelled.clone();
         thread::spawn(move || {
@@ -257,7 +257,8 @@ impl PtyManager {
                                 let _ = on_data.send(Response::new(chunk));
                             }
                             if !cancelled_f.load(Ordering::Acquire) {
-                                let _ = app_flusher.emit(&exit_event, ());
+                                let _ = app_flusher
+                                    .emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
                             }
                             return;
                         }
@@ -278,7 +279,7 @@ impl PtyManager {
                 }
             }
             if !cancelled_f.load(Ordering::Acquire) {
-                let _ = app_flusher.emit(&exit_event, ());
+                let _ = app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
             }
         });
 
