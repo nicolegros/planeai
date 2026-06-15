@@ -181,8 +181,10 @@ mod tests {
 
     #[test]
     fn fire_task_hook_no_task_management_returns_early() {
-        let mut cfg = config::Config::default();
-        cfg.task_management = None;
+        let cfg = config::Config {
+            task_management: None,
+            ..config::Config::default()
+        };
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         let session = test_session(Some("PROJ-1"));
         // Should not panic — returns early when no task_management configured
@@ -195,19 +197,21 @@ mod tests {
         db::migrate(&conn).unwrap();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
-        let mut cfg = config::Config::default();
-        cfg.task_management = Some(config::TaskManager {
-            templates: None,
-            on_start: None,
-            on_notify: None,
-            on_restart: None,
-            on_complete: Some(config::LifecycleHook {
-                move_to: "done".into(),
+        let cfg = config::Config {
+            task_management: Some(config::TaskManager {
+                templates: None,
+                on_start: None,
+                on_notify: None,
+                on_restart: None,
+                on_complete: Some(config::LifecycleHook {
+                    move_to: "done".into(),
+                }),
+                on_pr_open: None,
+                on_pr_merge: None,
+                auto_dispatch: None,
             }),
-            on_pr_open: None,
-            on_pr_merge: None,
-            auto_dispatch: None,
-        });
+            ..config::Config::default()
+        };
 
         let session = test_session(Some("MYA-1"));
         // Runs through the full path — project matched, prefix derived.
@@ -221,19 +225,21 @@ mod tests {
         db::migrate(&conn).unwrap();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
-        let mut cfg = config::Config::default();
-        cfg.task_management = Some(config::TaskManager {
-            templates: None,
-            on_start: None,
-            on_notify: None,
-            on_restart: None,
-            on_complete: Some(config::LifecycleHook {
-                move_to: "done".into(),
+        let cfg = config::Config {
+            task_management: Some(config::TaskManager {
+                templates: None,
+                on_start: None,
+                on_notify: None,
+                on_restart: None,
+                on_complete: Some(config::LifecycleHook {
+                    move_to: "done".into(),
+                }),
+                on_pr_open: None,
+                on_pr_merge: None,
+                auto_dispatch: None,
             }),
-            on_pr_open: None,
-            on_pr_merge: None,
-            auto_dispatch: None,
-        });
+            ..config::Config::default()
+        };
 
         let session = test_session(Some("MYA-1"));
         // Unknown hook name — does nothing
