@@ -8,7 +8,7 @@ use std::time::Duration;
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
-use crate::notify;
+use crate::output_observer::{NoopObserver, OutputObserver};
 #[cfg(not(windows))]
 use crate::tmux;
 
@@ -80,7 +80,7 @@ impl Drop for PtyHandle {
 
 pub struct PtyManager {
     ptys: RwLock<HashMap<String, Arc<Mutex<PtyHandle>>>>,
-    notify_state: Mutex<Option<notify::SharedNotifyState>>,
+    observer: RwLock<Arc<dyn OutputObserver>>,
     socket_path: Mutex<Option<String>>,
 }
 
@@ -88,13 +88,13 @@ impl PtyManager {
     pub fn new() -> Self {
         Self {
             ptys: RwLock::new(HashMap::new()),
-            notify_state: Mutex::new(None),
+            observer: RwLock::new(Arc::new(NoopObserver)),
             socket_path: Mutex::new(None),
         }
     }
 
-    pub fn set_notify_state(&self, state: notify::SharedNotifyState) {
-        *self.notify_state.lock().unwrap() = Some(state);
+    pub fn set_observer(&self, observer: Arc<dyn OutputObserver>) {
+        *self.observer.write().unwrap() = observer;
     }
 
     pub fn set_socket_path(&self, path: String) {
@@ -212,13 +212,11 @@ impl PtyManager {
         // ── Reader thread: reads PTY → pushes into pending buffer ─────────
         let pending_r = pending.clone();
         let exit_event_name = format!("pty-exited-{session_id}");
-        let notify_clone = self.notify_state.lock().unwrap().clone();
+        let observer = self.observer.read().unwrap().clone();
         let sid = session_id.to_string();
         let done_r = done.clone();
-        let app_reader = app.clone();
         thread::spawn(move || {
             let mut buf = [0u8; READ_BUF];
-            let mut was_busy = false;
             loop {
                 flow_clone.wait_if_paused();
                 match reader.read(&mut buf) {
@@ -229,23 +227,7 @@ impl PtyManager {
                         g.extend_from_slice(&buf[..n]);
                         cv.notify_one();
 
-                        if let Some(ref ns) = notify_clone {
-                            let mut s = ns.lock().unwrap();
-                            let was_idle =
-                                s.get_state(&sid) != Some(crate::notify::AgentState::Busy);
-                            s.notify_output(&sid);
-                            if was_idle && !was_busy {
-                                drop(s);
-                                let _ = app_reader.emit(
-                                    "agent-state-change",
-                                    serde_json::json!({
-                                        "session_id": &sid,
-                                        "state": "Busy"
-                                    }),
-                                );
-                            }
-                            was_busy = true;
-                        }
+                        observer.on_output(&sid, n);
                     }
                     Err(_) => break,
                 }

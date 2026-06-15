@@ -197,6 +197,37 @@ impl NotifyState {
 /// Shared handle to NotifyState used across threads.
 pub type SharedNotifyState = Arc<Mutex<NotifyState>>;
 
+/// Adapter that implements OutputObserver by forwarding to NotifyState + emitting Tauri events.
+/// Preserves the exact behavior previously inlined in the PTY reader thread.
+pub struct NotifyObserver {
+    state: SharedNotifyState,
+    app: AppHandle,
+}
+
+impl NotifyObserver {
+    pub fn new(state: SharedNotifyState, app: AppHandle) -> Self {
+        Self { state, app }
+    }
+}
+
+impl crate::output_observer::OutputObserver for NotifyObserver {
+    fn on_output(&self, session_id: &str, _byte_count: usize) {
+        let mut s = self.state.lock().unwrap();
+        let was_idle = s.get_state(session_id) != Some(AgentState::Busy);
+        s.notify_output(session_id);
+        if was_idle {
+            drop(s);
+            let _ = self.app.emit(
+                "agent-state-change",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "state": "Busy"
+                }),
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotifyEvent {
     Stop,
