@@ -43,6 +43,18 @@
   let taskItems = $state<TaskItem[]>([]);
   let taskSearchValue = $state("");
 
+  // Clear task-related state when switching to manual mode
+  $effect(() => {
+    if (mode === "manual") {
+      taskKey = "";
+      taskPrompt = "";
+      sessionName = "";
+      branchValue = "";
+      branchSearch = "";
+      newBranchName = "";
+    }
+  });
+
   const selectedProject = $derived(projects.find((p) => p.id === projectValue));
 
   $effect(() => {
