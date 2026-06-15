@@ -181,7 +181,7 @@ pub fn fire_task_notify_hook(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     if session.task_key.is_some() {
         if let Some(cwd) = session_cwd(&conn, &session) {
-            fire_task_hook(&cfg, &session, "on_notify", &cwd);
+            fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
         }
     }
     poll_pr_for_session(&conn, &cfg, &session)?;

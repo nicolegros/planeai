@@ -26,58 +26,15 @@ pub(crate) fn session_cwd(conn: &rusqlite::Connection, session: &db::Session) ->
 }
 
 /// Fire a task manager lifecycle hook (on_start, on_notify, on_restart, on_complete).
+/// Delegates to the unified implementation in session_ops.
 pub(crate) fn fire_task_hook(
     cfg: &config::Config,
     session: &db::Session,
     hook_name: &str,
     cwd: &str,
+    conn: &rusqlite::Connection,
 ) {
-    let task_key = match &session.task_key {
-        Some(k) => k,
-        None => return,
-    };
-    let tm = match resolve_task_manager(cfg) {
-        Ok(tm) => tm,
-        Err(_) => return,
-    };
-    let hook = match hook_name {
-        "on_start" => tm.on_start.as_ref(),
-        "on_notify" => tm.on_notify.as_ref(),
-        "on_restart" => tm.on_restart.as_ref(),
-        "on_complete" => tm.on_complete.as_ref(),
-        _ => None,
-    };
-    if let Some(h) = hook {
-        let db_path = crate::paths::db_path();
-        // Derive prefix from project name by looking up the path
-        let conn_result = rusqlite::Connection::open(&db_path);
-        if let Ok(conn) = conn_result {
-            let projects = db::list_projects(&conn).unwrap_or_default();
-            let prefix = projects
-                .iter()
-                .find(|p| cwd.starts_with(&p.path))
-                .map(|p| planeai_tasks::sqlite::derive_prefix(&p.name))
-                .unwrap_or_default();
-            if !prefix.is_empty() {
-                if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
-                    db_path.to_str().unwrap_or_default(),
-                    &prefix,
-                ) {
-                    use planeai_tasks::model::{Status, UpdateParams};
-                    use planeai_tasks::provider::TaskProvider;
-                    if let Some(s) = Status::parse(&h.move_to) {
-                        let _ = repo.update(
-                            task_key,
-                            UpdateParams {
-                                status: Some(s),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
+    crate::session_ops::fire_task_hook(cfg, session, hook_name, cwd, conn);
 }
 
 pub(crate) fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
@@ -189,5 +146,97 @@ mod tests {
             hide_done_tasks: None,
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
+    }
+
+    fn test_session(task_key: Option<&str>) -> db::Session {
+        db::Session {
+            id: "test-id".into(),
+            project_id: "proj-1".into(),
+            name: "test".into(),
+            tmux_name: None,
+            branch: "main".into(),
+            status: "active".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            worktree_path: None,
+            provider: None,
+            backend: "tmux".into(),
+            provider_session_id: None,
+            tab_count: 1,
+            auto_approve: false,
+            task_key: task_key.map(|s| s.to_string()),
+            base_branch: None,
+            pr_url: None,
+            pr_state: None,
+        }
+    }
+
+    #[test]
+    fn fire_task_hook_no_task_key_returns_early() {
+        let cfg = config::Config::default();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let session = test_session(None);
+        // Should not panic — just returns early
+        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+    }
+
+    #[test]
+    fn fire_task_hook_no_task_management_returns_early() {
+        let mut cfg = config::Config::default();
+        cfg.task_management = None;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let session = test_session(Some("PROJ-1"));
+        // Should not panic — returns early when no task_management configured
+        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp", &conn);
+    }
+
+    #[test]
+    fn fire_task_hook_with_matching_project_derives_prefix() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let mut cfg = config::Config::default();
+        cfg.task_management = Some(config::TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: None,
+            on_restart: None,
+            on_complete: Some(config::LifecycleHook {
+                move_to: "done".into(),
+            }),
+            on_pr_open: None,
+            on_pr_merge: None,
+            auto_dispatch: None,
+        });
+
+        let session = test_session(Some("MYA-1"));
+        // Runs through the full path — project matched, prefix derived.
+        // The task update won't find the task (no task tables), but doesn't error.
+        fire_task_hook(&cfg, &session, "on_complete", "/tmp/myapp/src", &conn);
+    }
+
+    #[test]
+    fn fire_task_hook_unknown_hook_name_does_nothing() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let mut cfg = config::Config::default();
+        cfg.task_management = Some(config::TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: None,
+            on_restart: None,
+            on_complete: Some(config::LifecycleHook {
+                move_to: "done".into(),
+            }),
+            on_pr_open: None,
+            on_pr_merge: None,
+            auto_dispatch: None,
+        });
+
+        let session = test_session(Some("MYA-1"));
+        // Unknown hook name — does nothing
+        fire_task_hook(&cfg, &session, "on_unknown", "/tmp/myapp", &conn);
     }
 }

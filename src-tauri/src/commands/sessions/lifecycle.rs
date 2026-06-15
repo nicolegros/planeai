@@ -66,7 +66,7 @@ pub fn restart_session(
     if updated.task_key.is_some() {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         if let Some(cwd) = session_cwd(&conn, &updated) {
-            fire_task_hook(&cfg, &updated, "on_restart", &cwd);
+            fire_task_hook(&cfg, &updated, "on_restart", &cwd, &conn);
         }
     }
 
@@ -98,7 +98,6 @@ pub async fn destroy_session(
     pty_state.0.detach(&id);
 
     let cleanup_ctx;
-    let task_hook_ctx;
     {
         let conn = db_state.0.lock().map_err(|e| e.to_string())?;
         let session = db::get_session(&conn, &id).map_err(|e| e.to_string())?;
@@ -122,16 +121,14 @@ pub async fn destroy_session(
                 },
             });
 
-            task_hook_ctx = if session.task_key.is_some() {
+            if session.task_key.is_some() {
                 let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-                let cwd = session_cwd(&conn, session);
-                Some((cfg.clone(), session.clone(), cwd))
-            } else {
-                None
-            };
+                if let Some(cwd) = session_cwd(&conn, session) {
+                    fire_task_hook(&cfg, session, "on_complete", &cwd, &conn);
+                }
+            }
         } else {
             cleanup_ctx = None;
-            task_hook_ctx = None;
         }
 
         db::destroy_session(&conn, &id).map_err(|e| e.to_string())?;
@@ -139,10 +136,6 @@ pub async fn destroy_session(
 
     if let Some(ctx) = cleanup_ctx {
         std::thread::spawn(move || {
-            if let Some((cfg, session, Some(cwd))) = task_hook_ctx {
-                fire_task_hook(&cfg, &session, "on_complete", &cwd);
-            }
-
             let errors = cleanup::run_cleanup(&ctx, &cleanup::real_ops());
 
             if !errors.is_empty() {
