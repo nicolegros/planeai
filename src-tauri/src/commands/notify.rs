@@ -96,31 +96,36 @@ fn install_kiro_hook(home: &str) -> Result<(), String> {
         serde_json::json!({ "name": "default", "tools": ["*"] })
     };
 
+    #[cfg(not(windows))]
+    let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
+    #[cfg(windows)]
+    let hook_command =
+        format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
+
     let hooks = config
         .as_object_mut()
         .unwrap()
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}));
-    let stop_hooks = hooks
-        .as_object_mut()
-        .unwrap()
-        .entry("stop")
-        .or_insert_with(|| serde_json::json!([]));
-    let stop_arr = stop_hooks.as_array_mut().unwrap();
+    let hooks_obj = hooks.as_object_mut().unwrap();
 
-    let already = stop_arr.iter().any(|h| {
-        h.get("command")
-            .and_then(|c| c.as_str())
-            .is_some_and(|c| c.contains("planeai-stop-notify"))
-    });
-    if !already {
-        #[cfg(not(windows))]
-        let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
-        #[cfg(windows)]
-        let hook_command =
-            format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
-        stop_arr.push(serde_json::json!({ "command": hook_command }));
-    }
+    let mut ensure_hook = |event: &str| {
+        let arr = hooks_obj
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+        let arr = arr.as_array_mut().unwrap();
+        let already = arr.iter().any(|h| {
+            h.get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("planeai-stop-notify"))
+        });
+        if !already {
+            arr.push(serde_json::json!({ "command": hook_command }));
+        }
+    };
+
+    ensure_hook("stop");
+    ensure_hook("userPromptSubmit");
 
     let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     std::fs::write(&config_path, output)
@@ -191,4 +196,116 @@ fn install_copilot_hook(home: &str) -> Result<(), String> {
         &bash_path.to_string_lossy(),
         &ps_path.to_string_lossy(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_kiro_hook_creates_both_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        install_kiro_hook(home).unwrap();
+
+        let config_path = dir.path().join(".kiro/agents/default.json");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Both hooks registered
+        let stop = &v["hooks"]["stop"];
+        assert!(stop.is_array());
+        assert!(stop[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
+
+        let prompt = &v["hooks"]["userPromptSubmit"];
+        assert!(prompt.is_array());
+        assert!(prompt[0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
+    }
+
+    #[test]
+    fn install_kiro_hook_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        install_kiro_hook(home).unwrap();
+        install_kiro_hook(home).unwrap();
+
+        let config_path = dir.path().join(".kiro/agents/default.json");
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Should not duplicate entries
+        assert_eq!(v["hooks"]["stop"].as_array().unwrap().len(), 1);
+        assert_eq!(v["hooks"]["userPromptSubmit"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn install_kiro_hook_preserves_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+        let agents_dir = dir.path().join(".kiro/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+
+        // Pre-existing config with user hooks
+        let existing = serde_json::json!({
+            "name": "default",
+            "tools": ["*"],
+            "hooks": {
+                "preToolUse": [{ "matcher": "shell", "command": "guardrails check" }]
+            }
+        });
+        std::fs::write(
+            agents_dir.join("default.json"),
+            serde_json::to_string_pretty(&existing).unwrap(),
+        )
+        .unwrap();
+
+        install_kiro_hook(home).unwrap();
+
+        let content = std::fs::read_to_string(agents_dir.join("default.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        // Existing hooks preserved
+        assert_eq!(v["hooks"]["preToolUse"][0]["matcher"], "shell");
+        // Our hooks added
+        assert!(v["hooks"]["stop"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
+        assert!(v["hooks"]["userPromptSubmit"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("planeai-stop-notify"));
+    }
+
+    #[test]
+    fn install_kiro_hook_writes_script_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_str().unwrap();
+
+        install_kiro_hook(home).unwrap();
+
+        #[cfg(not(windows))]
+        let script_path = dir.path().join(".kiro/hooks/planeai-stop-notify.sh");
+        #[cfg(windows)]
+        let script_path = dir.path().join(".kiro/hooks/planeai-stop-notify.ps1");
+        assert!(script_path.exists());
+
+        let content = std::fs::read_to_string(&script_path).unwrap();
+        assert!(content.contains("PLANEAI_SESSION_ID"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&script_path).unwrap().permissions();
+            assert_eq!(perms.mode() & 0o777, 0o755);
+        }
+    }
 }

@@ -266,6 +266,35 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
     }
 }
 
+/// Check if the Kiro CLI hook is installed at the given agents config path.
+/// Returns true only if both stop and userPromptSubmit hooks are configured.
+pub fn is_kiro_hook_installed_at(config_path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    if !content.contains("planeai-stop-notify") {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
+        return false;
+    };
+    ["stop", "userPromptSubmit"].iter().all(|event| {
+        hooks
+            .get(*event)
+            .and_then(|a| a.as_array())
+            .is_some_and(|arr| {
+                arr.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|c| c.as_str())
+                        .is_some_and(|c| c.contains("planeai-stop-notify"))
+                })
+            })
+    })
+}
+
 /// Check if the Claude Code hook is installed at the given settings path.
 /// Returns true only if all expected hook events are configured.
 pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
@@ -705,6 +734,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_json_busy_event() {
+        let line = r#"{"session_id":"abc123","event":"busy"}"#;
+        let msg = parse_notify_message(line);
+        assert_eq!(msg.session_id, "abc123");
+        assert_eq!(msg.event, NotifyEvent::Busy);
+    }
+
+    #[test]
     fn detect_claude_hook_installed() {
         let dir = tempfile::tempdir().unwrap();
         let settings_path = dir.path().join("settings.json");
@@ -967,5 +1004,57 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("planeai-stop-notify"));
+    }
+
+    #[test]
+    fn detect_kiro_hook_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("default.json");
+        let config = serde_json::json!({
+            "name": "default",
+            "tools": ["*"],
+            "hooks": {
+                "stop": [{ "command": "/path/to/planeai-stop-notify.sh" }],
+                "userPromptSubmit": [{ "command": "/path/to/planeai-stop-notify.sh" }]
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+
+        assert!(is_kiro_hook_installed_at(&config_path));
+    }
+
+    #[test]
+    fn detect_kiro_hook_missing_user_prompt_submit_triggers_reinstall() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("default.json");
+        // Old install with only "stop" hook
+        let config = serde_json::json!({
+            "name": "default",
+            "tools": ["*"],
+            "hooks": {
+                "stop": [{ "command": "/path/to/planeai-stop-notify.sh" }]
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+
+        assert!(!is_kiro_hook_installed_at(&config_path));
+    }
+
+    #[test]
+    fn detect_kiro_hook_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("default.json");
+        let config = serde_json::json!({ "name": "default", "tools": ["*"] });
+        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+
+        assert!(!is_kiro_hook_installed_at(&config_path));
+    }
+
+    #[test]
+    fn detect_kiro_hook_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("default.json");
+
+        assert!(!is_kiro_hook_installed_at(&config_path));
     }
 }

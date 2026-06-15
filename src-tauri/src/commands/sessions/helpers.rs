@@ -63,11 +63,8 @@ pub(crate) fn is_kiro_hook_installed() -> bool {
     let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
     *cache.get_or_insert_with(|| {
         let home = config::home_dir();
-        let path = format!("{home}/.kiro/agents/default.json");
-        match std::fs::read_to_string(&path) {
-            Ok(content) => content.contains("planeai-stop-notify"),
-            Err(_) => false,
-        }
+        let path = std::path::PathBuf::from(format!("{home}/.kiro/agents/default.json"));
+        crate::notify::is_kiro_hook_installed_at(&path)
     })
 }
 
