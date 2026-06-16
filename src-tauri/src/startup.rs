@@ -2,8 +2,10 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 use crate::commands::pr::poll_pr_for_session;
+use crate::commands::sessions::helpers::provider_has_hook;
 use crate::config;
 use crate::db;
+use crate::notify::SharedNotifyState;
 use crate::state::{ConfigState, DbState};
 
 /// Revive sessions on startup: recreate dead tmux sessions and restore exited direct sessions.
@@ -69,6 +71,42 @@ where
     }
 
     failures
+}
+
+/// Register all active sessions in NotifyState at startup (after NotifyState is created).
+pub fn register_active_sessions(
+    conn: &rusqlite::Connection,
+    cfg: &config::Config,
+    notify_state: &SharedNotifyState,
+) {
+    let sessions = match db::list_sessions(conn) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let projects = db::list_projects(conn).unwrap_or_default();
+    let mut ns = notify_state.lock().unwrap();
+
+    for session in &sessions {
+        if session.status != "active" {
+            continue;
+        }
+        let project_name = projects
+            .iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.name.as_str())
+            .unwrap_or("unknown");
+        let display_name = if session.name.is_empty() {
+            &session.branch
+        } else {
+            &session.name
+        };
+        let hook_enabled = session
+            .provider
+            .as_deref()
+            .map(|pk| provider_has_hook(pk, cfg))
+            .unwrap_or(false);
+        ns.register_session(&session.id, display_name, project_name, hook_enabled);
+    }
 }
 
 /// Start background PR status poller (every 2 minutes).
@@ -405,5 +443,90 @@ mod tests {
             db::get_session(&conn, "s1").unwrap().unwrap().status,
             "active"
         );
+    }
+
+    #[test]
+    fn register_active_sessions_registers_only_active() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        // Active session
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "active-sess",
+            None,
+            "main",
+            None,
+            None,
+            "direct",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        // Archived session
+        db::create_session_with_id(
+            &conn,
+            "s2",
+            &project.id,
+            "archived-sess",
+            None,
+            "feat",
+            None,
+            None,
+            "direct",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, "s2").unwrap();
+
+        let cfg = config::Config::default();
+        let notify_state: SharedNotifyState =
+            Arc::new(Mutex::new(crate::notify::NotifyState::new()));
+
+        register_active_sessions(&conn, &cfg, &notify_state);
+
+        let ns = notify_state.lock().unwrap();
+        assert!(ns.get_meta("s1").is_some(), "active session registered");
+        assert!(ns.get_meta("s2").is_none(), "exited session not registered");
+        assert_eq!(ns.get_meta("s1").unwrap().name, "active-sess");
+        assert_eq!(ns.get_meta("s1").unwrap().project_name, "myapp");
+    }
+
+    #[test]
+    fn register_active_sessions_uses_branch_as_display_name_when_name_empty() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "", // empty name
+            None,
+            "feature/cool",
+            None,
+            None,
+            "direct",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let cfg = config::Config::default();
+        let notify_state: SharedNotifyState =
+            Arc::new(Mutex::new(crate::notify::NotifyState::new()));
+
+        register_active_sessions(&conn, &cfg, &notify_state);
+
+        let ns = notify_state.lock().unwrap();
+        assert_eq!(ns.get_meta("s1").unwrap().name, "feature/cool");
     }
 }
