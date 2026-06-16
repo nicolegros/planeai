@@ -2976,6 +2976,7 @@ dependencies = [
  "json_comments",
  "notify",
  "planeai-core",
+ "planeai-ipc",
  "planeai-tasks",
  "portable-pty",
  "regex",
@@ -2995,7 +2996,6 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "uuid",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3018,7 +3018,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "libc",
+ "planeai-ipc",
  "portable-pty",
  "serde",
  "serde_json",
@@ -3027,6 +3027,15 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "planeai-ipc"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
