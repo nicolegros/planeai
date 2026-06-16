@@ -41,7 +41,7 @@ pub fn spawn_tab(
     });
 
     let pty_key = format!("{}:{}", session_id, tab_index);
-    let target = pty::PtyTarget::Direct {
+    let target = pty::PtyTarget::Shell {
         command: shell,
         args: vec!["-l".to_string()],
         cwd,

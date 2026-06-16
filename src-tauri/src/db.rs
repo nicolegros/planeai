@@ -207,6 +207,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
 
+    // Migrate direct backend sessions to daemon (direct backend removed)
+    let _ = conn.execute_batch("UPDATE sessions SET backend = 'daemon' WHERE backend = 'direct'");
+
     Ok(())
 }
 
@@ -522,29 +525,29 @@ mod tests {
     }
 
     #[test]
-    fn test_create_direct_session_with_null_tmux_name() {
+    fn test_create_daemon_session_with_null_tmux_name() {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let s = create_session_with_id(
             &conn,
             "sess-1",
             &p.id,
-            "direct session",
+            "daemon session",
             None,
             "main",
             None,
             None,
-            "direct",
+            "daemon",
             true,
             None,
             None,
         )
         .unwrap();
-        assert_eq!(s.backend, "direct");
+        assert_eq!(s.backend, "daemon");
         assert!(s.tmux_name.is_none());
         // Verify round-trip through DB
         let loaded = get_session(&conn, "sess-1").unwrap().unwrap();
-        assert_eq!(loaded.backend, "direct");
+        assert_eq!(loaded.backend, "daemon");
         assert!(loaded.tmux_name.is_none());
     }
 
@@ -808,7 +811,7 @@ mod tests {
             "main",
             None,
             Some("kiro"),
-            "direct",
+            "daemon",
             true,
             None,
             None,
@@ -935,7 +938,7 @@ mod tests {
         migrate(&conn).unwrap();
         // Now inserting NULL tmux_name should work
         let s = create_session_with_id(
-            &conn, "s2", "p1", "direct", None, "feat", None, None, "direct", true, None, None,
+            &conn, "s2", "p1", "daemon", None, "feat", None, None, "daemon", true, None, None,
         )
         .unwrap();
         assert!(s.tmux_name.is_none());
@@ -965,7 +968,7 @@ mod tests {
             "feat/x",
             None,
             None,
-            "direct",
+            "daemon",
             true,
             None,
             Some("main"),
@@ -981,15 +984,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
 
@@ -1026,15 +1029,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
 
@@ -1050,15 +1053,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
 
@@ -1076,15 +1079,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "direct", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "direct", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "direct", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
         )
         .unwrap();
 
@@ -1169,7 +1172,7 @@ mod tests {
 
         // Session with no task_key — should always appear
         let s1 = create_session_with_id(
-            &conn, "s1", &p.id, "no task", None, "main", None, None, "direct", false, None, None,
+            &conn, "s1", &p.id, "no task", None, "main", None, None, "daemon", false, None, None,
         )
         .unwrap();
 
@@ -1183,7 +1186,7 @@ mod tests {
             "feat-a",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             Some("MYA-1"),
             None,
@@ -1200,7 +1203,7 @@ mod tests {
             "feat-c",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             Some("MYA-1"),
             None,
@@ -1218,7 +1221,7 @@ mod tests {
             "feat-b",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             Some("MYA-2"),
             None,

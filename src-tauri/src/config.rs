@@ -420,7 +420,7 @@ pub fn resolve_backend(config: &Config) -> &str {
             if tmux_available() {
                 "tmux"
             } else {
-                "direct"
+                "daemon"
             }
         }
     }
@@ -741,10 +741,10 @@ mod tests {
     #[test]
     fn resolve_backend_returns_config_value_when_set() {
         let config = Config {
-            session_backend: Some("direct".to_string()),
+            session_backend: Some("daemon".to_string()),
             ..Default::default()
         };
-        assert_eq!(resolve_backend(&config), "direct");
+        assert_eq!(resolve_backend(&config), "daemon");
 
         let config = Config {
             session_backend: Some("tmux".to_string()),
@@ -758,14 +758,13 @@ mod tests {
         let config = Config::default();
         assert!(config.session_backend.is_none());
         let result = resolve_backend(&config);
-        // On this machine tmux is available, so should resolve to "tmux"
-        // The key behavior: it returns either "tmux" or "direct", never panics
-        assert!(result == "tmux" || result == "direct");
+        // The key behavior: it returns either "tmux" or "daemon", never panics
+        assert!(result == "tmux" || result == "daemon");
         // And it matches tmux_available()
         if tmux_available() {
             assert_eq!(result, "tmux");
         } else {
-            assert_eq!(result, "direct");
+            assert_eq!(result, "daemon");
         }
     }
 
@@ -774,14 +773,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path();
 
-        // Save with session_backend = Some("direct")
+        // Save with session_backend = Some("daemon")
         let config = Config {
-            session_backend: Some("direct".to_string()),
+            session_backend: Some("daemon".to_string()),
             ..Default::default()
         };
         save(config_dir, &config).unwrap();
         let (loaded, _) = load(config_dir);
-        assert_eq!(loaded.session_backend, Some("direct".to_string()));
+        assert_eq!(loaded.session_backend, Some("daemon".to_string()));
 
         // Save with session_backend = None (should be absent from JSON)
         let config = Config::default();

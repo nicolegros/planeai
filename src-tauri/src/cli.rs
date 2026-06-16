@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::io::{Read, Write};
 
 #[cfg(not(windows))]
 use crate::tmux;
@@ -115,7 +116,7 @@ pub fn build_session_plan(
         let sanitized = project.name.replace(' ', "-").replace(['.', ':'], "");
         Some(format!("planeai-{sanitized}-{short_id}"))
     } else {
-        None
+        None // daemon backend doesn't use tmux names
     };
 
     let session_name = opts.name.as_deref().unwrap_or(&opts.branch).to_string();
@@ -138,10 +139,6 @@ pub fn build_session_plan(
 }
 
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
-    if plan.backend == "direct" && !env.socket_path.exists() {
-        return Err("GUI is not running (socket not found). Direct backend requires the GUI to spawn sessions.".to_string());
-    }
-
     match &plan.branch_strategy {
         BranchStrategy::Checkout {
             repo,
@@ -161,7 +158,18 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         }
     }
 
-    if let Some(tmux_name) = &plan.tmux_name {
+    if plan.backend == "daemon" {
+        let socket_path = planeai_ipc::daemon_socket_path();
+        let daemon_bin = resolve_daemon_binary();
+        let scrollback = env.config.daemon_scrollback_bytes.unwrap_or(1_048_576);
+        ensure_daemon_running(&daemon_bin, &socket_path, scrollback)?;
+        daemon_spawn(
+            &socket_path,
+            &plan.session_id,
+            &plan.command,
+            &plan.working_dir,
+        )?;
+    } else if let Some(tmux_name) = &plan.tmux_name {
         #[cfg(not(windows))]
         tmux::create_session_with_cmd(
             tmux_name,
@@ -197,6 +205,109 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
 
     serde_json::to_string(&session).map_err(|e| e.to_string())
+}
+
+/// Resolve the daemon binary path. Checks /usr/local/bin first, then falls back
+/// to the current executable's directory.
+fn resolve_daemon_binary() -> std::path::PathBuf {
+    let symlinked = std::path::Path::new("/usr/local/bin/planeai-daemon");
+    if symlinked.exists() {
+        return symlinked.to_path_buf();
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("planeai-daemon");
+            if sibling.exists() {
+                return sibling;
+            }
+        }
+    }
+    // Last resort: hope it's on PATH
+    std::path::PathBuf::from("planeai-daemon")
+}
+
+/// Ensure the daemon process is running. If the socket/pipe doesn't exist, spawn the daemon.
+fn ensure_daemon_running(
+    daemon_bin: &std::path::Path,
+    socket_path: &std::path::Path,
+    scrollback_bytes: usize,
+) -> Result<(), String> {
+    // Try connecting to verify daemon is alive
+    let app_dir = crate::paths::app_data_dir();
+    if planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).is_ok() {
+        return Ok(());
+    }
+
+    // Stale socket — remove it (unix only, no-op on windows)
+    let _ = std::fs::remove_file(socket_path);
+
+    // Create parent directory
+    if let Some(parent) = socket_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    std::process::Command::new(daemon_bin)
+        .arg("--socket-path")
+        .arg(socket_path)
+        .arg("--scrollback-bytes")
+        .arg(scrollback_bytes.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to spawn daemon: {e}"))?;
+
+    // Wait for daemon to become reachable (up to 3 seconds)
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).is_ok() {
+            return Ok(());
+        }
+    }
+    Err("daemon did not start within 3 seconds".to_string())
+}
+
+/// Send a Spawn command to the daemon control socket.
+fn daemon_spawn(
+    _socket_path: &std::path::Path,
+    session_id: &str,
+    command: &str,
+    cwd: &str,
+) -> Result<(), String> {
+    let app_dir = crate::paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+        .map_err(|e| format!("daemon connect failed: {e}"))?;
+
+    // Send control connection type byte
+    stream
+        .write_all(&[0x00])
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    let req = serde_json::json!({
+        "cmd": "spawn",
+        "session_id": session_id,
+        "command": command,
+        "args": [],
+        "cwd": cwd,
+    });
+    let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
+    stream
+        .write_all(format!("{}\n", String::from_utf8_lossy(&payload)).as_bytes())
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    // Read response
+    let mut buf = vec![0u8; 4096];
+    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
+    let resp: serde_json::Value =
+        serde_json::from_slice(&buf[..n]).map_err(|e| format!("invalid response: {e}"))?;
+
+    if resp.get("error").is_some() {
+        return Err(resp["error"]
+            .as_str()
+            .unwrap_or("unknown error")
+            .to_string());
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -321,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_direct_backend_has_no_tmux_name() {
+    fn plan_daemon_backend_has_no_tmux_name() {
         let opts = SessionCreateOpts {
             project: "myapp".to_string(),
             branch: "main".to_string(),
@@ -338,13 +449,13 @@ mod tests {
         let plan = build_session_plan(
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             &opts,
-            &test_env("direct"),
+            &test_env("daemon"),
             &test_project(),
         )
         .unwrap();
 
         assert_eq!(plan.tmux_name, None);
-        assert_eq!(plan.backend, "direct");
+        assert_eq!(plan.backend, "daemon");
     }
 
     #[test]

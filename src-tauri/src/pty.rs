@@ -13,12 +13,11 @@ use crate::output_observer::{NoopObserver, OutputObserver};
 use crate::tmux;
 
 /// Describes what command to run inside the PTY.
-#[allow(dead_code)]
 pub enum PtyTarget {
     /// Attach to an existing tmux session.
     TmuxAttach { tmux_name: String },
-    /// Spawn a command directly (no tmux).
-    Direct {
+    /// Spawn a local shell command (used for extra tabs, not for session backends).
+    Shell {
         command: String,
         args: Vec<String>,
         cwd: String,
@@ -136,7 +135,7 @@ impl PtyManager {
                     return Err("tmux not available on Windows".to_string());
                 }
             }
-            PtyTarget::Direct { command, args, cwd } => {
+            PtyTarget::Shell { command, args, cwd } => {
                 let mut c = CommandBuilder::new(command);
                 c.args(args);
                 c.cwd(cwd);

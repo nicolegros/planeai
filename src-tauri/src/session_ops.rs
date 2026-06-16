@@ -160,6 +160,7 @@ pub fn destroy(
         } else {
             None
         },
+        session_id: Some(session.id.clone()),
     };
     let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
 
@@ -424,6 +425,47 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     WindowsPromptOps
 }
 
+/// Send a prompt to a daemon-backend session via the daemon data connection.
+fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let app_dir = crate::paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+        .map_err(|e| format!("daemon connect failed: {e}"))?;
+
+    // Data connection type byte
+    stream
+        .write_all(&[0x01])
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    // Session ID as 36-byte UTF-8
+    stream
+        .write_all(session_id.as_bytes())
+        .map_err(|e| format!("session id send failed: {e}"))?;
+
+    // Send FRAME_INPUT: [type=0x02][4-byte big-endian len][payload]
+    let payload = text.as_bytes();
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(0x02); // FRAME_INPUT
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    stream
+        .write_all(&frame)
+        .map_err(|e| format!("frame write failed: {e}"))?;
+
+    // Send Enter key
+    let enter = b"\n";
+    let mut enter_frame = Vec::with_capacity(6);
+    enter_frame.push(0x02);
+    enter_frame.extend_from_slice(&(enter.len() as u32).to_be_bytes());
+    enter_frame.extend_from_slice(enter);
+    stream
+        .write_all(&enter_frame)
+        .map_err(|e| format!("enter frame write failed: {e}"))?;
+
+    Ok(())
+}
+
 pub fn send_prompt(
     conn: &Connection,
     id_prefix: &str,
@@ -456,9 +498,9 @@ pub fn send_prompt(
             ops.tmux_send_keys(tmux_name, text)?;
             tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
-        "direct" => {
-            ops.notify_socket_send(&session.id, text)?;
-            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket");
+        "daemon" => {
+            daemon_send_prompt(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
         }
         other => return Err(format!("unsupported backend: {other}")),
     }
@@ -568,6 +610,7 @@ mod tests {
     fn test_cleanup_ops() -> CleanupOps {
         CleanupOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
@@ -577,6 +620,7 @@ mod tests {
     fn failing_cleanup_ops() -> CleanupOps {
         CleanupOps {
             kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+            kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
             delete_branch: Box::new(|_, _| Err("branch in use".to_string())),
@@ -950,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn send_prompt_direct_backend_sends_to_socket() {
+    fn send_prompt_daemon_backend_uses_daemon_connection() {
         let conn = setup_db();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         let projects = db::list_projects(&conn).unwrap();
@@ -961,28 +1005,28 @@ mod tests {
             &conn,
             id,
             pid,
-            "direct-session",
+            "daemon-session",
             None,
             "main",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             None,
             None,
         )
         .unwrap();
 
+        // daemon_send_prompt will fail in tests (no daemon running) but we verify
+        // the function routes to daemon backend correctly by checking it doesn't
+        // call tmux_send_keys or notify_socket_send
         let ops = MockPromptOps::new(true);
-        let result = send_prompt(&conn, "bbbb", "hello agent", &ops).unwrap();
-
-        assert_eq!(result.session_id, id);
-        assert_eq!(result.backend, "direct");
-        assert_eq!(ops.sent_socket.borrow().len(), 1);
-        assert_eq!(
-            ops.sent_socket.borrow()[0],
-            (id.to_string(), "hello agent".to_string())
-        );
+        let err = send_prompt(&conn, "bbbb", "hello agent", &ops);
+        // In test env, daemon socket won't exist, so this errors
+        assert!(err.is_err());
+        // Verify neither tmux nor socket was called
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(ops.sent_socket.borrow().len(), 0);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 # Dual Session Backend — Development Plan
 
+> **Note:** This plan is superseded by ADR-0010. The `direct` backend described here has been replaced by the `daemon` backend, which provides session persistence without requiring tmux. See PLA-65/PLA-70 for the implementation.
+
 ## Phase 1: Backend foundation (Rust)
 
 ### 1.1 DB migration — add `backend` column and `exited` status
