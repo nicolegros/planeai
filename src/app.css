@@ -150,6 +150,7 @@
 .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-width: none;
+  background-color: inherit !important;
 }
 
 .xterm-viewport::-webkit-scrollbar {
