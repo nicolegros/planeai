@@ -1,11 +1,9 @@
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
-use crate::config;
 use crate::db;
 use crate::pty;
 use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
-use crate::util::resolve_command;
 
 use super::helpers::provider_has_hook;
 use super::launch::discover_provider_session_id;
@@ -27,6 +25,8 @@ pub fn attach_session(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
+    // Discovery info: only need list_cmd, pattern, is_resume, previous_id, cwd.
+    // Command resolution is skipped for daemon sessions (not needed for reattach).
     let discovery_info = if session.backend != "tmux" {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
@@ -48,15 +48,6 @@ pub fn attach_session(
         });
         let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
 
-        let cmd = if is_resume {
-            config::restart_command_for_provider(provider_def, resume_id)
-        } else {
-            config::launch_command(provider_def, session.auto_approve)
-        };
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let command = resolve_command(parts[0]);
-        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
         let project_path = projects
             .iter()
@@ -74,9 +65,6 @@ pub fn attach_session(
             pattern,
             is_resume,
             session.provider_session_id.clone(),
-            cwd.clone(),
-            command,
-            args,
             cwd,
         ))
     } else {
@@ -131,9 +119,7 @@ pub fn attach_session(
     }
     drop(conn);
 
-    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd, _, _, _)) =
-        discovery_info
-    {
+    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd)) = discovery_info {
         eprintln!(
             "[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'",
             &session_id, &list_cmd, &cwd
@@ -161,7 +147,7 @@ pub fn attach_session(
             "[DEBUG-disc] skipping discovery: discovery_info={:?}",
             discovery_info
                 .as_ref()
-                .map(|(a, b, _, _, _, _, _, _)| (a.is_some(), b.is_some()))
+                .map(|(a, b, _, _, _)| (a.is_some(), b.is_some()))
         );
     }
 
