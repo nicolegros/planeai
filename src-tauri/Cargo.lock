@@ -3017,10 +3017,16 @@ name = "planeai-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
+ "libc",
  "portable-pty",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
