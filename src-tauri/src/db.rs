@@ -365,7 +365,7 @@ pub fn create_session_with_id(
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
     let sql = format!(
         "SELECT {SESSION_COLUMNS} FROM sessions WHERE status IN ('active', 'exited') \
-         AND (task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
+         AND (status = 'active' OR task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
          ORDER BY mru_position ASC NULLS LAST, created_at ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -1173,12 +1173,12 @@ mod tests {
         )
         .unwrap();
 
-        // Session linked to a done task — should be excluded
+        // Active session linked to a done task — should still appear (active sessions always visible)
         let s2 = create_session_with_id(
             &conn,
             "s2",
             &p.id,
-            "done task",
+            "done task active",
             None,
             "feat-a",
             None,
@@ -1190,10 +1190,28 @@ mod tests {
         )
         .unwrap();
 
-        // Session linked to an in_progress task — should appear
+        // Exited session linked to a done task — should be excluded
         let s3 = create_session_with_id(
             &conn,
             "s3",
+            &p.id,
+            "done task exited",
+            None,
+            "feat-c",
+            None,
+            None,
+            "direct",
+            false,
+            Some("MYA-1"),
+            None,
+        )
+        .unwrap();
+        mark_session_exited(&conn, &s3.id).unwrap();
+
+        // Session linked to an in_progress task — should appear
+        let s4 = create_session_with_id(
+            &conn,
+            "s4",
             &p.id,
             "active task",
             None,
@@ -1227,7 +1245,8 @@ mod tests {
         let sessions = list_sessions(&conn).unwrap();
         let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&s1.id.as_str()));
-        assert!(!ids.contains(&s2.id.as_str())); // done task — excluded
-        assert!(ids.contains(&s3.id.as_str()));
+        assert!(ids.contains(&s2.id.as_str())); // active session with done task — visible
+        assert!(!ids.contains(&s3.id.as_str())); // exited session with done task — excluded
+        assert!(ids.contains(&s4.id.as_str()));
     }
 }
