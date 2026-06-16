@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
 
-use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams};
+use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams, DEFAULT_BASE_BRANCH};
 use crate::provider::{Error, TaskProvider};
 
 /// Run task-table migrations on an existing connection.
@@ -18,7 +18,8 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
         .query_row("SELECT version FROM task_schema_version", [], |r| r.get(0))
         .map_err(|e| Error::Storage(e.to_string()))?;
 
-    let migrations = ["CREATE TABLE IF NOT EXISTS task_projects (
+    let migrations = [
+        "CREATE TABLE IF NOT EXISTS task_projects (
             prefix TEXT PRIMARY KEY,
             next_seq INTEGER NOT NULL DEFAULT 1
         );
@@ -42,7 +43,9 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             task_key TEXT NOT NULL REFERENCES tasks(key) ON DELETE CASCADE,
             tag TEXT NOT NULL,
             PRIMARY KEY (task_key, tag)
-        );"];
+        );",
+        "ALTER TABLE tasks ADD COLUMN base_branch TEXT;",
+    ];
 
     for (i, sql) in migrations.iter().enumerate() {
         if (i as i32) >= version {
@@ -138,39 +141,42 @@ impl SqliteRepository {
         Ok(out)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn row_to_task(
-        &self,
-        conn: &Connection,
-        key: &str,
-        title: String,
-        description: String,
-        status_str: String,
-        priority: i32,
-        parent_key: Option<String>,
-        created_at: String,
-        updated_at: String,
-    ) -> Result<Task, Error> {
-        let status = Status::parse(&status_str).ok_or(Error::InvalidStatus(status_str))?;
-        let blocked_by = self.load_blockers(conn, key)?;
-        let tags = self.load_tags(conn, key)?;
+    fn row_to_task(&self, conn: &Connection, row: TaskRow) -> Result<Task, Error> {
+        let status = Status::parse(&row.status).ok_or(Error::InvalidStatus(row.status))?;
+        let blocked_by = self.load_blockers(conn, &row.key)?;
+        let tags = self.load_tags(conn, &row.key)?;
         Ok(Task {
-            key: key.to_string(),
-            title,
-            description,
+            key: row.key,
+            title: row.title,
+            description: row.description,
             status,
-            priority,
-            parent_key,
+            priority: row.priority,
+            parent_key: row.parent_key,
             blocked_by,
             tags,
-            created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+            base_branch: row
+                .base_branch
+                .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
         })
     }
+}
+
+struct TaskRow {
+    key: String,
+    title: String,
+    description: String,
+    status: String,
+    priority: i32,
+    parent_key: Option<String>,
+    base_branch: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 impl TaskProvider for SqliteRepository {
@@ -183,8 +189,8 @@ impl TaskProvider for SqliteRepository {
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![key, self.prefix, params.title, params.description, "todo", params.priority, params.parent_key, now, now],
+            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![key, self.prefix, params.title, params.description, "todo", params.priority, params.parent_key, params.base_branch, now, now],
         ).map_err(|e| Error::Storage(e.to_string()))?;
 
         for bk in &params.blocked_by {
@@ -205,14 +211,17 @@ impl TaskProvider for SqliteRepository {
 
         self.row_to_task(
             &conn,
-            &key,
-            params.title,
-            params.description,
-            "todo".to_string(),
-            params.priority,
-            params.parent_key,
-            now.clone(),
-            now,
+            TaskRow {
+                key,
+                title: params.title,
+                description: params.description,
+                status: "todo".to_string(),
+                priority: params.priority,
+                parent_key: params.parent_key,
+                base_branch: Some(params.base_branch),
+                created_at: now.clone(),
+                updated_at: now,
+            },
         )
     }
 
@@ -222,7 +231,7 @@ impl TaskProvider for SqliteRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, created_at, updated_at FROM tasks WHERE key = ?1")
+            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1")
             .map_err(|e| Error::Storage(e.to_string()))?;
 
         stmt.query_row(params![key], |row| {
@@ -233,8 +242,9 @@ impl TaskProvider for SqliteRepository {
                 row.get::<_, String>(3)?,
                 row.get::<_, i32>(4)?,
                 row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })
         .map_err(|e| match e {
@@ -242,9 +252,20 @@ impl TaskProvider for SqliteRepository {
             _ => Error::Storage(e.to_string()),
         })
         .and_then(
-            |(k, title, desc, status, priority, parent, created, updated)| {
+            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
                 self.row_to_task(
-                    &conn, &k, title, desc, status, priority, parent, created, updated,
+                    &conn,
+                    TaskRow {
+                        key: k,
+                        title,
+                        description: desc,
+                        status,
+                        priority,
+                        parent_key: parent,
+                        base_branch,
+                        created_at: created,
+                        updated_at: updated,
+                    },
                 )
             },
         )
@@ -256,7 +277,7 @@ impl TaskProvider for SqliteRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
 
-        let mut sql = "SELECT key, title, description, status, priority, parent_key, created_at, updated_at FROM tasks WHERE project_prefix = ?1".to_string();
+        let mut sql = "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE project_prefix = ?1".to_string();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
             vec![Box::new(self.prefix.clone())];
 
@@ -306,18 +327,30 @@ impl TaskProvider for SqliteRepository {
                     row.get::<_, String>(3)?,
                     row.get::<_, i32>(4)?,
                     row.get::<_, Option<String>>(5)?,
-                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(6)?,
                     row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             })
             .map_err(|e| Error::Storage(e.to_string()))?;
 
         let mut tasks = Vec::new();
         for row in rows {
-            let (k, title, desc, status, priority, parent, created, updated) =
+            let (k, title, desc, status, priority, parent, base_branch, created, updated) =
                 row.map_err(|e| Error::Storage(e.to_string()))?;
             tasks.push(self.row_to_task(
-                &conn, &k, title, desc, status, priority, parent, created, updated,
+                &conn,
+                TaskRow {
+                    key: k,
+                    title,
+                    description: desc,
+                    status,
+                    priority,
+                    parent_key: parent,
+                    base_branch,
+                    created_at: created,
+                    updated_at: updated,
+                },
             )?);
         }
         Ok(tasks)
@@ -331,7 +364,7 @@ impl TaskProvider for SqliteRepository {
 
         let existing = {
             let mut stmt = conn
-                .prepare("SELECT title, description, status, priority, parent_key FROM tasks WHERE key = ?1")
+                .prepare("SELECT title, description, status, priority, parent_key, base_branch FROM tasks WHERE key = ?1")
                 .map_err(|e| Error::Storage(e.to_string()))?;
             stmt.query_row(rusqlite::params![key], |row| {
                 Ok((
@@ -340,6 +373,7 @@ impl TaskProvider for SqliteRepository {
                     row.get::<_, String>(2)?,
                     row.get::<_, i32>(3)?,
                     row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(|e| match e {
@@ -356,11 +390,15 @@ impl TaskProvider for SqliteRepository {
             .unwrap_or(existing.2);
         let priority = params.priority.unwrap_or(existing.3);
         let parent_key = params.parent_key.unwrap_or(existing.4);
+        let base_branch = params
+            .base_branch
+            .or(existing.5)
+            .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
-            "UPDATE tasks SET title = ?1, description = ?2, status = ?3, priority = ?4, parent_key = ?5, updated_at = ?6 WHERE key = ?7",
-            rusqlite::params![title, description, status_str, priority, parent_key, now, key],
+            "UPDATE tasks SET title = ?1, description = ?2, status = ?3, priority = ?4, parent_key = ?5, base_branch = ?6, updated_at = ?7 WHERE key = ?8",
+            rusqlite::params![title, description, status_str, priority, parent_key, base_branch, now, key],
         ).map_err(|e| Error::Storage(e.to_string()))?;
 
         if let Some(ref blockers) = params.blocked_by {
@@ -395,14 +433,17 @@ impl TaskProvider for SqliteRepository {
 
         self.row_to_task(
             &conn,
-            key,
-            title,
-            description,
-            status_str,
-            priority,
-            parent_key,
-            now.clone(),
-            now,
+            TaskRow {
+                key: key.to_string(),
+                title,
+                description,
+                status: status_str,
+                priority,
+                parent_key,
+                base_branch: Some(base_branch),
+                created_at: now.clone(),
+                updated_at: now,
+            },
         )
     }
 
@@ -734,5 +775,94 @@ mod tests {
             })
             .unwrap();
         assert_eq!(task.key, "FOO-1");
+    }
+
+    #[test]
+    fn base_branch_defaults_to_main() {
+        let r = repo();
+        let task = r
+            .create(CreateParams {
+                title: "task".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.base_branch, "main");
+        let fetched = r.get("TEST-1").unwrap();
+        assert_eq!(fetched.base_branch, "main");
+    }
+
+    #[test]
+    fn base_branch_custom_on_create() {
+        let r = repo();
+        let task = r
+            .create(CreateParams {
+                title: "task".into(),
+                base_branch: "develop".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.base_branch, "develop");
+        let fetched = r.get("TEST-1").unwrap();
+        assert_eq!(fetched.base_branch, "develop");
+    }
+
+    #[test]
+    fn base_branch_update() {
+        let r = repo();
+        r.create(CreateParams {
+            title: "task".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let updated = r
+            .update(
+                "TEST-1",
+                UpdateParams {
+                    base_branch: Some("release/v2".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.base_branch, "release/v2");
+    }
+
+    #[test]
+    fn base_branch_preserved_on_unrelated_update() {
+        let r = repo();
+        r.create(CreateParams {
+            title: "task".into(),
+            base_branch: "develop".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let updated = r
+            .update(
+                "TEST-1",
+                UpdateParams {
+                    title: Some("renamed".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(updated.base_branch, "develop");
+    }
+
+    #[test]
+    fn base_branch_in_list() {
+        let r = repo();
+        r.create(CreateParams {
+            title: "a".into(),
+            base_branch: "develop".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        r.create(CreateParams {
+            title: "b".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let tasks = r.list(ListFilter::default()).unwrap();
+        assert_eq!(tasks[0].base_branch, "develop");
+        assert_eq!(tasks[1].base_branch, "main");
     }
 }

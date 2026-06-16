@@ -110,6 +110,8 @@ enum TaskAction {
         #[arg(long)]
         parent: Option<String>,
         #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
         project: Option<String>,
         #[arg(long)]
         pretty: bool,
@@ -156,6 +158,8 @@ enum TaskAction {
         tags: Option<Vec<String>>,
         #[arg(long, value_delimiter = ',')]
         blocked_by: Option<Vec<String>>,
+        #[arg(long)]
+        base_branch: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -453,17 +457,21 @@ fn main() {
                     tags,
                     blocked_by,
                     parent,
+                    base_branch,
                     pretty,
                     ..
                 } => {
                     let r = planeai::task_cli::run_task_add(
                         &repo,
-                        &title,
-                        &desc,
-                        priority,
-                        &tags,
-                        &blocked_by,
-                        parent.as_deref(),
+                        planeai::task_cli::AddParams {
+                            title: &title,
+                            description: &desc,
+                            priority,
+                            tags: &tags,
+                            blocked_by: &blocked_by,
+                            parent: parent.as_deref(),
+                            base_branch: base_branch.as_deref(),
+                        },
                     );
                     let key = r.as_ref().ok().and_then(|json| {
                         serde_json::from_str::<serde_json::Value>(json)
@@ -503,17 +511,21 @@ fn main() {
                     priority,
                     tags,
                     blocked_by,
+                    base_branch,
                     pretty,
                     ..
                 } => {
                     let r = planeai::task_cli::run_task_edit(
                         &repo,
-                        &key,
-                        title.as_deref(),
-                        desc.as_deref(),
-                        priority,
-                        tags.as_deref(),
-                        blocked_by.as_deref(),
+                        planeai::task_cli::EditParams {
+                            key: &key,
+                            title: title.as_deref(),
+                            description: desc.as_deref(),
+                            priority,
+                            tags: tags.as_deref(),
+                            blocked_by: blocked_by.as_deref(),
+                            base_branch: base_branch.as_deref(),
+                        },
                     );
                     (r, pretty, Some(key))
                 }

@@ -42,6 +42,7 @@
   let formPriority = $state(0);
   let formKey = $state("");
   let formProjectPath = $state("");
+  let formBaseBranch = $state("main");
 
   // Context menu
   let contextMenu = $state<{ x: number; y: number; task: TaskItem } | null>(null);
@@ -111,6 +112,7 @@
     formTitle = "";
     formDescription = "";
     formPriority = 0;
+    formBaseBranch = "main";
     formProjectPath = projects[0]?.path ?? "";
     modalMode = "create";
   }
@@ -120,6 +122,7 @@
     formTitle = task.title;
     formDescription = task.description;
     formPriority = task.priority;
+    formBaseBranch = task.base_branch;
     modalMode = "edit";
   }
 
@@ -138,11 +141,11 @@
       if (modalMode === "create") {
         const repoPath = formProjectPath || projects[0]?.path;
         if (!repoPath) return;
-        await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [] });
+        await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [], baseBranch: formBaseBranch });
       } else if (modalMode === "edit") {
         const repoPath = repoPathForTask(formKey);
         if (!repoPath) return;
-        await taskStore.editTask({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null });
+        await taskStore.editTask({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null, baseBranch: formBaseBranch });
       }
       modalMode = null;
     } catch (e: any) { showSnackbar(e.toString()); }
@@ -383,6 +386,11 @@
     <div class="space-y-1">
       <Label>Priority</Label>
       <input type="number" bind:value={formPriority} class="w-20 rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50" />
+    </div>
+
+    <div class="space-y-1">
+      <Label>Base branch</Label>
+      <Input bind:value={formBaseBranch} placeholder="main" />
     </div>
 
     <div class="flex justify-end gap-2">

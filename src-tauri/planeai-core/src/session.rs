@@ -90,14 +90,8 @@ impl SessionDispatcher {
         // Build branch name from task key + short session id to avoid ref conflicts
         let branch = format!("{}/{}", task.key.to_lowercase().replace(' ', "-"), short_id);
 
-        // Resolve base branch: task-level wins over config default
-        let base = task
-            .base_branch
-            .as_deref()
-            .unwrap_or(&self.dispatch_config.base_branch);
-
         // Fetch base branch to ensure we have the latest remote ref
-        let resolved_base = backend.fetch_base(&self.project_path, base)?;
+        let resolved_base = backend.fetch_base(&self.project_path, &task.base_branch)?;
 
         // Create worktree
         let wt_path = format!(

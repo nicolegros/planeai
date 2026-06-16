@@ -116,7 +116,7 @@ async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
             priority: 1,
             blocked_by: vec![],
             subtasks: vec![],
-            base_branch: None,
+            base_branch: "main".to_string(),
         }],
         vec!["done".into(), "cancelled".into()],
     ));
@@ -172,7 +172,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             priority: 1,
             blocked_by: vec![],
             subtasks: vec![],
-            base_branch: None,
+            base_branch: "main".to_string(),
         }],
         vec!["done".into()],
     ));

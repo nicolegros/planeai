@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
+use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 
@@ -25,6 +25,7 @@ pub struct TaskItem {
     pub parent_key: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    pub base_branch: String,
 }
 
 impl From<planeai_tasks::model::Task> for TaskItem {
@@ -39,6 +40,7 @@ impl From<planeai_tasks::model::Task> for TaskItem {
             tags: t.tags,
             parent_key: t.parent_key,
             url: None,
+            base_branch: t.base_branch,
         }
     }
 }
@@ -96,6 +98,7 @@ pub fn list_all_task_items(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_task_item(
     db_state: State<DbState>,
     repo_path: String,
@@ -104,6 +107,7 @@ pub fn create_task_item(
     priority: i32,
     tags: Vec<String>,
     blocked_by: Vec<String>,
+    base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     tracing::info!(title = %title, "create_task_item");
     let repo = resolve_repo(&db_state, &repo_path)?;
@@ -114,6 +118,7 @@ pub fn create_task_item(
         tags,
         blocked_by,
         parent_key: None,
+        base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
     })
     .map(TaskItem::from)
     .map_err(|e| e.to_string())
@@ -130,6 +135,7 @@ pub fn edit_task_item(
     priority: Option<i32>,
     tags: Option<Vec<String>>,
     blocked_by: Option<Vec<String>>,
+    base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.update(
@@ -140,6 +146,7 @@ pub fn edit_task_item(
             priority,
             tags,
             blocked_by,
+            base_branch,
             ..Default::default()
         },
     )

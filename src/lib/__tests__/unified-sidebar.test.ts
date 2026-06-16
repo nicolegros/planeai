@@ -43,6 +43,7 @@ function makeTask(
     tags: [],
     parent_key,
     url: null,
+    base_branch: "main",
   };
 }
 
