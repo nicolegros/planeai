@@ -172,7 +172,7 @@ pub fn launch_session(
         let socket_path = planeai_ipc::daemon_socket_path();
 
         // Resolve sidecar path: bundled resource dir, or workspace target dir in dev
-        let sidecar_path = crate::daemon_client::resolve_daemon_binary(&app);
+        let sidecar_path = crate::paths::resolve_daemon_binary(&app);
 
         tauri::async_runtime::block_on(async {
             crate::daemon_client::ensure_daemon_running(
