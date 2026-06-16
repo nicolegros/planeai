@@ -419,14 +419,21 @@ impl PtyManager {
                     .map_err(|e| format!("resize failed: {e}"))
             }
             SessionHandle::Daemon(h) => {
-                let socket_path = h.socket_path.clone();
                 let sid = h.session_id.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Ok(mut client) =
-                        crate::daemon_client::DaemonClient::connect(&socket_path).await
-                    {
-                        let _ = client.resize(&sid, cols, rows).await;
-                    }
+                // One-shot sync IPC - no reader task spawned
+                std::thread::spawn(move || {
+                    use std::io::{Read, Write};
+                    let app_dir = crate::paths::app_data_dir();
+                    let mut stream =
+                        match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
+                            Ok(s) => s,
+                            Err(_) => return,
+                        };
+                    stream.write_all(&[0x00]).ok();
+                    let req = serde_json::json!({"cmd": "resize", "session_id": sid, "cols": cols, "rows": rows});
+                    let _ = stream.write_all(format!("{}\n", req).as_bytes());
+                    let mut buf = [0u8; 256];
+                    let _ = stream.read(&mut buf);
                 });
                 Ok(())
             }
