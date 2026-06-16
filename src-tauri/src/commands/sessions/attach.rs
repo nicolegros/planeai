@@ -86,9 +86,14 @@ pub fn attach_session(
     let pty_target = if session.backend == "tmux" {
         let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
         pty::PtyTarget::TmuxAttach { tmux_name }
+    } else if session.backend == "daemon" {
+        let socket_path = planeai_ipc::daemon_socket_path();
+        pty::PtyTarget::Daemon {
+            session_id: session_id.clone(),
+            socket_path,
+        }
     } else {
-        // Daemon sessions are attached via the daemon data connection (handled by PLA-69)
-        return Err("daemon session attach not yet supported in GUI".to_string());
+        return Err(format!("unsupported backend: {}", session.backend));
     };
 
     state.0.attach(

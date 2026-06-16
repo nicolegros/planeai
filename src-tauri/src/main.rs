@@ -135,6 +135,9 @@ fn main() {
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
 
+            // Daemon state (lazily connects to daemon)
+            app.manage(DaemonState(tokio::sync::Mutex::new(None)));
+
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
             let _ = std::fs::create_dir_all(&themes_dir);
@@ -199,6 +202,9 @@ fn main() {
 
             // PR status background poll
             startup::start_pr_poller(app.handle());
+
+            // Daemon exit event listener
+            startup::start_daemon_event_listener(app.handle());
 
             // Symphony orchestrator
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);

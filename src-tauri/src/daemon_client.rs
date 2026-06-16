@@ -250,7 +250,7 @@ pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
         "planeai-daemon"
     };
 
-    // Try resource dir (production bundle)
+    // Try resource dir (production bundle — externalBin places it here)
     if let Ok(resource_dir) = app.path().resource_dir() {
         let bundled = resource_dir.join(bin_name);
         if bundled.exists() {

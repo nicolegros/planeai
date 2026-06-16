@@ -114,6 +114,38 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
+/// Start a background task that listens for daemon exit events and marks sessions as exited.
+pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let socket_path = planeai_ipc::daemon_socket_path();
+
+        // Try connecting — if daemon isn't running, just return (will start when first session launches)
+        let mut client = match crate::daemon_client::DaemonClient::connect(&socket_path).await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        loop {
+            match client.recv_event().await {
+                Some(event) if event.event == "exited" => {
+                    let db = app.state::<DbState>();
+                    if let Ok(conn) = db.0.lock() {
+                        let _ = db::mark_session_exited(&conn, &event.session_id);
+                    }
+                    let _ = app.emit(
+                        "pty-exited",
+                        serde_json::json!({ "pty_key": event.session_id }),
+                    );
+                    let _ = app.emit("sessions-changed", ());
+                }
+                Some(_) => {}  // Ignore unknown events
+                None => break, // Connection closed
+            }
+        }
+    });
+}
+
 /// Register all active sessions in NotifyState at startup (after NotifyState is created).
 pub fn register_active_sessions(
     conn: &rusqlite::Connection,

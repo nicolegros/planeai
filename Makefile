@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint docs
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs build-daemon
 
 ci: lint test ## Run lint + tests
 
@@ -12,13 +12,19 @@ lint: ## Check formatting and clippy
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-dev:
+dev: build-daemon
 	pnpm tauri dev
 
-build:
+build-daemon: ## Build the daemon sidecar binary for the current platform
+	cd src-tauri && ./build-daemon.sh
+
+build-daemon-release: ## Build the daemon sidecar binary (release mode)
+	cd src-tauri && ./build-daemon.sh release
+
+build: build-daemon-release
 	pnpm tauri build -b app
 
-bundle:
+bundle: build-daemon-release
 	pnpm install
 	pnpm tauri build -b app
 
@@ -32,7 +38,7 @@ test:
 test-e2e: build
 	./tests/e2e_session_persistence.sh
 
-dev-bundle:
+dev-bundle: build-daemon-release
 	$(eval BRANCH := $(shell git branch --show-current | sed 's|/|-|g'))
 	$(eval SUFFIX := $(if $(filter main,$(BRANCH)),dev,$(if $(BRANCH),$(shell echo $(BRANCH) | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) printf substr($$i,1,1); printf int(rand()*10)}'),dev)))
 	@# Swap identifier, productName, and binary name for isolated dev build
