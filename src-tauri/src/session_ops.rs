@@ -60,7 +60,9 @@ pub fn archive(
         }
     }
 
-    // Kill the agent backend process
+    // Kill the agent backend process.
+    // Errors are logged but not propagated — a failed kill should not block
+    // archiving since the session may already be dead (exited, crashed, etc).
     let kill_errors = crate::cleanup::kill_backend(
         &session.backend,
         session.tmux_name.as_deref(),
