@@ -38,6 +38,7 @@ pub struct DaemonEvent {
 impl DaemonClient {
     /// Connect to the daemon socket. Sends the 0x00 control type byte.
     pub async fn connect(socket_path: &Path) -> Result<Self, String> {
+        tracing::debug!(path = %socket_path.display(), "connecting to daemon control socket");
         let stream = AsyncIpcStream::connect(socket_path)
             .await
             .map_err(|e| format!("failed to connect to daemon: {e}"))?;
@@ -94,6 +95,7 @@ impl DaemonClient {
         cwd: &str,
         env: Option<&HashMap<String, String>>,
     ) -> Result<(), String> {
+        tracing::info!(session_id, command, "spawning session in daemon");
         let req = serde_json::json!({
             "cmd": "spawn",
             "session_id": session_id,
@@ -271,6 +273,7 @@ pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
     }
 
     // Last resort: hope it's on PATH
+    tracing::warn!("daemon binary not found alongside executable, falling back to PATH");
     PathBuf::from(bin_name)
 }
 
@@ -282,8 +285,15 @@ pub async fn ensure_daemon_running(
 ) -> Result<(), String> {
     // Try connecting first
     if try_connect(socket_path).await {
+        tracing::debug!("daemon already running");
         return Ok(());
     }
+
+    tracing::info!(
+        binary = %sidecar_path.display(),
+        socket = %socket_path.display(),
+        "spawning daemon process"
+    );
 
     // Ensure parent directory exists
     if let Some(parent) = socket_path.parent() {
@@ -298,10 +308,12 @@ pub async fn ensure_daemon_running(
     for delay in delays {
         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         if try_connect(socket_path).await {
+            tracing::info!("daemon started successfully");
             return Ok(());
         }
     }
 
+    tracing::error!("daemon did not start within 2s");
     Err("daemon did not start within 2s".to_string())
 }
 

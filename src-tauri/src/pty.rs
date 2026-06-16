@@ -309,6 +309,7 @@ impl PtyManager {
         app: AppHandle,
         on_data: Channel<Response>,
     ) -> Result<(), String> {
+        tracing::info!(session_id, "attaching to daemon session");
         let cancelled = Arc::new(AtomicBool::new(false));
         let sid = session_id.to_string();
 

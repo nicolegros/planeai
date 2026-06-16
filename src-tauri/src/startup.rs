@@ -89,9 +89,14 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
         return;
     }
 
+    tracing::info!(
+        count = daemon_sessions.len(),
+        "reconciling daemon sessions on startup"
+    );
+
     let socket_path = planeai_ipc::daemon_socket_path();
     if !socket_path.exists() {
-        // Daemon not running — all daemon sessions are dead
+        tracing::info!("daemon socket not found, marking all daemon sessions as exited");
         for session in &daemon_sessions {
             let _ = db::mark_session_exited(conn, &session.id);
         }
@@ -159,6 +164,7 @@ pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
 
             match event {
                 Ok(Some(evt)) if evt.event == "exited" => {
+                    tracing::info!(session_id = %evt.session_id, "daemon session exited");
                     let db = app.state::<DbState>();
                     if let Ok(conn) = db.0.lock() {
                         let _ = db::mark_session_exited(&conn, &evt.session_id);
