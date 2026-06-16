@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
+use crate::session_backend::SessionBackend;
 #[cfg(not(windows))]
 use crate::tmux;
 
@@ -68,6 +69,8 @@ const FLUSH_COALESCE: Duration = Duration::from_millis(4);
 const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
 const READ_BUF: usize = 16 * 1024;
 
+// ─── Local PTY Backend ───────────────────────────────────────────────────────
+
 struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -82,20 +85,109 @@ impl Drop for PtyHandle {
     }
 }
 
-/// Handle for a daemon data connection.
-struct DaemonHandle {
+struct LocalBackend {
+    handle: Mutex<PtyHandle>,
+}
+
+impl SessionBackend for LocalBackend {
+    fn write(&self, data: &[u8]) -> Result<(), String> {
+        let mut h = self.handle.lock().map_err(|e| e.to_string())?;
+        h.writer
+            .write_all(data)
+            .map_err(|e| format!("write failed: {e}"))
+    }
+
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
+        let h = self.handle.lock().map_err(|e| e.to_string())?;
+        h.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("resize failed: {e}"))
+    }
+
+    fn pause(&self) -> Result<(), String> {
+        let h = self.handle.lock().map_err(|e| e.to_string())?;
+        h.flow.pause();
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<(), String> {
+        let h = self.handle.lock().map_err(|e| e.to_string())?;
+        h.flow.resume();
+        Ok(())
+    }
+
+    fn detach(&self) {
+        if let Ok(h) = self.handle.lock() {
+            h.cancelled.store(true, Ordering::Release);
+        }
+    }
+}
+
+// ─── Daemon Backend ──────────────────────────────────────────────────────────
+
+struct DaemonBackend {
     writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<planeai_ipc::r#async::AsyncIpcStream>>>,
     cancelled: Arc<AtomicBool>,
     session_id: String,
 }
 
-enum SessionHandle {
-    Local(Arc<Mutex<PtyHandle>>),
-    Daemon(Arc<DaemonHandle>),
+impl SessionBackend for DaemonBackend {
+    fn write(&self, data: &[u8]) -> Result<(), String> {
+        let writer = self.writer.clone();
+        let data = data.to_vec();
+        tauri::async_runtime::spawn(async move {
+            let mut w = writer.lock().await;
+            let _ = planeai_daemon::protocol::write_frame(
+                &mut *w,
+                planeai_daemon::protocol::FRAME_INPUT,
+                &data,
+            )
+            .await;
+        });
+        Ok(())
+    }
+
+    fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
+        let sid = self.session_id.clone();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let app_dir = crate::paths::app_data_dir();
+            let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            stream.write_all(&[0x00]).ok();
+            let req =
+                serde_json::json!({"cmd": "resize", "session_id": sid, "cols": cols, "rows": rows});
+            let _ = stream.write_all(format!("{}\n", req).as_bytes());
+            let mut buf = [0u8; 256];
+            let _ = stream.read(&mut buf);
+        });
+        Ok(())
+    }
+
+    fn pause(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resume(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn detach(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
 }
 
+// ─── PtyManager ──────────────────────────────────────────────────────────────
+
 pub struct PtyManager {
-    sessions: Arc<RwLock<HashMap<String, SessionHandle>>>,
+    sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: RwLock<Arc<dyn OutputObserver>>,
     socket_path: Mutex<Option<String>>,
 }
@@ -207,20 +299,26 @@ impl PtyManager {
 
         let cancelled = Arc::new(AtomicBool::new(false));
 
-        let handle = Arc::new(Mutex::new(PtyHandle {
+        let pty_handle = PtyHandle {
             master: pair.master,
             writer,
             child,
             flow: Arc::new(FlowControl::new()),
             cancelled: cancelled.clone(),
-        }));
+        };
 
-        let flow_clone = handle.lock().unwrap().flow.clone();
+        let flow_clone = pty_handle.flow.clone();
+
+        let backend: Box<dyn SessionBackend> = Box::new(LocalBackend {
+            handle: Mutex::new(pty_handle),
+        });
 
         {
             let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-            cancel_existing(&sessions, session_id);
-            sessions.insert(session_id.to_string(), SessionHandle::Local(handle));
+            if let Some(old) = sessions.get(session_id) {
+                old.detach();
+            }
+            sessions.insert(session_id.to_string(), backend);
         }
 
         // Shared buffer between reader and flusher threads
@@ -312,8 +410,10 @@ impl PtyManager {
         let sid = session_id.to_string();
 
         {
-            let sessions = self.sessions.write().map_err(|e| e.to_string())?;
-            cancel_existing(&sessions, session_id);
+            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+            if let Some(old) = sessions.get(session_id) {
+                old.detach();
+            }
         }
 
         let cancelled_clone = cancelled.clone();
@@ -334,7 +434,7 @@ impl PtyManager {
             let (reader, writer) = data_conn.into_split();
             let writer_arc = Arc::new(tokio::sync::Mutex::new(writer));
 
-            let daemon_handle = Arc::new(DaemonHandle {
+            let backend: Box<dyn SessionBackend> = Box::new(DaemonBackend {
                 writer: writer_arc,
                 cancelled: cancelled_clone.clone(),
                 session_id: sid_clone.clone(),
@@ -342,7 +442,7 @@ impl PtyManager {
 
             {
                 let mut s = sessions_arc.write().unwrap();
-                s.insert(sid_clone.clone(), SessionHandle::Daemon(daemon_handle));
+                s.insert(sid_clone.clone(), backend);
             }
 
             // Read loop: forward output frames to frontend
@@ -373,117 +473,36 @@ impl PtyManager {
     /// Write input bytes to a session's PTY.
     pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-        let handle = sessions.get(session_id).ok_or("session not attached")?;
-        match handle {
-            SessionHandle::Local(h) => {
-                let mut h = h.lock().map_err(|e| e.to_string())?;
-                h.writer
-                    .write_all(data)
-                    .map_err(|e| format!("write failed: {e}"))
-            }
-            SessionHandle::Daemon(h) => {
-                let writer = h.writer.clone();
-                let data = data.to_vec();
-                tauri::async_runtime::spawn(async move {
-                    let mut w = writer.lock().await;
-                    let _ = planeai_daemon::protocol::write_frame(
-                        &mut *w,
-                        planeai_daemon::protocol::FRAME_INPUT,
-                        &data,
-                    )
-                    .await;
-                });
-                Ok(())
-            }
-        }
+        let backend = sessions.get(session_id).ok_or("session not attached")?;
+        backend.write(data)
     }
 
     /// Resize a session's PTY.
     pub fn resize(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-        let handle = sessions.get(session_id).ok_or("session not attached")?;
-        match handle {
-            SessionHandle::Local(h) => {
-                let h = h.lock().map_err(|e| e.to_string())?;
-                h.master
-                    .resize(PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    })
-                    .map_err(|e| format!("resize failed: {e}"))
-            }
-            SessionHandle::Daemon(h) => {
-                let sid = h.session_id.clone();
-                // One-shot sync IPC - no reader task spawned
-                std::thread::spawn(move || {
-                    use std::io::{Read, Write};
-                    let app_dir = crate::paths::app_data_dir();
-                    let mut stream =
-                        match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
-                            Ok(s) => s,
-                            Err(_) => return,
-                        };
-                    stream.write_all(&[0x00]).ok();
-                    let req = serde_json::json!({"cmd": "resize", "session_id": sid, "cols": cols, "rows": rows});
-                    let _ = stream.write_all(format!("{}\n", req).as_bytes());
-                    let mut buf = [0u8; 256];
-                    let _ = stream.read(&mut buf);
-                });
-                Ok(())
-            }
-        }
+        let backend = sessions.get(session_id).ok_or("session not attached")?;
+        backend.resize(rows, cols)
     }
 
     /// Detach a session's PTY (cleanup).
     pub fn detach(&self, session_id: &str) {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(SessionHandle::Daemon(h)) = sessions.remove(session_id) {
-            h.cancelled.store(true, Ordering::Release);
+        if let Some(backend) = sessions.remove(session_id) {
+            backend.detach();
         }
     }
 
     /// Pause reading from a session's PTY (flow control back pressure).
     pub fn pause(&self, session_id: &str) -> Result<(), String> {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-        let handle = sessions.get(session_id).ok_or("session not attached")?;
-        match handle {
-            SessionHandle::Local(h) => {
-                let h = h.lock().map_err(|e| e.to_string())?;
-                h.flow.pause();
-                Ok(())
-            }
-            SessionHandle::Daemon(_) => Ok(()),
-        }
+        let backend = sessions.get(session_id).ok_or("session not attached")?;
+        backend.pause()
     }
 
     /// Resume reading from a session's PTY (flow control).
     pub fn resume(&self, session_id: &str) -> Result<(), String> {
         let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-        let handle = sessions.get(session_id).ok_or("session not attached")?;
-        match handle {
-            SessionHandle::Local(h) => {
-                let h = h.lock().map_err(|e| e.to_string())?;
-                h.flow.resume();
-                Ok(())
-            }
-            SessionHandle::Daemon(_) => Ok(()),
-        }
-    }
-}
-
-fn cancel_existing(sessions: &HashMap<String, SessionHandle>, session_id: &str) {
-    if let Some(old) = sessions.get(session_id) {
-        match old {
-            SessionHandle::Local(h) => {
-                if let Ok(h) = h.lock() {
-                    h.cancelled.store(true, Ordering::Release);
-                }
-            }
-            SessionHandle::Daemon(h) => {
-                h.cancelled.store(true, Ordering::Release);
-            }
-        }
+        let backend = sessions.get(session_id).ok_or("session not attached")?;
+        backend.resume()
     }
 }

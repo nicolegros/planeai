@@ -14,6 +14,7 @@ mod output_observer;
 mod paths;
 mod pr;
 mod pty;
+mod session_backend;
 mod session_ops;
 mod startup;
 mod state;
