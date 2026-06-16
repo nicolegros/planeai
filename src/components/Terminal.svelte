@@ -52,6 +52,7 @@
       cursorBlink: true,
       fontSize: s.terminal.font_size,
       fontFamily: terminalFontStack(s.terminal.font_family),
+      fontLigatures: true,
       theme: themeColors,
       scrollback: SCROLLBACK_LINES,
       convertEol: true,
