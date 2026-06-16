@@ -98,6 +98,7 @@ pub fn list_all_task_items(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_task_item(
     db_state: State<DbState>,
     repo_path: String,

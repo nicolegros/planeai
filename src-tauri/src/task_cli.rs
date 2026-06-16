@@ -27,26 +27,30 @@ pub fn resolve_prefix(
     Ok(derive_prefix(&proj.name))
 }
 
-pub fn run_task_add(
-    repo: &dyn TaskProvider,
-    title: &str,
-    description: &str,
-    priority: i32,
-    tags: &[String],
-    blocked_by: &[String],
-    parent: Option<&str>,
-    base_branch: Option<&str>,
-) -> Result<String, String> {
-    tracing::info!(title, priority, "creating task");
+pub struct AddParams<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub priority: i32,
+    pub tags: &'a [String],
+    pub blocked_by: &'a [String],
+    pub parent: Option<&'a str>,
+    pub base_branch: Option<&'a str>,
+}
+
+pub fn run_task_add(repo: &dyn TaskProvider, params: AddParams) -> Result<String, String> {
+    tracing::info!(params.title, params.priority, "creating task");
     let task = repo
         .create(CreateParams {
-            title: title.to_string(),
-            description: description.to_string(),
-            priority,
-            tags: tags.to_vec(),
-            blocked_by: blocked_by.to_vec(),
-            parent_key: parent.map(|s| s.to_string()),
-            base_branch: base_branch.unwrap_or(DEFAULT_BASE_BRANCH).to_string(),
+            title: params.title.to_string(),
+            description: params.description.to_string(),
+            priority: params.priority,
+            tags: params.tags.to_vec(),
+            blocked_by: params.blocked_by.to_vec(),
+            parent_key: params.parent.map(|s| s.to_string()),
+            base_branch: params
+                .base_branch
+                .unwrap_or(DEFAULT_BASE_BRANCH)
+                .to_string(),
         })
         .map_err(|e| e.to_string())?;
     tracing::info!(key = %task.key, "task created");
@@ -87,27 +91,28 @@ pub fn run_task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> Result
     serde_json::to_string(&task).map_err(|e| e.to_string())
 }
 
-pub fn run_task_edit(
-    repo: &dyn TaskProvider,
-    key: &str,
-    title: Option<&str>,
-    description: Option<&str>,
-    priority: Option<i32>,
-    tags: Option<&[String]>,
-    blocked_by: Option<&[String]>,
-    base_branch: Option<&str>,
-) -> Result<String, String> {
-    tracing::info!(key, "editing task");
+pub struct EditParams<'a> {
+    pub key: &'a str,
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub priority: Option<i32>,
+    pub tags: Option<&'a [String]>,
+    pub blocked_by: Option<&'a [String]>,
+    pub base_branch: Option<&'a str>,
+}
+
+pub fn run_task_edit(repo: &dyn TaskProvider, params: EditParams) -> Result<String, String> {
+    tracing::info!(params.key, "editing task");
     let task = repo
         .update(
-            key,
+            params.key,
             UpdateParams {
-                title: title.map(|s| s.to_string()),
-                description: description.map(|s| s.to_string()),
-                priority,
-                tags: tags.map(|t| t.to_vec()),
-                blocked_by: blocked_by.map(|b| b.to_vec()),
-                base_branch: base_branch.map(|s| s.to_string()),
+                title: params.title.map(|s| s.to_string()),
+                description: params.description.map(|s| s.to_string()),
+                priority: params.priority,
+                tags: params.tags.map(|t| t.to_vec()),
+                blocked_by: params.blocked_by.map(|b| b.to_vec()),
+                base_branch: params.base_branch.map(|s| s.to_string()),
                 ..Default::default()
             },
         )
@@ -156,18 +161,36 @@ mod tests {
         (conn, repo)
     }
 
+    fn add(repo: &dyn TaskProvider, title: &str) -> String {
+        run_task_add(
+            repo,
+            AddParams {
+                title,
+                description: "",
+                priority: 0,
+                tags: &[],
+                blocked_by: &[],
+                parent: None,
+                base_branch: None,
+            },
+        )
+        .unwrap()
+    }
+
     #[test]
     fn task_add_creates_and_returns_json() {
         let (_conn, repo) = setup();
         let result = run_task_add(
             &repo,
-            "Fix bug",
-            "desc",
-            1,
-            &["backend".into()],
-            &[],
-            None,
-            None,
+            AddParams {
+                title: "Fix bug",
+                description: "desc",
+                priority: 1,
+                tags: &["backend".into()],
+                blocked_by: &[],
+                parent: None,
+                base_branch: None,
+            },
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -181,7 +204,7 @@ mod tests {
     #[test]
     fn task_show_returns_task() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "A task", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "A task");
         let result = run_task_show(&repo, "PLA-1").unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["key"], "PLA-1");
@@ -191,8 +214,8 @@ mod tests {
     #[test]
     fn task_list_returns_all_tasks() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "first", "", 0, &[], &[], None, None).unwrap();
-        run_task_add(&repo, "second", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "first");
+        add(&repo, "second");
         let result = run_task_list(&repo, None, &[]).unwrap();
         let v: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         assert_eq!(v.len(), 2);
@@ -201,8 +224,8 @@ mod tests {
     #[test]
     fn task_list_filters_by_status() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "a", "", 0, &[], &[], None, None).unwrap();
-        run_task_add(&repo, "b", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "a");
+        add(&repo, "b");
         run_task_move(&repo, "PLA-1", "done").unwrap();
         let result = run_task_list(&repo, Some("todo"), &[]).unwrap();
         let v: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -213,7 +236,7 @@ mod tests {
     #[test]
     fn task_move_changes_status() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "task", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "task");
         let result = run_task_move(&repo, "PLA-1", "in_progress").unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["status"], "in_progress");
@@ -222,7 +245,7 @@ mod tests {
     #[test]
     fn task_move_invalid_status_errors() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "task", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "task");
         let result = run_task_move(&repo, "PLA-1", "bogus");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("invalid status"));
@@ -231,16 +254,18 @@ mod tests {
     #[test]
     fn task_edit_updates_fields() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "original", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "original");
         let result = run_task_edit(
             &repo,
-            "PLA-1",
-            Some("renamed"),
-            None,
-            Some(2),
-            None,
-            None,
-            None,
+            EditParams {
+                key: "PLA-1",
+                title: Some("renamed"),
+                description: None,
+                priority: Some(2),
+                tags: None,
+                blocked_by: None,
+                base_branch: None,
+            },
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -251,7 +276,7 @@ mod tests {
     #[test]
     fn task_delete_removes_task() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "doomed", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "doomed");
         let result = run_task_delete(&repo, "PLA-1").unwrap();
         assert!(result.contains("PLA-1"));
         let show = run_task_show(&repo, "PLA-1");
@@ -282,8 +307,19 @@ mod tests {
     #[test]
     fn task_add_with_base_branch() {
         let (_conn, repo) = setup();
-        let result =
-            run_task_add(&repo, "Feature", "", 0, &[], &[], None, Some("develop")).unwrap();
+        let result = run_task_add(
+            &repo,
+            AddParams {
+                title: "Feature",
+                description: "",
+                priority: 0,
+                tags: &[],
+                blocked_by: &[],
+                parent: None,
+                base_branch: Some("develop"),
+            },
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["base_branch"], "develop");
     }
@@ -291,7 +327,7 @@ mod tests {
     #[test]
     fn task_add_without_base_branch_defaults_to_main() {
         let (_conn, repo) = setup();
-        let result = run_task_add(&repo, "Feature", "", 0, &[], &[], None, None).unwrap();
+        let result = add(&repo, "Feature");
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["base_branch"], "main");
     }
@@ -299,16 +335,18 @@ mod tests {
     #[test]
     fn task_edit_base_branch() {
         let (_conn, repo) = setup();
-        run_task_add(&repo, "task", "", 0, &[], &[], None, None).unwrap();
+        add(&repo, "task");
         let result = run_task_edit(
             &repo,
-            "PLA-1",
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("release"),
+            EditParams {
+                key: "PLA-1",
+                title: None,
+                description: None,
+                priority: None,
+                tags: None,
+                blocked_by: None,
+                base_branch: Some("release"),
+            },
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
