@@ -124,7 +124,7 @@ describe("unified sidebar logic", () => {
   });
 
   describe("flat nav ordering", () => {
-    it("orphans come before tasks for same project", () => {
+    it("includes project_header, orphans, status_header, and tasks in order", () => {
       const projects = [makeProject("p1", "proj", "/path")];
       const sessions = [
         makeSession("s1", "p1", null),
@@ -134,14 +134,30 @@ describe("unified sidebar logic", () => {
       const allTaskKeys = new Set(tasks.map(t => t.key));
       const orphans = getOrphanSessions(sessions, allTaskKeys);
 
-      // Simulating the flatNav construction
-      type NavItem = { type: "orphan"; id: string } | { type: "task"; key: string };
+      // Simulating the flatNav construction (new format with headers)
+      type NavItem = { type: "project_header"; id: string } | { type: "orphan"; id: string } | { type: "status_header"; status: string } | { type: "task"; key: string };
       const flatNav: NavItem[] = [];
+      flatNav.push({ type: "project_header", id: "p1" });
       for (const s of orphans.filter(s => s.project_id === "p1")) flatNav.push({ type: "orphan", id: s.id });
+      flatNav.push({ type: "status_header", status: "in_progress" });
       for (const t of tasks) flatNav.push({ type: "task", key: t.key });
 
-      expect(flatNav[0]).toEqual({ type: "orphan", id: "s1" });
-      expect(flatNav[1]).toEqual({ type: "task", key: "T-1" });
+      expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
+      expect(flatNav[1]).toEqual({ type: "orphan", id: "s1" });
+      expect(flatNav[2]).toEqual({ type: "status_header", status: "in_progress" });
+      expect(flatNav[3]).toEqual({ type: "task", key: "T-1" });
+    });
+
+    it("collapsed project only shows project_header", () => {
+      type NavItem = { type: "project_header"; id: string } | { type: "task"; key: string };
+      const collapsed = new Set(["project:p1"]);
+      const flatNav: NavItem[] = [];
+      flatNav.push({ type: "project_header", id: "p1" });
+      if (!collapsed.has("project:p1")) {
+        flatNav.push({ type: "task", key: "T-1" });
+      }
+      expect(flatNav).toHaveLength(1);
+      expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
     });
   });
 });

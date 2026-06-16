@@ -11,6 +11,8 @@ export type SidebarNavAction =
   | { type: "restart" }
   | { type: "edit" }
   | { type: "open_pr" }
+  | { type: "collapse" }
+  | { type: "expand" }
   | { type: "status"; status: string }
   | { type: "start_session" };
 
@@ -59,6 +61,20 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
     e.preventDefault();
     clearPending();
     return { type: "select" };
+  }
+
+  // h / ArrowLeft — collapse
+  if (key === "h" || key === "ArrowLeft") {
+    e.preventDefault();
+    clearPending();
+    return { type: "collapse" };
+  }
+
+  // l / ArrowRight — expand
+  if (key === "l" || key === "ArrowRight") {
+    e.preventDefault();
+    clearPending();
+    return { type: "expand" };
   }
 
   // Handle pending multi-key sequences first
