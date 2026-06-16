@@ -25,7 +25,6 @@ pub enum PtyTarget {
         cwd: String,
     },
     /// Attach to a daemon-managed session via data connection.
-    #[allow(dead_code)]
     Daemon {
         session_id: String,
         socket_path: PathBuf,
@@ -87,7 +86,6 @@ impl Drop for PtyHandle {
 struct DaemonHandle {
     writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<planeai_ipc::r#async::AsyncIpcStream>>>,
     cancelled: Arc<AtomicBool>,
-    socket_path: PathBuf,
     session_id: String,
 }
 
@@ -322,7 +320,6 @@ impl PtyManager {
         let sid_clone = sid.clone();
         let observer = self.observer.read().unwrap().clone();
         let sessions_arc = self.sessions.clone();
-        let socket_path_clone = socket_path.clone();
 
         tauri::async_runtime::spawn(async move {
             let data_conn = match DataConnection::open(&socket_path, &sid_clone).await {
@@ -340,7 +337,6 @@ impl PtyManager {
             let daemon_handle = Arc::new(DaemonHandle {
                 writer: writer_arc,
                 cancelled: cancelled_clone.clone(),
-                socket_path: socket_path_clone,
                 session_id: sid_clone.clone(),
             });
 
@@ -441,7 +437,6 @@ impl PtyManager {
     }
 
     /// Detach a session's PTY (cleanup).
-    #[allow(dead_code)]
     pub fn detach(&self, session_id: &str) {
         let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(SessionHandle::Daemon(h)) = sessions.remove(session_id) {

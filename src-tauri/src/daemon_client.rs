@@ -3,9 +3,7 @@
 //! Provides a control connection (JSON-line protocol) and data connections
 //! (binary frames for PTY I/O).
 
-use planeai_daemon::protocol::{
-    read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT,
-};
+use planeai_daemon::protocol::{write_frame, CONN_CONTROL, CONN_DATA, FRAME_OUTPUT};
 use planeai_ipc::r#async::AsyncIpcStream;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,23 +11,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 /// High-level async client for the daemon's control connection.
-#[allow(dead_code)]
 pub struct DaemonClient {
-    socket_path: PathBuf,
     writer: tokio::io::WriteHalf<AsyncIpcStream>,
     event_rx: mpsc::UnboundedReceiver<DaemonEvent>,
     response_rx: mpsc::UnboundedReceiver<serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct SessionInfo {
-    pub session_id: String,
-    pub alive: bool,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct DaemonEvent {
     pub event: String,
     pub session_id: String,
@@ -79,7 +67,6 @@ impl DaemonClient {
         });
 
         Ok(Self {
-            socket_path: socket_path.to_path_buf(),
             writer,
             event_rx,
             response_rx,
@@ -107,57 +94,9 @@ impl DaemonClient {
         self.send_request(&req).await
     }
 
-    /// Kill a session.
-    #[allow(dead_code)]
-    pub async fn kill_session(&mut self, session_id: &str) -> Result<(), String> {
-        let req = serde_json::json!({ "cmd": "kill", "session_id": session_id });
-        self.send_request(&req).await
-    }
-
-    /// Resize a session's PTY.
-    pub async fn resize(&mut self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let req = serde_json::json!({ "cmd": "resize", "session_id": session_id, "cols": cols, "rows": rows });
-        self.send_request(&req).await
-    }
-
-    /// List all sessions.
-    #[allow(dead_code)]
-    pub async fn list_sessions(&mut self) -> Result<Vec<SessionInfo>, String> {
-        let req = serde_json::json!({ "cmd": "list" });
-        let mut line = serde_json::to_string(&req).map_err(|e| e.to_string())?;
-        line.push('\n');
-        self.writer
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|e| format!("write failed: {e}"))?;
-
-        let resp = self.response_rx.recv().await.ok_or("connection closed")?;
-        if let Some(err) = resp.get("error") {
-            return Err(err.as_str().unwrap_or("unknown error").to_string());
-        }
-        let sessions = resp
-            .get("sessions")
-            .and_then(|s| serde_json::from_value::<Vec<SessionInfoRaw>>(s.clone()).ok())
-            .unwrap_or_default();
-        Ok(sessions
-            .into_iter()
-            .map(|s| SessionInfo {
-                session_id: s.session_id,
-                alive: s.alive,
-            })
-            .collect())
-    }
-
     /// Receive the next event (async).
-    #[allow(dead_code)]
     pub async fn recv_event(&mut self) -> Option<DaemonEvent> {
         self.event_rx.recv().await
-    }
-
-    /// Get the socket path this client is connected to.
-    #[allow(dead_code)]
-    pub fn socket_path(&self) -> &Path {
-        &self.socket_path
     }
 
     async fn send_request(&mut self, req: &serde_json::Value) -> Result<(), String> {
@@ -175,13 +114,6 @@ impl DaemonClient {
             Ok(())
         }
     }
-}
-
-#[derive(serde::Deserialize)]
-#[allow(dead_code)]
-struct SessionInfoRaw {
-    session_id: String,
-    alive: bool,
 }
 
 // ─── Data Connection ─────────────────────────────────────────────────────────
@@ -211,23 +143,6 @@ impl DataConnection {
             .map_err(|e| format!("handshake failed: {e}"))?;
 
         Ok(Self { reader, writer })
-    }
-
-    /// Read the next output frame from the daemon.
-    #[allow(dead_code)]
-    pub async fn read_output(&mut self) -> Result<Vec<u8>, String> {
-        let (_frame_type, payload) = read_frame(&mut self.reader)
-            .await
-            .map_err(|e| format!("read failed: {e}"))?;
-        Ok(payload)
-    }
-
-    /// Write input data to the daemon session.
-    #[allow(dead_code)]
-    pub async fn write_input(&mut self, data: &[u8]) -> Result<(), String> {
-        write_frame(&mut self.writer, FRAME_INPUT, data)
-            .await
-            .map_err(|e| format!("write failed: {e}"))
     }
 
     /// Split into reader and writer halves for concurrent use.
