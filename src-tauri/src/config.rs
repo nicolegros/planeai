@@ -7,6 +7,12 @@ use std::sync::OnceLock;
 static TMUX_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IntegrationsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira: Option<planeai_jira::config::JiraConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
     pub terminal: Terminal,
@@ -43,6 +49,8 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_open_review: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrations: Option<IntegrationsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -253,6 +261,7 @@ impl Default for Config {
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: Some(true),
+            integrations: None,
         }
     }
 }
@@ -502,6 +511,7 @@ mod tests {
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: Some(true),
+            integrations: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
@@ -1006,5 +1016,53 @@ mod tests {
         let result = refresh(config_dir);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("parse"));
+    }
+
+    #[test]
+    fn config_without_integrations_field_deserializes() {
+        let dir = tempfile::tempdir().unwrap();
+        let json =
+            r#"{"providers": {"kiro": {"command": "kiro-cli chat"}}, "default_provider": "kiro"}"#;
+        fs::write(dir.path().join("config.json"), json).unwrap();
+
+        let (config, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        assert_eq!(config.integrations, None);
+    }
+
+    #[test]
+    fn config_with_integrations_jira_deserializes() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{
+            "providers": {"kiro": {"command": "kiro-cli chat"}},
+            "default_provider": "kiro",
+            "integrations": {
+                "jira": {
+                    "site": "https://test.atlassian.net",
+                    "projects": {
+                        "myapp": {
+                            "jira_project": "MA",
+                            "jql": "project = MA",
+                            "status_map": {"In Progress": "active"},
+                            "writeback": {"on_start": "In Progress", "comment": true}
+                        }
+                    }
+                }
+            }
+        }"#;
+        fs::write(dir.path().join("config.json"), json).unwrap();
+
+        let (config, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        let jira = config.integrations.unwrap().jira.unwrap();
+        assert_eq!(jira.site, "https://test.atlassian.net");
+        assert_eq!(jira.sync_interval_ms, 60_000);
+        let mapping = jira.projects.get("myapp").unwrap();
+        assert_eq!(mapping.jira_project, "MA");
+        assert_eq!(
+            mapping.writeback.as_ref().unwrap().on_start,
+            Some("In Progress".to_string())
+        );
+        assert!(mapping.writeback.as_ref().unwrap().comment);
     }
 }

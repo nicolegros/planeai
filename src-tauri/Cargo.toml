@@ -7,6 +7,7 @@ members = [
   "planeai-pty",
   "planeai-paths",
   "planeai-toon",
+  "planeai-jira",
 ]
 resolver = "2"
 
@@ -58,6 +59,7 @@ planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
 planeai-pty = { path = "planeai-pty" }
 planeai-paths = { path = "planeai-paths" }
+planeai-jira = { path = "planeai-jira" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
