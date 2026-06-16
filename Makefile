@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs
 
 ci: lint test ## Run lint + tests
 
@@ -44,3 +44,6 @@ dev-bundle:
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
+
+docs: ## Run docs site locally
+	cd docs && pnpm dev
