@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded by ADR-0010 — the `direct` backend has been replaced by the `daemon` backend, which provides persistence without requiring tmux. The tmux backend remains unchanged.
 
 ## Context
 

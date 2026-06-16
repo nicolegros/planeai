@@ -87,12 +87,8 @@ pub fn attach_session(
         let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
         pty::PtyTarget::TmuxAttach { tmux_name }
     } else {
-        let (_, _, _, _, _, ref command, ref args, ref cwd) = discovery_info.as_ref().unwrap();
-        pty::PtyTarget::Direct {
-            command: command.clone(),
-            args: args.clone(),
-            cwd: cwd.clone(),
-        }
+        // Daemon sessions are attached via the daemon data connection (handled by PLA-69)
+        return Err("daemon session attach not yet supported in GUI".to_string());
     };
 
     state.0.attach(

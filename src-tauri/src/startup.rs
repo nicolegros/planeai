@@ -8,7 +8,8 @@ use crate::db;
 use crate::notify::SharedNotifyState;
 use crate::state::{ConfigState, DbState};
 
-/// Revive sessions on startup: recreate dead tmux sessions and restore exited direct sessions.
+/// Revive sessions on startup: recreate dead tmux sessions.
+/// Daemon sessions are managed by the daemon process and don't need reviving here.
 pub fn revive_sessions<F, G>(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
@@ -27,46 +28,45 @@ where
     let mut failures = Vec::new();
 
     for session in &sessions {
-        if session.backend == "tmux" {
-            let tmux_name = match session.tmux_name.as_deref() {
-                Some(n) => n,
-                None => continue,
-            };
-            if has_tmux_session(tmux_name) {
-                continue;
-            }
-            let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
-            let cmd = match cfg.providers.get(provider_key) {
-                Some(provider_def) => config::restart_command_for_provider(
-                    provider_def,
-                    session.provider_session_id.as_deref(),
-                ),
-                None => continue,
-            };
-            let project_path = projects
-                .iter()
-                .find(|p| p.id == session.project_id)
-                .map(|p| p.path.as_str())
-                .unwrap_or("/");
-            let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
+        if session.backend != "tmux" {
+            continue;
+        }
+        let tmux_name = match session.tmux_name.as_deref() {
+            Some(n) => n,
+            None => continue,
+        };
+        if has_tmux_session(tmux_name) {
+            continue;
+        }
+        let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
+        let cmd = match cfg.providers.get(provider_key) {
+            Some(provider_def) => config::restart_command_for_provider(
+                provider_def,
+                session.provider_session_id.as_deref(),
+            ),
+            None => continue,
+        };
+        let project_path = projects
+            .iter()
+            .find(|p| p.id == session.project_id)
+            .map(|p| p.path.as_str())
+            .unwrap_or("/");
+        let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-            match create_tmux(tmux_name, cwd, &cmd, &session.id) {
-                Ok(()) => {
-                    if session.status == "exited" {
-                        let _ = db::restore_session(conn, &session.id);
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[revive] failed to recreate tmux for session {}: {}",
-                        session.id, e
-                    );
-                    let _ = db::mark_session_exited(conn, &session.id);
-                    failures.push(session.id.clone());
+        match create_tmux(tmux_name, cwd, &cmd, &session.id) {
+            Ok(()) => {
+                if session.status == "exited" {
+                    let _ = db::restore_session(conn, &session.id);
                 }
             }
-        } else if session.status == "exited" {
-            let _ = db::restore_session(conn, &session.id);
+            Err(e) => {
+                eprintln!(
+                    "[revive] failed to recreate tmux for session {}: {}",
+                    session.id, e
+                );
+                let _ = db::mark_session_exited(conn, &session.id);
+                failures.push(session.id.clone());
+            }
         }
     }
 
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn revive_restores_exited_direct_session_without_tmux_creation() {
+    fn revive_skips_daemon_sessions() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
@@ -325,7 +325,7 @@ mod tests {
             "main",
             Some("/tmp/worktree"),
             Some("kiro"),
-            "direct",
+            "daemon",
             false,
             None,
             None,
@@ -352,10 +352,12 @@ mod tests {
         );
 
         assert!(failures.is_empty());
+        // No tmux session should be created for daemon sessions
         assert_eq!(created.borrow().len(), 0);
+        // Daemon session stays exited (not restored)
         assert_eq!(
             db::get_session(&conn, "s1").unwrap().unwrap().status,
-            "active"
+            "exited"
         );
     }
 
@@ -461,7 +463,7 @@ mod tests {
             "main",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             None,
             None,
@@ -477,7 +479,7 @@ mod tests {
             "feat",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             None,
             None,
@@ -513,7 +515,7 @@ mod tests {
             "feature/cool",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             None,
             None,

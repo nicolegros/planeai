@@ -11,11 +11,13 @@ pub struct CleanupContext {
     pub worktree_path: Option<String>,
     pub project_path: Option<String>,
     pub branch: Option<String>,
+    pub session_id: Option<String>,
 }
 
 /// Operations that cleanup can perform (injectable for testing).
 pub struct CleanupOps {
     pub kill_tmux: Op1,
+    pub kill_daemon_session: Op1,
     pub remove_worktree: Op2,
     pub remove_dir: Op1,
     pub delete_branch: Op2,
@@ -25,13 +27,23 @@ pub struct CleanupOps {
 pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
     let mut errors = vec![];
 
-    // Kill tmux session if tmux-backed
-    if ctx.backend == "tmux" {
-        if let Some(ref name) = ctx.tmux_name {
-            if let Err(e) = (ops.kill_tmux)(name) {
-                errors.push(format!("tmux kill: {e}"));
+    // Kill backend session
+    match ctx.backend.as_str() {
+        "tmux" => {
+            if let Some(ref name) = ctx.tmux_name {
+                if let Err(e) = (ops.kill_tmux)(name) {
+                    errors.push(format!("tmux kill: {e}"));
+                }
             }
         }
+        "daemon" => {
+            if let Some(ref id) = ctx.session_id {
+                if let Err(e) = (ops.kill_daemon_session)(id) {
+                    errors.push(format!("daemon kill: {e}"));
+                }
+            }
+        }
+        _ => {}
     }
 
     // Remove worktree if applicable
@@ -68,6 +80,22 @@ pub fn real_ops() -> CleanupOps {
                 Ok(())
             }
         }),
+        kill_daemon_session: Box::new(|session_id| {
+            use std::io::{Read, Write};
+            let app_dir = crate::paths::app_data_dir();
+            let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
+                Ok(s) => s,
+                Err(_) => return Ok(()), // Daemon not running — nothing to kill
+            };
+            stream.write_all(&[0x00]).map_err(|e| e.to_string())?;
+            let req = serde_json::json!({"cmd": "kill", "session_id": session_id});
+            stream
+                .write_all(format!("{}\n", req).as_bytes())
+                .map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf);
+            Ok(())
+        }),
         remove_worktree: Box::new(crate::git::worktree_remove),
         remove_dir: Box::new(|path| match std::fs::remove_dir_all(path) {
             Ok(()) => Ok(()),
@@ -96,26 +124,34 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
-    fn noop_ops() -> CleanupOps {
-        CleanupOps {
+    #[test]
+    fn cleanup_kills_daemon_session_for_daemon_backend() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = CleanupOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|id| {
+                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
-        }
-    }
-
-    #[test]
-    fn cleanup_does_nothing_for_direct_session() {
+        };
         let ctx = CleanupContext {
-            backend: "direct".to_string(),
+            backend: "daemon".to_string(),
             tmux_name: None,
             worktree_path: None,
             project_path: None,
             branch: None,
+            session_id: Some("sess-123".to_string()),
         };
-        let errors = run_cleanup(&ctx, &noop_ops());
+        let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
+        KILLED.with(|k| {
+            assert_eq!(k.borrow().as_slice(), &["sess-123"]);
+        });
     }
 
     #[test]
@@ -128,6 +164,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
+            kill_daemon_session: Box::new(|_| Ok(())),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
@@ -138,6 +175,7 @@ mod tests {
             worktree_path: None,
             project_path: None,
             branch: None,
+            session_id: None,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -155,6 +193,7 @@ mod tests {
         }
         let ops = CleanupOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
             remove_worktree: Box::new(|repo, wt| {
                 WT_REMOVED.with(|v| v.borrow_mut().push((repo.to_string(), wt.to_string())));
                 Ok(())
@@ -174,6 +213,7 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("test-iv".to_string()),
+            session_id: None,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -198,6 +238,7 @@ mod tests {
     fn cleanup_collects_errors_from_failed_ops() {
         let ops = CleanupOps {
             kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+            kill_daemon_session: Box::new(|_| Ok(())),
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
             delete_branch: Box::new(|_, _| Err("branch in use".to_string())),
@@ -208,6 +249,7 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("feat-x".to_string()),
+            session_id: None,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert_eq!(errors.len(), 4);

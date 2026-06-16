@@ -1,14 +1,14 @@
 # planeai
 
-A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session. Supports two session backends: tmux (persistent) and direct PTY (ephemeral).
+A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session. Supports two session backends: tmux (persistent, requires tmux binary) and daemon (persistent, built-in).
 
 ## Glossary
 
 | Term                | Definition                                                                                                                                                                                                           |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                    |
-| **Session**         | A single agent working on a single task within a project. Backed by either a tmux session (persistent) or a direct PTY (ephemeral). Contains one terminal pane running the agent CLI.                                |
-| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `direct` (PTY spawns agent directly, dies on app quit). Resolved at session creation from the global setting.        |
+| **Session**         | A single agent working on a single task within a project. Backed by either a tmux session or the planeai daemon. Contains one terminal pane running the agent CLI.                                                   |
+| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `daemon` (survives app quit, uses built-in daemon process). Resolved at session creation from the global setting.    |
 | **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`.                          |
 | **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
 | **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                 |
@@ -18,6 +18,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Token**           | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                |
 | **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.      |
 | **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                   |
+| **Daemon**          | A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                              |
 
 ## Session lifecycle (v1)
 
@@ -26,8 +27,8 @@ create → active → exited → deleted
 ```
 
 - **Active** — PTY is connected and the agent process is running. Visible in sidebar.
-- **Exited** — agent process terminated. Terminal buffer is frozen (read-only). User can restart or delete. Detected via PTY EOF (unified for both backends).
-- **Deleted** — session removed from sidebar and DB. For tmux sessions, the tmux session is killed. Irreversible.
+- **Exited** — agent process terminated. Terminal buffer is frozen (read-only). User can restart or delete. Detected via PTY EOF (tmux) or daemon exit event (daemon).
+- **Deleted** — session removed from sidebar and DB. For tmux sessions, the tmux session is killed. For daemon sessions, a kill command is sent to the daemon. Irreversible.
 
 ## Architecture notes
 
@@ -38,7 +39,8 @@ create → active → exited → deleted
 - **Custom theming** via CSS files in `~/.config/planeai/themes/`. Theme file defines UI, terminal, and editor tokens for both light and dark modes.
 - **SQLite via rusqlite** on the Rust backend for persistence
 - **tmux** for optional process persistence (auto-detected; see Session backend)
-- **portable-pty** for PTY management (both tmux-attach and direct-spawn go through a local PTY)
+- **planeai-daemon** for built-in process persistence (no external dependencies)
+- **portable-pty** for PTY management (tmux-attach goes through a local PTY; daemon sessions are managed directly by the daemon process)
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
 - **Typed API layer** (`src/lib/api.ts`) — all `invoke()` calls consolidated behind domain-grouped typed methods; components never call `invoke()` directly (see ADR-0009)
 - **pnpm** for package management
@@ -48,7 +50,7 @@ create → active → exited → deleted
 - Keyboard-first — all actions reachable without mouse
 - Multiple sessions allowed per project in both checkout and worktree modes; inline warning shown when creating additional checkout sessions
 - DB is source of truth; orphan tmux sessions are ignored
-- tmux is optional — app works without it (direct PTY fallback)
+- tmux is optional — app works without it (daemon fallback)
 - Cross-platform: macOS and Windows (core functionality parity; tmux gracefully unavailable on Windows)
 - Project names must be unique
 
@@ -56,8 +58,9 @@ create → active → exited → deleted
 
 | Concern               | macOS                                             | Windows                                                |
 | --------------------- | ------------------------------------------------- | ------------------------------------------------------ |
-| **Session backend**   | tmux (persistent) or direct PTY                   | direct PTY only (tmux unavailable)                     |
+| **Session backend**   | tmux (persistent) or daemon (persistent)          | daemon only (tmux unavailable)                         |
 | **Notification IPC**  | Unix socket (`notify.sock`)                       | Named pipe (`\\.\pipe\planeai-notify`)                 |
+| **Daemon IPC**        | Unix socket (`daemon.sock` in XDG_RUNTIME_DIR)    | Named pipe (`\\.\pipe\planeai-daemon`)                 |
 | **Stop hook**         | Bash script (`.sh`) via `nc -U`                   | PowerShell script (`.ps1`) via `NamedPipeClientStream` |
 | **Config dir**        | `$XDG_CONFIG_HOME/planeai` or `~/.config/planeai` | `%APPDATA%\planeai`                                    |
 | **Home dir**          | `$HOME`                                           | `$HOME` or `%USERPROFILE%`                             |
@@ -71,16 +74,16 @@ create → active → exited → deleted
 
 The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL messages. Each message has an `event` field and a `session_id` field.
 
-| Event             | Direction        | Payload                                                   | Purpose                                                        |
-| ----------------- | ---------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
-| `stop`            | Hook → GUI       | `{"event":"stop","session_id":"..."}`                     | Agent finished (debounced idle detection)                      |
-| `notification`    | Hook → GUI       | `{"event":"notification","session_id":"..."}`             | Agent needs human attention                                    |
-| `busy`            | Hook → GUI       | `{"event":"busy","session_id":"..."}`                     | Agent started working                                          |
-| `session_created` | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}`          | New session created, GUI should refresh                        |
-| `session_changed` | CLI → GUI        | `{"event":"session_changed","session_id":"..."}`          | Session state changed (archived/destroyed), GUI should refresh |
-| `send_prompt`     | CLI → GUI        | `{"event":"send_prompt","session_id":"...","text":"..."}` | Write prompt text to the session's PTY (direct backend)        |
+| Event             | Direction        | Payload                                          | Purpose                                                        |
+| ----------------- | ---------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| `stop`            | Hook → GUI       | `{"event":"stop","session_id":"..."}`            | Agent finished (debounced idle detection)                      |
+| `notification`    | Hook → GUI       | `{"event":"notification","session_id":"..."}`    | Agent needs human attention                                    |
+| `busy`            | Hook → GUI       | `{"event":"busy","session_id":"..."}`            | Agent started working                                          |
+| `session_created` | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}` | New session created, GUI should refresh                        |
+| `session_changed` | CLI → GUI        | `{"event":"session_changed","session_id":"..."}` | Session state changed (archived/destroyed), GUI should refresh |
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
+For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
 
 ## Session backend
 
@@ -89,57 +92,54 @@ For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l
 The effective backend is resolved once at app startup:
 
 ```
-config.session_backend ?? (tmux_on_path ? "tmux" : "direct")
+config.session_backend ?? (tmux_on_path ? "tmux" : "daemon")
 ```
 
-- Config field absent → auto-detect (tmux if available, otherwise direct)
+- Config field absent → auto-detect (tmux if available, otherwise daemon)
 - `"session_backend": "tmux"` → force tmux (warn if not found)
-- `"session_backend": "direct"` → force direct PTY
+- `"session_backend": "daemon"` → force daemon
 
 Setting changes affect new sessions only. Existing sessions keep their backend.
 
+### Backend comparison
+
+| Feature      | tmux                         | daemon                                                 |
+| ------------ | ---------------------------- | ------------------------------------------------------ |
+| Persistence  | Survives app quit            | Survives app quit                                      |
+| Dependencies | Requires tmux binary         | Built-in (planeai-daemon binary)                       |
+| CLI headless | Works (tmux manages process) | Works (daemon spawned on-demand)                       |
+| Scrollback   | Managed by tmux              | Ring buffer (configurable via daemon_scrollback_bytes) |
+| Platform     | macOS, Linux                 | macOS, Linux, Windows                                  |
+
 ### PTY architecture
 
-Both backends spawn a local PTY via `portable-pty`. The only difference is the command inside:
+For tmux backend, a local PTY is spawned via `portable-pty` running `tmux attach-session -t <name>`. The tmux session is created beforehand with the agent command.
 
-- **tmux backend:** PTY runs `tmux attach-session -t <name>` (tmux session created beforehand with the agent command)
-- **direct backend:** PTY runs the agent command directly (e.g., `kiro-cli chat`)
-
-The `PtyManager.attach()` method accepts a `PtyTarget` enum:
-
-```rust
-enum PtyTarget {
-    TmuxAttach { tmux_name: String },
-    Direct { command: String, args: Vec<String>, cwd: String },
-}
-```
+For daemon backend, the daemon process owns the PTY directly. The GUI/CLI communicates with the daemon via its IPC socket (control for spawn/kill/list, data for I/O streaming).
 
 ### Exit detection
 
-Unified for both backends: PTY reader thread gets EOF → emit `pty-exited-{session_id}` → mark session as `exited` in DB. For tmux, this works because `remain-on-exit` is disabled — when the agent exits, the tmux session dies, `tmux attach` exits, PTY gets EOF.
+- **tmux**: PTY reader thread gets EOF → emit `pty-exited` → mark session as `exited` in DB.
+- **daemon**: daemon broadcasts an `exited` event on the control socket → GUI marks session exited.
 
 ### Startup reconciliation (one-time, not polling)
 
-- Direct sessions that were `active` at last quit → mark `exited`
-- Tmux sessions that were `active` → check `tmux has-session`; if false → mark `exited`; if true → reattach
-
-### Quit confirmation
-
-When the user quits (Cmd+Q / window close) and at least one `active` direct session exists, show an in-app confirmation modal: "N active session(s) will be terminated. Quit anyway?" with Quit / Cancel. If all active sessions are tmux-backed (will survive) or no active sessions exist, quit immediately.
+- Tmux sessions that were `active` → check `tmux has-session`; if false → mark `exited`; if true → leave as-is
+- Daemon sessions → left as-is (daemon manages their lifecycle)
 
 ### Restart
 
-Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For direct, spawns a new PTY.
+Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For daemon, sends a spawn command to the daemon.
 
 ### DB columns
 
-- `backend TEXT NOT NULL DEFAULT 'tmux' CHECK(backend IN ('tmux', 'direct'))` — set at creation time
-- `status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'exited', 'deleted'))` — updated on exit/delete
-- `tmux_name TEXT` — NULL for direct sessions, populated for tmux sessions
+- `backend TEXT NOT NULL DEFAULT 'tmux'` — set at creation time, values: `'tmux'` or `'daemon'`
+- `status TEXT NOT NULL DEFAULT 'active'` — updated on exit/delete
+- `tmux_name TEXT` — NULL for daemon sessions, populated for tmux sessions
 
 ### Preferences UI
 
-Dropdown: Auto (default) / tmux / Direct. "Auto" maps to absent in config file. Inline warning if user selects tmux but binary not found.
+Dropdown: Auto (default) / tmux / Daemon. "Auto" maps to absent in config file. Inline warning if user selects tmux but binary not found.
 
 ## Worktree support
 
@@ -150,8 +150,8 @@ Sessions can run in two modes:
 
 ### Lifecycle
 
-- **Archive** — kills tmux, marks session archived. Worktree directory is preserved on disk.
-- **Destroy** — kills tmux, runs `git worktree remove --force`, deletes directory, removes from DB.
+- **Archive** — kills tmux/daemon session, marks session archived. Worktree directory is preserved on disk.
+- **Destroy** — kills tmux/daemon session, runs `git worktree remove --force`, deletes directory, removes from DB.
 
 ### Data model
 
