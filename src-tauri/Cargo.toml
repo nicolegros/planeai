@@ -40,7 +40,9 @@ path = "src/bin/cli.rs"
 [dependencies]
 planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }
-planeai-ipc = { path = "planeai-ipc" }
+planeai-ipc = { path = "planeai-ipc", features = ["async"] }
+planeai-daemon = { path = "planeai-daemon" }
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }

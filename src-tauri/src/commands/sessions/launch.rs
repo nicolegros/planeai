@@ -1,9 +1,9 @@
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config;
 use crate::db;
 use crate::git;
-use crate::state::{ConfigState, DbState, NotifyHandle};
+use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle};
 #[cfg(not(windows))]
 use crate::tmux;
 use crate::util::sanitize_project_name;
@@ -80,6 +80,7 @@ pub(crate) fn discover_provider_session_id(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn launch_session(
+    app: AppHandle,
     state: State<DbState>,
     notify: State<NotifyHandle>,
     config_state: State<ConfigState>,
@@ -111,6 +112,7 @@ pub fn launch_session(
 
     let hook_enabled = provider_has_hook(&provider_key, &cfg);
     let backend = config::resolve_backend(&cfg).to_string();
+    let scrollback_bytes = cfg.daemon_scrollback_bytes.unwrap_or(1_048_576);
     drop(cfg);
 
     let conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -163,6 +165,51 @@ pub fn launch_session(
     } else {
         None
     };
+
+    // For daemon backend: ensure daemon is running and spawn session
+    if backend == "daemon" {
+        let daemon_state = app.state::<DaemonState>();
+        let socket_path = planeai_ipc::daemon_socket_path();
+
+        // Resolve sidecar path: bundled resource dir, or workspace target dir in dev
+        let sidecar_path = crate::daemon_client::resolve_daemon_binary(&app);
+
+        tauri::async_runtime::block_on(async {
+            crate::daemon_client::ensure_daemon_running(
+                &sidecar_path,
+                &socket_path,
+                scrollback_bytes,
+            )
+            .await
+        })?;
+
+        // Parse command into program + args (shell-style split)
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let (program, args) = parts.split_first().ok_or("empty command")?;
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("PLANEAI_SESSION_ID".to_string(), session_id.clone());
+
+        tauri::async_runtime::block_on(async {
+            let mut ds = daemon_state.0.lock().await;
+            let client = match ds.as_mut() {
+                Some(c) => c,
+                None => {
+                    *ds = Some(
+                        crate::daemon_client::DaemonClient::connect(&socket_path)
+                            .await
+                            .map_err(|e| format!("daemon connect failed: {e}"))?,
+                    );
+                    ds.as_mut().unwrap()
+                }
+            };
+            client
+                .spawn_session(&session_id, program, &args, &working_dir, Some(&env))
+                .await
+        })?;
+    }
 
     {
         let mut ns = notify.0.lock().unwrap();

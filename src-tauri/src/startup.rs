@@ -73,6 +73,47 @@ where
     failures
 }
 
+/// Reconcile daemon sessions: mark sessions as exited if the daemon doesn't know about them.
+pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Config) {
+    let sessions = match db::list_sessions(conn) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let daemon_sessions: Vec<&db::Session> = sessions
+        .iter()
+        .filter(|s| s.backend == "daemon" && s.status == "active")
+        .collect();
+
+    if daemon_sessions.is_empty() {
+        return;
+    }
+
+    let socket_path = planeai_ipc::daemon_socket_path();
+
+    // Try to reach daemon and list sessions
+    let daemon_list = tauri::async_runtime::block_on(async {
+        // Don't spawn daemon just for reconciliation — if it's not running, sessions are dead
+        if !socket_path.exists() {
+            return None;
+        }
+        let mut client = crate::daemon_client::DaemonClient::connect(&socket_path)
+            .await
+            .ok()?;
+        client.list_sessions().await.ok()
+    });
+
+    let alive_ids: std::collections::HashSet<String> = daemon_list
+        .map(|list| list.into_iter().map(|s| s.session_id).collect())
+        .unwrap_or_default();
+
+    for session in daemon_sessions {
+        if !alive_ids.contains(&session.id) {
+            let _ = db::mark_session_exited(conn, &session.id);
+        }
+    }
+}
+
 /// Register all active sessions in NotifyState at startup (after NotifyState is created).
 pub fn register_active_sessions(
     conn: &rusqlite::Connection,
