@@ -18,7 +18,7 @@ import {
   getTabCount,
   destroySession as destroyTabState,
 } from "./session-tabs.svelte";
-import { touchMru, removeMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
@@ -129,7 +129,6 @@ export async function loadSessions(): Promise<void> {
 
 export function selectSession(id: string): void {
   activeSessionId = id;
-  touchMru(id);
   poolActivate(id);
   if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
   sessionsApi.acknowledge(id);
@@ -160,10 +159,9 @@ export async function deleteSession(s: Session): Promise<void> {
   editorFileName = efName;
   editorModified = eMod;
   sessions = sessions.filter((x) => x.id !== s.id);
-  removeMru(s.id);
   if (activeSessionId === s.id) {
     activeSessionId = sessions[0]?.id ?? null;
-    if (activeSessionId) touchMru(activeSessionId);
+    if (activeSessionId) poolActivate(activeSessionId);
   }
 }
 
@@ -171,10 +169,9 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
-  removeMru(s.id);
   if (activeSessionId === s.id) {
     activeSessionId = sessions[0]?.id ?? null;
-    if (activeSessionId) touchMru(activeSessionId);
+    if (activeSessionId) poolActivate(activeSessionId);
   }
 }
 
@@ -371,14 +368,13 @@ export function updateSessionName(sessionId: string, name: string): void {
 export function removeProjectSessions(projectId: string): string[] {
   const ids = sessions.filter((s) => s.project_id === projectId).map((s) => s.id);
   for (const id of ids) {
-    removeMru(id);
-    destroyTabState(id);
     poolRemove(id);
+    destroyTabState(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
     activeSessionId = getMruList()[0] ?? null;
-    if (activeSessionId) touchMru(activeSessionId);
+    if (activeSessionId) poolActivate(activeSessionId);
   }
   return ids;
 }
