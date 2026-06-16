@@ -8,9 +8,17 @@
     projects: Project[];
     selectedIndex: number;
     agentStates: Record<string, string>;
+    taskStatuses: Record<string, string>;
   }
 
-  let { mruSessionIds, sessions, projects, selectedIndex, agentStates }: Props = $props();
+  let { mruSessionIds, sessions, projects, selectedIndex, agentStates, taskStatuses }: Props = $props();
+
+  const statusDotColors: Record<string, string> = {
+    todo: "bg-blue-500",
+    in_progress: "bg-amber-500",
+    in_review: "bg-green-500",
+    done: "bg-purple-500",
+  };
 
   function getSession(id: string) {
     return sessions.find((s) => s.id === id);
@@ -22,11 +30,14 @@
 </script>
 
 <div class="absolute inset-0 flex items-center justify-center z-20">
-  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-96 max-h-screen overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
+  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-[32rem] max-h-screen overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
     {#each mruSessionIds as id, i (id)}
       {@const session = getSession(id)}
       {#if session}
         <div class="px-3 py-2 rounded text-sm flex items-center gap-2 {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
+          {#if session.task_key && taskStatuses[session.task_key]}
+            <span class="shrink-0 size-2 rounded-full {statusDotColors[taskStatuses[session.task_key]] ?? 'bg-surface-400'}"></span>
+          {/if}
           {#if session.task_key}<span class="shrink-0 text-[10px] font-medium {i === selectedIndex ? 'text-surface-200' : 'text-primary-600 dark:text-primary-400'}">{session.task_key}</span>{/if}
           <span class="font-medium truncate">{session.name || session.branch}</span>
           <span class="ml-auto shrink-0 text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>

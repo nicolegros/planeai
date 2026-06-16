@@ -353,8 +353,6 @@
                                 <span class="ml-auto shrink-0 size-3.5 animate-pulse text-amber-500" title="Needs attention">
                                   <Lightbulb class="size-3.5" />
                                 </span>
-                              {:else}
-                                <span class="ml-auto shrink-0 size-1.5 rounded-full bg-primary-500"></span>
                               {/if}
                             {/if}
                           </button>
