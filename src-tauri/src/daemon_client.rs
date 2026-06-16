@@ -119,6 +119,7 @@ impl DaemonClient {
     }
 
     /// List all sessions.
+    #[allow(dead_code)]
     pub async fn list_sessions(&mut self) -> Result<Vec<SessionInfo>, String> {
         let req = serde_json::json!({ "cmd": "list" });
         let mut line = serde_json::to_string(&req).map_err(|e| e.to_string())?;
@@ -175,6 +176,7 @@ impl DaemonClient {
 }
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 struct SessionInfoRaw {
     session_id: String,
     alive: bool,

@@ -90,22 +90,25 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 
     let socket_path = planeai_ipc::daemon_socket_path();
-
-    // Try to reach daemon and list sessions
-    let daemon_list = tauri::async_runtime::block_on(async {
-        // Don't spawn daemon just for reconciliation — if it's not running, sessions are dead
-        if !socket_path.exists() {
-            return None;
+    if !socket_path.exists() {
+        // Daemon not running — all daemon sessions are dead
+        for session in &daemon_sessions {
+            let _ = db::mark_session_exited(conn, &session.id);
         }
-        let mut client = crate::daemon_client::DaemonClient::connect(&socket_path)
-            .await
-            .ok()?;
-        client.list_sessions().await.ok()
-    });
+        return;
+    }
 
-    let alive_ids: std::collections::HashSet<String> = daemon_list
-        .map(|list| list.into_iter().map(|s| s.session_id).collect())
-        .unwrap_or_default();
+    // Use sync IPC to query daemon (avoid block_on which can deadlock during setup)
+    let alive_ids = match query_daemon_sessions_sync() {
+        Some(ids) => ids,
+        None => {
+            // Can't reach daemon — mark all as exited
+            for session in &daemon_sessions {
+                let _ = db::mark_session_exited(conn, &session.id);
+            }
+            return;
+        }
+    };
 
     for session in daemon_sessions {
         if !alive_ids.contains(&session.id) {
@@ -114,33 +117,61 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 }
 
+/// Sync query to daemon for session list (used during startup to avoid block_on deadlock).
+fn query_daemon_sessions_sync() -> Option<std::collections::HashSet<String>> {
+    use std::io::{BufRead, Write};
+
+    let app_dir = crate::paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
+    stream.write_all(&[0x00]).ok()?; // control connection type byte
+    let req = serde_json::json!({"cmd": "list"});
+    stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
+
+    let mut line = String::new();
+    let mut reader = std::io::BufReader::new(stream);
+    reader.read_line(&mut line).ok()?;
+
+    let val: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let sessions = val.get("sessions")?.as_array()?;
+    let ids: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter_map(|s| s.get("session_id")?.as_str().map(|s| s.to_string()))
+        .collect();
+    Some(ids)
+}
+
 /// Start a background task that listens for daemon exit events and marks sessions as exited.
 pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
     let app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let socket_path = planeai_ipc::daemon_socket_path();
 
-        // Try connecting — if daemon isn't running, just return (will start when first session launches)
+        // Try connecting — if daemon isn't running, just return
         let mut client = match crate::daemon_client::DaemonClient::connect(&socket_path).await {
             Ok(c) => c,
             Err(_) => return,
         };
 
         loop {
-            match client.recv_event().await {
-                Some(event) if event.event == "exited" => {
+            // Timeout prevents this task from blocking tokio shutdown indefinitely
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(5), client.recv_event()).await;
+
+            match event {
+                Ok(Some(evt)) if evt.event == "exited" => {
                     let db = app.state::<DbState>();
                     if let Ok(conn) = db.0.lock() {
-                        let _ = db::mark_session_exited(&conn, &event.session_id);
+                        let _ = db::mark_session_exited(&conn, &evt.session_id);
                     }
                     let _ = app.emit(
                         "pty-exited",
-                        serde_json::json!({ "pty_key": event.session_id }),
+                        serde_json::json!({ "pty_key": evt.session_id }),
                     );
                     let _ = app.emit("sessions-changed", ());
                 }
-                Some(_) => {}  // Ignore unknown events
-                None => break, // Connection closed
+                Ok(Some(_)) => {}   // Ignore unknown events
+                Ok(None) => break,  // Connection closed
+                Err(_) => continue, // Timeout — loop again (allows task cancellation)
             }
         }
     });
