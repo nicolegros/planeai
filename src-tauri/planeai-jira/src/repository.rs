@@ -18,62 +18,55 @@ impl JiraRepository {
     pub fn upsert_issue(&self, issue: &JiraIssue) -> Result<(), Error> {
         let labels_json =
             serde_json::to_string(&issue.labels).map_err(|e| Error::Storage(e.to_string()))?;
-        self.conn
-            .execute(
-                "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(issue_key) DO UPDATE SET
-                    jira_project = excluded.jira_project,
-                    summary = excluded.summary,
-                    description = excluded.description,
-                    status = excluded.status,
-                    priority = excluded.priority,
-                    labels = excluded.labels,
-                    sync_status = excluded.sync_status,
-                    last_synced_at = excluded.last_synced_at",
-                params![
-                    issue.issue_key,
-                    issue.jira_project,
-                    issue.summary,
-                    issue.description,
-                    issue.status,
-                    issue.priority,
-                    labels_json,
-                    issue.sync_status,
-                    issue.last_synced_at.to_rfc3339(),
-                ],
-            )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(issue_key) DO UPDATE SET
+                jira_project = excluded.jira_project,
+                summary = excluded.summary,
+                description = excluded.description,
+                status = excluded.status,
+                priority = excluded.priority,
+                labels = excluded.labels,
+                sync_status = excluded.sync_status,
+                last_synced_at = excluded.last_synced_at",
+            params![
+                issue.issue_key,
+                issue.jira_project,
+                issue.summary,
+                issue.description,
+                issue.status,
+                issue.priority,
+                labels_json,
+                issue.sync_status,
+                issue.last_synced_at.to_rfc3339(),
+            ],
+        )?;
         Ok(())
     }
 
     pub fn mark_stale(&self, issue_keys: &[&str]) -> Result<(), Error> {
         for key in issue_keys {
-            self.conn
-                .execute(
-                    "UPDATE jira_issues SET sync_status = 'stale' WHERE issue_key = ?1",
-                    params![key],
-                )
-                .map_err(|e| Error::Storage(e.to_string()))?;
+            self.conn.execute(
+                "UPDATE jira_issues SET sync_status = 'stale' WHERE issue_key = ?1",
+                params![key],
+            )?;
         }
         Ok(())
     }
 
     pub fn mark_synced(&self, issue_key: &str) -> Result<(), Error> {
-        self.conn
-            .execute(
-                "UPDATE jira_issues SET sync_status = 'synced', last_synced_at = ?1 WHERE issue_key = ?2",
-                params![Utc::now().to_rfc3339(), issue_key],
-            )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        self.conn.execute(
+            "UPDATE jira_issues SET sync_status = 'synced', last_synced_at = ?1 WHERE issue_key = ?2",
+            params![Utc::now().to_rfc3339(), issue_key],
+        )?;
         Ok(())
     }
 
     pub fn get_issue(&self, issue_key: &str) -> Result<Option<JiraIssue>, Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1")
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1",
+        )?;
 
         let result = stmt.query_row(params![issue_key], |row| {
             Ok((
@@ -108,21 +101,18 @@ impl JiraRepository {
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Error::Storage(e.to_string())),
+            Err(e) => Err(e.into()),
         }
     }
 
     pub fn list_synced_keys(&self, jira_project: &str) -> Result<Vec<String>, Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'")
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        let rows = stmt
-            .query_map(params![jira_project], |row| row.get(0))
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut stmt = self.conn.prepare(
+            "SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'",
+        )?;
+        let rows = stmt.query_map(params![jira_project], |row| row.get(0))?;
         let mut keys = Vec::new();
         for r in rows {
-            keys.push(r.map_err(|e| Error::Storage(e.to_string()))?);
+            keys.push(r?);
         }
         Ok(keys)
     }
@@ -136,17 +126,15 @@ impl JiraRepository {
         match result {
             Ok(key) => Ok(key),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Error::Storage(e.to_string())),
+            Err(e) => Err(e.into()),
         }
     }
 
     pub fn link_task(&self, task_key: &str, issue_key: &str) -> Result<(), Error> {
-        self.conn
-            .execute(
-                "UPDATE tasks SET jira_issue_key = ?1 WHERE key = ?2",
-                params![issue_key, task_key],
-            )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        self.conn.execute(
+            "UPDATE tasks SET jira_issue_key = ?1 WHERE key = ?2",
+            params![issue_key, task_key],
+        )?;
         Ok(())
     }
 
@@ -159,7 +147,7 @@ impl JiraRepository {
         match result {
             Ok(key) => Ok(key),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(Error::Storage(e.to_string())),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -171,7 +159,6 @@ mod tests {
 
     fn setup() -> JiraRepository {
         let conn = Connection::open_in_memory().unwrap();
-        // Create tasks table first (simulating planeai-tasks migration)
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         JiraRepository::new(conn).unwrap()
     }
@@ -195,21 +182,16 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // second run should not error
+        migrate(&conn).unwrap();
     }
 
     #[test]
     fn migration_creates_jira_issues_table_and_fk_column() {
         let repo = setup();
-        // Verify jira_issues table exists by inserting
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
 
-        // Verify jira_issue_key column exists on tasks
         repo.conn
-            .execute(
-                "INSERT INTO task_projects (prefix) VALUES ('TST')",
-                [],
-            )
+            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
             .unwrap();
         repo.conn
             .execute(
@@ -301,12 +283,8 @@ mod tests {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
 
-        // Create a task
         repo.conn
-            .execute(
-                "INSERT INTO task_projects (prefix) VALUES ('TST')",
-                [],
-            )
+            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
             .unwrap();
         repo.conn
             .execute(
@@ -315,10 +293,8 @@ mod tests {
             )
             .unwrap();
 
-        // Before linking
         assert_eq!(repo.get_task_issue_key("TST-1").unwrap(), None);
 
-        // Link
         repo.link_task("TST-1", "PROJ-1").unwrap();
         assert_eq!(
             repo.get_task_issue_key("TST-1").unwrap(),
@@ -332,10 +308,7 @@ mod tests {
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
 
         repo.conn
-            .execute(
-                "INSERT INTO task_projects (prefix) VALUES ('TST')",
-                [],
-            )
+            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
             .unwrap();
         repo.conn
             .execute(
@@ -344,10 +317,8 @@ mod tests {
             )
             .unwrap();
 
-        // Before linking
         assert_eq!(repo.find_task_by_issue_key("PROJ-1").unwrap(), None);
 
-        // After linking
         repo.link_task("TST-1", "PROJ-1").unwrap();
         assert_eq!(
             repo.find_task_by_issue_key("PROJ-1").unwrap(),

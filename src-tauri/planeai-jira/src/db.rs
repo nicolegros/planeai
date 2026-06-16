@@ -6,12 +6,10 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS jira_schema_version (version INTEGER NOT NULL);
          INSERT OR IGNORE INTO jira_schema_version (version) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM jira_schema_version);",
-    )
-    .map_err(|e| Error::Storage(e.to_string()))?;
+    )?;
 
-    let version: i32 = conn
-        .query_row("SELECT version FROM jira_schema_version", [], |r| r.get(0))
-        .map_err(|e| Error::Storage(e.to_string()))?;
+    let version: i32 =
+        conn.query_row("SELECT version FROM jira_schema_version", [], |r| r.get(0))?;
 
     let migrations: &[&str] = &[
         // v1: jira_issues table + FK column on tasks
@@ -30,13 +28,11 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
 
     for (i, sql) in migrations.iter().enumerate() {
         if (i as i32) >= version {
-            conn.execute_batch(sql)
-                .map_err(|e| Error::Storage(e.to_string()))?;
+            conn.execute_batch(sql)?;
             conn.execute(
                 "UPDATE jira_schema_version SET version = ?1",
                 params![i + 1],
-            )
-            .map_err(|e| Error::Storage(e.to_string()))?;
+            )?;
         }
     }
 
@@ -59,8 +55,7 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
     if !has_column {
         conn.execute_batch(
             "ALTER TABLE tasks ADD COLUMN jira_issue_key TEXT REFERENCES jira_issues(issue_key);",
-        )
-        .map_err(|e| Error::Storage(e.to_string()))?;
+        )?;
     }
 
     Ok(())
