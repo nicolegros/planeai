@@ -15,8 +15,12 @@ pub struct Task {
     pub blocked_by: Vec<String>,
     #[serde(default)]
     pub subtasks: Vec<String>,
-    #[serde(default)]
-    pub base_branch: Option<String>,
+    #[serde(default = "default_base_branch")]
+    pub base_branch: String,
+}
+
+fn default_base_branch() -> String {
+    "main".to_string()
 }
 
 /// Abstraction over task storage. Replaces CLI-based TaskManagerConfig.

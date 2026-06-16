@@ -139,7 +139,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         priority: 1,
         blocked_by: vec![],
         subtasks: vec![],
-        base_branch: None,
+        base_branch: "main".to_string(),
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -212,7 +212,7 @@ fn dispatch_uses_task_base_branch_when_present() {
         priority: 0,
         blocked_by: vec![],
         subtasks: vec![],
-        base_branch: Some("develop".to_string()),
+        base_branch: "develop".to_string(),
     };
 
     let session = dispatcher.dispatch(&task, &backend).unwrap();
@@ -255,7 +255,7 @@ fn dispatch_fetches_base_before_worktree_creation() {
         priority: 0,
         blocked_by: vec![],
         subtasks: vec![],
-        base_branch: Some("develop".to_string()),
+        base_branch: "develop".to_string(),
     };
 
     dispatcher.dispatch(&task, &backend).unwrap();
@@ -335,6 +335,6 @@ fn make_task() -> Task {
         priority: 1,
         blocked_by: vec![],
         subtasks: vec![],
-        base_branch: None,
+        base_branch: "main".to_string(),
     }
 }
