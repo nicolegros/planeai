@@ -281,12 +281,31 @@ impl TaskSource for SqliteTaskSource {
             .list(planeai_tasks::model::ListFilter::default())
             .map_err(|e| e.to_string())?;
         tracing::debug!(count = tasks.len(), "listed tasks from internal provider");
-        Ok(tasks.into_iter().map(into_core_task).collect())
+
+        // Build parent→children map from parent_key relationships
+        let mut children_map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for t in &tasks {
+            if let Some(ref parent) = t.parent_key {
+                children_map
+                    .entry(parent.clone())
+                    .or_default()
+                    .push(t.key.clone());
+            }
+        }
+
+        Ok(tasks
+            .into_iter()
+            .map(|t| {
+                let subtasks = children_map.remove(&t.key).unwrap_or_default();
+                into_core_task(t, subtasks)
+            })
+            .collect())
     }
 
     fn get_task(&self, key: &str) -> Result<Task, String> {
         let task = self.repo.get(key).map_err(|e| e.to_string())?;
-        Ok(into_core_task(task))
+        Ok(into_core_task(task, vec![]))
     }
 
     fn move_task(&self, key: &str, status: &str) -> Result<(), String> {
@@ -312,7 +331,7 @@ impl TaskSource for SqliteTaskSource {
     }
 }
 
-fn into_core_task(t: planeai_tasks::model::Task) -> Task {
+fn into_core_task(t: planeai_tasks::model::Task, subtasks: Vec<String>) -> Task {
     Task {
         key: t.key,
         title: t.title,
@@ -320,7 +339,7 @@ fn into_core_task(t: planeai_tasks::model::Task) -> Task {
         description: t.description,
         priority: t.priority,
         blocked_by: t.blocked_by,
-        subtasks: vec![],
+        subtasks,
         base_branch: None,
     }
 }
@@ -566,5 +585,48 @@ mod tests {
             orch.projects[0].dispatch_config.prompt_command,
             Some("{prompt}".to_string()),
         );
+    }
+
+    #[test]
+    fn list_tasks_populates_subtasks_from_parent_key() {
+        use planeai_tasks::model::CreateParams;
+        use planeai_tasks::provider::TaskProvider;
+
+        let repo = SqliteRepository::open_in_memory("TST").unwrap();
+        // Create parent
+        let parent = repo
+            .create(CreateParams {
+                title: "Parent task".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        // Create children pointing to parent
+        let child1 = repo
+            .create(CreateParams {
+                title: "Child one".into(),
+                parent_key: Some(parent.key.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        let child2 = repo
+            .create(CreateParams {
+                title: "Child two".into(),
+                parent_key: Some(parent.key.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let source = SqliteTaskSource::new(repo, vec!["done".into()]);
+        let tasks = source.list_tasks().unwrap();
+
+        let parent_task = tasks.iter().find(|t| t.key == parent.key).unwrap();
+        assert!(parent_task.subtasks.contains(&child1.key));
+        assert!(parent_task.subtasks.contains(&child2.key));
+
+        // Children should have no subtasks
+        let c1 = tasks.iter().find(|t| t.key == child1.key).unwrap();
+        let c2 = tasks.iter().find(|t| t.key == child2.key).unwrap();
+        assert!(c1.subtasks.is_empty());
+        assert!(c2.subtasks.is_empty());
     }
 }
