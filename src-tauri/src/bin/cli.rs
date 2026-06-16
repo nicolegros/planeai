@@ -339,7 +339,7 @@ fn main() {
                     &conn,
                     &session.id,
                     &Some(cfg),
-                    &planeai::cleanup::real_ops(),
+                    &planeai::cleanup::real_kill_ops(),
                 ) {
                     Ok(session) => {
                         notify_session_changed(&session.id);

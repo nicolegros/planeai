@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-use crate::cleanup::{CleanupContext, CleanupOps};
+use crate::cleanup::{CleanupContext, CleanupOps, KillOps};
 use crate::config::Config;
 use crate::db::{self, Session};
 
@@ -37,7 +37,7 @@ pub fn archive(
     conn: &Connection,
     id: &str,
     config: &Option<Config>,
-    cleanup_ops: &CleanupOps,
+    kill_ops: &KillOps,
 ) -> Result<Session, String> {
     let session = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
@@ -69,7 +69,7 @@ pub fn archive(
         branch: None,
         session_id: Some(session.id.clone()),
     };
-    let kill_errors = crate::cleanup::kill_backend(&ctx, cleanup_ops);
+    let kill_errors = crate::cleanup::kill_backend(&ctx, kill_ops);
     if !kill_errors.is_empty() {
         eprintln!("[session] kill errors during archive: {:?}", kill_errors);
         tracing::warn!(?kill_errors, "errors killing backend during archive");
@@ -629,18 +629,26 @@ mod tests {
 
     fn test_cleanup_ops() -> CleanupOps {
         CleanupOps {
-            kill_tmux: Box::new(|_| Ok(())),
-            kill_daemon_session: Box::new(|_| Ok(())),
+            kill: test_kill_ops(),
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
         }
     }
 
+    fn test_kill_ops() -> KillOps {
+        KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
+        }
+    }
+
     fn failing_cleanup_ops() -> CleanupOps {
         CleanupOps {
-            kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-            kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
+            },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
             delete_branch: Box::new(|_, _| Err("branch in use".to_string())),
@@ -848,15 +856,12 @@ mod tests {
         )
         .unwrap();
 
-        let ops = CleanupOps {
+        let ops = KillOps {
             kill_tmux: Box::new(|name| {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
             kill_daemon_session: Box::new(|_| Ok(())),
-            remove_worktree: Box::new(|_, _| Ok(())),
-            remove_dir: Box::new(|_| Ok(())),
-            delete_branch: Box::new(|_, _| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -893,15 +898,12 @@ mod tests {
         )
         .unwrap();
 
-        let ops = CleanupOps {
+        let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
             kill_daemon_session: Box::new(|sid| {
                 KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
                 Ok(())
             }),
-            remove_worktree: Box::new(|_, _| Ok(())),
-            remove_dir: Box::new(|_| Ok(())),
-            delete_branch: Box::new(|_, _| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -935,7 +937,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = archive(&conn, id, &None, &test_cleanup_ops()).unwrap();
+        let session = archive(&conn, id, &None, &test_kill_ops()).unwrap();
 
         // Returns pre-mutation session
         assert_eq!(session.status, "active");
@@ -971,7 +973,7 @@ mod tests {
         .unwrap();
 
         let cfg = test_config_with_task_manager();
-        let session = archive(&conn, id, &cfg, &test_cleanup_ops()).unwrap();
+        let session = archive(&conn, id, &cfg, &test_kill_ops()).unwrap();
 
         assert_eq!(session.task_key, Some("PROJ-456".to_string()));
     }

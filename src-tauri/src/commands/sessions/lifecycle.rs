@@ -26,7 +26,7 @@ pub fn archive_session(
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
-    crate::session_ops::archive(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
+    crate::session_ops::archive(&conn, &id, &Some(cfg), &cleanup::real_kill_ops())?;
     Ok(())
 }
 
