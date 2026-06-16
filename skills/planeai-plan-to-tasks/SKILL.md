@@ -76,8 +76,8 @@ Each task's `--desc` is a structured mini-handoff. Spare no detail — there is 
 - [ ] Specific criterion 2
 ```
 
-
 ### 5. Ask user for approval
+
 Present in details the tasks that will be created and ask for approval.
 
 ### 6. Create the tasks
