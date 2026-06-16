@@ -14,30 +14,38 @@ pub struct CleanupContext {
     pub session_id: Option<String>,
 }
 
-/// Operations that cleanup can perform (injectable for testing).
-pub struct CleanupOps {
+/// Operations to kill a backend session (injectable for testing).
+pub struct KillOps {
     pub kill_tmux: Op1,
     pub kill_daemon_session: Op1,
+}
+
+/// Operations that cleanup can perform (injectable for testing).
+pub struct CleanupOps {
+    pub kill: KillOps,
     pub remove_worktree: Op2,
     pub remove_dir: Op1,
     pub delete_branch: Op2,
 }
 
-/// Run background cleanup for a destroyed session. Returns collected errors.
-pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
+/// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
+pub fn kill_backend(
+    backend: &str,
+    tmux_name: Option<&str>,
+    session_id: Option<&str>,
+    ops: &KillOps,
+) -> Vec<String> {
     let mut errors = vec![];
-
-    // Kill backend session
-    match ctx.backend.as_str() {
+    match backend {
         "tmux" => {
-            if let Some(ref name) = ctx.tmux_name {
+            if let Some(name) = tmux_name {
                 if let Err(e) = (ops.kill_tmux)(name) {
                     errors.push(format!("tmux kill: {e}"));
                 }
             }
         }
         "daemon" => {
-            if let Some(ref id) = ctx.session_id {
+            if let Some(id) = session_id {
                 if let Err(e) = (ops.kill_daemon_session)(id) {
                     errors.push(format!("daemon kill: {e}"));
                 }
@@ -45,6 +53,17 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         }
         _ => {}
     }
+    errors
+}
+
+/// Run background cleanup for a destroyed session. Returns collected errors.
+pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
+    let mut errors = kill_backend(
+        &ctx.backend,
+        ctx.tmux_name.as_deref(),
+        ctx.session_id.as_deref(),
+        &ops.kill,
+    );
 
     // Remove worktree if applicable
     if let Some(ref wt_path) = ctx.worktree_path {
@@ -67,9 +86,9 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
     errors
 }
 
-/// Production operations that call real tmux/git/fs commands.
-pub fn real_ops() -> CleanupOps {
-    CleanupOps {
+/// Production kill operations.
+pub fn real_kill_ops() -> KillOps {
+    KillOps {
         kill_tmux: Box::new(|_name| {
             #[cfg(not(windows))]
             {
@@ -96,6 +115,13 @@ pub fn real_ops() -> CleanupOps {
             let _ = stream.read(&mut buf);
             Ok(())
         }),
+    }
+}
+
+/// Production operations that call real tmux/git/fs commands.
+pub fn real_ops() -> CleanupOps {
+    CleanupOps {
+        kill: real_kill_ops(),
         remove_worktree: Box::new(crate::git::worktree_remove),
         remove_dir: Box::new(|path| match std::fs::remove_dir_all(path) {
             Ok(()) => Ok(()),
@@ -130,11 +156,13 @@ mod tests {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = CleanupOps {
-            kill_tmux: Box::new(|_| Ok(())),
-            kill_daemon_session: Box::new(|id| {
-                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
-                Ok(())
-            }),
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Ok(())),
+                kill_daemon_session: Box::new(|id| {
+                    KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                    Ok(())
+                }),
+            },
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
@@ -160,11 +188,13 @@ mod tests {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = CleanupOps {
-            kill_tmux: Box::new(|name| {
-                KILLED.with(|k| k.borrow_mut().push(name.to_string()));
-                Ok(())
-            }),
-            kill_daemon_session: Box::new(|_| Ok(())),
+            kill: KillOps {
+                kill_tmux: Box::new(|name| {
+                    KILLED.with(|k| k.borrow_mut().push(name.to_string()));
+                    Ok(())
+                }),
+                kill_daemon_session: Box::new(|_| Ok(())),
+            },
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
             delete_branch: Box::new(|_, _| Ok(())),
@@ -192,8 +222,10 @@ mod tests {
             static BR_DELETED: RefCell<Vec<(String, String)>> = const { RefCell::new(vec![]) };
         }
         let ops = CleanupOps {
-            kill_tmux: Box::new(|_| Ok(())),
-            kill_daemon_session: Box::new(|_| Ok(())),
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Ok(())),
+                kill_daemon_session: Box::new(|_| Ok(())),
+            },
             remove_worktree: Box::new(|repo, wt| {
                 WT_REMOVED.with(|v| v.borrow_mut().push((repo.to_string(), wt.to_string())));
                 Ok(())
@@ -237,8 +269,10 @@ mod tests {
     #[test]
     fn cleanup_collects_errors_from_failed_ops() {
         let ops = CleanupOps {
-            kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-            kill_daemon_session: Box::new(|_| Ok(())),
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                kill_daemon_session: Box::new(|_| Ok(())),
+            },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
             delete_branch: Box::new(|_, _| Err("branch in use".to_string())),

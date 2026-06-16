@@ -335,7 +335,12 @@ fn main() {
                 let cfg_dir = planeai::config::config_dir("planeai");
                 let (cfg, _) = planeai::config::load(&cfg_dir);
 
-                match planeai::session_ops::archive(&conn, &session.id, &Some(cfg)) {
+                match planeai::session_ops::archive(
+                    &conn,
+                    &session.id,
+                    &Some(cfg),
+                    &planeai::cleanup::real_kill_ops(),
+                ) {
                     Ok(session) => {
                         notify_session_changed(&session.id);
                         let output = serde_json::to_string(&session).unwrap();

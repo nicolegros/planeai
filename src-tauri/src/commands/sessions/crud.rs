@@ -91,29 +91,31 @@ pub fn restore_session(
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::restore_session(&conn, &id).map_err(|e| e.to_string())?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+
+    // Restart relaunches the agent process and sets status to active
+    let ops = crate::session_ops::real_restart_ops();
+    let session = crate::session_ops::restart(&conn, &id, &cfg, &ops)?;
 
     // Register in NotifyState when restoring
-    if let Some(session) = db::get_session(&conn, &id).map_err(|e| e.to_string())? {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        let project_name = db::get_project(&conn, &session.project_id)
-            .ok()
-            .flatten()
-            .map(|p| p.name)
-            .unwrap_or_else(|| "unknown".to_string());
-        let display_name = if session.name.is_empty() {
-            &session.branch
-        } else {
-            &session.name
-        };
-        let hook_enabled = session
-            .provider
-            .as_deref()
-            .map(|pk| provider_has_hook(pk, &cfg))
-            .unwrap_or(false);
-        let mut ns = notify.0.lock().unwrap();
-        ns.register_session(&id, display_name, &project_name, hook_enabled);
-    }
+    let project_name = db::get_project(&conn, &session.project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.name)
+        .unwrap_or_else(|| "unknown".to_string());
+    let display_name = if session.name.is_empty() {
+        &session.branch
+    } else {
+        &session.name
+    };
+    let hook_enabled = session
+        .provider
+        .as_deref()
+        .map(|pk| provider_has_hook(pk, &cfg))
+        .unwrap_or(false);
+    let mut ns = notify.0.lock().unwrap();
+    ns.register_session(&id, display_name, &project_name, hook_enabled);
+
     Ok(())
 }
 
