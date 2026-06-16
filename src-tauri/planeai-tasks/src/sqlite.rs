@@ -139,41 +139,40 @@ impl SqliteRepository {
         Ok(out)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn row_to_task(
-        &self,
-        conn: &Connection,
-        key: &str,
-        title: String,
-        description: String,
-        status_str: String,
-        priority: i32,
-        parent_key: Option<String>,
-        base_branch: Option<String>,
-        created_at: String,
-        updated_at: String,
-    ) -> Result<Task, Error> {
-        let status = Status::parse(&status_str).ok_or(Error::InvalidStatus(status_str))?;
-        let blocked_by = self.load_blockers(conn, key)?;
-        let tags = self.load_tags(conn, key)?;
+    fn row_to_task(&self, conn: &Connection, row: TaskRow) -> Result<Task, Error> {
+        let status = Status::parse(&row.status).ok_or(Error::InvalidStatus(row.status))?;
+        let blocked_by = self.load_blockers(conn, &row.key)?;
+        let tags = self.load_tags(conn, &row.key)?;
         Ok(Task {
-            key: key.to_string(),
-            title,
-            description,
+            key: row.key,
+            title: row.title,
+            description: row.description,
             status,
-            priority,
-            parent_key,
+            priority: row.priority,
+            parent_key: row.parent_key,
             blocked_by,
             tags,
-            base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
-            created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
+            base_branch: row.base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
-            updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
         })
     }
+}
+
+struct TaskRow {
+    key: String,
+    title: String,
+    description: String,
+    status: String,
+    priority: i32,
+    parent_key: Option<String>,
+    base_branch: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 impl TaskProvider for SqliteRepository {
@@ -208,15 +207,17 @@ impl TaskProvider for SqliteRepository {
 
         self.row_to_task(
             &conn,
-            &key,
-            params.title,
-            params.description,
-            "todo".to_string(),
-            params.priority,
-            params.parent_key,
-            Some(params.base_branch),
-            now.clone(),
-            now,
+            TaskRow {
+                key,
+                title: params.title,
+                description: params.description,
+                status: "todo".to_string(),
+                priority: params.priority,
+                parent_key: params.parent_key,
+                base_branch: Some(params.base_branch),
+                created_at: now.clone(),
+                updated_at: now,
+            },
         )
     }
 
@@ -249,7 +250,8 @@ impl TaskProvider for SqliteRepository {
         .and_then(
             |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
                 self.row_to_task(
-                    &conn, &k, title, desc, status, priority, parent, base_branch, created, updated,
+                    &conn,
+                    TaskRow { key: k, title, description: desc, status, priority, parent_key: parent, base_branch, created_at: created, updated_at: updated },
                 )
             },
         )
@@ -323,7 +325,8 @@ impl TaskProvider for SqliteRepository {
             let (k, title, desc, status, priority, parent, base_branch, created, updated) =
                 row.map_err(|e| Error::Storage(e.to_string()))?;
             tasks.push(self.row_to_task(
-                &conn, &k, title, desc, status, priority, parent, base_branch, created, updated,
+                &conn,
+                TaskRow { key: k, title, description: desc, status, priority, parent_key: parent, base_branch, created_at: created, updated_at: updated },
             )?);
         }
         Ok(tasks)
@@ -403,15 +406,17 @@ impl TaskProvider for SqliteRepository {
 
         self.row_to_task(
             &conn,
-            key,
-            title,
-            description,
-            status_str,
-            priority,
-            parent_key,
-            Some(base_branch),
-            now.clone(),
-            now,
+            TaskRow {
+                key: key.to_string(),
+                title,
+                description,
+                status: status_str,
+                priority,
+                parent_key,
+                base_branch: Some(base_branch),
+                created_at: now.clone(),
+                updated_at: now,
+            },
         )
     }
 
