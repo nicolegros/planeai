@@ -2,15 +2,7 @@ use std::process::Command;
 
 pub fn tmux_bin() -> &'static str {
     static BIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    BIN.get_or_init(|| {
-        // Check common Homebrew paths first, then fall back to bare name
-        for path in ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux"] {
-            if std::path::Path::new(path).exists() {
-                return path.to_string();
-            }
-        }
-        "tmux".to_string()
-    })
+    BIN.get_or_init(|| crate::command::resolve("tmux"))
 }
 
 /// Generate a tmux session name: planeai-<project>-<8hex>
@@ -169,16 +161,23 @@ mod tests {
     }
 
     #[test]
-    fn tmux_bin_resolves_absolute_path_when_binary_exists() {
+    fn tmux_bin_resolves_via_command_resolve() {
         let bin = tmux_bin();
-        // On systems where tmux is installed, tmux_bin() must return an absolute path
-        // so that GUI apps without PATH can find it.
-        if std::path::Path::new("/opt/homebrew/bin/tmux").exists()
-            || std::path::Path::new("/usr/local/bin/tmux").exists()
-        {
+        let resolved = crate::command::resolve("tmux");
+        // tmux_bin() should return the same result as command::resolve("tmux")
+        assert_eq!(bin, resolved);
+    }
+
+    #[test]
+    fn tmux_bin_returns_absolute_path_when_installed() {
+        let bin = tmux_bin();
+        // If tmux is installed anywhere on this system, resolve must return an absolute path.
+        // A bare "tmux" means it wasn't found — acceptable in CI without tmux.
+        if bin != "tmux" {
+            assert!(bin.starts_with('/'), "expected absolute path, got: {bin}");
             assert!(
-                bin.starts_with('/'),
-                "tmux_bin() should resolve to absolute path, got: {bin}"
+                std::path::Path::new(bin).exists(),
+                "resolved path does not exist: {bin}"
             );
         }
     }
