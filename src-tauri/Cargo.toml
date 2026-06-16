@@ -37,6 +37,10 @@ path = "src/main.rs"
 name = "planeai-cli"
 path = "src/bin/cli.rs"
 
+[[bin]]
+name = "planeai-daemon"
+path = "src/bin/daemon.rs"
+
 [dependencies]
 planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }

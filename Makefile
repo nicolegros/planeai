@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint docs build-daemon
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs
 
 ci: lint test ## Run lint + tests
 
@@ -12,23 +12,15 @@ lint: ## Check formatting and clippy
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-dev: build-daemon
+dev:
 	pnpm tauri dev
 
-build-daemon: ## Build the daemon sidecar binary for the current platform
-	cd src-tauri && cargo build -p planeai-daemon
-
-build-daemon-release: ## Build the daemon sidecar binary (release mode)
-	cd src-tauri && cargo build --release -p planeai-daemon
-
-build: build-daemon-release
+build:
 	pnpm tauri build -b app
-	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai.app/Contents/MacOS/" 2>/dev/null || true
 
-bundle: build-daemon-release
+bundle:
 	pnpm install
 	pnpm tauri build -b app
-	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai.app/Contents/MacOS/" 2>/dev/null || true
 
 open: bundle
 	open src-tauri/target/release/bundle/macos/planeai.app
@@ -40,7 +32,7 @@ test:
 test-e2e: build
 	./tests/e2e_session_persistence.sh
 
-dev-bundle: build-daemon-release
+dev-bundle:
 	$(eval BRANCH := $(shell git branch --show-current | sed 's|/|-|g'))
 	$(eval SUFFIX := $(if $(filter main,$(BRANCH)),dev,$(if $(BRANCH),$(shell echo $(BRANCH) | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) printf substr($$i,1,1); printf int(rand()*10)}'),dev)))
 	@# Swap identifier, productName, and binary name for isolated dev build
@@ -49,7 +41,6 @@ dev-bundle: build-daemon-release
 	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
-	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app/Contents/MacOS/" 2>/dev/null || true
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
