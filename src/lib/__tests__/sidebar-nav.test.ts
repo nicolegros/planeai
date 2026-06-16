@@ -66,6 +66,26 @@ describe("sidebar-nav", () => {
       expect(action).toEqual({ type: "select" });
     });
 
+    it("h returns collapse", () => {
+      const action = handleSidebarKey(key({ key: "h" }), 5);
+      expect(action).toEqual({ type: "collapse" });
+    });
+
+    it("ArrowLeft returns collapse", () => {
+      const action = handleSidebarKey(key({ key: "ArrowLeft" }), 5);
+      expect(action).toEqual({ type: "collapse" });
+    });
+
+    it("l returns expand", () => {
+      const action = handleSidebarKey(key({ key: "l" }), 5);
+      expect(action).toEqual({ type: "expand" });
+    });
+
+    it("ArrowRight returns expand", () => {
+      const action = handleSidebarKey(key({ key: "ArrowRight" }), 5);
+      expect(action).toEqual({ type: "expand" });
+    });
+
     it("a returns archive", () => {
       const action = handleSidebarKey(key({ key: "a" }), 5);
       expect(action).toEqual({ type: "archive" });

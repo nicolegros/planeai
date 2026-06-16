@@ -11,8 +11,12 @@ function makeSession(id: string, projectId: string, taskKey: string | null = nul
   return { id, project_id: projectId, name: "", tmux_name: null, branch: "main", status: "active", created_at: "", worktree_path: null, provider: null, backend: "direct", tab_count: 1, base_branch: null, task_key: taskKey, pr_url: null, pr_state: null };
 }
 
-function makeTask(key: string, status: string, title = "task"): TaskItem {
-  return { key, title, status, description: "", priority: 0, blocked_by: [], tags: [], parent_key: null, url: null };
+function makeTask(key: string, status: string, title = "task", parent_key: string | null = null): TaskItem {
+  return { key, title, status, description: "", priority: 0, blocked_by: [], tags: [], parent_key, url: null };
+}
+
+function isParentTask(task: TaskItem, allTasks: TaskItem[]): boolean {
+  return allTasks.some(t => t.parent_key === task.key);
 }
 
 function getOrphanSessions(sessions: Session[], allTaskKeys: Set<string>): Session[] {
@@ -93,8 +97,34 @@ describe("unified sidebar logic", () => {
     });
   });
 
+  describe("parent task detection", () => {
+    it("task with subtasks is a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "parent"),
+        makeTask("PLA-2", "todo", "child", "PLA-1"),
+      ];
+      expect(isParentTask(tasks[0], tasks)).toBe(true);
+    });
+
+    it("task without subtasks is not a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "standalone"),
+        makeTask("PLA-2", "todo", "other"),
+      ];
+      expect(isParentTask(tasks[0], tasks)).toBe(false);
+    });
+
+    it("child task is not a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "parent"),
+        makeTask("PLA-2", "todo", "child", "PLA-1"),
+      ];
+      expect(isParentTask(tasks[1], tasks)).toBe(false);
+    });
+  });
+
   describe("flat nav ordering", () => {
-    it("orphans come before tasks for same project", () => {
+    it("includes project_header, orphans, status_header, and tasks in order", () => {
       const projects = [makeProject("p1", "proj", "/path")];
       const sessions = [
         makeSession("s1", "p1", null),
@@ -104,14 +134,30 @@ describe("unified sidebar logic", () => {
       const allTaskKeys = new Set(tasks.map(t => t.key));
       const orphans = getOrphanSessions(sessions, allTaskKeys);
 
-      // Simulating the flatNav construction
-      type NavItem = { type: "orphan"; id: string } | { type: "task"; key: string };
+      // Simulating the flatNav construction (new format with headers)
+      type NavItem = { type: "project_header"; id: string } | { type: "orphan"; id: string } | { type: "status_header"; status: string } | { type: "task"; key: string };
       const flatNav: NavItem[] = [];
+      flatNav.push({ type: "project_header", id: "p1" });
       for (const s of orphans.filter(s => s.project_id === "p1")) flatNav.push({ type: "orphan", id: s.id });
+      flatNav.push({ type: "status_header", status: "in_progress" });
       for (const t of tasks) flatNav.push({ type: "task", key: t.key });
 
-      expect(flatNav[0]).toEqual({ type: "orphan", id: "s1" });
-      expect(flatNav[1]).toEqual({ type: "task", key: "T-1" });
+      expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
+      expect(flatNav[1]).toEqual({ type: "orphan", id: "s1" });
+      expect(flatNav[2]).toEqual({ type: "status_header", status: "in_progress" });
+      expect(flatNav[3]).toEqual({ type: "task", key: "T-1" });
+    });
+
+    it("collapsed project only shows project_header", () => {
+      type NavItem = { type: "project_header"; id: string } | { type: "task"; key: string };
+      const collapsed = new Set(["project:p1"]);
+      const flatNav: NavItem[] = [];
+      flatNav.push({ type: "project_header", id: "p1" });
+      if (!collapsed.has("project:p1")) {
+        flatNav.push({ type: "task", key: "T-1" });
+      }
+      expect(flatNav).toHaveLength(1);
+      expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
     });
   });
 });

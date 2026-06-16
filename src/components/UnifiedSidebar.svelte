@@ -99,6 +99,16 @@
       try { results[p.path] = await tasksApi.listAll(p.path); } catch { results[p.path] = []; }
     }));
     tasksByProject = results;
+    // Auto-collapse empty projects
+    const allKeys = new Set(Object.values(results).flat().map(t => t.key));
+    const updates: Record<string, boolean> = {};
+    for (const p of projects) {
+      const key = `project:${p.id}`;
+      const hasTasks = (results[p.path] ?? []).length > 0;
+      const hasOrphans = sessions.some(s => s.project_id === p.id && (!s.task_key || !allKeys.has(s.task_key)));
+      if (!hasTasks && !hasOrphans) updates[key] = true;
+    }
+    if (Object.keys(updates).length) collapsedSections = { ...collapsedSections, ...updates };
   }
   $effect(() => { if (projects.length > 0) refresh(); });
 
@@ -116,6 +126,10 @@
 
   function sessionForTask(key: string): Session | undefined {
     return sessions.find(s => s.task_key === key);
+  }
+
+  function isParentTask(task: TaskItem, allTasks: TaskItem[]): boolean {
+    return allTasks.some(t => t.parent_key === task.key);
   }
 
   function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
@@ -157,10 +171,13 @@
   }
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "orphan"; session: Session } | { type: "task"; task: TaskItem; projectPath: string };
+  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of projects) {
+      const projectKey = `project:${project.id}`;
+      result.push({ type: "project_header", project });
+      if (collapsedSections[projectKey]) continue;
       // Orphans first
       const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? [];
       for (const s of projectOrphans) result.push({ type: "orphan", session: s });
@@ -168,7 +185,9 @@
       const projectTasks = tasksByProject[project.path] ?? [];
       const statusGroups = groupByStatus(projectTasks);
       for (const status of statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks))) {
+        if ((statusGroups[status] ?? []).length === 0) continue;
         const sectionKey = `${project.path}:${status}`;
+        result.push({ type: "status_header", projectPath: project.path, status });
         if (collapsedSections[sectionKey]) continue;
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
@@ -187,8 +206,61 @@
     const action = handleSidebarKey(e, flatNav.length);
     if (!action) return;
 
-    const current = flatNav[getSelectedIndex()];
+    const idx = getSelectedIndex();
+    const current = flatNav[idx];
     if (!current) return;
+
+    if (action.type === "collapse") {
+      if (current.type === "project_header") {
+        const key = `project:${current.project.id}`;
+        if (!collapsedSections[key]) collapsedSections = { ...collapsedSections, [key]: true };
+      } else if (current.type === "status_header") {
+        const sectionKey = `${current.projectPath}:${current.status}`;
+        if (!collapsedSections[sectionKey]) {
+          collapsedSections = { ...collapsedSections, [sectionKey]: true };
+        } else {
+          // Already collapsed status → jump to project header
+          const projectIdx = flatNav.findIndex(n => n.type === "project_header" && n.project.path === current.projectPath);
+          if (projectIdx >= 0) setSelectedIndex(projectIdx);
+        }
+      } else if (current.type === "task" || current.type === "orphan") {
+        // Jump to parent status header or project header
+        for (let i = idx - 1; i >= 0; i--) {
+          if (flatNav[i].type === "status_header" || flatNav[i].type === "project_header") {
+            setSelectedIndex(i);
+            break;
+          }
+        }
+      }
+      return;
+    }
+
+    if (action.type === "expand") {
+      if (current.type === "project_header") {
+        const key = `project:${current.project.id}`;
+        if (collapsedSections[key]) collapsedSections = { ...collapsedSections, [key]: false };
+      } else if (current.type === "status_header") {
+        const sectionKey = `${current.projectPath}:${current.status}`;
+        if (collapsedSections[sectionKey]) collapsedSections = { ...collapsedSections, [sectionKey]: false };
+      }
+      return;
+    }
+
+    if (current.type === "project_header") {
+      if (action.type === "select") {
+        const key = `project:${current.project.id}`;
+        toggleSection(key);
+      }
+      return;
+    }
+
+    if (current.type === "status_header") {
+      if (action.type === "select") {
+        const sectionKey = `${current.projectPath}:${current.status}`;
+        toggleSection(sectionKey);
+      }
+      return;
+    }
 
     if (current.type === "orphan") {
       const session = current.session;
@@ -239,15 +311,23 @@
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {@const statusGroups = groupByStatus(projectTasks)}
         {@const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? []}
+        {@const projectKey = `project:${project.id}`}
+        {@const projectCollapsed = collapsedSections[projectKey]}
+        {@const projectNavIdx = flatNav.findIndex(n => n.type === "project_header" && n.project.id === project.id)}
+        {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
-          <h3
-            class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1"
+          <button
+            class="w-full px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1 rounded-md py-0.5 hover:bg-surface-200 dark:hover:bg-surface-800 {isProjectSelected ? 'ring-1 ring-primary-500/50' : ''}"
             title={project.path}
+            onclick={() => toggleSection(projectKey)}
             oncontextmenu={(e) => onProjectContextMenu(e, project)}
           >
+            {#if projectCollapsed}<ChevronRight class="size-3 shrink-0" />{:else}<ChevronDown class="size-3 shrink-0" />{/if}
             {project.name}
             {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-amber-500" />{/if}
-          </h3>
+          </button>
+
+          {#if !projectCollapsed}
 
           <!-- Orphan sessions at top -->
           {#if projectOrphans.length > 0}
@@ -308,9 +388,11 @@
             {@const items = statusGroups[status] ?? []}
             {#if items.length > 0}
               {@const sectionKey = `${project.path}:${status}`}
+              {@const statusNavIdx = flatNav.findIndex(n => n.type === "status_header" && n.projectPath === project.path && n.status === status)}
+              {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div class="ml-1">
                 <button
-                  class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status]} hover:opacity-80 rounded-md"
+                  class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status]} hover:opacity-80 rounded-md {isStatusSelected ? 'ring-1 ring-primary-500/50' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
                   {#if collapsedSections[sectionKey]}<ChevronRight class="size-3" />{:else}<ChevronDown class="size-3" />{/if}
@@ -324,6 +406,7 @@
                       {@const isActive = linked?.id === activeSessionId}
                       {@const taskNavIdx = flatNav.findIndex(n => n.type === "task" && n.task.key === task.key)}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
+                      {@const isParent = isParentTask(task, projectTasks)}
                       <li>
                         <button
                           class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
@@ -332,7 +415,10 @@
                           onclick={() => handleTaskClick(task, project.path)}
                           oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                         >
-                          <span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{task.key}</span>
+                          {#if task.parent_key}
+                            <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
+                          {/if}
+                          <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
                           <span class="truncate">{task.title}</span>
                           {#if linked}
                             <span class="ml-auto shrink-0 flex items-center gap-1">
@@ -364,6 +450,7 @@
 
           {#if projectOrphans.length === 0 && projectTasks.length === 0}
             <p class="px-3 py-1 text-xs text-surface-600 dark:text-surface-400 italic">No sessions or tasks</p>
+          {/if}
           {/if}
         </div>
       {/each}
