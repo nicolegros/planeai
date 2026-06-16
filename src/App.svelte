@@ -212,6 +212,7 @@
       onSidebarTabChange={(tab) => { sidebarTab = tab; }}
       onTaskCreateConsumed={() => { taskCreateRequested = false; }}
       onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
+      onSessionsChanged={() => orchestrator.loadSessions()}
     />
   {/if}
 

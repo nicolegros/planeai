@@ -21,11 +21,12 @@
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
+    onSessionsChanged?: () => void;
     onTaskCreateConsumed?: () => void;
     onTaskRefreshConsumed?: () => void;
   }
 
-  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
@@ -165,16 +166,8 @@
     if (!repoPath) return;
     try {
       await tasksApi.move(key, status, repoPath);
-      if (status === "done") {
-        const linked = sessionForTask(key);
-        if (linked) {
-          console.log(`[task-panel] task ${key} → done, archiving session ${linked.id}`);
-          try { await onArchiveSession?.(linked); } catch (e: any) { showSnackbar(`Archive failed: ${e}`); }
-        } else {
-          console.log(`[task-panel] task ${key} → done, no linked session`);
-        }
-      }
       await refresh();
+      onSessionsChanged?.();
     } catch (e: any) { showSnackbar(e.toString()); }
   }
 

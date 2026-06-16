@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({ close: vi.fn(), onCloseRequested: vi.fn(() => Promise.resolve(() => {})) })),
+  getCurrentWindow: vi.fn(() => ({
+    close: vi.fn(),
+    onCloseRequested: vi.fn(() => Promise.resolve(() => {})),
+  })),
 }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn() }));
@@ -29,30 +32,66 @@ vi.mock("../api", () => ({
 import { sessions as sessionsApi, symphony } from "../api";
 import type { Session } from "../types";
 import {
-  getSessions, getActiveSessionId, loadSessions, selectSession, createSession,
-  deleteSession, archiveSession, restartSession,
-  getUnifiedTabs, getUnifiedActiveIndex, selectUnifiedTab, handleNextTab, handlePrevTab,
-  toggleDiff, toggleEditor, getDiffTabOpen, getDiffTabActive, getEditorTabOpen, getEditorTabActive,
-  getAgentStates, clearAgentState, startEventListeners, startSymphonyPolling, _resetForTests,
+  getSessions,
+  getActiveSessionId,
+  loadSessions,
+  selectSession,
+  createSession,
+  deleteSession,
+  archiveSession,
+  restartSession,
+  getUnifiedTabs,
+  getUnifiedActiveIndex,
+  selectUnifiedTab,
+  handleNextTab,
+  handlePrevTab,
+  toggleDiff,
+  toggleEditor,
+  getDiffTabOpen,
+  getDiffTabActive,
+  getEditorTabOpen,
+  getEditorTabActive,
+  getAgentStates,
+  clearAgentState,
+  startEventListeners,
+  startSymphonyPolling,
+  _resetForTests,
 } from "../session-orchestrator.svelte";
 
 const api = vi.mocked(sessionsApi);
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
-    id: "s1", project_id: "p1", name: "test", tmux_name: null, branch: "main",
-    status: "active", created_at: "2024-01-01", worktree_path: null, provider: "kiro",
-    backend: "tmux", tab_count: 1, base_branch: null, task_key: null, pr_url: null, pr_state: null,
+    id: "s1",
+    project_id: "p1",
+    name: "test",
+    tmux_name: null,
+    branch: "main",
+    status: "active",
+    created_at: "2024-01-01",
+    worktree_path: null,
+    provider: "kiro",
+    backend: "tmux",
+    tab_count: 1,
+    base_branch: null,
+    task_key: null,
+    pr_url: null,
+    pr_state: null,
     ...overrides,
   };
 }
 
 describe("session-orchestrator", () => {
-  beforeEach(() => { vi.clearAllMocks(); _resetForTests(); api.list.mockResolvedValue([]); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetForTests();
+    api.list.mockResolvedValue([]);
+  });
 
   describe("loadSessions", () => {
     it("populates sessions from API", async () => {
-      const s1 = makeSession({ id: "s1" }), s2 = makeSession({ id: "s2", name: "two" });
+      const s1 = makeSession({ id: "s1" }),
+        s2 = makeSession({ id: "s2", name: "two" });
       api.list.mockResolvedValue([s1, s2]);
       await loadSessions();
       expect(getSessions()).toEqual([s1, s2]);
@@ -89,7 +128,8 @@ describe("session-orchestrator", () => {
 
   describe("deleteSession", () => {
     it("removes session from list and calls API", async () => {
-      const s1 = makeSession({ id: "s1" }), s2 = makeSession({ id: "s2" });
+      const s1 = makeSession({ id: "s1" }),
+        s2 = makeSession({ id: "s2" });
       api.list.mockResolvedValue([s1, s2]);
       await loadSessions();
       await deleteSession(s1);
@@ -98,7 +138,8 @@ describe("session-orchestrator", () => {
     });
 
     it("selects next session when active is deleted", async () => {
-      const s1 = makeSession({ id: "s1" }), s2 = makeSession({ id: "s2" });
+      const s1 = makeSession({ id: "s1" }),
+        s2 = makeSession({ id: "s2" });
       api.list.mockResolvedValue([s1, s2]);
       await loadSessions();
       selectSession("s1");
@@ -144,16 +185,21 @@ describe("session-orchestrator", () => {
     it("handleNextTab cycles forward", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
       await loadSessions();
-      handleNextTab(); expect(getUnifiedActiveIndex()).toBe(1);
-      handleNextTab(); expect(getUnifiedActiveIndex()).toBe(2);
-      handleNextTab(); expect(getUnifiedActiveIndex()).toBe(0);
+      handleNextTab();
+      expect(getUnifiedActiveIndex()).toBe(1);
+      handleNextTab();
+      expect(getUnifiedActiveIndex()).toBe(2);
+      handleNextTab();
+      expect(getUnifiedActiveIndex()).toBe(0);
     });
 
     it("handlePrevTab cycles backward", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 3 })]);
       await loadSessions();
-      handlePrevTab(); expect(getUnifiedActiveIndex()).toBe(2);
-      handlePrevTab(); expect(getUnifiedActiveIndex()).toBe(1);
+      handlePrevTab();
+      expect(getUnifiedActiveIndex()).toBe(2);
+      handlePrevTab();
+      expect(getUnifiedActiveIndex()).toBe(1);
     });
 
     it("toggleDiff opens and activates", async () => {
@@ -167,7 +213,8 @@ describe("session-orchestrator", () => {
     it("toggleDiff closes when active", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
-      toggleDiff(); toggleDiff();
+      toggleDiff();
+      toggleDiff();
       expect(getDiffTabOpen()["s1"]).toBe(false);
     });
 
@@ -188,7 +235,9 @@ describe("session-orchestrator", () => {
     });
 
     it("startSymphonyPolling returns cleanup", () => {
-      vi.mocked(symphony.getStatus).mockResolvedValue(JSON.stringify({ active: true, slots_used: 1, max_concurrent: 3 }));
+      vi.mocked(symphony.getStatus).mockResolvedValue(
+        JSON.stringify({ active: true, slots_used: 1, max_concurrent: 3 }),
+      );
       const cleanup = startSymphonyPolling();
       expect(typeof cleanup).toBe("function");
       cleanup();
