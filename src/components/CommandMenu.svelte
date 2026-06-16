@@ -33,10 +33,11 @@
   let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");
   let archivedProjects = $state<Project[]>([]);
   let taskItems = $state<TaskItem[]>([]);
   let fileList = $state<string[]>([]);
+  let projectAutoModes = $state<Record<string, boolean>>({});
 
   async function openArchived() {
     archivedSessions = await sessionsApi.listArchived();
@@ -78,6 +79,15 @@
 
   function openDeleteProject() {
     subMenu = "deleteProject";
+  }
+
+  async function openAutoDispatch() {
+    const modes: Record<string, boolean> = {};
+    await Promise.all(projects.map(async (p) => {
+      try { modes[p.id] = await projectsApi.getAutoMode(p.id); } catch { modes[p.id] = false; }
+    }));
+    projectAutoModes = modes;
+    subMenu = "autoDispatch";
   }
 
   function projectName(projectId: string): string {
@@ -301,6 +311,33 @@
             </Command.Viewport>
           </Command.List>
         </Command.Root>
+      {:else if subMenu === "autoDispatch"}
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
+          <Command.Input
+            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            placeholder="Toggle auto-dispatch..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects as project (project.id)}
+                    <Command.Item
+                      value="{projectAutoModes[project.id] ? 'disable' : 'enable'} auto-dispatch {project.name}"
+                      keywords={[project.name, "auto", "dispatch", "toggle"]}
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      onSelect={async () => { const next = !projectAutoModes[project.id]; await projectsApi.setAutoMode(project.id, next); projectAutoModes = { ...projectAutoModes, [project.id]: next }; }}
+                    >
+                      <span>{project.name}</span>
+                      <span class="text-xs shrink-0 ml-2 {projectAutoModes[project.id] ? 'text-amber-500' : 'text-surface-400'}">{projectAutoModes[project.id] ? '✓ On' : 'Off'}</span>
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
       {:else}
       <Command.Root class="flex flex-col" loop disablePointerSelection>
         <Command.Input
@@ -462,6 +499,15 @@
                   onSelect={openArchivedProjects}
                 >
                   Restore project…
+                </Command.Item>
+                <Command.Item
+                  value="toggle auto-dispatch"
+                  keywords={["auto", "dispatch", "toggle", "project", "automatic"]}
+                  disabled={projects.length === 0}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openAutoDispatch}
+                >
+                  Toggle auto-dispatch…
                 </Command.Item>
               </Command.GroupItems>
             </Command.Group>

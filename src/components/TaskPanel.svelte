@@ -24,9 +24,10 @@
     onSessionsChanged?: () => void;
     onTaskCreateConsumed?: () => void;
     onTaskRefreshConsumed?: () => void;
+    disableKeyboard?: boolean;
   }
 
-  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
 
   // React to external create request
   $effect(() => {
@@ -238,6 +239,7 @@
   const flatTaskKeys = $derived(flatNav.map((item) => item.type === "task" ? item.task.key : `§${item.sectionKey}`));
 
   function handleTaskKeydown(e: KeyboardEvent) {
+    if (disableKeyboard) return;
     if (getActiveZone() !== "sidebar") return;
     if (flatNav.length === 0) return;
     const el = document.activeElement;

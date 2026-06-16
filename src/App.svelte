@@ -13,7 +13,7 @@
   import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
-  import Sidebar from "./components/Sidebar.svelte";
+  import UnifiedSidebar from "./components/UnifiedSidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
   import Terminal from "./components/Terminal.svelte";
@@ -32,11 +32,11 @@
   let showProjectForm = $state(false);
   let showSessionForm = $state(false);
   let sidebarVisible = $state(true);
-  let sidebarTab = $state<"sessions" | "tasks">("sessions");
   let taskCreateRequested = $state(false);
   let taskRefreshRequested = $state(false);
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
+  let showNewItemModal = $state(false);
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
   let showQuitConfirm = $state(false);
@@ -129,9 +129,7 @@
     const cleanup = installKeyboardRouter(
       (action) => {
         if (action.type === "new_session") {
-          if (sidebarTab === "tasks") taskCreateRequested = true;
-          else if (projects.length === 0) showProjectForm = true;
-          else showSessionForm = true;
+          showNewItemModal = true;
         } else if (action.type === "new_project") { showProjectForm = true; }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; }
         else if (action.type === "jump_to_session") { orchestrator.jumpToSession(action.index); }
@@ -145,7 +143,7 @@
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -155,13 +153,13 @@
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
-        else if (action.type === "toggle_task_panel") { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; }
-        else if (action.type === "toggle_sessions_panel") { sidebarTab = "sessions"; if (!sidebarVisible) sidebarVisible = true; }
-        else if (action.type === "refresh_tasks") { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; taskRefreshRequested = true; }
+        else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
+        else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
+        else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskRefreshRequested = true; }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !getCycleState().isCycling,
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling,
       () => !!(activeSessionId && editorTabActive[activeSessionId])
     );
 
@@ -204,32 +202,31 @@
 
   <div class="flex flex-1 min-h-0">
   {#if sidebarVisible}
-    <Sidebar
-      {projects}
-      {sessions}
-      {activeSessionId}
-      {zone}
-      {agentStates}
-      {renamingSessionId}
-      {sidebarTab}
-      {taskCreateRequested}
-      {taskRefreshRequested}
-      onAddProject={() => (showProjectForm = true)}
-      onSelectSession={(id) => orchestrator.selectSession(id)}
-      onArchiveSession={(s) => orchestrator.archiveSession(s)}
-      onDeleteSession={(s) => (sessionToDelete = s)}
-      onRestartSession={(s) => orchestrator.restartSession(s)}
-      onOpenPreferences={openPreferences}
-      onRenameSession={doRename}
-      onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
-      onArchiveProject={archiveProject}
-      onDeleteProject={(p) => (projectToDelete = p)}
-      onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null }; showSessionForm = true; }}
-      onSidebarTabChange={(tab) => { sidebarTab = tab; }}
-      onTaskCreateConsumed={() => { taskCreateRequested = false; }}
-      onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
-      onSessionsChanged={() => orchestrator.loadSessions()}
-    />
+      <UnifiedSidebar
+        {projects}
+        {sessions}
+        {activeSessionId}
+        {zone}
+        {agentStates}
+        {renamingSessionId}
+        {taskCreateRequested}
+        {taskRefreshRequested}
+        onSelectSession={(id) => orchestrator.selectSession(id)}
+        onArchiveSession={(s) => orchestrator.archiveSession(s)}
+        onDeleteSession={(s) => (sessionToDelete = s)}
+        onRestartSession={(s) => orchestrator.restartSession(s)}
+        onRenameSession={doRename}
+        onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
+        onArchiveProject={archiveProject}
+        onDeleteProject={(p) => (projectToDelete = p)}
+        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null }; showSessionForm = true; }}
+        onAddProject={() => (showProjectForm = true)}
+        onOpenPreferences={openPreferences}
+        onCreateSession={() => { showNewItemModal = true; }}
+        onTaskCreateConsumed={() => { taskCreateRequested = false; }}
+        onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
+        onSessionsChanged={() => orchestrator.loadSessions()}
+      />
   {/if}
 
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
@@ -279,7 +276,7 @@
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectsApi.restore(id); await loadProjects(); }}
       onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
-      onCreateTask={() => { sidebarTab = "tasks"; if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
+      onCreateTask={() => { if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
       onToggleDiff={() => orchestrator.toggleDiff()}
       onOpenFile={(path) => orchestrator.openFile(path)}
     />
@@ -395,6 +392,28 @@
             <div class="flex justify-between">
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd> cancel</span>
               <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">q</kbd> quit</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    {/if}
+
+    {#if showNewItemModal}
+      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }}>
+        <Dialog.Portal>
+          <Dialog.Overlay class="fixed inset-0 z-50" />
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-64 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-5 space-y-3 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
+            <Dialog.Title class="text-sm font-semibold text-surface-900 dark:text-surface-50">New…</Dialog.Title>
+            <div class="space-y-1">
+              <button class="w-full text-left px-3 py-2 rounded-md text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800 flex items-center justify-between" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
+                Session
+                <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs text-surface-500">s</kbd>
+              </button>
+              <button class="w-full text-left px-3 py-2 rounded-md text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800 flex items-center justify-between" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
+                Task
+                <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs text-surface-500">t</kbd>
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
