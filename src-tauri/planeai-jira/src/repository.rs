@@ -9,6 +9,24 @@ pub struct JiraRepository {
     conn: Connection,
 }
 
+fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
+    let labels_json: String = row.get(6)?;
+    let ts: String = row.get(8)?;
+    Ok(JiraIssue {
+        issue_key: row.get(0)?,
+        jira_project: row.get(1)?,
+        summary: row.get(2)?,
+        description: row.get(3)?,
+        status: row.get(4)?,
+        priority: row.get(5)?,
+        labels: serde_json::from_str(&labels_json).unwrap_or_default(),
+        sync_status: row.get(7)?,
+        last_synced_at: chrono::DateTime::parse_from_rfc3339(&ts)
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now()),
+    })
+}
+
 impl JiraRepository {
     pub fn new(conn: Connection) -> Result<Self, Error> {
         migrate(&conn)?;
@@ -68,38 +86,10 @@ impl JiraRepository {
             "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1",
         )?;
 
-        let result = stmt.query_row(params![issue_key], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        });
+        let result = stmt.query_row(params![issue_key], row_to_issue);
 
         match result {
-            Ok((issue_key, jira_project, summary, description, status, priority, labels_json, sync_status, last_synced_at)) => {
-                let labels: Vec<String> = serde_json::from_str(&labels_json).unwrap_or_default();
-                let last_synced_at = chrono::DateTime::parse_from_rfc3339(&last_synced_at)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
-                Ok(Some(JiraIssue {
-                    issue_key,
-                    jira_project,
-                    summary,
-                    description,
-                    status,
-                    priority,
-                    labels,
-                    sync_status,
-                    last_synced_at,
-                }))
-            }
+            Ok(issue) => Ok(Some(issue)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
