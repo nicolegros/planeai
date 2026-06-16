@@ -91,7 +91,11 @@ pub fn build_session_plan(
     let short_id = &session_id.replace('-', "")[..8];
 
     let branch_strategy = if opts.worktree {
-        let base = opts.base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH).to_string();
+        let base = opts
+            .base_branch
+            .as_deref()
+            .unwrap_or(DEFAULT_BASE_BRANCH)
+            .to_string();
         let home = config::home_dir();
         let wt_path = format!("{home}/.planeai/worktrees/{}/{short_id}", project.name);
         BranchStrategy::Worktree {

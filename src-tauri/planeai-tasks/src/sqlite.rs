@@ -18,7 +18,8 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
         .query_row("SELECT version FROM task_schema_version", [], |r| r.get(0))
         .map_err(|e| Error::Storage(e.to_string()))?;
 
-    let migrations = ["CREATE TABLE IF NOT EXISTS task_projects (
+    let migrations = [
+        "CREATE TABLE IF NOT EXISTS task_projects (
             prefix TEXT PRIMARY KEY,
             next_seq INTEGER NOT NULL DEFAULT 1
         );
@@ -43,7 +44,8 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             tag TEXT NOT NULL,
             PRIMARY KEY (task_key, tag)
         );",
-        "ALTER TABLE tasks ADD COLUMN base_branch TEXT;"];
+        "ALTER TABLE tasks ADD COLUMN base_branch TEXT;",
+    ];
 
     for (i, sql) in migrations.iter().enumerate() {
         if (i as i32) >= version {
@@ -152,7 +154,9 @@ impl SqliteRepository {
             parent_key: row.parent_key,
             blocked_by,
             tags,
-            base_branch: row.base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
+            base_branch: row
+                .base_branch
+                .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
             created_at: chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -251,7 +255,17 @@ impl TaskProvider for SqliteRepository {
             |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
                 self.row_to_task(
                     &conn,
-                    TaskRow { key: k, title, description: desc, status, priority, parent_key: parent, base_branch, created_at: created, updated_at: updated },
+                    TaskRow {
+                        key: k,
+                        title,
+                        description: desc,
+                        status,
+                        priority,
+                        parent_key: parent,
+                        base_branch,
+                        created_at: created,
+                        updated_at: updated,
+                    },
                 )
             },
         )
@@ -326,7 +340,17 @@ impl TaskProvider for SqliteRepository {
                 row.map_err(|e| Error::Storage(e.to_string()))?;
             tasks.push(self.row_to_task(
                 &conn,
-                TaskRow { key: k, title, description: desc, status, priority, parent_key: parent, base_branch, created_at: created, updated_at: updated },
+                TaskRow {
+                    key: k,
+                    title,
+                    description: desc,
+                    status,
+                    priority,
+                    parent_key: parent,
+                    base_branch,
+                    created_at: created,
+                    updated_at: updated,
+                },
             )?);
         }
         Ok(tasks)
@@ -366,7 +390,10 @@ impl TaskProvider for SqliteRepository {
             .unwrap_or(existing.2);
         let priority = params.priority.unwrap_or(existing.3);
         let parent_key = params.parent_key.unwrap_or(existing.4);
-        let base_branch = params.base_branch.or(existing.5).unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
+        let base_branch = params
+            .base_branch
+            .or(existing.5)
+            .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
         let now = Utc::now().to_rfc3339();
 
         conn.execute(

@@ -159,8 +159,17 @@ mod tests {
     #[test]
     fn task_add_creates_and_returns_json() {
         let (_conn, repo) = setup();
-        let result =
-            run_task_add(&repo, "Fix bug", "desc", 1, &["backend".into()], &[], None, None).unwrap();
+        let result = run_task_add(
+            &repo,
+            "Fix bug",
+            "desc",
+            1,
+            &["backend".into()],
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["key"], "PLA-1");
         assert_eq!(v["title"], "Fix bug");
@@ -223,8 +232,17 @@ mod tests {
     fn task_edit_updates_fields() {
         let (_conn, repo) = setup();
         run_task_add(&repo, "original", "", 0, &[], &[], None, None).unwrap();
-        let result =
-            run_task_edit(&repo, "PLA-1", Some("renamed"), None, Some(2), None, None, None).unwrap();
+        let result = run_task_edit(
+            &repo,
+            "PLA-1",
+            Some("renamed"),
+            None,
+            Some(2),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["title"], "renamed");
         assert_eq!(v["priority"], 2);
@@ -282,8 +300,17 @@ mod tests {
     fn task_edit_base_branch() {
         let (_conn, repo) = setup();
         run_task_add(&repo, "task", "", 0, &[], &[], None, None).unwrap();
-        let result =
-            run_task_edit(&repo, "PLA-1", None, None, None, None, None, Some("release")).unwrap();
+        let result = run_task_edit(
+            &repo,
+            "PLA-1",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("release"),
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["base_branch"], "release");
     }
