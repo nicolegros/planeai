@@ -3013,6 +3013,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "planeai-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "portable-pty",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "planeai-tasks"
 version = "0.0.0"
 dependencies = [

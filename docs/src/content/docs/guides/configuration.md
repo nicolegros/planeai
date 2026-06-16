@@ -21,20 +21,20 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
       // Template for autonomous prompts (task dispatch)
       "autonomous_prompt_template": "Complete this task: {{task.title}}\n\n{{task.description}}",
       // Flag to enable autonomous/yolo mode (no confirmations)
-      "yolo_flag": "--trust"
+      "yolo_flag": "--trust",
     },
     "claude": {
       "command": "claude",
       "prompt_command": "claude --message \"{{prompt}}\"",
       "autonomous_prompt_template": "{{task.title}}: {{task.description}}",
-      "yolo_flag": "--dangerously-skip-permissions"
-    }
-  }
+      "yolo_flag": "--dangerously-skip-permissions",
+    },
+  },
 }
 ```
 
-| Field                        | Description                                           |
-| ---------------------------- | ----------------------------------------------------- |
+| Field                        | Description                                            |
+| ---------------------------- | ------------------------------------------------------ |
 | `command`                    | Shell command to start a new agent session             |
 | `prompt_command`             | Command to send a prompt to a running session          |
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task      |
@@ -46,15 +46,15 @@ Controls how planeai manages terminal sessions.
 
 ```jsonc
 {
-  "session_backend": "auto" // "auto" | "tmux" | "direct"
+  "session_backend": "auto", // "auto" | "tmux" | "direct"
 }
 ```
 
-| Value    | Behavior                                                  |
-| -------- | --------------------------------------------------------- |
-| `auto`   | Uses tmux if available, falls back to direct              |
-| `tmux`   | Requires tmux — sessions persist across app restarts      |
-| `direct` | In-process PTY — sessions terminate when the app closes   |
+| Value    | Behavior                                                |
+| -------- | ------------------------------------------------------- |
+| `auto`   | Uses tmux if available, falls back to direct            |
+| `tmux`   | Requires tmux — sessions persist across app restarts    |
+| `direct` | In-process PTY — sessions terminate when the app closes |
 
 :::tip
 Use `tmux` backend for production workflows. Sessions survive crashes and app restarts.
@@ -79,9 +79,9 @@ Templates control how tasks map to branches, session names, and prompts.
       // Session display name
       "name": "{{task.key}}: {{task.title | truncate(40)}}",
       // Prompt sent to the agent
-      "prompt": "{{task.description}}"
-    }
-  }
+      "prompt": "{{task.description}}",
+    },
+  },
 }
 ```
 
@@ -89,12 +89,12 @@ Templates control how tasks map to branches, session names, and prompts.
 
 Templates use `{{variable}}` interpolation with optional transforms via `|`:
 
-| Transform       | Description                          |
-| --------------- | ------------------------------------ |
-| `slugify`       | Converts to URL-safe slug            |
-| `truncate(n)`   | Truncates to `n` characters          |
-| `lowercase`     | Converts to lowercase                |
-| `uppercase`     | Converts to uppercase                |
+| Transform     | Description                 |
+| ------------- | --------------------------- |
+| `slugify`     | Converts to URL-safe slug   |
+| `truncate(n)` | Truncates to `n` characters |
+| `lowercase`   | Converts to lowercase       |
+| `uppercase`   | Converts to uppercase       |
 
 Available variables: `task.key`, `task.title`, `task.description`, `task.status`, `task.priority`.
 
@@ -113,18 +113,18 @@ Hooks run shell commands at task state transitions.
       // Runs when a notification is received
       "on_notify": "say '{{task.key}} needs attention'",
       // Runs when a failed task is retried
-      "on_restart": "git stash && git pull --rebase"
-    }
-  }
+      "on_restart": "git stash && git pull --rebase",
+    },
+  },
 }
 ```
 
-| Hook         | Trigger                             |
-| ------------ | ----------------------------------- |
-| `on_start`   | Task dispatched to an agent session |
-| `on_complete`| Agent signals task completion        |
-| `on_notify`  | Task receives a notification         |
-| `on_restart` | Task is retried after failure        |
+| Hook          | Trigger                             |
+| ------------- | ----------------------------------- |
+| `on_start`    | Task dispatched to an agent session |
+| `on_complete` | Agent signals task completion       |
+| `on_notify`   | Task receives a notification        |
+| `on_restart`  | Task is retried after failure       |
 
 :::note
 Hooks run in the working directory of the task's git worktree.
