@@ -104,7 +104,7 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
     }
 
     // Use sync IPC to query daemon (avoid block_on which can deadlock during setup)
-    let alive_ids = match query_daemon_sessions_sync() {
+    let alive_ids = match crate::daemon_client::list_sessions_sync() {
         Some(ids) => ids,
         None => {
             // Can't reach daemon — mark all as exited
@@ -120,29 +120,6 @@ pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Con
             let _ = db::mark_session_exited(conn, &session.id);
         }
     }
-}
-
-/// Sync query to daemon for session list (used during startup to avoid block_on deadlock).
-fn query_daemon_sessions_sync() -> Option<std::collections::HashSet<String>> {
-    use std::io::{BufRead, Write};
-
-    let app_dir = crate::paths::app_data_dir();
-    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
-    stream.write_all(&[0x00]).ok()?; // control connection type byte
-    let req = serde_json::json!({"cmd": "list"});
-    stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
-
-    let mut line = String::new();
-    let mut reader = std::io::BufReader::new(stream);
-    reader.read_line(&mut line).ok()?;
-
-    let val: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let sessions = val.get("sessions")?.as_array()?;
-    let ids: std::collections::HashSet<String> = sessions
-        .iter()
-        .filter_map(|s| s.get("session_id")?.as_str().map(|s| s.to_string()))
-        .collect();
-    Some(ids)
 }
 
 /// Start a background task that listens for daemon exit events and marks sessions as exited.

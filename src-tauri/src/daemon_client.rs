@@ -156,6 +156,31 @@ impl DataConnection {
     }
 }
 
+// ─── Sync IPC ────────────────────────────────────────────────────────────────
+
+/// Sync query to daemon for session list (avoids async/block_on during startup).
+pub fn list_sessions_sync() -> Option<std::collections::HashSet<String>> {
+    use std::io::{BufRead, Write};
+
+    let app_dir = crate::paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
+    stream.write_all(&[0x00]).ok()?; // control connection type byte
+    let req = serde_json::json!({"cmd": "list"});
+    stream.write_all(format!("{}\n", req).as_bytes()).ok()?;
+
+    let mut line = String::new();
+    let mut reader = std::io::BufReader::new(stream);
+    reader.read_line(&mut line).ok()?;
+
+    let val: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let sessions = val.get("sessions")?.as_array()?;
+    let ids: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter_map(|s| s.get("session_id")?.as_str().map(|s| s.to_string()))
+        .collect();
+    Some(ids)
+}
+
 // ─── Sidecar Spawning ────────────────────────────────────────────────────────
 
 /// Resolve the daemon binary path. In production, use the bundled resource.
