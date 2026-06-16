@@ -33,7 +33,12 @@ pub struct DestroyResult {
     pub cleanup_errors: Vec<String>,
 }
 
-pub fn archive(conn: &Connection, id: &str, config: &Option<Config>) -> Result<Session, String> {
+pub fn archive(
+    conn: &Connection,
+    id: &str,
+    config: &Option<Config>,
+    cleanup_ops: &CleanupOps,
+) -> Result<Session, String> {
     let session = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
@@ -53,6 +58,21 @@ pub fn archive(conn: &Connection, id: &str, config: &Option<Config>) -> Result<S
             tracing::info!(task_key = %key, "firing on_complete hook");
             fire_task_hook(cfg, &session, "on_complete", &cwd, conn);
         }
+    }
+
+    // Kill the agent backend process
+    let ctx = CleanupContext {
+        backend: session.backend.clone(),
+        tmux_name: session.tmux_name.clone(),
+        worktree_path: None,
+        project_path: None,
+        branch: None,
+        session_id: Some(session.id.clone()),
+    };
+    let kill_errors = crate::cleanup::kill_backend(&ctx, cleanup_ops);
+    if !kill_errors.is_empty() {
+        eprintln!("[session] kill errors during archive: {:?}", kill_errors);
+        tracing::warn!(?kill_errors, "errors killing backend during archive");
     }
 
     db::archive_session(conn, id).map_err(|e| e.to_string())?;
@@ -253,8 +273,8 @@ pub fn restart(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
 
-    if session.status != "exited" {
-        return Err("can only restart exited sessions".to_string());
+    if session.status != "exited" && session.status != "archived" {
+        return Err("can only restart exited or archived sessions".to_string());
     }
 
     let provider_key = session
@@ -802,6 +822,96 @@ mod tests {
     }
 
     #[test]
+    fn archive_kills_backend_session() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ddddeeee-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "to-archive",
+            Some("planeai-myapp-ddd"),
+            "feat-done",
+            Some("/tmp/wt/done"),
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = CleanupOps {
+            kill_tmux: Box::new(|name| {
+                KILLED.with(|k| k.borrow_mut().push(name.to_string()));
+                Ok(())
+            }),
+            kill_daemon_session: Box::new(|_| Ok(())),
+            remove_worktree: Box::new(|_, _| Ok(())),
+            remove_dir: Box::new(|_| Ok(())),
+            delete_branch: Box::new(|_, _| Ok(())),
+        };
+
+        archive(&conn, id, &None, &ops).unwrap();
+
+        KILLED.with(|k| {
+            assert_eq!(k.borrow().as_slice(), &["planeai-myapp-ddd"]);
+        });
+    }
+
+    #[test]
+    fn archive_kills_daemon_backend_session() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ddddeeee-2222-3333-4444-555566667777";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "daemon-archive",
+            None,
+            "main",
+            None,
+            None,
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = CleanupOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|sid| {
+                KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
+                Ok(())
+            }),
+            remove_worktree: Box::new(|_, _| Ok(())),
+            remove_dir: Box::new(|_| Ok(())),
+            delete_branch: Box::new(|_, _| Ok(())),
+        };
+
+        archive(&conn, id, &None, &ops).unwrap();
+
+        KILLED.with(|k| {
+            assert_eq!(k.borrow().as_slice(), &[id]);
+        });
+    }
+
+    #[test]
     fn archive_sets_status_and_returns_pre_mutation_session() {
         let conn = setup_db();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -825,7 +935,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = archive(&conn, id, &None).unwrap();
+        let session = archive(&conn, id, &None, &test_cleanup_ops()).unwrap();
 
         // Returns pre-mutation session
         assert_eq!(session.status, "active");
@@ -861,7 +971,7 @@ mod tests {
         .unwrap();
 
         let cfg = test_config_with_task_manager();
-        let session = archive(&conn, id, &cfg).unwrap();
+        let session = archive(&conn, id, &cfg, &test_cleanup_ops()).unwrap();
 
         assert_eq!(session.task_key, Some("PROJ-456".to_string()));
     }
@@ -1165,6 +1275,40 @@ mod tests {
         let cfg = Config::default();
         let ops = MockRestartOps::new();
         let err = restart(&conn, id, &cfg, &ops).unwrap_err();
-        assert!(err.contains("can only restart exited sessions"));
+        assert!(err.contains("can only restart exited or archived sessions"));
+    }
+
+    #[test]
+    fn restart_restores_archived_session() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ffffbbbb-2222-3333-4444-555566667777";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "archived-me",
+            Some("planeai-myapp-fff"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::archive_session(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert_eq!(ops.calls.borrow().len(), 1);
+        assert_eq!(ops.calls.borrow()[0].0, "planeai-myapp-fff");
     }
 }

@@ -23,11 +23,9 @@ pub struct CleanupOps {
     pub delete_branch: Op2,
 }
 
-/// Run background cleanup for a destroyed session. Returns collected errors.
-pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
+/// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
+pub fn kill_backend(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
     let mut errors = vec![];
-
-    // Kill backend session
     match ctx.backend.as_str() {
         "tmux" => {
             if let Some(ref name) = ctx.tmux_name {
@@ -45,6 +43,12 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         }
         _ => {}
     }
+    errors
+}
+
+/// Run background cleanup for a destroyed session. Returns collected errors.
+pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
+    let mut errors = kill_backend(ctx, ops);
 
     // Remove worktree if applicable
     if let Some(ref wt_path) = ctx.worktree_path {
