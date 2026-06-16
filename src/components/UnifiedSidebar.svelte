@@ -118,6 +118,10 @@
     return sessions.find(s => s.task_key === key);
   }
 
+  function isParentTask(task: TaskItem, allTasks: TaskItem[]): boolean {
+    return allTasks.some(t => t.parent_key === task.key);
+  }
+
   function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
     const groups: Record<string, TaskItem[]> = {};
     for (const s of statusOrder) groups[s] = [];
@@ -324,6 +328,7 @@
                       {@const isActive = linked?.id === activeSessionId}
                       {@const taskNavIdx = flatNav.findIndex(n => n.type === "task" && n.task.key === task.key)}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
+                      {@const isParent = isParentTask(task, projectTasks)}
                       <li>
                         <button
                           class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
@@ -332,7 +337,10 @@
                           onclick={() => handleTaskClick(task, project.path)}
                           oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                         >
-                          <span class="shrink-0 text-[10px] font-medium text-primary-600 dark:text-primary-400">{task.key}</span>
+                          {#if task.parent_key}
+                            <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
+                          {/if}
+                          <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
                           <span class="truncate">{task.title}</span>
                           {#if linked}
                             <span class="ml-auto shrink-0 flex items-center gap-1">

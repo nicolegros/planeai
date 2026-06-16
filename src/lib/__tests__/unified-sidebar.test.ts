@@ -11,8 +11,12 @@ function makeSession(id: string, projectId: string, taskKey: string | null = nul
   return { id, project_id: projectId, name: "", tmux_name: null, branch: "main", status: "active", created_at: "", worktree_path: null, provider: null, backend: "direct", tab_count: 1, base_branch: null, task_key: taskKey, pr_url: null, pr_state: null };
 }
 
-function makeTask(key: string, status: string, title = "task"): TaskItem {
-  return { key, title, status, description: "", priority: 0, blocked_by: [], tags: [], parent_key: null, url: null };
+function makeTask(key: string, status: string, title = "task", parent_key: string | null = null): TaskItem {
+  return { key, title, status, description: "", priority: 0, blocked_by: [], tags: [], parent_key, url: null };
+}
+
+function isParentTask(task: TaskItem, allTasks: TaskItem[]): boolean {
+  return allTasks.some(t => t.parent_key === task.key);
 }
 
 function getOrphanSessions(sessions: Session[], allTaskKeys: Set<string>): Session[] {
@@ -90,6 +94,32 @@ describe("unified sidebar logic", () => {
       const groups = groupByStatus([]);
       expect(groups["todo"]).toHaveLength(0);
       expect(groups["in_progress"]).toHaveLength(0);
+    });
+  });
+
+  describe("parent task detection", () => {
+    it("task with subtasks is a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "parent"),
+        makeTask("PLA-2", "todo", "child", "PLA-1"),
+      ];
+      expect(isParentTask(tasks[0], tasks)).toBe(true);
+    });
+
+    it("task without subtasks is not a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "standalone"),
+        makeTask("PLA-2", "todo", "other"),
+      ];
+      expect(isParentTask(tasks[0], tasks)).toBe(false);
+    });
+
+    it("child task is not a parent", () => {
+      const tasks = [
+        makeTask("PLA-1", "todo", "parent"),
+        makeTask("PLA-2", "todo", "child", "PLA-1"),
+      ];
+      expect(isParentTask(tasks[1], tasks)).toBe(false);
     });
   });
 
