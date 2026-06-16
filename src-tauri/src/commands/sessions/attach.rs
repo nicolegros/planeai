@@ -1,10 +1,11 @@
 use tauri::ipc::Channel;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use crate::config;
+use crate::daemon_client;
 use crate::db;
 use crate::pty;
-use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
+use crate::state::{ConfigState, DaemonSessions, DbState, NotifyHandle, PtyState};
 use crate::util::resolve_command;
 
 use super::helpers::provider_has_hook;
@@ -20,12 +21,15 @@ pub fn attach_session(
     config_state: State<ConfigState>,
     state: State<PtyState>,
     notify: State<NotifyHandle>,
+    daemon_sessions: State<DaemonSessions>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
+
+    let is_daemon = session.backend == "daemon" || session.backend == "direct";
 
     let discovery_info = if session.backend != "tmux" {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
@@ -83,25 +87,82 @@ pub fn attach_session(
         None
     };
 
-    let pty_target = if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
-        pty::PtyTarget::TmuxAttach { tmux_name }
-    } else {
-        let (_, _, _, _, _, ref command, ref args, ref cwd) = discovery_info.as_ref().unwrap();
-        pty::PtyTarget::Direct {
-            command: command.clone(),
-            args: args.clone(),
-            cwd: cwd.clone(),
-        }
-    };
+    if is_daemon {
+        // Daemon backend: ensure daemon is running, then connect to it
+        daemon_client::ensure_daemon()?;
+        let mut daemon_conn =
+            daemon_client::DaemonConn::connect().map_err(|e| format!("daemon connect: {e}"))?;
 
-    state.0.attach(
-        &session_id,
-        pty_target,
-        dark_mode.unwrap_or(true),
-        app.clone(),
-        on_data,
-    )?;
+        // Check if session already exists in daemon (re-attach case)
+        let list_resp = daemon_conn.list_sessions().unwrap_or_default();
+        let session_exists = list_resp.contains(&session_id);
+
+        if !session_exists {
+            // Need to create the session in the daemon
+            let (_, _, _, _, _, ref command, ref args, ref cwd) = discovery_info.as_ref().unwrap();
+            let env: Vec<(String, String)> = vec![
+                ("TERM".to_string(), "xterm-256color".to_string()),
+                (
+                    "COLORFGBG".to_string(),
+                    if dark_mode.unwrap_or(true) {
+                        "15;0"
+                    } else {
+                        "0;15"
+                    }
+                    .to_string(),
+                ),
+            ];
+            daemon_conn
+                .create_session(&session_id, command, args, cwd, &env)
+                .map_err(|e| format!("daemon create: {e}"))?;
+        }
+
+        // Attach to data stream from daemon
+        let data_stream = daemon_conn
+            .attach(&session_id)
+            .map_err(|e| format!("daemon attach: {e}"))?;
+
+        // Spawn a thread to read from daemon and forward to frontend
+        let sid = session_id.clone();
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            let mut ds = data_stream;
+            loop {
+                match ds.read_frame() {
+                    Some(data) => {
+                        if on_data.send(tauri::ipc::Response::new(data)).is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        // Session exited or disconnected
+                        let _ = app_clone.emit("pty-exited", serde_json::json!({ "pty_key": sid }));
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Track this session as daemon-managed
+        daemon_sessions.0.lock().unwrap().insert(session_id.clone());
+    } else {
+        // tmux backend: use local PTY as before
+        let pty_target = {
+            let tmux_name = session
+                .tmux_name
+                .clone()
+                .ok_or("tmux session has no tmux_name")?;
+            pty::PtyTarget::TmuxAttach { tmux_name }
+        };
+
+        state.0.attach(
+            &session_id,
+            pty_target,
+            dark_mode.unwrap_or(true),
+            app.clone(),
+            on_data,
+        )?;
+    }
 
     {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
@@ -172,8 +233,15 @@ pub fn write_to_pty(
     session_id: String,
     data: Vec<u8>,
     state: State<PtyState>,
+    daemon_sessions: State<DaemonSessions>,
 ) -> Result<(), String> {
-    state.0.write(&session_id, &data)
+    if daemon_sessions.0.lock().unwrap().contains(&session_id) {
+        let mut conn = crate::daemon_client::DaemonConn::connect()
+            .map_err(|e| format!("daemon connect: {e}"))?;
+        conn.write_to_session(&session_id, &data)
+    } else {
+        state.0.write(&session_id, &data)
+    }
 }
 
 #[tauri::command]
@@ -182,8 +250,15 @@ pub fn resize_pty(
     rows: u16,
     cols: u16,
     state: State<PtyState>,
+    daemon_sessions: State<DaemonSessions>,
 ) -> Result<(), String> {
-    state.0.resize(&session_id, rows, cols)
+    if daemon_sessions.0.lock().unwrap().contains(&session_id) {
+        let mut conn = crate::daemon_client::DaemonConn::connect()
+            .map_err(|e| format!("daemon connect: {e}"))?;
+        conn.resize_session(&session_id, rows, cols)
+    } else {
+        state.0.resize(&session_id, rows, cols)
+    }
 }
 
 #[tauri::command]

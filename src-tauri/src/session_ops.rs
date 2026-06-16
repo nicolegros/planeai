@@ -456,9 +456,17 @@ pub fn send_prompt(
             ops.tmux_send_keys(tmux_name, text)?;
             tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
-        "direct" => {
-            ops.notify_socket_send(&session.id, text)?;
-            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket");
+        "daemon" | "direct" => {
+            // For daemon sessions, write directly to daemon socket
+            if let Ok(mut conn) = crate::daemon_client::DaemonConn::connect() {
+                conn.write_to_session(&session.id, text.as_bytes())
+                    .map_err(|e| format!("daemon write failed: {e}"))?;
+                tracing::info!(session_id = %session.id, "send_prompt: sent via daemon");
+            } else {
+                // Fallback to notify socket for backward compatibility
+                ops.notify_socket_send(&session.id, text)?;
+                tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket (fallback)");
+            }
         }
         other => return Err(format!("unsupported backend: {other}")),
     }
@@ -966,7 +974,7 @@ mod tests {
             "main",
             None,
             None,
-            "direct",
+            "daemon",
             false,
             None,
             None,
@@ -977,7 +985,8 @@ mod tests {
         let result = send_prompt(&conn, "bbbb", "hello agent", &ops).unwrap();
 
         assert_eq!(result.session_id, id);
-        assert_eq!(result.backend, "direct");
+        assert_eq!(result.backend, "daemon");
+        // Daemon send_prompt tries daemon first, falls back to socket
         assert_eq!(ops.sent_socket.borrow().len(), 1);
         assert_eq!(
             ops.sent_socket.borrow()[0],

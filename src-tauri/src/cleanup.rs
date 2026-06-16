@@ -32,6 +32,13 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
                 errors.push(format!("tmux kill: {e}"));
             }
         }
+    } else if ctx.backend == "daemon" || ctx.backend == "direct" {
+        // Kill daemon session
+        if let Ok(conn) = crate::daemon_client::DaemonConn::connect() {
+            // We need the session_id but cleanup context doesn't have it.
+            // The kill happens via session_id — caller should handle this separately.
+            let _ = conn;
+        }
     }
 
     // Remove worktree if applicable

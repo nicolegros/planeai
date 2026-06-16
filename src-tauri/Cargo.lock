@@ -3013,6 +3013,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "planeai-daemon"
+version = "0.0.0"
+dependencies = [
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "planeai-tasks"
 version = "0.0.0"
 dependencies = [

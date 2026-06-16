@@ -148,6 +148,20 @@ impl Backend for TauriBackend {
         Err("tmux is not supported on Windows".to_string())
     }
 
+    fn create_daemon_session(
+        &self,
+        session_id: &str,
+        command: &str,
+        args: &[String],
+        cwd: &str,
+    ) -> Result<(), String> {
+        crate::daemon_client::ensure_daemon()?;
+        let mut conn = crate::daemon_client::DaemonConn::connect()
+            .map_err(|e| format!("daemon connect: {e}"))?;
+        let env: Vec<(String, String)> = vec![("TERM".to_string(), "xterm-256color".to_string())];
+        conn.create_session(session_id, command, args, cwd, &env)
+    }
+
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         crate::db::create_session_with_id(

@@ -138,8 +138,27 @@ pub fn build_session_plan(
 }
 
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
-    if plan.backend == "direct" && !env.socket_path.exists() {
-        return Err("GUI is not running (socket not found). Direct backend requires the GUI to spawn sessions.".to_string());
+    if plan.backend == "daemon" || plan.backend == "direct" {
+        // Ensure daemon is running and create session in it
+        crate::daemon_client::ensure_daemon()?;
+        let mut daemon_conn = crate::daemon_client::DaemonConn::connect()
+            .map_err(|e| format!("daemon connect: {e}"))?;
+
+        let parts: Vec<&str> = plan.command.split_whitespace().collect();
+        let command = parts[0].to_string();
+        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        let env_vars: Vec<(String, String)> =
+            vec![("TERM".to_string(), "xterm-256color".to_string())];
+
+        daemon_conn
+            .create_session(
+                &plan.session_id,
+                &command,
+                &args,
+                &plan.working_dir,
+                &env_vars,
+            )
+            .map_err(|e| format!("daemon create_session: {e}"))?;
     }
 
     match &plan.branch_strategy {
@@ -338,13 +357,13 @@ mod tests {
         let plan = build_session_plan(
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             &opts,
-            &test_env("direct"),
+            &test_env("daemon"),
             &test_project(),
         )
         .unwrap();
 
         assert_eq!(plan.tmux_name, None);
-        assert_eq!(plan.backend, "direct");
+        assert_eq!(plan.backend, "daemon");
     }
 
     #[test]

@@ -26,15 +26,11 @@ export default defineConfig({
         },
         {
           label: "Tutorials",
-          items: [
-            { label: "Your First Session", slug: "tutorials/first-session" },
-          ],
+          items: [{ label: "Your First Session", slug: "tutorials/first-session" }],
         },
         {
           label: "Reference",
-          items: [
-            { label: "API Reference", slug: "reference/api" },
-          ],
+          items: [{ label: "API Reference", slug: "reference/api" }],
         },
       ],
     }),

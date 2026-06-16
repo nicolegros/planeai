@@ -74,6 +74,15 @@ impl Backend for RecordingBackend {
         ));
         Ok(())
     }
+    fn create_daemon_session(
+        &self,
+        _session_id: &str,
+        _command: &str,
+        _args: &[String],
+        _cwd: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         self.sessions_inserted.lock().unwrap().push(session.clone());
         Ok(())

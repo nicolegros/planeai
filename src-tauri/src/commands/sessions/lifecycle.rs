@@ -2,7 +2,7 @@ use tauri::{Emitter, State};
 
 use crate::cleanup;
 use crate::db;
-use crate::state::{ConfigState, DbState, PtyState};
+use crate::state::{ConfigState, DaemonSessions, DbState, PtyState};
 
 #[tauri::command]
 pub fn restart_session(
@@ -22,8 +22,10 @@ pub fn archive_session(
     db_state: State<DbState>,
     pty_state: State<PtyState>,
     config_state: State<ConfigState>,
+    daemon_sessions: State<DaemonSessions>,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
+    daemon_sessions.0.lock().unwrap().remove(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     crate::session_ops::archive(&conn, &id, &Some(cfg))?;
@@ -36,9 +38,17 @@ pub async fn destroy_session(
     db_state: State<'_, DbState>,
     pty_state: State<'_, PtyState>,
     config_state: State<'_, ConfigState>,
+    daemon_sessions: State<'_, DaemonSessions>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
+
+    // Kill daemon session if it's daemon-managed
+    if daemon_sessions.0.lock().unwrap().remove(&id) {
+        if let Ok(mut conn) = crate::daemon_client::DaemonConn::connect() {
+            let _ = conn.kill_session(&id);
+        }
+    }
 
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();

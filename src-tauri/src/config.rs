@@ -412,12 +412,13 @@ pub fn should_accept_provider_session_id(
 /// Resolve the effective session backend: use config value if set, otherwise auto-detect.
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
+        Some(b) if b == "direct" => "daemon", // migrate legacy value
         Some(b) => b.as_str(),
         None => {
             if tmux_available() {
                 "tmux"
             } else {
-                "direct"
+                "daemon"
             }
         }
     }
@@ -740,13 +741,19 @@ mod tests {
             session_backend: Some("direct".to_string()),
             ..Default::default()
         };
-        assert_eq!(resolve_backend(&config), "direct");
+        assert_eq!(resolve_backend(&config), "daemon"); // legacy 'direct' migrated to 'daemon'
 
         let config = Config {
             session_backend: Some("tmux".to_string()),
             ..Default::default()
         };
         assert_eq!(resolve_backend(&config), "tmux");
+
+        let config = Config {
+            session_backend: Some("daemon".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_backend(&config), "daemon");
     }
 
     #[test]
@@ -755,8 +762,8 @@ mod tests {
         assert!(config.session_backend.is_none());
         let result = resolve_backend(&config);
         // On this machine tmux is available, so should resolve to "tmux"
-        // The key behavior: it returns either "tmux" or "direct", never panics
-        assert!(result == "tmux" || result == "direct");
+        // The key behavior: it returns either "tmux" or "daemon", never panics
+        assert!(result == "tmux" || result == "daemon");
         // And it matches tmux_available()
         if tmux_available() {
             assert_eq!(result, "tmux");

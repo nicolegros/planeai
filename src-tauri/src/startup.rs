@@ -65,6 +65,20 @@ where
                     failures.push(session.id.clone());
                 }
             }
+        } else if session.backend == "daemon" || session.backend == "direct" {
+            // Daemon sessions: check if daemon knows about them
+            if session.status == "active" {
+                if let Ok(mut daemon_conn) = crate::daemon_client::DaemonConn::connect() {
+                    let list = daemon_conn.list_sessions().unwrap_or_default();
+                    if !list.contains(&session.id) {
+                        // Daemon doesn't know about this session — mark exited
+                        let _ = db::mark_session_exited(conn, &session.id);
+                    }
+                } else {
+                    // Daemon not running and session was active — mark exited
+                    let _ = db::mark_session_exited(conn, &session.id);
+                }
+            }
         } else if session.status == "exited" {
             let _ = db::restore_session(conn, &session.id);
         }
@@ -353,9 +367,10 @@ mod tests {
 
         assert!(failures.is_empty());
         assert_eq!(created.borrow().len(), 0);
+        // Daemon/direct sessions that are exited stay exited (require explicit restart)
         assert_eq!(
             db::get_session(&conn, "s1").unwrap().unwrap().status,
-            "active"
+            "exited"
         );
     }
 

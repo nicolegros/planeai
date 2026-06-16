@@ -4,6 +4,7 @@ mod cleanup;
 mod command;
 mod commands;
 mod config;
+mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
@@ -183,6 +184,9 @@ fn main() {
                 &app_dir,
             ));
             app.manage(PtyState(pty_mgr));
+            app.manage(DaemonSessions(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )));
             app.manage(FileExplorerState(Mutex::new(
                 file_explorer::WatcherManager::new(),
             )));

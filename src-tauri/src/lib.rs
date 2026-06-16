@@ -2,6 +2,7 @@ pub mod cleanup;
 pub mod cli;
 pub mod command;
 pub mod config;
+pub mod daemon_client;
 pub mod db;
 pub mod git;
 pub mod ipc;
