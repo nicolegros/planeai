@@ -16,8 +16,11 @@ url = "2"
 open = "5"
 sha2 = "0.10"
 thiserror = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
 wiremock = "0.6"
+planeai-tasks = { path = "../planeai-tasks" }
