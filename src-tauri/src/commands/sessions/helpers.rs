@@ -141,6 +141,7 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            daemon_scrollback_bytes: None,
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
     }

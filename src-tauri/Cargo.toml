@@ -1,5 +1,5 @@
 [workspace]
-members = ["planeai-core", "planeai-tasks", "planeai-daemon"]
+members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -40,6 +40,7 @@ path = "src/bin/cli.rs"
 [dependencies]
 planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }
+planeai-ipc = { path = "planeai-ipc" }
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }
@@ -61,15 +62,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = [
-  "Win32_System_Pipes",
-  "Win32_Foundation",
-  "Win32_Storage_FileSystem",
-  "Win32_Security",
-  "Win32_System_IO",
-] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

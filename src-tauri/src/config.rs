@@ -28,6 +28,8 @@ pub struct Config {
     pub pr_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_done_tasks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_scrollback_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -228,6 +230,7 @@ impl Default for Config {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            daemon_scrollback_bytes: None,
         }
     }
 }
@@ -528,6 +531,7 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            daemon_scrollback_bytes: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();
