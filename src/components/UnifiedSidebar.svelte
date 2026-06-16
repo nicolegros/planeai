@@ -250,6 +250,7 @@
     } else {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
+      else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
       else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
     }

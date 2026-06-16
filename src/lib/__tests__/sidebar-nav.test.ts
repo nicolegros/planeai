@@ -101,6 +101,11 @@ describe("sidebar-nav", () => {
       expect(action).toEqual({ type: "restart" });
     });
 
+    it("e returns edit", () => {
+      const action = handleSidebarKey(key({ key: "e" }), 5);
+      expect(action).toEqual({ type: "edit" });
+    });
+
     it("dd returns delete", () => {
       const first = handleSidebarKey(key({ key: "d" }), 5);
       expect(first).toBeNull();

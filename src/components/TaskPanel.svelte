@@ -115,7 +115,7 @@
     modalMode = "create";
   }
 
-  function openEdit(task: TaskItem) {
+  export function openEdit(task: TaskItem) {
     formKey = task.key;
     formTitle = task.title;
     formDescription = task.description;
