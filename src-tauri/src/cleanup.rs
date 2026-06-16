@@ -29,18 +29,23 @@ pub struct CleanupOps {
 }
 
 /// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
-pub fn kill_backend(ctx: &CleanupContext, ops: &KillOps) -> Vec<String> {
+pub fn kill_backend(
+    backend: &str,
+    tmux_name: Option<&str>,
+    session_id: Option<&str>,
+    ops: &KillOps,
+) -> Vec<String> {
     let mut errors = vec![];
-    match ctx.backend.as_str() {
+    match backend {
         "tmux" => {
-            if let Some(ref name) = ctx.tmux_name {
+            if let Some(name) = tmux_name {
                 if let Err(e) = (ops.kill_tmux)(name) {
                     errors.push(format!("tmux kill: {e}"));
                 }
             }
         }
         "daemon" => {
-            if let Some(ref id) = ctx.session_id {
+            if let Some(id) = session_id {
                 if let Err(e) = (ops.kill_daemon_session)(id) {
                     errors.push(format!("daemon kill: {e}"));
                 }
@@ -53,7 +58,12 @@ pub fn kill_backend(ctx: &CleanupContext, ops: &KillOps) -> Vec<String> {
 
 /// Run background cleanup for a destroyed session. Returns collected errors.
 pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
-    let mut errors = kill_backend(ctx, &ops.kill);
+    let mut errors = kill_backend(
+        &ctx.backend,
+        ctx.tmux_name.as_deref(),
+        ctx.session_id.as_deref(),
+        &ops.kill,
+    );
 
     // Remove worktree if applicable
     if let Some(ref wt_path) = ctx.worktree_path {

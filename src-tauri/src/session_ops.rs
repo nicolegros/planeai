@@ -61,15 +61,12 @@ pub fn archive(
     }
 
     // Kill the agent backend process
-    let ctx = CleanupContext {
-        backend: session.backend.clone(),
-        tmux_name: session.tmux_name.clone(),
-        worktree_path: None,
-        project_path: None,
-        branch: None,
-        session_id: Some(session.id.clone()),
-    };
-    let kill_errors = crate::cleanup::kill_backend(&ctx, kill_ops);
+    let kill_errors = crate::cleanup::kill_backend(
+        &session.backend,
+        session.tmux_name.as_deref(),
+        Some(session.id.as_str()),
+        kill_ops,
+    );
     if !kill_errors.is_empty() {
         eprintln!("[session] kill errors during archive: {:?}", kill_errors);
         tracing::warn!(?kill_errors, "errors killing backend during archive");
