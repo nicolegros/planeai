@@ -2976,6 +2976,7 @@ dependencies = [
  "json_comments",
  "notify",
  "planeai-core",
+ "planeai-jira",
  "planeai-tasks",
  "portable-pty",
  "regex",
@@ -3010,6 +3011,15 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "planeai-jira"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
