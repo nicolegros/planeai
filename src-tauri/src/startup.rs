@@ -73,6 +73,93 @@ where
     failures
 }
 
+/// Reconcile daemon sessions: mark sessions as exited if the daemon doesn't know about them.
+pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Config) {
+    let sessions = match db::list_sessions(conn) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let daemon_sessions: Vec<&db::Session> = sessions
+        .iter()
+        .filter(|s| s.backend == "daemon" && s.status == "active")
+        .collect();
+
+    if daemon_sessions.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        count = daemon_sessions.len(),
+        "reconciling daemon sessions on startup"
+    );
+
+    let socket_path = planeai_ipc::daemon_socket_path();
+    if !socket_path.exists() {
+        tracing::info!("daemon socket not found, marking all daemon sessions as exited");
+        for session in &daemon_sessions {
+            let _ = db::mark_session_exited(conn, &session.id);
+        }
+        return;
+    }
+
+    // Use sync IPC to query daemon (avoid block_on which can deadlock during setup)
+    let alive_ids = match crate::daemon_client::list_sessions_sync() {
+        Some(ids) => ids,
+        None => {
+            // Can't reach daemon — mark all as exited
+            for session in &daemon_sessions {
+                let _ = db::mark_session_exited(conn, &session.id);
+            }
+            return;
+        }
+    };
+
+    for session in daemon_sessions {
+        if !alive_ids.contains(&session.id) {
+            let _ = db::mark_session_exited(conn, &session.id);
+        }
+    }
+}
+
+/// Start a background task that listens for daemon exit events and marks sessions as exited.
+pub fn start_daemon_event_listener(app_handle: &tauri::AppHandle) {
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let socket_path = planeai_ipc::daemon_socket_path();
+
+        // Try connecting — if daemon isn't running, just return
+        let mut client = match crate::daemon_client::DaemonClient::connect(&socket_path).await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        loop {
+            // Timeout prevents this task from blocking tokio shutdown indefinitely
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(5), client.recv_event()).await;
+
+            match event {
+                Ok(Some(evt)) if evt.event == "exited" => {
+                    tracing::info!(session_id = %evt.session_id, "daemon session exited");
+                    let db = app.state::<DbState>();
+                    if let Ok(conn) = db.0.lock() {
+                        let _ = db::mark_session_exited(&conn, &evt.session_id);
+                    }
+                    let _ = app.emit(
+                        "pty-exited",
+                        serde_json::json!({ "pty_key": evt.session_id }),
+                    );
+                    let _ = app.emit("sessions-changed", ());
+                }
+                Ok(Some(_)) => {}   // Ignore unknown events
+                Ok(None) => break,  // Connection closed
+                Err(_) => continue, // Timeout — loop again (allows task cancellation)
+            }
+        }
+    });
+}
+
 /// Register all active sessions in NotifyState at startup (after NotifyState is created).
 pub fn register_active_sessions(
     conn: &rusqlite::Connection,

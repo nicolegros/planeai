@@ -488,7 +488,7 @@
     <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Session Backend</h2>
       <div class="flex gap-2">
-        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "direct", label: "Direct" }] as opt (opt.value)}
+        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon" }] as opt (opt.value)}
           <button
             class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700'}"
             onclick={() => setSessionBackend(opt.value)}
@@ -499,9 +499,9 @@
         <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
       {/if}
       <p class="text-xs text-surface-700 dark:text-surface-400">
-        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise direct PTY.
+        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise daemon.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
-        {:else}Sessions are ephemeral — terminated on app quit.
+        {:else}Sessions persist after quitting (built-in daemon).
         {/if}
         Changes apply to new sessions only.
       </p>

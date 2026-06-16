@@ -69,6 +69,27 @@ impl AsyncWrite for AsyncIpcStream {
     }
 }
 
+impl AsyncIpcStream {
+    /// Connect to a Unix socket / named pipe at the given path.
+    pub async fn connect(path: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            let stream = tokio::net::UnixStream::connect(path).await?;
+            Ok(Self {
+                inner: InnerStream::Unix(stream),
+            })
+        }
+        #[cfg(windows)]
+        {
+            let _ = path;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "async connect not yet implemented on Windows",
+            ))
+        }
+    }
+}
+
 /// Async IPC listener.
 pub struct AsyncIpcListener {
     #[cfg(unix)]

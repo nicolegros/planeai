@@ -1,9 +1,9 @@
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config;
 use crate::db;
 use crate::git;
-use crate::state::{ConfigState, DbState, NotifyHandle};
+use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle};
 #[cfg(not(windows))]
 use crate::tmux;
 use crate::util::sanitize_project_name;
@@ -79,10 +79,11 @@ pub(crate) fn discover_provider_session_id(
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn launch_session(
-    state: State<DbState>,
-    notify: State<NotifyHandle>,
-    config_state: State<ConfigState>,
+pub async fn launch_session(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    notify: State<'_, NotifyHandle>,
+    config_state: State<'_, ConfigState>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -96,26 +97,29 @@ pub fn launch_session(
     task_key: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<db::Session, String> {
-    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    let provider_key = provider.unwrap_or_else(|| cfg.default_provider.clone());
-    let provider_def = cfg
-        .providers
-        .get(&provider_key)
-        .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let mut cmd = config::launch_command(provider_def, auto_approve);
+    // Phase 1: gather params from config (holding config lock briefly)
+    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes) = {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
+        let provider_def = cfg
+            .providers
+            .get(&pk)
+            .ok_or_else(|| format!("Unknown provider: {pk}"))?;
+        let mut c = config::launch_command(provider_def, auto_approve);
 
-    if let (Some(prompt), Some(prompt_cmd_template)) = (&task_prompt, &provider_def.prompt_command)
-    {
-        planeai_core::template::append_prompt(&mut cmd, prompt_cmd_template, prompt);
-    }
+        if let (Some(prompt), Some(prompt_cmd_template)) =
+            (&task_prompt, &provider_def.prompt_command)
+        {
+            planeai_core::template::append_prompt(&mut c, prompt_cmd_template, prompt);
+        }
 
-    let hook_enabled = provider_has_hook(&provider_key, &cfg);
-    let backend = config::resolve_backend(&cfg).to_string();
-    drop(cfg);
+        let he = provider_has_hook(&pk, &cfg);
+        let be = config::resolve_backend(&cfg).to_string();
+        let sb = cfg.daemon_scrollback_bytes.unwrap_or(1_048_576);
+        (c, pk, he, be, sb)
+    };
 
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-
-    // Detect base branch before any checkout/worktree operation
+    // Phase 2: sync work — detect base branch, git worktree/checkout
     let effective_base_branch = base_branch.clone().or_else(|| {
         let output = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -136,10 +140,10 @@ pub fn launch_session(
 
     let (working_dir, worktree_path) = if use_worktree {
         let base = base_branch.as_deref().unwrap_or("main");
-        let session_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+        let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
         let home = config::home_dir();
-        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{session_id}");
+        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
         std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
             .map_err(|e| format!("failed to create worktree dir: {e}"))?;
         git::worktree_add(&repo_path, &wt_path, &branch, base)?;
@@ -163,6 +167,43 @@ pub fn launch_session(
     } else {
         None
     };
+
+    // Phase 3: async daemon work — no locks held
+    if backend == "daemon" {
+        let daemon_state = app.state::<DaemonState>();
+        let socket_path = planeai_ipc::daemon_socket_path();
+        let sidecar_path = crate::paths::resolve_daemon_binary(&app);
+
+        crate::daemon_client::ensure_daemon_running(&sidecar_path, &socket_path, scrollback_bytes)
+            .await?;
+
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        let (program, args) = parts.split_first().ok_or("empty command")?;
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("PLANEAI_SESSION_ID".to_string(), session_id.clone());
+
+        let mut ds = daemon_state.0.lock().await;
+        let client = match ds.as_mut() {
+            Some(c) => c,
+            None => {
+                *ds = Some(
+                    crate::daemon_client::DaemonClient::connect(&socket_path)
+                        .await
+                        .map_err(|e| format!("daemon connect failed: {e}"))?,
+                );
+                ds.as_mut().unwrap()
+            }
+        };
+        client
+            .spawn_session(&session_id, program, &args, &working_dir, Some(&env))
+            .await?;
+    }
+
+    // Phase 4: DB write and notify (re-acquire lock)
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
 
     {
         let mut ns = notify.0.lock().unwrap();

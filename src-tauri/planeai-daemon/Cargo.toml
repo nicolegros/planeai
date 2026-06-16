@@ -3,10 +3,6 @@ name = "planeai-daemon"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "planeai-daemon"
-path = "src/main.rs"
-
 [lib]
 name = "planeai_daemon"
 path = "src/lib.rs"

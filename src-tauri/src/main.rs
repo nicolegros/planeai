@@ -4,6 +4,7 @@ mod cleanup;
 mod command;
 mod commands;
 mod config;
+mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
@@ -13,6 +14,7 @@ mod output_observer;
 mod paths;
 mod pr;
 mod pty;
+mod session_backend;
 mod session_ops;
 mod startup;
 mod state;
@@ -126,7 +128,13 @@ fn main() {
                 |_, _, _, _| Err("tmux not available".to_string()),
             );
 
+            // Reconcile daemon sessions (mark dead ones as exited)
+            startup::reconcile_daemon_sessions(&conn, &cfg);
+
             app.manage(ConfigState(Mutex::new(cfg)));
+
+            // Daemon state (lazily connects to daemon)
+            app.manage(DaemonState(tokio::sync::Mutex::new(None)));
 
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
@@ -192,6 +200,9 @@ fn main() {
 
             // PR status background poll
             startup::start_pr_poller(app.handle());
+
+            // Daemon exit event listener
+            startup::start_daemon_event_listener(app.handle());
 
             // Symphony orchestrator
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);

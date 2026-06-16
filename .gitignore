@@ -5,6 +5,7 @@ node_modules/
 dist/
 docs/.astro/
 src-tauri/target/
+src-tauri/binaries/
 
 # IDE
 .vscode/

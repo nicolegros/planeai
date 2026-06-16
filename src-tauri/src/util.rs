@@ -13,6 +13,7 @@ pub fn expand_tilde(path: &str) -> String {
 
 /// Resolve a command name to its full path, checking user-local bin directories
 /// that may not be in PATH when launched from a GUI app.
+#[allow(dead_code)]
 pub fn resolve_command(cmd: &str) -> String {
     command::resolve(cmd)
 }

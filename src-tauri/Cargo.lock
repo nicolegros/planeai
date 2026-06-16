@@ -2970,12 +2970,14 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planeai"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clap",
  "font-kit",
  "json_comments",
  "notify",
  "planeai-core",
+ "planeai-daemon",
  "planeai-ipc",
  "planeai-tasks",
  "portable-pty",
