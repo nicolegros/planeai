@@ -120,27 +120,9 @@ mod tests {
     #[test]
     fn provider_has_hook_unknown_provider_returns_false() {
         let cfg = config::Config {
-            appearance: config::Appearance {
-                mode: "dark".into(),
-                terminal_theme_dark: String::new(),
-                terminal_theme_light: String::new(),
-                diff_theme_dark: String::new(),
-                diff_theme_light: String::new(),
-                theme: "default".into(),
-            },
-            terminal: config::Terminal {
-                font_family: "monospace".into(),
-                font_size: 14,
-                option_as_meta: false,
-            },
             providers: std::collections::HashMap::new(),
             default_provider: "kiro".into(),
-            session_backend: None,
-            vim_mode: None,
-            task_management: None,
-            projects_base_path: None,
-            pr_status: None,
-            hide_done_tasks: None,
+            ..Default::default()
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
     }
