@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 
 use crate::db::migrate;
-use crate::model::JiraIssue;
+use crate::model::{JiraIssue, SyncStatus};
 use crate::Error;
 
 pub struct JiraRepository {
@@ -11,6 +11,7 @@ pub struct JiraRepository {
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
     let labels_json: String = row.get(6)?;
+    let sync_status_str: String = row.get(7)?;
     let ts: String = row.get(8)?;
     Ok(JiraIssue {
         issue_key: row.get(0)?,
@@ -20,7 +21,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
         status: row.get(4)?,
         priority: row.get(5)?,
         labels: serde_json::from_str(&labels_json).unwrap_or_default(),
-        sync_status: row.get(7)?,
+        sync_status: SyncStatus::parse(&sync_status_str).unwrap_or(SyncStatus::Synced),
         last_synced_at: chrono::DateTime::parse_from_rfc3339(&ts)
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),
@@ -56,7 +57,7 @@ impl JiraRepository {
                 issue.status,
                 issue.priority,
                 labels_json,
-                issue.sync_status,
+                issue.sync_status.as_str(),
                 issue.last_synced_at.to_rfc3339(),
             ],
         )?;
@@ -162,7 +163,7 @@ mod tests {
             status: "To Do".to_string(),
             priority: Some("High".to_string()),
             labels: vec!["backend".to_string(), "urgent".to_string()],
-            sync_status: "synced".to_string(),
+            sync_status: SyncStatus::Synced,
             last_synced_at: Utc::now(),
         }
     }
@@ -235,21 +236,21 @@ mod tests {
 
         let i1 = repo.get_issue("PROJ-1").unwrap().unwrap();
         let i2 = repo.get_issue("PROJ-2").unwrap().unwrap();
-        assert_eq!(i1.sync_status, "stale");
-        assert_eq!(i2.sync_status, "stale");
+        assert_eq!(i1.sync_status, SyncStatus::Stale);
+        assert_eq!(i2.sync_status, SyncStatus::Stale);
     }
 
     #[test]
     fn mark_synced_updates_status_and_timestamp() {
         let repo = setup();
         let mut issue = sample_issue("PROJ-1");
-        issue.sync_status = "stale".to_string();
+        issue.sync_status = SyncStatus::Stale;
         repo.upsert_issue(&issue).unwrap();
 
         repo.mark_synced("PROJ-1").unwrap();
 
         let fetched = repo.get_issue("PROJ-1").unwrap().unwrap();
-        assert_eq!(fetched.sync_status, "synced");
+        assert_eq!(fetched.sync_status, SyncStatus::Synced);
     }
 
     #[test]
