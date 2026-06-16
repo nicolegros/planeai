@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tasks as tasksApi } from "../lib/api";
   import type { TaskItem, Session, Project } from "../lib/types";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -8,44 +7,28 @@
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
-  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
+  import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import * as projectStore from "../lib/project-store.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
 
   interface Props {
-    projects: Pick<Project, "name" | "path">[];
-    projectAutoMode?: Record<string, boolean>;
-    sessions: Pick<Session, "id" | "task_key" | "pr_url">[];
-    activeSessionId?: string | null;
-    agentStates: Record<string, string>;
-    taskCreateRequested?: boolean;
-    taskRefreshRequested?: boolean;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
     onSessionsChanged?: () => void;
-    onTaskCreateConsumed?: () => void;
-    onTaskRefreshConsumed?: () => void;
     disableKeyboard?: boolean;
   }
 
-  let { projects, projectAutoMode = {}, sessions, activeSessionId = null, agentStates, taskCreateRequested = false, taskRefreshRequested = false, disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onTaskCreateConsumed, onTaskRefreshConsumed }: Props = $props();
+  let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged }: Props = $props();
 
-  // React to external create request
-  $effect(() => {
-    if (taskCreateRequested) {
-      openCreate();
-      onTaskCreateConsumed?.();
-    }
-  });
-
-  $effect(() => {
-    if (taskRefreshRequested) {
-      refresh();
-      onTaskRefreshConsumed?.();
-    }
-  });
-
-  let tasksByProject = $state<Record<string, TaskItem[]>>({});
-  let loading = $state(false);
+  // ─── Derived from stores ────────────────────────────────────────────────────
+  const projects = $derived(projectStore.getProjects().map(p => ({ name: p.name, path: p.path })));
+  const sessions = $derived(orchestrator.getSessions());
+  const activeSessionId = $derived(orchestrator.getActiveSessionId());
+  const agentStates = $derived(orchestrator.getAgentStates());
+  const tasksByProject = $derived(taskStore.getTasksByProject());
+  const loading = $derived(taskStore.isLoading());
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
 
   const activeTaskKey = $derived(
@@ -91,28 +74,6 @@
     for (const s of statusOrder) groups[s]?.sort((a, b) => b.priority - a.priority);
     return groups;
   }
-
-  export async function refresh() {
-    if (projects.length === 0) return;
-    loading = true;
-    try {
-      const results: Record<string, TaskItem[]> = {};
-      await Promise.all(
-        projects.map(async (p) => {
-          try {
-            results[p.path] = await tasksApi.listAll(p.path);
-          } catch {
-            results[p.path] = [];
-          }
-        })
-      );
-      tasksByProject = results;
-    } finally {
-      loading = false;
-    }
-  }
-
-  $effect(() => { if (projects.length > 0) refresh(); });
 
   function toggleSection(key: string) {
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
@@ -166,8 +127,7 @@
     const repoPath = repoPathForTask(key);
     if (!repoPath) return;
     try {
-      await tasksApi.move(key, status, repoPath);
-      await refresh();
+      await taskStore.moveTask(key, status, repoPath);
       onSessionsChanged?.();
     } catch (e: any) { showSnackbar(e.toString()); }
   }
@@ -178,14 +138,13 @@
       if (modalMode === "create") {
         const repoPath = formProjectPath || projects[0]?.path;
         if (!repoPath) return;
-        await tasksApi.create({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [] });
+        await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [] });
       } else if (modalMode === "edit") {
         const repoPath = repoPathForTask(formKey);
         if (!repoPath) return;
-        await tasksApi.edit({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null });
+        await taskStore.editTask({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null });
       }
       modalMode = null;
-      await refresh();
     } catch (e: any) { showSnackbar(e.toString()); }
   }
 
@@ -305,7 +264,7 @@
         {#if projectTasks.length > 0}
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
-            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}{#if projectAutoMode[project.path]}<Zap class="size-2.5 text-amber-500" />{/if}</h3>
+            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}</h3>
             {#each statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks)) as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}

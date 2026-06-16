@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { tasks as tasksApi } from "../lib/api";
   import { projects as projectsApi } from "../lib/api";
   import type { TaskItem, Session, Project } from "../lib/types";
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
-  import type { FocusZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -12,16 +10,13 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
   import TaskPanel from "./TaskPanel.svelte";
+  import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import * as projectStore from "../lib/project-store.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
 
   interface Props {
-    projects: Project[];
-    sessions: Session[];
-    activeSessionId: string | null;
-    zone: FocusZone;
-    agentStates: Record<string, string>;
     renamingSessionId: string | null;
     taskCreateRequested?: boolean;
-    taskRefreshRequested?: boolean;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
@@ -30,19 +25,24 @@
     onOpenPreferences: () => void;
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
-    onArchiveProject: (project: Project) => void;
     onDeleteProject: (project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onTaskCreateConsumed?: () => void;
-    onTaskRefreshConsumed?: () => void;
     onSessionsChanged?: () => void;
   }
 
-  let { projects, sessions, activeSessionId, zone, agentStates, renamingSessionId, taskCreateRequested = false, taskRefreshRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onArchiveProject, onDeleteProject, onPickTask, onCreateSession, onTaskCreateConsumed, onTaskRefreshConsumed, onSessionsChanged }: Props = $props();
+  let { renamingSessionId, taskCreateRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onTaskCreateConsumed, onSessionsChanged }: Props = $props();
+
+  // ─── Derived from stores ────────────────────────────────────────────────────
+  const projects = $derived(projectStore.getProjects());
+  const sessions = $derived(orchestrator.getSessions());
+  const activeSessionId = $derived(orchestrator.getActiveSessionId());
+  const agentStates = $derived(orchestrator.getAgentStates());
+  const zone = $derived(getActiveZone());
+  const tasksByProject = $derived(taskStore.getTasksByProject());
 
   let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
-  let tasksByProject = $state<Record<string, TaskItem[]>>({});
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
   let renameValue = $state("");
 
@@ -91,31 +91,9 @@
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
   function onTaskContextMenu(e: MouseEvent, task: TaskItem, projectPath: string) { e.preventDefault(); taskContextMenu = { x: e.clientX, y: e.clientY, task, projectPath }; }
 
-  // Load tasks
-  export async function refresh() {
-    if (projects.length === 0) return;
-    const results: Record<string, TaskItem[]> = {};
-    await Promise.all(projects.map(async (p) => {
-      try { results[p.path] = await tasksApi.listAll(p.path); } catch { results[p.path] = []; }
-    }));
-    tasksByProject = results;
-    // Auto-collapse empty projects
-    const allKeys = new Set(Object.values(results).flat().map(t => t.key));
-    const updates: Record<string, boolean> = {};
-    for (const p of projects) {
-      const key = `project:${p.id}`;
-      const hasTasks = (results[p.path] ?? []).length > 0;
-      const hasOrphans = sessions.some(s => s.project_id === p.id && (!s.task_key || !allKeys.has(s.task_key)));
-      if (!hasTasks && !hasOrphans) updates[key] = true;
-    }
-    if (Object.keys(updates).length) collapsedSections = { ...collapsedSections, ...updates };
-  }
-  $effect(() => { if (projects.length > 0) refresh(); });
-
   // External triggers
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
   $effect(() => { if (taskCreateRequested) { taskPanelRef?.openCreate(); onTaskCreateConsumed?.(); } });
-  $effect(() => { if (taskRefreshRequested) { refresh(); onTaskRefreshConsumed?.(); } });
 
   // Derive orphan sessions (no task_key or task_key not in loaded tasks)
   const allTaskKeys = $derived(new Set(Object.values(tasksByProject).flat().map(t => t.key)));
@@ -158,8 +136,7 @@
   async function moveTask(key: string, status: string) {
     const repoPath = repoPathForTask(key);
     if (!repoPath) return;
-    await tasksApi.move(key, status, repoPath);
-    await refresh();
+    await taskStore.moveTask(key, status, repoPath);
     onSessionsChanged?.();
   }
 
@@ -279,7 +256,7 @@
   }
 
   // Window focus refresh
-  function onWindowFocus() { refresh(); }
+  function onWindowFocus() { taskStore.refresh(projects.map(p => p.path)); }
 </script>
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
@@ -470,18 +447,9 @@
   <TaskPanel
     bind:this={taskPanelRef}
     disableKeyboard={true}
-    projects={projects.map(p => ({ name: p.name, path: p.path }))}
-    projectAutoMode={Object.fromEntries(projects.map(p => [p.path, projectAutoMode[p.id] ?? false]))}
-    sessions={sessions.map(s => ({ id: s.id, task_key: s.task_key, pr_url: s.pr_url }))}
-    {activeSessionId}
-    {agentStates}
-    {taskCreateRequested}
-    taskRefreshRequested={false}
     {onPickTask}
     {onSelectSession}
     onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
-    onTaskCreateConsumed={onTaskCreateConsumed}
-    onTaskRefreshConsumed={() => {}}
     onSessionsChanged={onSessionsChanged}
   />
 </div>
@@ -513,7 +481,7 @@
     onClose={() => (projectContextMenu = null)}
     items={[
       { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
-      { label: "Archive project", onSelect: () => onArchiveProject(projectContextMenu!.project) },
+      { label: "Archive project", onSelect: () => projectStore.archiveProject(projectContextMenu!.project.id) },
       { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
     ]}
   />

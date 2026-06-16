@@ -1,17 +1,21 @@
 <script lang="ts">
   import { LoaderCircle, Lightbulb } from "@lucide/svelte";
   import type { Session, Project } from "../lib/types";
+  import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import * as projectStore from "../lib/project-store.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
 
   interface Props {
     mruSessionIds: string[];
-    sessions: Session[];
-    projects: Project[];
     selectedIndex: number;
-    agentStates: Record<string, string>;
-    taskStatuses: Record<string, string>;
   }
 
-  let { mruSessionIds, sessions, projects, selectedIndex, agentStates, taskStatuses }: Props = $props();
+  let { mruSessionIds, selectedIndex }: Props = $props();
+
+  const sessions = $derived(orchestrator.getSessions());
+  const agentStates = $derived(orchestrator.getAgentStates());
+  const projects = $derived(projectStore.getProjects());
+  const taskStatuses = $derived(taskStore.getTaskStatuses());
 
   const statusDotColors: Record<string, string> = {
     todo: "bg-blue-500",
