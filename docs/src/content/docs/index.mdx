@@ -1,0 +1,40 @@
+---
+title: planeai
+description: Run multiple AI coding agents in parallel from a keyboard-first UI.
+template: splash
+hero:
+  tagline: Run multiple AI coding agents in parallel — each in its own persistent terminal session, orchestrated from a keyboard-first UI.
+  actions:
+    - text: Get Started
+      link: /planeai/getting-started/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/nicolegros/planeai
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Features
+
+<CardGrid>
+  <Card title="Parallel Agents" icon="rocket">
+    Run as many AI coding sessions as you need, side by side.
+  </Card>
+  <Card title="Persistent Sessions" icon="laptop">
+    Agents keep running when you quit the app — powered by tmux.
+  </Card>
+  <Card title="Provider-Agnostic" icon="puzzle">
+    Works with Kiro, Claude, Copilot, or any CLI-based agent.
+  </Card>
+  <Card title="Keyboard-First" icon="star">
+    Command menu (Cmd+K) and shortcuts for every action.
+  </Card>
+  <Card title="Task Management" icon="list-format">
+    Built-in task tracker with lifecycle hooks and auto-dispatch.
+  </Card>
+  <Card title="Git Worktree Isolation" icon="seti:git">
+    Parallel agents work on separate branches without conflicts.
+  </Card>
+</CardGrid>
