@@ -38,17 +38,20 @@ vi.mock("../../lib/settings.svelte", () => ({
   updateSettings: vi.fn(),
 }));
 
-import { tasks } from "../../lib/api";
-import TaskPanel from "../TaskPanel.svelte";
+vi.mock("../../lib/session-orchestrator.svelte", () => ({
+  getSessions: () => [{ id: "sess-1", task_key: "TASK-1", pr_url: null, project_id: "proj-1", name: "Session 1", branch: "main", status: "active", backend: "direct", tmux_name: null, created_at: "", worktree_path: null, provider: null, tab_count: 1, base_branch: null, pr_state: null }],
+  getActiveSessionId: () => "sess-1",
+  getAgentStates: () => ({}),
+}));
 
-describe("TaskPanel move-to-done archives session", () => {
-  let onArchiveSession: ReturnType<typeof vi.fn>;
-  let target: HTMLElement;
+vi.mock("../../lib/project-store.svelte", () => ({
+  getProjects: () => [{ id: "proj-1", name: "myapp", path: "/tmp/myapp" }],
+}));
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    onArchiveSession = vi.fn();
-    vi.mocked(tasks.listAll).mockResolvedValue([
+const mockMoveTask = vi.fn((_key: string, _status: string, _repoPath: string) => Promise.resolve());
+vi.mock("../../lib/task-store.svelte", () => ({
+  getTasksByProject: () => ({
+    "/tmp/myapp": [
       {
         key: "TASK-1",
         title: "Fix bug",
@@ -60,8 +63,23 @@ describe("TaskPanel move-to-done archives session", () => {
         parent_key: null,
         url: null,
       },
-    ]);
+    ],
+  }),
+  isLoading: () => false,
+  moveTask: (key: string, status: string, repoPath: string) => mockMoveTask(key, status, repoPath),
+  createTask: vi.fn(() => Promise.resolve()),
+  editTask: vi.fn(() => Promise.resolve()),
+}));
 
+import TaskPanel from "../TaskPanel.svelte";
+
+describe("TaskPanel move-to-done archives session", () => {
+  let onArchiveSession: ReturnType<typeof vi.fn>;
+  let target: HTMLElement;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onArchiveSession = vi.fn();
     target = document.createElement("div");
     document.body.appendChild(target);
   });
@@ -75,20 +93,13 @@ describe("TaskPanel move-to-done archives session", () => {
     mount(TaskPanel, {
       target,
       props: {
-        projects: [{ name: "myapp", path: "/tmp/myapp" }],
-        sessions: [{ id: "sess-1", task_key: "TASK-1", pr_url: null }],
-        agentStates: {},
         onPickTask: vi.fn(),
         onSelectSession: vi.fn(),
         onArchiveSession,
         onSessionsChanged,
-        onTaskCreateConsumed: vi.fn(),
       },
     });
 
-    await vi.waitFor(() => {
-      expect(tasks.listAll).toHaveBeenCalledWith("/tmp/myapp");
-    });
     await new Promise((r) => setTimeout(r, 10));
 
     const taskButtons = target.querySelectorAll("button");
@@ -107,7 +118,7 @@ describe("TaskPanel move-to-done archives session", () => {
     doneBtn!.click();
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(tasks.move).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
+    expect(mockMoveTask).toHaveBeenCalledWith("TASK-1", "done", "/tmp/myapp");
     expect(onArchiveSession).not.toHaveBeenCalled();
     expect(onSessionsChanged).toHaveBeenCalled();
   });

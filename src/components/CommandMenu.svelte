@@ -5,12 +5,11 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
+  import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import * as projectStore from "../lib/project-store.svelte";
 
   interface Props {
     open: boolean;
-    sessions: Session[];
-    projects: Project[];
-    activeSessionId: string | null;
     onOpenChange: (open: boolean) => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: () => void;
@@ -30,7 +29,12 @@
     openFileMode?: boolean;
   }
 
-  let { open, sessions, projects, activeSessionId, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
+
+  // ─── Derived from stores ────────────────────────────────────────────────────
+  const sessions = $derived(orchestrator.getSessions());
+  const activeSessionId = $derived(orchestrator.getActiveSessionId());
+  const projects = $derived(projectStore.getProjects());
 
   let archivedSessions = $state<Session[]>([]);
   let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");

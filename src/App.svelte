@@ -3,9 +3,11 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, projects as projectsApi, pty, notify, tasks as tasksApi } from "./lib/api";
-  import type { Session, Project, TaskItem } from "./lib/types";
+  import { sessions as sessionsApi, pty, notify } from "./lib/api";
+  import type { Session, Project } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
+  import * as projectStore from "./lib/project-store.svelte";
+  import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
@@ -28,12 +30,10 @@
   import * as orchestrator from "./lib/session-orchestrator.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
-  let projects = $state<Project[]>([]);
   let showProjectForm = $state(false);
   let showSessionForm = $state(false);
   let sidebarVisible = $state(true);
   let taskCreateRequested = $state(false);
-  let taskRefreshRequested = $state(false);
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
   let showNewItemModal = $state(false);
@@ -50,23 +50,8 @@
   let editorBindRefs = $state<Record<string, EditorTab>>({});
   $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
 
-  // ─── Task statuses for TabSwitcher ──────────────────────────────────────────
-  let taskStatuses = $state<Record<string, string>>({});
-
-  async function loadTaskStatuses() {
-    const statuses: Record<string, string> = {};
-    await Promise.all(projects.map(async (p) => {
-      try {
-        const items = await tasksApi.listAll(p.path);
-        for (const t of items) statuses[t.key] = t.status;
-      } catch { /* ignore */ }
-    }));
-    taskStatuses = statuses;
-  }
-
-  $effect(() => { if (projects.length > 0) loadTaskStatuses(); });
-
   // ─── Derived from orchestrator ──────────────────────────────────────────────
+  const projects = $derived(projectStore.getProjects());
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
@@ -84,8 +69,6 @@
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
   // ─── Project management ─────────────────────────────────────────────────────
-  async function loadProjects() { projects = await projectsApi.list(); }
-
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
     if (existing) { existing.setFocus(); return; }
@@ -99,22 +82,16 @@
     focusTerminal();
   }
 
-  async function archiveProject(p: Project) {
-    await projectsApi.archive(p.id);
-    orchestrator.removeProjectSessions(p.id);
-    projects = projects.filter((x) => x.id !== p.id);
-  }
-
   async function deleteProject(p: Project) {
-    await projectsApi.delete(p.id);
-    orchestrator.removeProjectSessions(p.id);
-    projects = projects.filter((x) => x.id !== p.id);
+    await projectStore.deleteProject(p.id);
     projectToDelete = null;
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
   onMount(() => {
-    loadProjects();
+    projectStore.loadProjects().then(() => {
+      taskStore.loadTasks(projectStore.getProjects().map((p) => p.path));
+    });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
 
@@ -155,7 +132,7 @@
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
-        else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskRefreshRequested = true; }
+        else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
@@ -203,36 +180,28 @@
   <div class="flex flex-1 min-h-0">
   {#if sidebarVisible}
       <UnifiedSidebar
-        {projects}
-        {sessions}
-        {activeSessionId}
-        {zone}
-        {agentStates}
         {renamingSessionId}
         {taskCreateRequested}
-        {taskRefreshRequested}
         onSelectSession={(id) => orchestrator.selectSession(id)}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
         onRestartSession={(s) => orchestrator.restartSession(s)}
         onRenameSession={doRename}
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
-        onArchiveProject={archiveProject}
         onDeleteProject={(p) => (projectToDelete = p)}
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null }; showSessionForm = true; }}
         onAddProject={() => (showProjectForm = true)}
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showNewItemModal = true; }}
         onTaskCreateConsumed={() => { taskCreateRequested = false; }}
-        onTaskRefreshConsumed={() => { taskRefreshRequested = false; }}
-        onSessionsChanged={() => orchestrator.loadSessions()}
+        onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
       />
   {/if}
 
   <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-        <ProjectForm onCreated={() => { showProjectForm = false; loadProjects(); }} onCancel={() => (showProjectForm = false)} />
+        <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); }} onCancel={() => (showProjectForm = false)} />
       </div>
     {/if}
 
@@ -254,14 +223,11 @@
     </Dialog.Root>
 
     {#if getCycleState().isVisible}
-      <TabSwitcher mruSessionIds={getCycleState().cycleList} {sessions} {projects} selectedIndex={getCycleState().index} {agentStates} {taskStatuses} />
+      <TabSwitcher mruSessionIds={getCycleState().cycleList} selectedIndex={getCycleState().index} />
     {/if}
 
     <CommandMenu
       open={commandMenuOpen}
-      {sessions}
-      {projects}
-      {activeSessionId}
       openFileMode={commandMenuFileMode}
       onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
       onSelectSession={(id) => { orchestrator.selectSession(id); focusTerminal(); }}
@@ -272,9 +238,9 @@
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
       onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
       onResetTerminal={() => { if (activeSessionId) pty.write(activeSessionId, [0x0c]); }}
-      onArchiveProject={async (id) => { const p = projects.find(x => x.id === id); if (p) await archiveProject(p); }}
+      onArchiveProject={async (id) => { await projectStore.archiveProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
-      onRestoreProject={async (id) => { await projectsApi.restore(id); await loadProjects(); }}
+      onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
       onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
       onCreateTask={() => { if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
       onToggleDiff={() => orchestrator.toggleDiff()}
