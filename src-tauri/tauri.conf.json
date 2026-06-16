@@ -9,8 +9,7 @@
     "beforeBuildCommand": "pnpm build"
   },
   "bundle": {
-    "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"],
-    "externalBin": ["binaries/planeai-daemon"]
+    "icon": ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
   },
   "app": {
     "macOSPrivateApi": true,

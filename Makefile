@@ -16,17 +16,19 @@ dev: build-daemon
 	pnpm tauri dev
 
 build-daemon: ## Build the daemon sidecar binary for the current platform
-	cd src-tauri && ./build-daemon.sh
+	cd src-tauri && cargo build -p planeai-daemon
 
 build-daemon-release: ## Build the daemon sidecar binary (release mode)
-	cd src-tauri && ./build-daemon.sh release
+	cd src-tauri && cargo build --release -p planeai-daemon
 
 build: build-daemon-release
 	pnpm tauri build -b app
+	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai.app/Contents/MacOS/" 2>/dev/null || true
 
 bundle: build-daemon-release
 	pnpm install
 	pnpm tauri build -b app
+	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai.app/Contents/MacOS/" 2>/dev/null || true
 
 open: bundle
 	open src-tauri/target/release/bundle/macos/planeai.app
@@ -47,6 +49,7 @@ dev-bundle: build-daemon-release
 	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
+	cp src-tauri/target/release/planeai-daemon "src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app/Contents/MacOS/" 2>/dev/null || true
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
