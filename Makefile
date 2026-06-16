@@ -19,6 +19,7 @@ build:
 	pnpm tauri build -b app
 
 bundle:
+	pnpm install
 	pnpm tauri build -b app
 
 open: bundle
