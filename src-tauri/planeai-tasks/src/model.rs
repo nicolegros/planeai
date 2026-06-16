@@ -46,11 +46,17 @@ pub struct Task {
     pub blocked_by: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default = "default_base_branch")]
+    pub base_branch: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Default)]
+fn default_base_branch() -> String {
+    "main".to_string()
+}
+
+#[derive(Debug, Clone)]
 pub struct CreateParams {
     pub title: String,
     pub description: String,
@@ -58,6 +64,21 @@ pub struct CreateParams {
     pub parent_key: Option<String>,
     pub blocked_by: Vec<String>,
     pub tags: Vec<String>,
+    pub base_branch: String,
+}
+
+impl Default for CreateParams {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            description: String::new(),
+            priority: 0,
+            parent_key: None,
+            blocked_by: Vec::new(),
+            tags: Vec::new(),
+            base_branch: "main".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -69,6 +90,7 @@ pub struct UpdateParams {
     pub parent_key: Option<Option<String>>,
     pub blocked_by: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
+    pub base_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

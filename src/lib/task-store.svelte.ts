@@ -68,6 +68,7 @@ export async function createTask(params: {
   priority: number;
   tags: string[];
   blockedBy: string[];
+  baseBranch?: string;
 }): Promise<void> {
   await tasksApi.create(params);
   await loadTasks(Object.keys(tasksByProject));
@@ -81,6 +82,7 @@ export async function editTask(params: {
   priority: number;
   tags: string[] | null;
   blockedBy: string[] | null;
+  baseBranch?: string | null;
 }): Promise<void> {
   await tasksApi.edit(params);
   await loadTasks(Object.keys(tasksByProject));

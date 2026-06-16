@@ -40,7 +40,7 @@ pub(crate) fn poll_pr_for_session(
     Ok(transition.is_some())
 }
 
-fn new_pr_url(cwd: &str, branch: &str) -> Result<String, String> {
+fn new_pr_url(cwd: &str, branch: &str, base_branch: Option<&str>) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(cwd)
@@ -51,8 +51,12 @@ fn new_pr_url(cwd: &str, branch: &str) -> Result<String, String> {
     }
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let repo_path = parse_github_repo(&raw).ok_or("could not parse GitHub repo from remote URL")?;
+    let compare = match base_branch {
+        Some(base) => format!("{base}...{branch}"),
+        None => branch.to_string(),
+    };
     Ok(format!(
-        "https://github.com/{repo_path}/compare/{branch}?expand=1"
+        "https://github.com/{repo_path}/compare/{compare}?expand=1"
     ))
 }
 
@@ -80,7 +84,7 @@ fn fetch_pr_url_inner(
             Ok(Some(s.url))
         }
         None => {
-            let create_url = new_pr_url(&cwd, &session.branch)?;
+            let create_url = new_pr_url(&cwd, &session.branch, session.base_branch.as_deref())?;
             Ok(Some(create_url))
         }
     }
@@ -207,7 +211,7 @@ mod tests {
             "daemon",
             true,
             None,
-            None,
+            Some("main"),
         )
         .unwrap();
 
@@ -219,7 +223,7 @@ mod tests {
         let result = fetch_pr_url_inner(&conn, &cfg, "s1");
         assert_eq!(
             result.unwrap(),
-            Some("https://github.com/org/repo/compare/feat/x?expand=1".to_string())
+            Some("https://github.com/org/repo/compare/main...feat/x?expand=1".to_string())
         );
     }
 

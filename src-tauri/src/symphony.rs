@@ -340,7 +340,7 @@ fn into_core_task(t: planeai_tasks::model::Task, subtasks: Vec<String>) -> Task 
         priority: t.priority,
         blocked_by: t.blocked_by,
         subtasks,
-        base_branch: None,
+        base_branch: Some(t.base_branch),
     }
 }
 

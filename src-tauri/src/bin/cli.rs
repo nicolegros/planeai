@@ -110,6 +110,8 @@ enum TaskAction {
         #[arg(long)]
         parent: Option<String>,
         #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
         project: Option<String>,
         #[arg(long)]
         pretty: bool,
@@ -156,6 +158,8 @@ enum TaskAction {
         tags: Option<Vec<String>>,
         #[arg(long, value_delimiter = ',')]
         blocked_by: Option<Vec<String>>,
+        #[arg(long)]
+        base_branch: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -453,6 +457,7 @@ fn main() {
                     tags,
                     blocked_by,
                     parent,
+                    base_branch,
                     pretty,
                     ..
                 } => {
@@ -464,6 +469,7 @@ fn main() {
                         &tags,
                         &blocked_by,
                         parent.as_deref(),
+                        base_branch.as_deref(),
                     );
                     let key = r.as_ref().ok().and_then(|json| {
                         serde_json::from_str::<serde_json::Value>(json)
@@ -503,6 +509,7 @@ fn main() {
                     priority,
                     tags,
                     blocked_by,
+                    base_branch,
                     pretty,
                     ..
                 } => {
@@ -514,6 +521,7 @@ fn main() {
                         priority,
                         tags.as_deref(),
                         blocked_by.as_deref(),
+                        base_branch.as_deref(),
                     );
                     (r, pretty, Some(key))
                 }

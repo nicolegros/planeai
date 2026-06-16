@@ -32,6 +32,7 @@ export interface TaskItem {
   tags: string[];
   parent_key: string | null;
   url: string | null;
+  base_branch: string;
 }
 
 export interface DirEntry {
