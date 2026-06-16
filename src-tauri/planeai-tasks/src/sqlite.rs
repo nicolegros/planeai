@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use std::sync::Mutex;
 
-use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams};
+use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams, DEFAULT_BASE_BRANCH};
 use crate::provider::{Error, TaskProvider};
 
 /// Run task-table migrations on an existing connection.
@@ -165,7 +165,7 @@ impl SqliteRepository {
             parent_key,
             blocked_by,
             tags,
-            base_branch: base_branch.unwrap_or_else(|| "main".to_string()),
+            base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
             created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now()),
@@ -363,7 +363,7 @@ impl TaskProvider for SqliteRepository {
             .unwrap_or(existing.2);
         let priority = params.priority.unwrap_or(existing.3);
         let parent_key = params.parent_key.unwrap_or(existing.4);
-        let base_branch = params.base_branch.or(existing.5).unwrap_or_else(|| "main".to_string());
+        let base_branch = params.base_branch.or(existing.5).unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
         let now = Utc::now().to_rfc3339();
 
         conn.execute(

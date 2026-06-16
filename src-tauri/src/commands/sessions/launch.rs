@@ -1,5 +1,7 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use planeai_tasks::model::DEFAULT_BASE_BRANCH;
+
 use crate::config;
 use crate::db;
 use crate::git;
@@ -139,7 +141,7 @@ pub async fn launch_session(
     });
 
     let (working_dir, worktree_path) = if use_worktree {
-        let base = base_branch.as_deref().unwrap_or("main");
+        let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
         let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
         let home = config::home_dir();

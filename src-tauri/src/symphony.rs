@@ -8,7 +8,7 @@ use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
 use planeai_core::task::{Task, TaskSource};
 
-use planeai_tasks::model::Status;
+use planeai_tasks::model::{Status, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
@@ -239,7 +239,7 @@ impl Backend for TauriBackend {
         let base_branch = auto
             .base_branch
             .clone()
-            .unwrap_or_else(|| "main".to_string());
+            .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string());
 
         Some(DispatchConfig {
             provider: provider_key.to_string(),
@@ -411,7 +411,7 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
                 base_branch: auto
                     .base_branch
                     .clone()
-                    .unwrap_or_else(|| "main".to_string()),
+                    .unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
                 session_backend: backend_str.to_string(),
                 prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
                 prompt_command: provider.prompt_command.clone(),

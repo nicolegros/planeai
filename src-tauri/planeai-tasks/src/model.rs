@@ -52,8 +52,10 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
 }
 
+pub const DEFAULT_BASE_BRANCH: &str = "main";
+
 fn default_base_branch() -> String {
-    "main".to_string()
+    DEFAULT_BASE_BRANCH.to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +78,7 @@ impl Default for CreateParams {
             parent_key: None,
             blocked_by: Vec::new(),
             tags: Vec::new(),
-            base_branch: "main".to_string(),
+            base_branch: DEFAULT_BASE_BRANCH.to_string(),
         }
     }
 }

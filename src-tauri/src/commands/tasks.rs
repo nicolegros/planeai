@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
+use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 
@@ -117,7 +117,7 @@ pub fn create_task_item(
         tags,
         blocked_by,
         parent_key: None,
-        base_branch: base_branch.unwrap_or_else(|| "main".to_string()),
+        base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
     })
     .map(TaskItem::from)
     .map_err(|e| e.to_string())

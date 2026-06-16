@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
+use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::derive_prefix;
 
@@ -46,7 +46,7 @@ pub fn run_task_add(
             tags: tags.to_vec(),
             blocked_by: blocked_by.to_vec(),
             parent_key: parent.map(|s| s.to_string()),
-            base_branch: base_branch.unwrap_or("main").to_string(),
+            base_branch: base_branch.unwrap_or(DEFAULT_BASE_BRANCH).to_string(),
         })
         .map_err(|e| e.to_string())?;
     tracing::info!(key = %task.key, "task created");
