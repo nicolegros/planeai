@@ -908,7 +908,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading",
 ]
 
 [[package]]
@@ -2250,7 +2250,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading 0.7.4",
+ "libloading",
  "once_cell",
 ]
 
@@ -2277,16 +2277,6 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
-]
-
-[[package]]
-name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -2980,17 +2970,15 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planeai"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "chrono",
  "clap",
  "font-kit",
  "json_comments",
  "notify",
  "planeai-core",
- "planeai-daemon",
- "planeai-ipc",
- "planeai-pty",
+ "planeai-jira",
  "planeai-tasks",
+ "portable-pty",
  "regex",
  "rusqlite",
  "serde",
@@ -3008,17 +2996,14 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "uuid",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "planeai-core"
 version = "0.0.0"
 dependencies = [
- "chrono",
- "json_comments",
- "planeai-tasks",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -3029,39 +3014,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "planeai-daemon"
-version = "0.1.0"
+name = "planeai-jira"
+version = "0.0.0"
 dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "planeai-ipc",
- "planeai-pty",
  "serde",
  "serde_json",
  "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "planeai-ipc"
-version = "0.1.0"
-dependencies = [
- "libc",
- "tempfile",
- "tokio",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "planeai-pty"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "portable-pty",
 ]
 
 [[package]]
