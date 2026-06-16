@@ -272,7 +272,7 @@ pub fn restart(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
 
-    if session.status != "exited" && session.status != "archived" {
+    if !matches!(session.status.as_str(), "exited" | "archived") {
         return Err("can only restart exited or archived sessions".to_string());
     }
 
