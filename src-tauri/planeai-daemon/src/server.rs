@@ -1,9 +1,10 @@
-use crate::protocol::{Request, Response, SessionInfoDto};
+use crate::data::handle_data_connection;
+use crate::protocol::{Request, Response, SessionInfoDto, CONN_CONTROL, CONN_DATA};
 use crate::registry::SessionRegistry;
 use crate::transport::{DaemonListener, DaemonStream};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinSet;
 
@@ -51,7 +52,7 @@ impl DaemonServer {
                     match result {
                         Ok(stream) => {
                             let server = Arc::clone(&self);
-                            tasks.spawn(async move { server.handle_connection(stream).await });
+                            tasks.spawn(async move { server.route_connection(stream).await });
                         }
                         Err(e) => {
                             tracing::error!("accept error: {e}");
@@ -63,6 +64,22 @@ impl DaemonServer {
         }
 
         tasks.shutdown().await;
+    }
+
+    async fn route_connection(self: Arc<Self>, mut stream: DaemonStream) {
+        let mut byte = [0u8; 1];
+        if stream.read_exact(&mut byte).await.is_err() {
+            return;
+        }
+        match byte[0] {
+            CONN_CONTROL => self.handle_connection(stream).await,
+            CONN_DATA => {
+                handle_data_connection(stream, Arc::clone(&self.registry)).await;
+            }
+            other => {
+                tracing::warn!("unknown connection type byte: 0x{other:02x}");
+            }
+        }
     }
 
     async fn handle_connection(self: Arc<Self>, stream: DaemonStream) {
