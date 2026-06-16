@@ -39,7 +39,25 @@ vi.mock("../../lib/settings.svelte", () => ({
 }));
 
 vi.mock("../../lib/session-orchestrator.svelte", () => ({
-  getSessions: () => [{ id: "sess-1", task_key: "TASK-1", pr_url: null, project_id: "proj-1", name: "Session 1", branch: "main", status: "active", backend: "direct", tmux_name: null, created_at: "", worktree_path: null, provider: null, tab_count: 1, base_branch: null, pr_state: null }],
+  getSessions: () => [
+    {
+      id: "sess-1",
+      task_key: "TASK-1",
+      pr_url: null,
+      project_id: "proj-1",
+      name: "Session 1",
+      branch: "main",
+      status: "active",
+      backend: "direct",
+      tmux_name: null,
+      created_at: "",
+      worktree_path: null,
+      provider: null,
+      tab_count: 1,
+      base_branch: null,
+      pr_state: null,
+    },
+  ],
   getActiveSessionId: () => "sess-1",
   getAgentStates: () => ({}),
 }));

@@ -91,19 +91,6 @@
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
   function onTaskContextMenu(e: MouseEvent, task: TaskItem, projectPath: string) { e.preventDefault(); taskContextMenu = { x: e.clientX, y: e.clientY, task, projectPath }; }
 
-  // Auto-collapse empty projects when task data changes
-  $effect(() => {
-    const allKeys = new Set(Object.values(tasksByProject).flat().map(t => t.key));
-    const updates: Record<string, boolean> = {};
-    for (const p of projects) {
-      const key = `project:${p.id}`;
-      const hasTasks = (tasksByProject[p.path] ?? []).length > 0;
-      const hasOrphans = sessions.some(s => s.project_id === p.id && (!s.task_key || !allKeys.has(s.task_key)));
-      if (!hasTasks && !hasOrphans) updates[key] = true;
-    }
-    if (Object.keys(updates).length) collapsedSections = { ...collapsedSections, ...updates };
-  });
-
   // External triggers
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
   $effect(() => { if (taskCreateRequested) { taskPanelRef?.openCreate(); onTaskCreateConsumed?.(); } });
