@@ -99,6 +99,16 @@
       try { results[p.path] = await tasksApi.listAll(p.path); } catch { results[p.path] = []; }
     }));
     tasksByProject = results;
+    // Auto-collapse empty projects
+    const allKeys = new Set(Object.values(results).flat().map(t => t.key));
+    const updates: Record<string, boolean> = {};
+    for (const p of projects) {
+      const key = `project:${p.id}`;
+      const hasTasks = (results[p.path] ?? []).length > 0;
+      const hasOrphans = sessions.some(s => s.project_id === p.id && (!s.task_key || !allKeys.has(s.task_key)));
+      if (!hasTasks && !hasOrphans) updates[key] = true;
+    }
+    if (Object.keys(updates).length) collapsedSections = { ...collapsedSections, ...updates };
   }
   $effect(() => { if (projects.length > 0) refresh(); });
 
