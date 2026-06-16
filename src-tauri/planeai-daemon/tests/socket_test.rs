@@ -26,14 +26,20 @@ mod socket_tests {
         serde_json::from_str(&line).unwrap()
     }
 
+    async fn connect_control(sock: &std::path::Path) -> BufReader<UnixStream> {
+        let mut conn = UnixStream::connect(sock).await.unwrap();
+        // Send connection type discriminator: 0x00 = control
+        conn.write_all(&[0x00]).await.unwrap();
+        BufReader::new(conn)
+    }
+
     #[tokio::test]
     async fn spawn_and_list() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("daemon.sock");
         let _shutdown = start_server(&sock).await;
 
-        let conn = UnixStream::connect(&sock).await.unwrap();
-        let mut reader = BufReader::new(conn);
+        let mut reader = connect_control(&sock).await;
 
         // Spawn
         let resp = send_recv(
@@ -82,8 +88,7 @@ mod socket_tests {
         let sock = dir.path().join("daemon.sock");
         let _shutdown = start_server(&sock).await;
 
-        let conn = UnixStream::connect(&sock).await.unwrap();
-        let mut reader = BufReader::new(conn);
+        let mut reader = connect_control(&sock).await;
 
         send_recv(
             &mut reader,
@@ -108,8 +113,7 @@ mod socket_tests {
         let sock = dir.path().join("daemon.sock");
         let _shutdown = start_server(&sock).await;
 
-        let conn = UnixStream::connect(&sock).await.unwrap();
-        let mut reader = BufReader::new(conn);
+        let mut reader = connect_control(&sock).await;
 
         let resp = send_recv(
             &mut reader,
@@ -125,8 +129,7 @@ mod socket_tests {
         let sock = dir.path().join("daemon.sock");
         let _shutdown = start_server(&sock).await;
 
-        let conn = UnixStream::connect(&sock).await.unwrap();
-        let mut reader = BufReader::new(conn);
+        let mut reader = connect_control(&sock).await;
 
         // Spawn a short-lived process
         send_recv(
@@ -169,8 +172,7 @@ mod socket_tests {
         let sock = dir.path().join("daemon.sock");
         let _shutdown = start_server(&sock).await;
 
-        let conn = UnixStream::connect(&sock).await.unwrap();
-        let mut reader = BufReader::new(conn);
+        let mut reader = connect_control(&sock).await;
 
         let resp = send_recv(&mut reader, r#"not valid json"#).await;
         assert!(!resp["error"].as_str().unwrap().is_empty());
