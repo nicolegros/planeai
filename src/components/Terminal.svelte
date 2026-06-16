@@ -30,6 +30,7 @@
   let containerEl: HTMLDivElement;
   let term: Terminal;
   let fitAddon: FitAddon;
+  let webglAddon: WebglAddon | null = null;
   let attached = $state(false);
 
   const SCROLLBACK_LINES = 100_000;
@@ -77,7 +78,8 @@
     term.open(containerEl);
 
     try {
-      term.loadAddon(new WebglAddon());
+      webglAddon = new WebglAddon();
+      term.loadAddon(webglAddon);
     } catch {
       // WebGL not available, fall back to canvas
     }
@@ -287,13 +289,22 @@
   });
 
   $effect(() => {
-    if (!term) return;
     const s = getSettings();
     isDark(); // track reactivity on dark mode change
+    if (!term) return;
     term.options.theme = extractTerminalTheme();
     term.options.fontSize = s.terminal.font_size;
     term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;
+    // WebGL addon doesn't re-render after font changes (xterm.js #3280) — reload it
+    if (webglAddon) {
+      webglAddon.dispose();
+      webglAddon = null;
+      try {
+        webglAddon = new WebglAddon();
+        term.loadAddon(webglAddon);
+      } catch { /* fall back to canvas */ }
+    }
     if (fitAddon) fitAddon.fit();
   });
 
