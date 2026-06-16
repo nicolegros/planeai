@@ -76,7 +76,11 @@ Each task's `--desc` is a structured mini-handoff. Spare no detail — there is 
 - [ ] Specific criterion 2
 ```
 
-### 5. Create the tasks
+
+### 5. Ask user for approval
+Present in details the tasks that will be created and ask for approval.
+
+### 6. Create the tasks
 
 Use `planeai-cli task add` for each task:
 
@@ -88,7 +92,7 @@ planeai-cli task add "Parent title" --desc "..." --tags feature-name
 planeai-cli task add "Subtask title" --parent PLA-1 --desc "..." --blocked-by PLA-1
 ```
 
-### 6. Present the result
+### 7. Present the result
 
 After all tasks are created, present a summary table showing:
 
