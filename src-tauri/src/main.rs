@@ -114,6 +114,17 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+            // Config-driven PTY core selection (env var takes priority)
+            if std::env::var("PLANEAI_LOCAL_PTY_CORE").is_err() {
+                if let Some(ref core) = cfg.local_pty_core {
+                    std::env::set_var("PLANEAI_LOCAL_PTY_CORE", core);
+                }
+            }
+            if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
+                if let Some(ref dir) = cfg.session_log_dir {
+                    std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
+                }
+            }
             tracing::info!("config loaded");
 
             // Revive sessions
@@ -295,6 +306,7 @@ fn main() {
             session_logs::get_session_log_metadata,
             session_logs::read_session_log_chunk,
             session_logs::open_session_log_folder,
+            session_logs::delete_session_log,
             session_logs::is_dogfood_log_viewer_enabled,
         ])
         .run(tauri::generate_context!())

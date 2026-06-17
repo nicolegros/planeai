@@ -28,12 +28,29 @@
   const CHUNK_INTERVAL_MS = 16;
 
   onMount(async () => {
+    await refreshLogs();
+  });
+
+  async function refreshLogs() {
     try {
       logs = await sessionLogs.list();
     } catch (e) {
       error = String(e);
     }
-  });
+  }
+
+  async function deleteLog() {
+    if (!selectedLog) return;
+    if (!confirm(`Delete log for session ${selectedLog.session_id.slice(0, 8)}…?`)) return;
+    try {
+      await sessionLogs.delete(selectedLog.session_id);
+      selectedLog = null;
+      stopReplay();
+      await refreshLogs();
+    } catch (e) {
+      error = String(e);
+    }
+  }
 
   function formatDate(iso: string | null): string {
     if (!iso) return "—";
@@ -158,7 +175,10 @@
 <div class="log-viewer">
   <div class="log-viewer-header">
     <h2>Session Log Viewer <span class="badge">dogfood</span></h2>
-    <button class="close-btn" onclick={onClose}>✕</button>
+    <div class="header-actions">
+      <button class="close-btn" onclick={refreshLogs} title="Refresh">↻</button>
+      <button class="close-btn" onclick={onClose}>✕</button>
+    </div>
   </div>
 
   {#if error}
@@ -178,6 +198,7 @@
           <div class="log-entry-id">{log.session_id.slice(0, 8)}…</div>
           <div class="log-entry-meta">
             <span class="status-badge" class:running={log.status === "running"} class:exited={log.status === "exited"}>{log.status}</span>
+            <span>{formatBytes(log.bytes_written)}</span>
             <span>{formatDate(log.started_at)}</span>
           </div>
           <div class="log-entry-cmd">{log.command || "—"}</div>
@@ -206,6 +227,7 @@
           <div class="meta-actions">
             <button onclick={copyPath}>Copy Path</button>
             <button onclick={openFolder}>Open Folder</button>
+            <button class="danger" onclick={deleteLog}>Delete</button>
           </div>
         </div>
 
@@ -215,11 +237,13 @@
           {:else if replayState === "playing"}
             <button onclick={pauseReplay}>⏸ Pause</button>
             <button onclick={stopReplay}>⏹ Stop</button>
-            <span>{formatBytes(bytesReplayed)} replayed</span>
+            <button onclick={startReplay}>↻ Restart</button>
+            <span>{formatBytes(bytesReplayed)} / {formatBytes(selectedLog.bytes_written)}</span>
           {:else if replayState === "paused"}
             <button onclick={resumeReplay}>▶ Resume</button>
             <button onclick={stopReplay}>⏹ Stop</button>
-            <span>{formatBytes(bytesReplayed)} replayed (paused)</span>
+            <button onclick={startReplay}>↻ Restart</button>
+            <span>{formatBytes(bytesReplayed)} / {formatBytes(selectedLog.bytes_written)} (paused)</span>
           {:else}
             <button onclick={startReplay}>↻ Restart</button>
             <span>Replay complete — {formatBytes(bytesReplayed)}</span>
@@ -257,6 +281,7 @@
     font-size: 16px;
     font-weight: 600;
   }
+  .header-actions { display: flex; gap: 4px; }
   .badge {
     font-size: 10px;
     background: #f9e2af;
@@ -347,6 +372,8 @@
     font-size: 12px;
   }
   .meta-actions button:hover, .replay-controls button:hover { background: var(--color-border, #313244); }
+  .meta-actions button.danger { color: #f38ba8; border-color: #f38ba8; }
+  .meta-actions button.danger:hover { background: rgba(243, 139, 168, 0.15); }
   .replay-controls button.primary { background: #89b4fa; color: #1e1e2e; border-color: #89b4fa; }
   .replay-controls {
     display: flex;

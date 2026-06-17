@@ -15,6 +15,7 @@ pub struct LocalPtySession {
     id: SessionId,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     flow: Arc<FlowControl>,
     exited: Arc<AtomicBool>,
     pub diag: Arc<PipelineDiagnostics>,
@@ -50,7 +51,7 @@ impl LocalPtySession {
             cmd.env(k, v);
         }
 
-        pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
         drop(pair.slave);
 
         let writer = pair.master.take_writer()?;
@@ -155,7 +156,7 @@ impl LocalPtySession {
             });
         }
 
-        Ok(Self { id, writer: Arc::new(Mutex::new(writer)), master: Arc::new(Mutex::new(pair.master)), flow, exited, diag })
+        Ok(Self { id, writer: Arc::new(Mutex::new(writer)), master: Arc::new(Mutex::new(pair.master)), child: Arc::new(Mutex::new(child)), flow, exited, diag })
     }
 
     pub fn id(&self) -> SessionId { self.id }
@@ -175,7 +176,18 @@ impl LocalPtySession {
 
     pub fn pause(&self) { self.flow.pause(); }
     pub fn resume(&self) { self.flow.resume(); }
-    pub fn kill(&self) -> anyhow::Result<()> { Ok(()) }
+    pub fn kill(&self) -> anyhow::Result<()> {
+        if let Ok(mut child) = self.child.lock() {
+            child.kill()?;
+        }
+        Ok(())
+    }
     pub fn has_exited(&self) -> bool { self.exited.load(Ordering::Acquire) }
     pub fn diagnostics(&self) -> &Arc<PipelineDiagnostics> { &self.diag }
+}
+
+impl Drop for LocalPtySession {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
 }

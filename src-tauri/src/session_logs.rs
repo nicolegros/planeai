@@ -131,6 +131,19 @@ pub fn read_session_log_chunk(
 }
 
 #[tauri::command]
+pub fn delete_session_log(session_id: String) -> Result<(), String> {
+    let base = log_base_dir().ok_or("PLANEAI_SESSION_LOG_DIR not set")?;
+    let session_dir = base.join(&session_id);
+    if !is_under(&base, &session_dir) {
+        return Err("path traversal denied".to_string());
+    }
+    if !session_dir.exists() {
+        return Err("session log not found".to_string());
+    }
+    fs::remove_dir_all(&session_dir).map_err(|e| format!("delete failed: {e}"))
+}
+
+#[tauri::command]
 pub fn open_session_log_folder(path: String) -> Result<(), String> {
     let base = log_base_dir().ok_or("PLANEAI_SESSION_LOG_DIR not set")?;
     let target = PathBuf::from(&path);
@@ -283,6 +296,142 @@ mod tests {
         )
         .unwrap();
         assert_eq!(chunk.len(), 256 * 1024);
+        drop(dir);
+    }
+
+    #[test]
+    fn list_handles_missing_ansi_file_gracefully() {
+        let dir = setup_log_dir();
+        let session_dir = dir.path().join("sessions").join("missing-ansi");
+        fs::create_dir_all(&session_dir).unwrap();
+        let meta = SessionMeta {
+            schema_version: 1,
+            session_id: "missing-ansi".to_string(),
+            pty_core: "planeai-pty".to_string(),
+            started_at: "2026-06-17T19:00:00+00:00".to_string(),
+            ended_at: None,
+            command: "echo hi".to_string(),
+            cwd: "/tmp".to_string(),
+            cols: 80,
+            rows: 24,
+            ansi_log_file: "nonexistent.ansi".to_string(),
+            bytes_written: 0,
+            bytes_dropped: 0,
+            exit_status: None,
+            status: "running".to_string(),
+        };
+        fs::write(
+            session_dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        ).unwrap();
+        // Should still list the entry (metadata is valid even if .ansi is missing)
+        let result = list_session_logs().unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].session_id, "missing-ansi");
+        drop(dir);
+    }
+
+    #[test]
+    fn chunk_read_missing_file_returns_error() {
+        let dir = setup_log_dir();
+        let session_dir = dir.path().join("sessions").join("no-file");
+        fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("missing.ansi");
+        let result = read_session_log_chunk(path.to_string_lossy().to_string(), 0, 100);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("open failed") || err.contains("path traversal"));
+        drop(dir);
+    }
+
+    #[test]
+    fn replay_does_not_mutate_metadata() {
+        let dir = setup_log_dir();
+        let session_dir = dir.path().join("sessions").join("replay-safe");
+        fs::create_dir_all(&session_dir).unwrap();
+        let meta = SessionMeta {
+            schema_version: 1,
+            session_id: "replay-safe".to_string(),
+            pty_core: "planeai-pty".to_string(),
+            started_at: "2026-06-17T19:00:00+00:00".to_string(),
+            ended_at: Some("2026-06-17T19:05:00+00:00".to_string()),
+            command: "echo test".to_string(),
+            cwd: "/tmp".to_string(),
+            cols: 80,
+            rows: 24,
+            ansi_log_file: "output.ansi".to_string(),
+            bytes_written: 5,
+            bytes_dropped: 0,
+            exit_status: Some(0),
+            status: "exited".to_string(),
+        };
+        let meta_json = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(session_dir.join("meta.json"), &meta_json).unwrap();
+        fs::write(session_dir.join("output.ansi"), b"hello").unwrap();
+
+        // Read chunk (simulates replay)
+        let ansi_path = session_dir.join("output.ansi");
+        let _chunk = read_session_log_chunk(ansi_path.to_string_lossy().to_string(), 0, 100).unwrap();
+
+        // Metadata should be unchanged
+        let after = fs::read_to_string(session_dir.join("meta.json")).unwrap();
+        assert_eq!(after, meta_json);
+        drop(dir);
+    }
+
+    #[test]
+    fn list_sorted_newest_first() {
+        let dir = setup_log_dir();
+        let base = dir.path().join("sessions");
+        // Create two sessions with different timestamps
+        for (id, ts) in [("old", "2026-06-17T10:00:00+00:00"), ("new", "2026-06-17T20:00:00+00:00")] {
+            let session_dir = base.join(id);
+            fs::create_dir_all(&session_dir).unwrap();
+            let meta = SessionMeta {
+                schema_version: 1,
+                session_id: id.to_string(),
+                pty_core: "planeai-pty".to_string(),
+                started_at: ts.to_string(),
+                ended_at: None,
+                command: "echo".to_string(),
+                cwd: "/tmp".to_string(),
+                cols: 80,
+                rows: 24,
+                ansi_log_file: "output.ansi".to_string(),
+                bytes_written: 0,
+                bytes_dropped: 0,
+                exit_status: None,
+                status: "running".to_string(),
+            };
+            fs::write(session_dir.join("meta.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+        }
+        let result = list_session_logs().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].session_id, "new");
+        assert_eq!(result[1].session_id, "old");
+        drop(dir);
+    }
+
+    #[test]
+    fn delete_removes_session_dir() {
+        let dir = setup_log_dir();
+        let session_dir = dir.path().join("sessions").join("to-delete");
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(session_dir.join("meta.json"), "{}").unwrap();
+        fs::write(session_dir.join("output.ansi"), b"data").unwrap();
+
+        let result = delete_session_log("to-delete".to_string());
+        assert!(result.is_ok());
+        assert!(!session_dir.exists());
+        drop(dir);
+    }
+
+    #[test]
+    fn delete_rejects_path_traversal() {
+        let dir = setup_log_dir();
+        let result = delete_session_log("../../etc".to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("path traversal"));
         drop(dir);
     }
 }

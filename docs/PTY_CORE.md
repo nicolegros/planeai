@@ -194,6 +194,51 @@ Both paths are at parity. The planeai-pty path uses the same coalescing strategy
 5. **Background-threaded LogSink** — current implementation is synchronous-buffered; could move to a dedicated write thread if latency becomes an issue
 6. **Log rotation/cleanup** — not yet implemented
 
+## Lifecycle Semantics
+
+### Session states
+
+A `LocalPtySession` can be in one of these states:
+
+| State | Description |
+|-------|-------------|
+| **Running** | Child process alive, reader/flusher threads active |
+| **Exited** | Child exited (naturally or killed), reader thread saw EOF, flusher sent `PtyEvent::Exit` |
+
+### Transition triggers
+
+| Trigger | Behavior |
+|---------|----------|
+| Shell exits naturally | Reader gets EOF → sets `done` flag → flusher drains pending → sends `PtyEvent::Exit` → metadata finalized |
+| Command exits naturally | Same as shell exit |
+| User closes terminal (UI) | `PlaneaiPtyBackend::detach()` → calls `session.kill()` → kills child process → reader gets EOF → normal exit path |
+| App window closes | Session is dropped → `Drop` impl calls `kill()` → same as above |
+| App process is killed (SIGKILL) | Child process receives SIGHUP (PTY master fd closed by OS). Metadata may not finalize. |
+| Backend receives PTY EOF | Reader thread breaks its loop → sets `done` → flusher detects `done` → sends Exit event |
+| `kill()` called | Sends signal to child process via `portable_pty::Child::kill()`. PTY fd closure follows. |
+
+### Child process cleanup
+
+- **`kill()`**: Sends kill signal to the child. The child dies, PTY master fd is closed by OS cleanup.
+- **`Drop`**: Always calls `kill()`. No orphaned child processes after session is dropped.
+- **Forced app exit (SIGKILL)**: The OS closes the PTY master fd when the app process dies. The child receives SIGHUP and typically exits. This is OS-level cleanup, not application-level.
+
+### Metadata finalization
+
+- **Normal exit**: `TrackingLogSink` receives `PtyEvent::Exit` → writes final `meta.json` with `ended_at`, `exit_status`, `bytes_written`, `bytes_dropped`, `status: "exited"`.
+- **`kill()` / session drop**: Same path — `PtyEvent::Exit` is sent by flusher after reader EOF.
+- **App crash (SIGKILL)**: Metadata remains `status: "running"` with `ended_at: null`. The log viewer shows this as "running" (stale). No automatic recovery/correction is performed.
+
+### Distinction between close / kill / detach
+
+| Operation | Implementation | Effect |
+|-----------|---------------|--------|
+| **close** (UI "close session") | Calls `detach()` on `SessionBackend` | Calls `session.kill()` — terminates child |
+| **kill** | `LocalPtySession::kill()` | Signals child process to die |
+| **detach** | `PlaneaiPtyBackend::detach()` | Equivalent to kill (no true detach for local sessions) |
+
+**Important:** There is no "detach-and-keep-running" for planeai-pty local sessions. Detach is kill. This is intentional — persistent sessions use the daemon/tmux backends instead.
+
 ## Known limitations
 
 - planeai-pty is only wired for `PtyTarget::Shell` (local tabs). Session attach (tmux/daemon) still uses legacy paths.

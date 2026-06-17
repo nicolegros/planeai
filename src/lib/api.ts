@@ -159,4 +159,5 @@ export const sessionLogs = {
   readChunk: (path: string, offset: number, length: number) =>
     invoke<number[]>("read_session_log_chunk", { path, offset, length }),
   openFolder: (path: string) => invoke("open_session_log_folder", { path }),
+  delete: (sessionId: string) => invoke("delete_session_log", { sessionId }),
 };
