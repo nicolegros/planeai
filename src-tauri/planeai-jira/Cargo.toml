@@ -18,7 +18,6 @@ sha2 = "0.10"
 thiserror = "2"
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 wiremock = "0.6"
