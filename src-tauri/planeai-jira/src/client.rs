@@ -5,6 +5,9 @@ use tracing::{debug, instrument, warn};
 
 use crate::auth::JiraAuth;
 
+const SEARCH_FIELDS: &str = "summary,description,status,priority,labels,parent,issuelinks";
+const PAGE_SIZE: u64 = 50;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("unauthorized — token refresh failed")]
@@ -121,6 +124,7 @@ impl JiraClient {
     pub async fn search(&self, jql: &str) -> Result<Vec<FetchedIssue>, Error> {
         let mut issues = Vec::new();
         let mut start_at = 0u64;
+        let page_size_str = PAGE_SIZE.to_string();
 
         loop {
             debug!(start_at, "fetching search page");
@@ -131,11 +135,8 @@ impl JiraClient {
                 .send_with_retry(|token| {
                     self.client.get(&url).bearer_auth(token).query(&[
                         ("jql", jql),
-                        (
-                            "fields",
-                            "summary,description,status,priority,labels,parent,issuelinks",
-                        ),
-                        ("maxResults", "50"),
+                        ("fields", SEARCH_FIELDS),
+                        ("maxResults", &page_size_str),
                         ("startAt", start_str.as_str()),
                     ])
                 })
@@ -144,10 +145,10 @@ impl JiraClient {
                 .await?;
 
             parse_page(&page, &mut issues);
-            if start_at + 50 >= page.total {
+            if start_at + PAGE_SIZE >= page.total {
                 break;
             }
-            start_at += 50;
+            start_at += PAGE_SIZE;
         }
 
         debug!(count = issues.len(), "search complete");
