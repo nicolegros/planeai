@@ -5,11 +5,13 @@ pub mod db;
 pub mod model;
 pub mod repository;
 pub mod sync;
+pub mod writeback;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
 pub use sync::{JiraSync, SyncResult};
+pub use writeback::{JiraWriteback, WritebackAction};
 
 #[derive(Debug)]
 pub enum Error {
