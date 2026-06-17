@@ -10,6 +10,7 @@ mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
+mod jira;
 mod logging;
 mod notify;
 mod output_observer;
@@ -146,36 +147,33 @@ fn main() {
 
             // Stale worktree cleanup (fire-and-forget background thread)
             let cleanup_db_path = planeai_paths::db_path();
+            let cleanup_cfg = cfg.clone();
             std::thread::spawn(move || {
-                let conn = match rusqlite::Connection::open(&cleanup_db_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("stale worktree cleanup: failed to open db: {e}");
-                        return;
-                    }
-                };
-                let errors = planeai_core::cleanup::cleanup_stale_worktrees(
-                    &conn,
-                    |project_path, wt_path| {
-                        if !std::path::Path::new(wt_path).exists() {
-                            return Ok(());
-                        }
-                        let _ = planeai_core::git::worktree_remove(project_path, wt_path);
-                        if std::path::Path::new(wt_path).exists() {
-                            std::fs::remove_dir_all(wt_path).map_err(|e| e.to_string())?;
-                        }
-                        Ok(())
-                    },
-                );
+                let cleanup_conn =
+                    rusqlite::Connection::open(&cleanup_db_path).expect("open db for cleanup");
+                let errors =
+                    crate::worktree::cleanup_stale_worktrees(&cleanup_conn, &cleanup_cfg);
                 for e in &errors {
-                    tracing::warn!("stale worktree cleanup: {e}");
+                    tracing::warn!("stale worktree cleanup error: {e}");
                 }
                 if errors.is_empty() {
                     tracing::info!("stale worktree cleanup: complete");
                 }
             });
 
+            // Jira integration (before cfg is moved into ConfigState)
+            let jira_state = jira::init_jira(&cfg);
+            if let Some(ref state) = jira_state {
+                if let (Some(sync), Some(cancel)) = (&state.sync, &state.cancel) {
+                    let sync = sync.clone();
+                    let cancel = cancel.clone();
+                    tokio::spawn(async move { sync.start(cancel).await });
+                    tracing::info!("jira sync loop started");
+                }
+            }
+
             app.manage(ConfigState(Mutex::new(cfg)));
+            app.manage(commands::JiraHandle(Mutex::new(jira_state)));
 
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
@@ -349,6 +347,10 @@ fn main() {
             session_logs::open_session_log_folder,
             session_logs::delete_session_log,
             session_logs::is_dogfood_log_viewer_enabled,
+            jira_connect,
+            jira_disconnect,
+            jira_sync_now,
+            jira_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

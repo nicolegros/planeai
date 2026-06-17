@@ -5,6 +5,7 @@ pub mod config;
 pub mod file_explorer;
 pub mod files;
 pub mod git;
+pub mod jira;
 pub mod notify;
 pub mod pr;
 pub mod pr_comments;
@@ -20,6 +21,7 @@ pub use config::*;
 pub use file_explorer::*;
 pub use files::*;
 pub use git::*;
+pub use jira::*;
 pub use notify::*;
 pub use pr::{
     create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,

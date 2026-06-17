@@ -72,3 +72,15 @@ export interface PrStatus {
   checks: CiCheck[];
   conflicting: boolean;
 }
+
+export interface JiraStatus {
+  connected: boolean;
+  site: string | null;
+}
+
+export interface SyncResult {
+  created: number;
+  updated: number;
+  stale: number;
+  errors: number;
+}
