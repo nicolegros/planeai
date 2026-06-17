@@ -1,22 +1,44 @@
 import { describe, it, expect } from "vitest";
-import type { Session, TaskItem, Project } from "../types";
+import type { Session, TaskItem } from "../types";
 
 // Test the derivation logic used by UnifiedSidebar
 
-function makeProject(id: string, name: string, path: string): Project {
-  return { id, name, path };
-}
-
 function makeSession(id: string, projectId: string, taskKey: string | null = null): Session {
-  return { id, project_id: projectId, name: "", tmux_name: null, branch: "main", status: "active", created_at: "", worktree_path: null, provider: null, backend: "direct", tab_count: 1, base_branch: null, task_key: taskKey, pr_url: null, pr_state: null };
+  return {
+    id,
+    project_id: projectId,
+    name: "",
+    tmux_name: null,
+    branch: "main",
+    status: "active",
+    created_at: "",
+    worktree_path: null,
+    provider: null,
+    backend: "direct",
+    tab_count: 1,
+    base_branch: null,
+    task_key: taskKey,
+    pr_url: null,
+    pr_state: null,
+  };
 }
 
 function makeTask(key: string, status: string, title = "task"): TaskItem {
-  return { key, title, status, description: "", priority: 0, blocked_by: [], tags: [], parent_key: null, url: null };
+  return {
+    key,
+    title,
+    status,
+    description: "",
+    priority: 0,
+    blocked_by: [],
+    tags: [],
+    parent_key: null,
+    url: null,
+  };
 }
 
 function getOrphanSessions(sessions: Session[], allTaskKeys: Set<string>): Session[] {
-  return sessions.filter(s => !s.task_key || !allTaskKeys.has(s.task_key));
+  return sessions.filter((s) => !s.task_key || !allTaskKeys.has(s.task_key));
 }
 
 function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
@@ -57,7 +79,7 @@ describe("unified sidebar logic", () => {
         makeSession("s4", "p1", "PLA-99"),
       ];
       const orphans = getOrphanSessions(sessions, new Set(["PLA-1", "PLA-2"]));
-      expect(orphans.map(s => s.id)).toEqual(["s2", "s4"]);
+      expect(orphans.map((s) => s.id)).toEqual(["s2", "s4"]);
     });
   });
 
@@ -83,7 +105,7 @@ describe("unified sidebar logic", () => {
         { ...makeTask("T-3", "todo"), priority: 2 },
       ];
       const groups = groupByStatus(tasks);
-      expect(groups["todo"].map(t => t.key)).toEqual(["T-2", "T-3", "T-1"]);
+      expect(groups["todo"].map((t) => t.key)).toEqual(["T-2", "T-3", "T-1"]);
     });
 
     it("handles empty input", () => {
@@ -95,19 +117,16 @@ describe("unified sidebar logic", () => {
 
   describe("flat nav ordering", () => {
     it("orphans come before tasks for same project", () => {
-      const projects = [makeProject("p1", "proj", "/path")];
-      const sessions = [
-        makeSession("s1", "p1", null),
-        makeSession("s2", "p1", "T-1"),
-      ];
+      const sessions = [makeSession("s1", "p1", null), makeSession("s2", "p1", "T-1")];
       const tasks = [makeTask("T-1", "in_progress")];
-      const allTaskKeys = new Set(tasks.map(t => t.key));
+      const allTaskKeys = new Set(tasks.map((t) => t.key));
       const orphans = getOrphanSessions(sessions, allTaskKeys);
 
       // Simulating the flatNav construction
       type NavItem = { type: "orphan"; id: string } | { type: "task"; key: string };
       const flatNav: NavItem[] = [];
-      for (const s of orphans.filter(s => s.project_id === "p1")) flatNav.push({ type: "orphan", id: s.id });
+      for (const s of orphans.filter((s) => s.project_id === "p1"))
+        flatNav.push({ type: "orphan", id: s.id });
       for (const t of tasks) flatNav.push({ type: "task", key: t.key });
 
       expect(flatNav[0]).toEqual({ type: "orphan", id: "s1" });
