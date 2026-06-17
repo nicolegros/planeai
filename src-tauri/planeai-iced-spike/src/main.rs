@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+mod shell;
+
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -12,6 +14,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::Processor;
 use clap::Parser as ClapParser;
+use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::widget::Canvas;
@@ -23,8 +26,11 @@ use serde_json::json;
 #[derive(ClapParser, Debug, Clone)]
 struct Args {
     /// Path to raw ANSI fixture file
+    #[arg(long, required_unless_present = "shell")]
+    replay: Option<PathBuf>,
+    /// Launch a live local shell instead of replaying a fixture
     #[arg(long)]
-    replay: PathBuf,
+    shell: bool,
     /// Terminal columns
     #[arg(long, default_value_t = 120)]
     cols: usize,
@@ -218,6 +224,54 @@ fn snapshot_text(term: &alacritty_terminal::Term<EventProxy>) -> String {
     out
 }
 
+// --- Keyboard input translation ---
+
+fn key_to_bytes(key: &keyboard::Key, modifiers: &keyboard::Modifiers) -> Vec<u8> {
+    use keyboard::key::Named;
+    use keyboard::Key;
+
+    match key {
+        Key::Character(c) => {
+            let ch = c.as_str();
+            if modifiers.control() {
+                // Ctrl+letter → control code
+                if let Some(b) = ch.bytes().next() {
+                    let ctrl = match b {
+                        b'a'..=b'z' => b - b'a' + 1,
+                        b'A'..=b'Z' => b - b'A' + 1,
+                        b'[' => 27,
+                        b'\\' => 28,
+                        b']' => 29,
+                        b'^' => 30,
+                        b'_' => 31,
+                        _ => return ch.as_bytes().to_vec(),
+                    };
+                    return vec![ctrl];
+                }
+            }
+            ch.as_bytes().to_vec()
+        }
+        Key::Named(named) => match named {
+            Named::Enter => b"\r".to_vec(),
+            Named::Backspace => b"\x7f".to_vec(),
+            Named::Tab => b"\t".to_vec(),
+            Named::Escape => b"\x1b".to_vec(),
+            Named::ArrowUp => b"\x1b[A".to_vec(),
+            Named::ArrowDown => b"\x1b[B".to_vec(),
+            Named::ArrowRight => b"\x1b[C".to_vec(),
+            Named::ArrowLeft => b"\x1b[D".to_vec(),
+            Named::Home => b"\x1b[H".to_vec(),
+            Named::End => b"\x1b[F".to_vec(),
+            Named::PageUp => b"\x1b[5~".to_vec(),
+            Named::PageDown => b"\x1b[6~".to_vec(),
+            Named::Delete => b"\x1b[3~".to_vec(),
+            Named::Insert => b"\x1b[2~".to_vec(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
 // --- Iced App State ---
 
 struct App {
@@ -239,21 +293,36 @@ struct App {
     max_pending_unparsed: usize,
     // metrics output lines (buffered as JSON values)
     metrics_lines: Vec<serde_json::Value>,
+    // shell mode
+    pty: Option<shell::Shell>,
 }
 
 #[derive(Debug, Clone)]
-enum Message { Tick }
+enum Message {
+    Tick,
+    KeyEvent(keyboard::Event),
+    PtyPoll,
+}
 
 impl App {
     fn boot() -> (Self, iced::Task<Message>) {
         let args = ARGS.get().unwrap();
-        let data = fs::read(&args.replay).expect("Failed to read replay file");
+        let data = if let Some(ref path) = args.replay {
+            fs::read(path).expect("Failed to read replay file")
+        } else {
+            Vec::new()
+        };
         let scrollback = args.scrollback_lines.unwrap_or(0);
         let size = TermSize { cols: args.cols, rows: args.rows + scrollback };
         let config = alacritty_terminal::term::Config::default();
         let term = alacritty_terminal::Term::new(config, &size, EventProxy);
         let processor = Processor::new();
         let snapshot = snapshot_grid(&term);
+        let pty = if args.shell {
+            Some(shell::Shell::spawn(args.cols as u16, args.rows as u16))
+        } else {
+            None
+        };
         (
             Self {
                 data,
@@ -272,6 +341,7 @@ impl App {
                 parse_times: Vec::new(),
                 max_pending_unparsed: 0,
                 metrics_lines: Vec::new(),
+                pty,
             },
             iced::Task::none(),
         )
@@ -279,10 +349,13 @@ impl App {
 
     fn common_fields(&self) -> serde_json::Value {
         let args = ARGS.get().unwrap();
+        let fixture = args.replay.as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<shell>".to_string());
         json!({
             "schema_version": 1,
             "backend": args.backend,
-            "fixture": args.replay.to_string_lossy(),
+            "fixture": fixture,
             "cols": args.cols,
             "rows": args.rows,
             "chunk_size": args.chunk_size,
@@ -305,6 +378,32 @@ impl App {
 
     fn update(&mut self, message: Message) {
         match message {
+            Message::KeyEvent(keyboard::Event::KeyPressed { key, modifiers, text, .. }) => {
+                // Use text field for normal typing, key_to_bytes for control sequences
+                let bytes = if modifiers.control() {
+                    key_to_bytes(&key, &modifiers)
+                } else if let Some(ref t) = text {
+                    t.as_bytes().to_vec()
+                } else {
+                    key_to_bytes(&key, &modifiers)
+                };
+                if !bytes.is_empty() {
+                    if let Some(ref pty) = self.pty {
+                        pty.write(&bytes);
+                    }
+                }
+            }
+            Message::KeyEvent(_) => {}
+            Message::PtyPoll => {
+                if let Some(ref pty) = self.pty {
+                    let output = pty.drain();
+                    if !output.is_empty() {
+                        self.processor.advance(&mut self.term, &output);
+                        self.snapshot = snapshot_grid(&self.term);
+                        self.cache.clear();
+                    }
+                }
+            }
             Message::Tick => {
                 if self.done {
                     return;
@@ -339,10 +438,10 @@ impl App {
                     "queue_depth_bytes": self.data.len() - end,
                 }));
 
-                // Track pending unparsed
-                let pending = self.data.len() - self.offset;
-                if pending > self.max_pending_unparsed {
-                    self.max_pending_unparsed = pending;
+                // Track max pending unparsed: this is the chunk size about to be parsed
+                // (in synchronous replay, only the current chunk is "queued but unparsed")
+                if bytes_fed > self.max_pending_unparsed {
+                    self.max_pending_unparsed = bytes_fed;
                 }
 
                 // parse_batch
@@ -460,7 +559,7 @@ impl App {
             "schema_version": 1,
             "event_type": "summary",
             "backend": args.backend,
-            "fixture": args.replay.to_string_lossy(),
+            "fixture": args.replay.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
             "cols": args.cols,
             "rows": args.rows,
             "chunk_size": args.chunk_size,
@@ -526,13 +625,26 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.done {
-            Subscription::none()
-        } else {
+        let mut subs = Vec::new();
+
+        // Keyboard input (for shell mode)
+        if self.pty.is_some() {
+            subs.push(keyboard::listen().map(Message::KeyEvent));
+            subs.push(
+                iced::time::every(Duration::from_millis(16)).map(|_| Message::PtyPoll)
+            );
+        }
+
+        // Replay tick
+        if !self.done && !self.data.is_empty() {
             let interval = ARGS.get().unwrap().chunk_interval_ms;
             let ms = if interval == 0 { 1 } else { interval };
-            iced::time::every(Duration::from_millis(ms)).map(|_| Message::Tick)
+            subs.push(
+                iced::time::every(Duration::from_millis(ms)).map(|_| Message::Tick)
+            );
         }
+
+        Subscription::batch(subs)
     }
 }
 

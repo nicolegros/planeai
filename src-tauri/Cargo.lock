@@ -4361,6 +4361,7 @@ dependencies = [
  "clap",
  "iced",
  "libc",
+ "portable-pty",
  "serde_json",
 ]
 
