@@ -30,6 +30,12 @@ pub struct Config {
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrollback_lines: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_mounted_terminals: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_links: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -231,6 +237,9 @@ impl Default for Config {
             pr_status: None,
             hide_done_tasks: None,
             daemon_scrollback_bytes: None,
+            scrollback_lines: None,
+            max_mounted_terminals: None,
+            web_links: None,
         }
     }
 }
@@ -532,6 +541,9 @@ mod tests {
             pr_status: None,
             hide_done_tasks: None,
             daemon_scrollback_bytes: None,
+            scrollback_lines: None,
+            max_mounted_terminals: None,
+            web_links: None,
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();

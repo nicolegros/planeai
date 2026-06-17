@@ -1138,14 +1138,12 @@ mod tests {
         )
         .unwrap();
 
-        // daemon_send_prompt will fail in tests (no daemon running) but we verify
-        // the function routes to daemon backend correctly by checking it doesn't
-        // call tmux_send_keys or notify_socket_send
+        // daemon_send_prompt will attempt a real IPC connection. If a daemon is running
+        // it may succeed; if not, it errors. Either way, verify the daemon path was taken
+        // (not tmux or socket).
         let ops = MockPromptOps::new(true);
-        let err = send_prompt(&conn, "bbbb", "hello agent", &ops);
-        // In test env, daemon socket won't exist, so this errors
-        assert!(err.is_err());
-        // Verify neither tmux nor socket was called
+        let _result = send_prompt(&conn, "bbbb", "hello agent", &ops);
+        // Verify neither tmux nor socket was called (daemon path was used)
         assert_eq!(ops.sent_keys.borrow().len(), 0);
         assert_eq!(ops.sent_socket.borrow().len(), 0);
     }

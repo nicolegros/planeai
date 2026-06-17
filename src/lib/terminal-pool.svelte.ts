@@ -1,14 +1,22 @@
 /**
  * Terminal pool — manages which sessions have mounted xterm instances.
- * Only the active session + MRU neighbors are mounted (max 3).
+ * Only the active session + MRU neighbors are mounted (max 3 by default).
  * Mounted but non-active sessions are "paused" (PTY flow paused).
  *
  * Derives mount decisions from the global MRU list (mru.svelte.ts).
  */
 import { getMruList, touchMru, removeMru } from "./mru.svelte";
+import { getSettings } from "./settings.svelte";
 
-/** Max simultaneously mounted terminals (active + neighbors) */
-export const MAX_MOUNTED = 3;
+/** Default max simultaneously mounted terminals (active + neighbors) */
+export const DEFAULT_MAX_MOUNTED = 3;
+
+/** @deprecated Use getSettings().max_mounted_terminals ?? DEFAULT_MAX_MOUNTED */
+export { DEFAULT_MAX_MOUNTED as MAX_MOUNTED };
+
+function getMaxMounted(): number {
+  return getSettings().max_mounted_terminals ?? DEFAULT_MAX_MOUNTED;
+}
 
 let active = $state<string | null>(null);
 
@@ -30,7 +38,8 @@ export function getPoolState(): {
   mounted: string[];
   paused: string[];
 } {
-  const mounted = getMruList().slice(0, MAX_MOUNTED);
+  const maxMounted = getMaxMounted();
+  const mounted = getMruList().slice(0, maxMounted);
   const paused = mounted.filter((id) => id !== active);
   return { active, mounted, paused };
 }
@@ -39,7 +48,7 @@ export function getPoolState(): {
 export function isMounted(sessionId: string): boolean {
   const mru = getMruList();
   const idx = mru.indexOf(sessionId);
-  return idx !== -1 && idx < MAX_MOUNTED;
+  return idx !== -1 && idx < getMaxMounted();
 }
 
 /** Check if a specific session should be paused (mounted but not active). */
