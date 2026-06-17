@@ -37,6 +37,7 @@ pub struct JiraClient {
     auth: Arc<JiraAuth>,
     cloud_id: String,
     client: Client,
+    #[cfg(test)]
     base_url_override: Option<String>,
 }
 
@@ -46,6 +47,7 @@ impl JiraClient {
             auth,
             cloud_id,
             client: Client::new(),
+            #[cfg(test)]
             base_url_override: None,
         }
     }
@@ -61,6 +63,7 @@ impl JiraClient {
     }
 
     fn base_url(&self) -> String {
+        #[cfg(test)]
         if let Some(url) = &self.base_url_override {
             return url.clone();
         }
