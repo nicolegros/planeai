@@ -122,6 +122,7 @@ Features: deterministic colored lines, carriage-return progress updates every 50
 | `--input-benchmark` | Enable synthetic input injection |
 | `--input-interval-ms <ms>` | Interval between synthetic inputs (default: 50) |
 | `--input-events <n>` | Number of synthetic inputs (default: 100) |
+| `--output-queue-policy <p>` | Queue policy: `block` (default, lossless) or `drop_oldest` (lossy, stress testing only) |
 
 ## Input Support
 
@@ -163,14 +164,29 @@ Summary fields:
 
 PTY output is read on a background thread into a **bounded 512KB buffer**.
 
+**Default policy: `block` (lossless)**
+
+The PTY reader thread blocks (via Condvar) when the buffer is full, waiting for the UI poll to drain it. This guarantees zero bytes are ever dropped, preserving terminal ANSI state integrity.
+
 | Property | Value |
 |----------|-------|
 | `output_queue_capacity_bytes` | 524288 (512KB) |
-| `output_queue_policy` | `drop_oldest` |
-| Behavior when full | Oldest bytes are drained to make room |
-| `output_bytes_dropped` | Reported in summary (0 under normal load) |
+| `output_queue_policy` (default) | `block` |
+| Behavior when full | PTY reader blocks until UI drains |
+| `output_bytes_dropped` | Always 0 in block mode |
+| `producer_block_count` | Number of times the reader thread blocked |
+| `producer_block_duration_ms` | Total time spent blocked |
 
-The Iced UI polls every 16ms, drains the entire buffer, parses through alacritty_terminal, and re-renders. Under extreme flood conditions (sustained output > 32MB/s for long periods), oldest output may be dropped. Under normal PlaneAI agent workloads, no bytes are dropped.
+**Alternative policy: `drop_oldest` (stress testing only)**
+
+```bash
+cargo run --release --bin planeai-iced-spike -- \
+  --shell --output-queue-policy drop_oldest ...
+```
+
+⚠️ **Warning:** `drop_oldest` silently discards terminal bytes when the buffer is full. This can corrupt ANSI state, lose command output, and produce garbled display. Use only for stress testing and flood throughput measurement — never for production terminal sessions.
+
+The Iced UI polls every 16ms, drains the entire buffer, parses through alacritty_terminal, and re-renders. Under normal workloads the buffer never fills and the reader never blocks.
 
 ## Metrics Emitted
 
@@ -189,7 +205,7 @@ Frame timing (warmup-corrected for p95/p99):
 
 Jank: `frames_over_16_7ms`, `frames_over_33_3ms`, `frames_over_50ms`
 
-Queue: `output_queue_capacity_bytes`, `output_queue_policy`, `output_bytes_dropped`, `max_pending_pty_output_bytes`, `queue_depth_at_end_bytes`
+Queue: `output_queue_capacity_bytes`, `output_queue_policy`, `output_bytes_dropped`, `producer_block_count`, `producer_block_duration_ms`, `max_pending_pty_output_bytes`, `queue_depth_at_end_bytes`
 
 Input (shell mode): `p50/p95/p99_input_write_latency_ms`, `max_input_write_latency_ms`, `input_events_received`, `input_events_written`, `input_events_failed`
 

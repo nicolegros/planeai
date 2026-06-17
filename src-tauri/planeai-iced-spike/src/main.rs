@@ -67,6 +67,8 @@ struct Args {
     input_events: u64,
     #[arg(long)]
     flood_command: Option<String>,
+    #[arg(long, default_value = "block")]
+    output_queue_policy: String,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();
@@ -269,10 +271,12 @@ impl App {
         let pty = if is_shell_mode {
             let cmd = args.command.as_deref()
                 .or(args.flood_command.as_deref());
-            Some(shell::Shell::spawn_command(
+            let policy = shell::QueuePolicy::from_str(&args.output_queue_policy);
+            Some(shell::Shell::spawn_with_policy(
                 args.cols as u16,
                 args.rows as u16,
                 cmd,
+                policy,
             ))
         } else {
             None
@@ -790,8 +794,10 @@ impl App {
             "frames_over_50ms": fd_warmup.iter().filter(|&&t| t > 50.0).count(),
             // Queue/backpressure
             "output_queue_capacity_bytes": shell::MAX_BUFFER,
-            "output_queue_policy": shell::QUEUE_POLICY,
+            "output_queue_policy": self.pty.as_ref().map(|p| p.policy.as_str()).unwrap_or("block"),
             "output_bytes_dropped": bytes_dropped,
+            "producer_block_count": self.pty.as_ref().map(|p| p.producer_block_count()).unwrap_or(0),
+            "producer_block_duration_ms": self.pty.as_ref().map(|p| p.producer_block_duration_ms()).unwrap_or(0.0),
             "max_pending_pty_output_bytes": max_pty,
             "queue_depth_at_end_bytes": self.pty.as_ref().map(|p| p.pending_len()).unwrap_or(0),
             "max_queue_depth_bytes": max_pty,
