@@ -255,18 +255,10 @@ mod tests {
     }
 
     fn setup_db() -> (Arc<crate::repository::JiraRepository>, Arc<planeai_tasks::sqlite::SqliteRepository>) {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let db_path = tmp.path().to_str().unwrap().to_string();
-        std::mem::forget(tmp);
-
-        let conn1 = Connection::open(&db_path).unwrap();
-        planeai_tasks::sqlite::migrate(&conn1).unwrap();
-        crate::db::migrate(&conn1).unwrap();
-        let jira_repo = Arc::new(crate::repository::JiraRepository::new(conn1).unwrap());
-
-        let conn2 = Connection::open(&db_path).unwrap();
-        let task_repo = Arc::new(planeai_tasks::sqlite::SqliteRepository::new(conn2, "TST").unwrap());
-
+        let jira_repo = Arc::new(crate::repository::JiraRepository::new(
+            Connection::open_in_memory().unwrap(),
+        ).unwrap());
+        let task_repo = Arc::new(planeai_tasks::sqlite::SqliteRepository::open_in_memory("TST").unwrap());
         (jira_repo, task_repo)
     }
 

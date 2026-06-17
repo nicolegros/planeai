@@ -127,7 +127,7 @@ impl JiraRepository {
     pub fn get_task_issue_key(&self, task_key: &str) -> Result<Option<String>, Error> {
         let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
         let result = conn.query_row(
-            "SELECT jira_issue_key FROM tasks WHERE key = ?1",
+            "SELECT issue_key FROM jira_task_links WHERE task_key = ?1",
             params![task_key],
             |row| row.get(0),
         );
@@ -141,8 +141,8 @@ impl JiraRepository {
     pub fn link_task(&self, task_key: &str, issue_key: &str) -> Result<(), Error> {
         let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
         conn.execute(
-            "UPDATE tasks SET jira_issue_key = ?1 WHERE key = ?2",
-            params![issue_key, task_key],
+            "INSERT OR REPLACE INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2)",
+            params![task_key, issue_key],
         )?;
         Ok(())
     }
@@ -150,7 +150,7 @@ impl JiraRepository {
     pub fn find_task_by_issue_key(&self, issue_key: &str) -> Result<Option<String>, Error> {
         let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
         let result = conn.query_row(
-            "SELECT key FROM tasks WHERE jira_issue_key = ?1",
+            "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
             params![issue_key],
             |row| row.get(0),
         );
@@ -169,7 +169,6 @@ mod tests {
 
     fn setup() -> JiraRepository {
         let conn = Connection::open_in_memory().unwrap();
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
         JiraRepository::new(conn).unwrap()
     }
 
@@ -190,24 +189,14 @@ mod tests {
     #[test]
     fn migration_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
     }
 
     #[test]
-    fn migration_creates_jira_issues_table_and_fk_column() {
+    fn migration_creates_tables() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        let conn = repo.conn.lock().unwrap();
-        conn.execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'test', 'todo', '2024-01-01', '2024-01-01')",
-            [],
-        ).unwrap();
-        drop(conn);
         repo.link_task("TST-1", "PROJ-1").unwrap();
     }
 
@@ -292,15 +281,6 @@ mod tests {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
 
-        let conn = repo.conn.lock().unwrap();
-        conn.execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'task', 'todo', '2024-01-01', '2024-01-01')",
-            [],
-        ).unwrap();
-        drop(conn);
-
         assert_eq!(repo.get_task_issue_key("TST-1").unwrap(), None);
 
         repo.link_task("TST-1", "PROJ-1").unwrap();
@@ -314,15 +294,6 @@ mod tests {
     fn find_task_by_issue_key_works() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        let conn = repo.conn.lock().unwrap();
-        conn.execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'task', 'todo', '2024-01-01', '2024-01-01')",
-            [],
-        ).unwrap();
-        drop(conn);
 
         assert_eq!(repo.find_task_by_issue_key("PROJ-1").unwrap(), None);
 
