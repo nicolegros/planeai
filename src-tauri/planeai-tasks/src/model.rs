@@ -62,6 +62,7 @@ fn default_base_branch() -> String {
 pub struct CreateParams {
     pub title: String,
     pub description: String,
+    pub status: Option<Status>,
     pub priority: i32,
     pub parent_key: Option<String>,
     pub blocked_by: Vec<String>,
