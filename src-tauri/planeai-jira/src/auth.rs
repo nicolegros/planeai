@@ -148,7 +148,7 @@ impl JiraAuth {
             .map_err(|_| Error::Timeout)??;
 
         let token_resp = self.exchange_code(&code, &redirect_uri, &verifier).await?;
-        self.store_tokens(&token_resp)?;
+        self.store_tokens(&token_resp).await?;
 
         let cloud_id = self.fetch_cloud_id(&token_resp.access_token).await?;
         self.store.set("cloud_id", &cloud_id)?;
@@ -156,13 +156,10 @@ impl JiraAuth {
         Ok(())
     }
 
-    pub fn disconnect(&self) -> Result<(), Error> {
+    pub async fn disconnect(&self) -> Result<(), Error> {
         self.store.delete("refresh_token")?;
         self.store.delete("cloud_id")?;
-        // Clear in-memory state without await since we use try_lock for sync disconnect
-        if let Ok(mut state) = self.token_state.try_lock() {
-            *state = None;
-        }
+        *self.token_state.lock().await = None;
         Ok(())
     }
 
@@ -203,7 +200,7 @@ impl JiraAuth {
             .json::<TokenResponse>()
             .await?;
 
-        self.store_tokens(&resp)?;
+        self.store_tokens(&resp).await?;
         Ok(resp.access_token)
     }
 
@@ -249,7 +246,7 @@ impl JiraAuth {
             .ok_or_else(|| Error::CloudIdNotFound(self.site.clone()))
     }
 
-    fn store_tokens(&self, resp: &TokenResponse) -> Result<(), Error> {
+    async fn store_tokens(&self, resp: &TokenResponse) -> Result<(), Error> {
         if let Some(rt) = &resp.refresh_token {
             self.store.set("refresh_token", rt)?;
         }
@@ -257,10 +254,7 @@ impl JiraAuth {
             access_token: resp.access_token.clone(),
             expires_at: std::time::Instant::now() + Duration::from_secs(resp.expires_in),
         };
-        // try_lock is safe here — only called from async methods that don't hold the lock
-        if let Ok(mut state) = self.token_state.try_lock() {
-            *state = Some(ts);
-        }
+        *self.token_state.lock().await = Some(ts);
         Ok(())
     }
 }
@@ -537,7 +531,7 @@ mod tests {
             expires_at: std::time::Instant::now() + Duration::from_secs(3600),
         });
 
-        auth.disconnect().unwrap();
+        auth.disconnect().await.unwrap();
 
         assert!(auth.token_state.lock().await.is_none());
         assert!(!auth.is_connected());
