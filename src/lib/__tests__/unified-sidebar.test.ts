@@ -160,9 +160,10 @@ describe("unified sidebar logic", () => {
       tasksByProject: Record<string, TaskItem[]>,
     ): boolean {
       const key = `project:${project.id}`;
-      return collapsedSections[key] ?? (
-        (orphansByProject.find((g) => g.project.id === project.id)?.sessions ?? []).length === 0 &&
-        (tasksByProject[project.path] ?? []).length === 0
+      return (
+        collapsedSections[key] ??
+        ((orphansByProject.find((g) => g.project.id === project.id)?.sessions ?? []).length === 0 &&
+          (tasksByProject[project.path] ?? []).length === 0)
       );
     }
 

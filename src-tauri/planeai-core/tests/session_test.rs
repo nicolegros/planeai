@@ -38,6 +38,7 @@ impl TaskSource for MockTaskSource {
 struct RecordingBackend {
     worktrees_created: Mutex<Vec<(String, String, String, String)>>,
     tmux_sessions: Mutex<Vec<(String, String, String, String)>>,
+    daemon_sessions: Mutex<Vec<(String, String, String)>>,
     sessions_inserted: Mutex<Vec<NewSession>>,
     gui_notified: Mutex<Vec<String>>,
     fetches: Mutex<Vec<(String, String)>>,
@@ -71,6 +72,14 @@ impl Backend for RecordingBackend {
             cwd.to_string(),
             cmd.to_string(),
             session_id.to_string(),
+        ));
+        Ok(())
+    }
+    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String> {
+        self.daemon_sessions.lock().unwrap().push((
+            session_id.to_string(),
+            cmd.to_string(),
+            cwd.to_string(),
         ));
         Ok(())
     }
@@ -337,4 +346,41 @@ fn make_task() -> Task {
         subtasks: vec![],
         base_branch: "main".to_string(),
     }
+}
+
+#[test]
+fn dispatch_daemon_backend_calls_create_daemon_session() {
+    let backend = RecordingBackend::default();
+
+    let dispatcher = SessionDispatcher {
+        task_source: Arc::new(MockTaskSource::new()),
+        on_start: None,
+        dispatch_config: DispatchConfig {
+            provider: "kiro".to_string(),
+            provider_command: "kiro-cli chat".to_string(),
+            yolo: true,
+            yolo_flag: Some("--trust-all-tools".to_string()),
+            worktree_root: "/tmp/wt".to_string(),
+            base_branch: "main".to_string(),
+            session_backend: "daemon".to_string(),
+            prompt_template: None,
+            prompt_command: None,
+            prompt_wrapper: None,
+            name_template: None,
+        },
+        project_id: "p1".to_string(),
+        project_name: "proj".to_string(),
+        project_path: "/repo".to_string(),
+    };
+
+    let task = make_task();
+    dispatcher.dispatch(&task, &backend).unwrap();
+
+    // Daemon session was created (not tmux)
+    let daemon = backend.daemon_sessions.lock().unwrap();
+    assert_eq!(daemon.len(), 1);
+    assert!(daemon[0].1.contains("kiro-cli chat --trust-all-tools"));
+
+    let tmux = backend.tmux_sessions.lock().unwrap();
+    assert_eq!(tmux.len(), 0);
 }

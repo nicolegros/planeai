@@ -361,6 +361,7 @@ pub trait PromptOps {
     fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String>;
     fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
     fn tmux_has_session(&self, tmux_name: &str) -> bool;
+    fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
 #[cfg(not(windows))]
@@ -389,6 +390,9 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
             crate::tmux::has_session(tmux_name)
+        }
+        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            daemon_send_prompt(session_id, text)
         }
     }
     RealPromptOps
@@ -439,6 +443,9 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
+        }
+        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            daemon_send_prompt(session_id, text)
         }
     }
     WindowsPromptOps
@@ -518,7 +525,7 @@ pub fn send_prompt(
             tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
         "daemon" => {
-            daemon_send_prompt(&session.id, text)?;
+            ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
         }
         other => return Err(format!("unsupported backend: {other}")),
@@ -598,6 +605,9 @@ mod tests {
         }
         fn tmux_has_session(&self, _tmux_name: &str) -> bool {
             self.has_session
+        }
+        fn daemon_send(&self, _session_id: &str, _text: &str) -> Result<(), String> {
+            Err("daemon not running (mock)".to_string())
         }
     }
 

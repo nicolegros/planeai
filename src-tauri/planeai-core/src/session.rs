@@ -21,6 +21,7 @@ pub trait Backend: Send + Sync {
         cmd: &str,
         session_id: &str,
     ) -> Result<(), String>;
+    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String>;
     fn insert_session(&self, session: &NewSession) -> Result<(), String>;
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
@@ -135,6 +136,8 @@ impl SessionDispatcher {
         let tmux_name = format!("planeai-{}-{}", self.project_name, short_id);
         if self.dispatch_config.session_backend == "tmux" {
             backend.create_tmux_session(&tmux_name, &wt_path, &cmd, &session_id)?;
+        } else if self.dispatch_config.session_backend == "daemon" {
+            backend.create_daemon_session(&session_id, &cmd, &wt_path)?;
         }
 
         let session_name = if let Some(tpl) = &self.dispatch_config.name_template {
