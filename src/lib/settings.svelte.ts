@@ -82,7 +82,7 @@ export interface AppConfig {
   projects_base_path?: string | null;
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;
-  integrations?: { jira?: JiraConfig | null } | null;
+  jira?: JiraConfig | null;
 }
 
 let config = $state<AppConfig>({

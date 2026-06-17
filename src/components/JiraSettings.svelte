@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { jira, projects } from "../lib/api";
-  import { getSettings, updateSettings, type AppConfig, type JiraConfig, type JiraProjectMapping, type JiraStatusMapping } from "../lib/settings.svelte";
+  import { getSettings, updateSettings, type JiraConfig, type JiraProjectMapping, type JiraStatusMapping } from "../lib/settings.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Button, Input, Select, Label, Checkbox } from "./ui";
   import type { JiraStatus, SyncResult } from "../lib/types";
   import type { Project } from "../lib/types";
 
   const config = $derived(getSettings());
-  const jiraConfig = $derived(config.integrations?.jira ?? {});
+  const jiraConfig = $derived(config.jira ?? {});
   const mappings = $derived(jiraConfig.project_mappings ?? []);
 
   let status = $state<JiraStatus>({ connected: false, site: null });
@@ -39,7 +39,7 @@
 
   function saveJira(patch: Partial<JiraConfig>) {
     const updated = { ...jiraConfig, ...patch };
-    updateSettings({ integrations: { ...config.integrations, jira: updated } } as Partial<AppConfig>);
+    updateSettings({ jira: updated });
   }
 
   function saveMappings(newMappings: JiraProjectMapping[]) {
