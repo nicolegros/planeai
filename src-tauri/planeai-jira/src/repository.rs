@@ -1,12 +1,13 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use std::sync::Mutex;
 
 use crate::db::migrate;
 use crate::model::{JiraIssue, SyncStatus};
 use crate::Error;
 
 pub struct JiraRepository {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
@@ -41,13 +42,19 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
 impl JiraRepository {
     pub fn new(conn: Connection) -> Result<Self, Error> {
         migrate(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn upsert_issue(&self, issue: &JiraIssue) -> Result<(), Error> {
         let labels_json =
             serde_json::to_string(&issue.labels).map_err(|e| Error::Storage(e.to_string()))?;
-        self.conn.execute(
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        conn.execute(
             "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(issue_key) DO UPDATE SET
@@ -75,8 +82,12 @@ impl JiraRepository {
     }
 
     pub fn mark_stale(&self, issue_keys: &[&str]) -> Result<(), Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         for key in issue_keys {
-            self.conn.execute(
+            conn.execute(
                 "UPDATE jira_issues SET sync_status = 'stale' WHERE issue_key = ?1",
                 params![key],
             )?;
@@ -85,7 +96,11 @@ impl JiraRepository {
     }
 
     pub fn mark_synced(&self, issue_key: &str) -> Result<(), Error> {
-        self.conn.execute(
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        conn.execute(
             "UPDATE jira_issues SET sync_status = 'synced', last_synced_at = ?1 WHERE issue_key = ?2",
             params![Utc::now().to_rfc3339(), issue_key],
         )?;
@@ -93,7 +108,11 @@ impl JiraRepository {
     }
 
     pub fn get_issue(&self, issue_key: &str) -> Result<Option<JiraIssue>, Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut stmt = conn.prepare(
             "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1",
         )?;
 
@@ -107,7 +126,11 @@ impl JiraRepository {
     }
 
     pub fn list_synced_keys(&self, jira_project: &str) -> Result<Vec<String>, Error> {
-        let mut stmt = self.conn.prepare(
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut stmt = conn.prepare(
             "SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'",
         )?;
         let rows = stmt.query_map(params![jira_project], |row| row.get(0))?;
@@ -119,8 +142,12 @@ impl JiraRepository {
     }
 
     pub fn get_task_issue_key(&self, task_key: &str) -> Result<Option<String>, Error> {
-        let result = self.conn.query_row(
-            "SELECT jira_issue_key FROM tasks WHERE key = ?1",
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let result = conn.query_row(
+            "SELECT issue_key FROM jira_task_links WHERE task_key = ?1",
             params![task_key],
             |row| row.get(0),
         );
@@ -132,16 +159,24 @@ impl JiraRepository {
     }
 
     pub fn link_task(&self, task_key: &str, issue_key: &str) -> Result<(), Error> {
-        self.conn.execute(
-            "UPDATE tasks SET jira_issue_key = ?1 WHERE key = ?2",
-            params![issue_key, task_key],
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2)",
+            params![task_key, issue_key],
         )?;
         Ok(())
     }
 
     pub fn find_task_by_issue_key(&self, issue_key: &str) -> Result<Option<String>, Error> {
-        let result = self.conn.query_row(
-            "SELECT key FROM tasks WHERE jira_issue_key = ?1",
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let result = conn.query_row(
+            "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
             params![issue_key],
             |row| row.get(0),
         );
@@ -160,7 +195,6 @@ mod tests {
 
     fn setup() -> JiraRepository {
         let conn = Connection::open_in_memory().unwrap();
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
         JiraRepository::new(conn).unwrap()
     }
 
@@ -181,25 +215,14 @@ mod tests {
     #[test]
     fn migration_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
-        planeai_tasks::sqlite::migrate(&conn).unwrap();
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
     }
 
     #[test]
-    fn migration_creates_jira_issues_table_and_fk_column() {
+    fn migration_creates_tables() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        repo.conn
-            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        repo.conn
-            .execute(
-                "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'test', 'todo', '2024-01-01', '2024-01-01')",
-                [],
-            )
-            .unwrap();
         repo.link_task("TST-1", "PROJ-1").unwrap();
     }
 
@@ -284,16 +307,6 @@ mod tests {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
 
-        repo.conn
-            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        repo.conn
-            .execute(
-                "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'task', 'todo', '2024-01-01', '2024-01-01')",
-                [],
-            )
-            .unwrap();
-
         assert_eq!(repo.get_task_issue_key("TST-1").unwrap(), None);
 
         repo.link_task("TST-1", "PROJ-1").unwrap();
@@ -307,16 +320,6 @@ mod tests {
     fn find_task_by_issue_key_works() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        repo.conn
-            .execute("INSERT INTO task_projects (prefix) VALUES ('TST')", [])
-            .unwrap();
-        repo.conn
-            .execute(
-                "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at) VALUES ('TST-1', 'TST', 'task', 'todo', '2024-01-01', '2024-01-01')",
-                [],
-            )
-            .unwrap();
 
         assert_eq!(repo.find_task_by_issue_key("PROJ-1").unwrap(), None);
 

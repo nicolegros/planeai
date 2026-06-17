@@ -56,7 +56,7 @@ impl JiraClient {
     }
 
     #[cfg(test)]
-    fn with_base_url(auth: Arc<JiraAuth>, base_url: String) -> Self {
+    pub(crate) fn with_base_url(auth: Arc<JiraAuth>, base_url: String) -> Self {
         Self {
             auth,
             cloud_id: String::new(),
