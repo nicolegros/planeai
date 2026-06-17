@@ -53,3 +53,14 @@ export interface FileDiff {
   modified: string;
   language: string;
 }
+
+export interface JiraStatus {
+  connected: boolean;
+  site: string | null;
+}
+
+export interface SyncResult {
+  created: number;
+  updated: number;
+  stale: number;
+}

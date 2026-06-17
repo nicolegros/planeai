@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod file_explorer;
 mod git;
+mod jira;
 mod logging;
 mod notify;
 mod output_observer;
@@ -126,7 +127,19 @@ fn main() {
                 |_, _, _, _| Err("tmux not available".to_string()),
             );
 
-            app.manage(ConfigState(Mutex::new(cfg)));
+            app.manage(ConfigState(Mutex::new(cfg.clone())));
+
+            // Jira integration
+            let jira_state = jira::init_jira(&cfg);
+            if let Some(ref state) = jira_state {
+                if let (Some(sync), Some(cancel)) = (&state.sync, &state.cancel) {
+                    let sync = sync.clone();
+                    let cancel = cancel.clone();
+                    tokio::spawn(async move { sync.start(cancel).await });
+                    tracing::info!("jira sync loop started");
+                }
+            }
+            app.manage(commands::JiraHandle(Mutex::new(jira_state)));
 
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
@@ -266,6 +279,10 @@ fn main() {
             check_cli_installed,
             install_cli,
             get_symphony_status,
+            jira_connect,
+            jira_disconnect,
+            jira_sync_now,
+            jira_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

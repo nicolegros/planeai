@@ -5,6 +5,7 @@ use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 
+use crate::commands::jira::JiraHandle;
 use crate::db;
 use crate::state::{ConfigState, DbState};
 
@@ -151,6 +152,8 @@ pub fn edit_task_item(
 #[tauri::command]
 pub fn move_task_item(
     db_state: State<DbState>,
+    config_state: State<ConfigState>,
+    jira: State<JiraHandle>,
     key: String,
     status: String,
     repo_path: String,
@@ -166,7 +169,47 @@ pub fn move_task_item(
         },
     )
     .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Writeback hook — non-blocking
+    let action = match s {
+        Status::InProgress => Some(planeai_jira::WritebackAction::Start),
+        Status::Done => Some(planeai_jira::WritebackAction::Complete),
+        _ => None,
+    };
+
+    if let Some(action) = action {
+        if let Ok(guard) = jira.0.lock() {
+            if let Some(state) = guard.as_ref() {
+                if let (Some(writeback), repo_jira) = (&state.writeback, &state.repo) {
+                    if let Ok(Some(issue_key)) = repo_jira.get_task_issue_key(&key) {
+                        let cfg = config_state.0.lock().ok();
+                        let wb_config = cfg.as_ref().and_then(|c| {
+                            let jira_cfg = c.integrations.as_ref()?.jira.as_ref()?;
+                            let issue_proj = repo_jira.get_issue(&issue_key).ok()??.jira_project;
+                            jira_cfg
+                                .projects
+                                .values()
+                                .find(|m| m.jira_project == issue_proj)?
+                                .writeback
+                                .clone()
+                        });
+
+                        if let Some(wb_config) = wb_config {
+                            let writeback = writeback.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = writeback.on_status_change(&issue_key, action, &wb_config).await {
+                                    tracing::warn!(error = %e, "jira writeback failed");
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
