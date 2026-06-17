@@ -130,6 +130,55 @@ impl JiraAuth {
         }
     }
 
+    /// Create a JiraAuth with a pre-loaded access token for integration/client tests.
+    #[cfg(test)]
+    pub(crate) fn with_fixed_token(token: &str, token_url: String) -> Self {
+        use std::collections::HashMap;
+        use std::sync::Mutex as StdMutex;
+
+        struct MemStore(StdMutex<HashMap<String, String>>);
+        impl TokenStore for MemStore {
+            fn get(&self, key: &str) -> Result<String, Error> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .get(key)
+                    .cloned()
+                    .ok_or_else(|| Error::Keyring(format!("not found: {key}")))
+            }
+            fn set(&self, key: &str, value: &str) -> Result<(), Error> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(key.to_string(), value.to_string());
+                Ok(())
+            }
+            fn delete(&self, key: &str) -> Result<(), Error> {
+                self.0.lock().unwrap().remove(key);
+                Ok(())
+            }
+        }
+
+        let store = MemStore(StdMutex::new(HashMap::from([(
+            "refresh_token".to_string(),
+            "test_refresh".to_string(),
+        )])));
+
+        let token_state = Some(TokenState {
+            access_token: token.to_string(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(3600),
+        });
+
+        Self {
+            site: "https://test.atlassian.net".to_string(),
+            token_state: Mutex::new(token_state),
+            store: Box::new(store),
+            client: Client::new(),
+            token_url,
+            resources_url: String::new(),
+        }
+    }
+
     pub async fn connect(&self) -> Result<(), Error> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
@@ -173,6 +222,11 @@ impl JiraAuth {
             }
         }
         self.refresh().await
+    }
+
+    /// Clear the cached token so the next access_token() call triggers a refresh.
+    pub async fn invalidate_token(&self) {
+        *self.token_state.lock().await = None;
     }
 
     pub fn is_connected(&self) -> bool {
