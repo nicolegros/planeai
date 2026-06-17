@@ -179,9 +179,7 @@ pub async fn launch_session(
         crate::daemon_client::ensure_daemon_running(&sidecar_path, &socket_path, scrollback_bytes)
             .await?;
 
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let (program, args) = parts.split_first().ok_or("empty command")?;
-        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let (program, args) = planeai_core::command::shell_args(&cmd);
 
         let mut env = std::collections::HashMap::new();
         env.insert("TERM".to_string(), "xterm-256color".to_string());
@@ -235,4 +233,37 @@ pub async fn launch_session(
     }
 
     Ok(session)
+}
+
+#[cfg(test)]
+mod tests {
+    use planeai_core::command::shell_args;
+
+    #[test]
+    fn shell_args_preserves_quoted_prompt() {
+        let cmd = "kiro-cli chat --trust-all-tools 'Implement PLA-89: fix daemon task launch'";
+        let (program, args) = shell_args(cmd);
+
+        if cfg!(windows) {
+            assert_eq!(program, "cmd");
+            assert_eq!(args, vec!["/C", cmd]);
+        } else {
+            assert_eq!(program, "/bin/sh");
+            assert_eq!(args, vec!["-c", cmd]);
+        }
+    }
+
+    #[test]
+    fn shell_args_handles_simple_command() {
+        let cmd = "kiro-cli chat";
+        let (program, args) = shell_args(cmd);
+
+        if cfg!(windows) {
+            assert_eq!(program, "cmd");
+            assert_eq!(args, vec!["/C", cmd]);
+        } else {
+            assert_eq!(program, "/bin/sh");
+            assert_eq!(args, vec!["-c", cmd]);
+        }
+    }
 }

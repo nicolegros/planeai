@@ -20,6 +20,18 @@ impl std::fmt::Display for CommandError {
     }
 }
 
+/// Return the shell program and args needed to execute a command string.
+/// On Unix: `("/bin/sh", ["-c", cmd])`. On Windows: `("cmd", ["/C", cmd])`.
+#[cfg(not(windows))]
+pub fn shell_args(cmd: &str) -> (&'static str, Vec<String>) {
+    ("/bin/sh", vec!["-c".to_string(), cmd.to_string()])
+}
+
+#[cfg(windows)]
+pub fn shell_args(cmd: &str) -> (&'static str, Vec<String>) {
+    ("cmd", vec!["/C".to_string(), cmd.to_string()])
+}
+
 /// Run a shell command string via `sh -c` (Unix) or `cmd /C` (Windows).
 /// Returns stdout on success.
 pub fn run_command(cmd_str: &str, cwd: &Path) -> Result<String, CommandError> {
