@@ -5,6 +5,7 @@ use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 
+use crate::commands::jira::JiraHandle;
 use crate::db;
 use crate::state::{ConfigState, DbState};
 
@@ -151,6 +152,8 @@ pub fn edit_task_item(
 #[tauri::command]
 pub fn move_task_item(
     db_state: State<DbState>,
+    config_state: State<ConfigState>,
+    jira: State<JiraHandle>,
     key: String,
     status: String,
     repo_path: String,
@@ -166,7 +169,18 @@ pub fn move_task_item(
         },
     )
     .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Writeback hook — non-blocking
+    if let Ok(guard) = jira.0.lock() {
+        if let Some(state) = guard.as_ref() {
+            if let Ok(cfg) = config_state.0.lock() {
+                state.try_writeback(&key, s, &cfg);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
