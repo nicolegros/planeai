@@ -1,0 +1,241 @@
+---
+title: CLI Reference
+description: Command reference for planeai-cli — manage sessions, projects, tasks, and the orchestrator from the terminal.
+---
+
+`planeai-cli` is a companion CLI that lets you script and automate planeai from the terminal. All commands output JSON by default and accept a `--pretty` flag for human-readable output.
+
+## Install
+
+The CLI is installed from within the app via **Preferences → CLI** or with the system installer bundled with each release.
+
+Once installed, it's available as `planeai-cli` on your PATH.
+
+## Global Behavior
+
+| Behavior       | Details                                                        |
+| -------------- | -------------------------------------------------------------- |
+| Output format  | JSON (single line) by default                                  |
+| Pretty output  | Add `--pretty` to any command for indented JSON or tables      |
+| Errors         | Printed to stderr as `{"error": "..."}`, exits with code 1    |
+| Database       | Uses the same SQLite database as the desktop app               |
+| Config         | Reads `~/.config/planeai/config.json` (same as the app)        |
+
+---
+
+## `session`
+
+Manage agent sessions.
+
+### `session create`
+
+Create and launch a new agent session.
+
+```bash
+planeai-cli session create --project <name> --branch <branch> [options]
+```
+
+| Flag             | Description                                          |
+| ---------------- | ---------------------------------------------------- |
+| `--project`      | Project name (required)                              |
+| `--branch`       | Git branch to use (required)                         |
+| `--name`         | Display name for the session                         |
+| `--new-branch`   | Create the branch if it doesn't exist                |
+| `--worktree`     | Use a git worktree instead of checking out in-place  |
+| `--base-branch`  | Base branch for new branch / worktree (default: main)|
+| `--yolo`         | Enable autonomous mode (skip confirmations)          |
+| `--provider`     | Provider to use (overrides default_provider)         |
+| `--task-key`     | Associate a task key with this session               |
+| `--prompt`       | Initial prompt to send to the agent                  |
+
+### `session ls`
+
+List active sessions.
+
+```bash
+planeai-cli session ls [--archived] [--pretty]
+```
+
+| Flag         | Description                  |
+| ------------ | ---------------------------- |
+| `--archived` | Show archived sessions only  |
+
+### `session delete`
+
+Permanently destroy a session and clean up its resources (worktree, tmux/daemon process).
+
+```bash
+planeai-cli session delete <id>
+```
+
+The `id` can be a prefix — it will match if unambiguous.
+
+### `session archive`
+
+Archive a session (stops the agent but preserves the record).
+
+```bash
+planeai-cli session archive <id>
+```
+
+### `session prompt`
+
+Send a prompt to a running session.
+
+```bash
+planeai-cli session prompt <id> [text]
+```
+
+If `text` is omitted, the prompt is read from stdin. This is useful for piping multi-line prompts:
+
+```bash
+echo "Refactor the auth module" | planeai-cli session prompt abc123
+```
+
+---
+
+## `project`
+
+Manage registered projects.
+
+### `project list`
+
+List all registered projects.
+
+```bash
+planeai-cli project list [--pretty]
+```
+
+---
+
+## `task`
+
+Built-in task tracker. Tasks are scoped to a project (resolved from `--project` or the current working directory).
+
+### `task add`
+
+Create a new task.
+
+```bash
+planeai-cli task add <title> [options]
+```
+
+| Flag            | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `--desc`        | Task description (default: empty)                |
+| `--priority`    | Priority number (default: 0)                     |
+| `--tags`        | Comma-separated tags                             |
+| `--blocked-by`  | Comma-separated task keys that block this task   |
+| `--parent`      | Parent task key (for subtasks)                   |
+| `--base-branch` | Base branch for this task (default: main)        |
+| `--project`     | Project name (otherwise resolved from CWD)       |
+
+### `task show`
+
+Show a task by key.
+
+```bash
+planeai-cli task show <key> [--project <name>]
+```
+
+### `task ls`
+
+List tasks with optional filters.
+
+```bash
+planeai-cli task ls [--status <status>] [--tags <tags>] [--project <name>]
+```
+
+| Flag       | Description                                        |
+| ---------- | -------------------------------------------------- |
+| `--status` | Filter by status: `todo`, `in_progress`, `done`    |
+| `--tags`   | Comma-separated tags to filter by                  |
+
+### `task move`
+
+Move a task to a new status.
+
+```bash
+planeai-cli task move <key> <status>
+```
+
+Valid statuses: `todo`, `in_progress`, `done`.
+
+### `task edit`
+
+Edit an existing task.
+
+```bash
+planeai-cli task edit <key> [options]
+```
+
+| Flag            | Description                 |
+| --------------- | --------------------------- |
+| `--title`       | New title                   |
+| `--desc`        | New description             |
+| `--priority`    | New priority                |
+| `--tags`        | Replace tags (comma-sep)    |
+| `--blocked-by`  | Replace blockers (comma-sep)|
+| `--base-branch` | New base branch             |
+
+### `task delete`
+
+Delete a task.
+
+```bash
+planeai-cli task delete <key> [--project <name>]
+```
+
+---
+
+## `symphony`
+
+Control the auto-dispatch orchestrator.
+
+### `symphony status`
+
+Show orchestrator status (running sessions, concurrency).
+
+```bash
+planeai-cli symphony status
+```
+
+### `symphony stop`
+
+Stop the orchestrator.
+
+```bash
+planeai-cli symphony stop
+```
+
+---
+
+## Examples
+
+Create a session with a worktree in autonomous mode:
+
+```bash
+planeai-cli session create \
+  --project myapp \
+  --branch feat/auth \
+  --new-branch \
+  --worktree \
+  --yolo \
+  --prompt "Implement JWT authentication"
+```
+
+Dispatch a task to an agent:
+
+```bash
+planeai-cli task add "Add pagination to /users" \
+  --desc "Support limit/offset query params" \
+  --tags backend,api \
+  --priority 1
+planeai-cli task move PLA-1 in_progress
+```
+
+List sessions as a formatted table:
+
+```bash
+planeai-cli session ls --pretty
+```

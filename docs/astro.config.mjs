@@ -30,7 +30,10 @@ export default defineConfig({
         },
         {
           label: "Reference",
-          items: [{ label: "API Reference", slug: "reference/api" }],
+          items: [
+            { label: "CLI Reference", slug: "reference/cli" },
+            { label: "API Reference", slug: "reference/api" },
+          ],
         },
       ],
     }),
