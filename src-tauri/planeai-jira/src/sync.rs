@@ -16,6 +16,7 @@ pub struct SyncResult {
     pub created: usize,
     pub updated: usize,
     pub stale: usize,
+    pub errors: usize,
 }
 
 pub struct JiraSync {
@@ -51,7 +52,7 @@ impl JiraSync {
                 }
                 _ = interval.tick() => {
                     match self.sync_now().await {
-                        Ok(r) => info!(created = r.created, updated = r.updated, stale = r.stale, "jira sync complete"),
+                        Ok(r) => info!(created = r.created, updated = r.updated, stale = r.stale, errors = r.errors, "jira sync complete"),
                         Err(e) => warn!(error = %e, "jira sync error"),
                     }
                 }
@@ -65,7 +66,10 @@ impl JiraSync {
         for (_name, mapping) in &self.config.projects {
             match self.sync_project(mapping, &mut result).await {
                 Ok(()) => {}
-                Err(e) => warn!(project = %mapping.jira_project, error = %e, "sync failed for project, continuing"),
+                Err(e) => {
+                    warn!(project = %mapping.jira_project, error = %e, "sync failed for project, continuing");
+                    result.errors += 1;
+                }
             }
         }
 
