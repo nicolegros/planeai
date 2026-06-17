@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Channel } from "@tauri-apps/api/core";
   import { pty } from "../lib/api";
-  import { Terminal } from "@xterm/xterm";
+  import { Terminal, type ITerminalAddon } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { WebglAddon } from "@xterm/addon-webgl";
@@ -30,6 +30,7 @@
   let containerEl: HTMLDivElement;
   let term: Terminal;
   let fitAddon: FitAddon;
+  let webglAddon: ITerminalAddon | null = null;
   let attached = $state(false);
 
   const SCROLLBACK_LINES = 20_000;
@@ -103,12 +104,6 @@
     }
 
     term.open(containerEl);
-
-    try {
-      term.loadAddon(new WebglAddon());
-    } catch {
-      // WebGL not available, fall back to canvas
-    }
 
     fitAddon.fit();
 
@@ -300,8 +295,27 @@
   });
 
   $effect(() => {
-    if (visible && fitAddon) {
+    if (!term) return;
+    if (visible) {
+      if (!webglAddon) {
+        try {
+          const addon = new WebglAddon();
+          addon.onContextLoss(() => {
+            addon.dispose();
+            webglAddon = null;
+          });
+          term.loadAddon(addon);
+          webglAddon = addon;
+        } catch {
+          // WebGL not available, use default canvas renderer
+        }
+      }
       requestAnimationFrame(() => fitAddon.fit());
+    } else {
+      if (webglAddon) {
+        webglAddon.dispose();
+        webglAddon = null;
+      }
     }
   });
 
