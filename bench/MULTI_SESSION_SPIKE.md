@@ -206,29 +206,127 @@ cargo test -p planeai-iced-spike
 # Existing modes (must still work)
 bash bench/smoke-test.sh
 
-# Multi-session shell (interactive)
+# Multi-session shell — spike-local (interactive)
 cargo run --release --bin planeai-iced-spike -- \
-  --multi-session --sessions 3 --cols 120 --rows 40 \
+  --multi-session --sessions 3 --session-source spike-local \
+  --cols 120 --rows 40 \
   --metrics bench/results/smoke-multi-shell.jsonl --backend iced-alacritty
 
-# Multi-session flood (automated)
+# Multi-session flood — spike-local (automated)
 cargo run --release --bin planeai-iced-spike -- \
-  --multi-session --sessions 3 \
+  --multi-session --sessions 3 --session-source spike-local \
   --session-command "python3 bench/flood-output.py" \
   --cols 120 --rows 40 --max-runtime-ms 5000 \
-  --metrics bench/results/smoke-multi-flood.jsonl \
+  --metrics bench/results/smoke-multi-spike-local.jsonl \
+  --backend iced-alacritty --exit-when-done
+
+# Multi-session flood — planeai-local (automated)
+cargo run --release --bin planeai-iced-spike -- \
+  --multi-session --sessions 3 --session-source planeai-local \
+  --session-command "python3 bench/flood-output.py" \
+  --cols 120 --rows 40 --max-runtime-ms 5000 \
+  --metrics bench/results/smoke-multi-planeai-local.jsonl \
   --backend iced-alacritty --exit-when-done
 
 # Summarize all
 python3 bench/summarize-metrics.py bench/results/smoke-*.jsonl
 ```
 
+## Session Sources
+
+### `spike-local` (default)
+
+- Uses `shell.rs` in planeai-iced-spike
+- Simple reader thread → bounded buffer (512KB) → pull via `try_read_batch()`
+- No output coalescing — reader appends directly to shared buffer
+- High raw throughput (~41 MB/s in flood test)
+- Spike-only code, not shared with production backend
+
+### `planeai-local`
+
+- Uses `pty_core.rs` — Tauri-independent extraction of the production PTY backend
+- Reader thread → coalescing buffer → flusher thread (4ms coalesce) → push via `TerminalOutputSink`
+- ChannelSink bridges push→pull: bounded 512KB buffer with blocking backpressure
+- Lower throughput (~0.33 MB/s in flood test) due to flusher coalescing on critical path
+- Lossless: 0 bytes dropped under all tested loads
+- Faithfully reproduces production `pty.rs` behavior (reader/flusher/FlowControl pattern)
+- Supports: write, resize, pause/resume, exit detection
+
+### Architecture
+
+```
+spike-local:
+  PTY → reader thread → 512KB buffer → try_read_batch() → alacritty_terminal
+
+planeai-local:
+  PTY → reader thread → coalescing buffer → flusher thread (4ms sleep)
+      → TerminalOutputSink::send() → ChannelSink (512KB blocking buffer)
+      → try_read_batch() → alacritty_terminal
+```
+
+### Which source is default?
+
+`spike-local` is the default (via `--session-source spike-local`).
+
+### Performance Comparison (3 sessions, flood-output.py, 5s)
+
+| Metric | spike-local | planeai-local |
+|--------|-------------|---------------|
+| Throughput (MB/s) | 41 | 0.33 |
+| Total bytes (5s) | 215 MB | 1.7 MB |
+| p99 frame delta | 42 ms | 33 ms |
+| p95 parse time | 2.2 ms | 4.2 ms |
+| p95 render work | 0.11 ms | 0.04 ms |
+| Bytes dropped | 0 | 0 |
+| Max pending | 512 KB | 507 KB |
+| RSS | 284 MB | 306 MB |
+
+The throughput difference is expected: planeai-local's flusher adds 4ms coalescing sleep per batch, which creates backpressure when the bounded buffer fills. In production, this coalescing reduces frontend render calls. In the spike, it limits peak throughput but produces smoother output delivery.
+
+### Usage
+
+```bash
+# spike-local (default, high throughput)
+cargo run --release --bin planeai-iced-spike -- \
+  --multi-session --sessions 3 --session-source spike-local
+
+# planeai-local (production-faithful, coalesced output)
+cargo run --release --bin planeai-iced-spike -- \
+  --multi-session --sessions 3 --session-source planeai-local
+```
+
+## What Remains: Daemon Integration
+
+- `planeai-daemon` crate is fully Tauri-independent (tokio + portable-pty)
+- Integration would require: async runtime in the spike, data connection via IPC socket
+- Would add `--session-source planeai-daemon` that connects to an existing daemon session
+- Blocked on: tokio integration into iced event loop, session discovery/listing
+
+## What Remains: tmux Integration
+
+- tmux backend requires the `tmux` binary on PATH
+- Integration would add `--session-source planeai-tmux`
+- Would need: session listing (tmux list-sessions), attach via PtyTarget::TmuxAttach
+- Blocked on: tmux session lifecycle management, detach/reattach semantics in the spike
+
+## What Remains: Full Production Backend Extraction
+
+The shared core (`pty_core.rs`) currently lives inside the spike crate. To fully unify:
+
+1. Move `pty_core.rs` to `planeai-core` or a new `planeai-pty` crate
+2. Make the production Tauri `pty.rs` use the shared core (implement `TerminalOutputSink` for `Channel<Response>` + `AppHandle`)
+3. Remove duplicated reader/flusher logic from `pty.rs`
+
+This was intentionally deferred to avoid risking the production Tauri app.
+
 ## Known Limitations
 
-1. **Backend:** Uses `spike-local` only. PlaneAI's real backend (LocalBackend, DaemonBackend) is not integrated yet due to Tauri coupling.
-2. **Resize:** Only resizes the active session's PTY. Inactive sessions are not resized until switched to.
-3. **No bracketed paste mode:** Paste sends raw text without bracketed paste escape sequences.
-4. **No scrollback:** Terminal scrollback is not implemented in the canvas renderer.
-5. **Session names:** Fixed as "Session 1", "Session 2", etc. No rename support.
-6. **No session persistence:** Sessions die when the app closes. No tmux/daemon reconnect.
-7. **Queue policy per-app:** All sessions share the same queue policy (from CLI flag).
+1. **Resize:** Only resizes the active session's PTY. Inactive sessions are not resized until switched to.
+2. **No bracketed paste mode:** Paste sends raw text without bracketed paste escape sequences.
+3. **No scrollback:** Terminal scrollback is not implemented in the canvas renderer.
+4. **Session names:** Fixed as "Session 1", "Session 2", etc. No rename support.
+5. **No session persistence:** Sessions die when the app closes. No tmux/daemon reconnect.
+6. **Queue policy per-app:** All sessions share the same queue policy (from CLI flag).
+7. **planeai-local throughput:** Coalescing flusher limits peak throughput to ~0.3 MB/s under flood conditions. This is a faithful reproduction of production behavior, not a bug.
+8. **planeai-local has no OutputObserver:** The production backend's `OutputObserver` trait (for byte-counting hooks) is not wired up in the extracted core.
+9. **No Tauri adapter yet:** The shared core is not yet consumed by the production Tauri app. It lives spike-side only.

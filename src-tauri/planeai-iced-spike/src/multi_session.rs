@@ -70,12 +70,26 @@ impl MultiApp {
         let boot = Instant::now();
 
         for i in 0..args.sessions {
-            let policy = QueuePolicy::from_str(&args.output_queue_policy);
-            let shell = Shell::spawn_with_policy(
-                i, cols as u16, rows as u16,
-                args.session_command.as_deref(),
-                policy,
-            );
+            let backend: Box<dyn PlaneAiTerminalSession> = match args.session_source.as_str() {
+                "spike-local" => {
+                    let policy = QueuePolicy::from_str(&args.output_queue_policy);
+                    Box::new(Shell::spawn_with_policy(
+                        i, cols as u16, rows as u16,
+                        args.session_command.as_deref(),
+                        policy,
+                    ))
+                }
+                "planeai-local" => {
+                    Box::new(crate::planeai_local::PlaneAiLocalSession::spawn(
+                        i, cols as u16, rows as u16,
+                        args.session_command.as_deref(),
+                    ).unwrap_or_else(|e| panic!("Failed to spawn planeai-local session {}: {}", i, e)))
+                }
+                other => {
+                    eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local", other);
+                    std::process::exit(1);
+                }
+            };
             let term = new_term(cols, rows);
             let processor = new_processor();
             let snapshot = snapshot_grid(&term);
@@ -93,7 +107,7 @@ impl MultiApp {
             }));
 
             sessions.push(Session {
-                id: i, name, backend: Box::new(shell), term, processor, snapshot,
+                id: i, name, backend, term, processor, snapshot,
                 cache: Cache::new(), bytes_processed: 0, parse_times: Vec::new(),
                 render_works: Vec::new(), dirty: false,
             });
@@ -177,11 +191,25 @@ impl MultiApp {
                 // Cmd+N
                 if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n") {
                     let id = self.sessions.len();
-                    let policy = QueuePolicy::from_str(&self.args.output_queue_policy);
-                    let shell = Shell::spawn_with_policy(
-                        id, self.cols as u16, self.rows as u16,
-                        self.args.session_command.as_deref(), policy,
-                    );
+                    let backend: Box<dyn PlaneAiTerminalSession> = match self.args.session_source.as_str() {
+                        "spike-local" => {
+                            let policy = QueuePolicy::from_str(&self.args.output_queue_policy);
+                            Box::new(Shell::spawn_with_policy(
+                                id, self.cols as u16, self.rows as u16,
+                                self.args.session_command.as_deref(), policy,
+                            ))
+                        }
+                        "planeai-local" => {
+                            Box::new(crate::planeai_local::PlaneAiLocalSession::spawn(
+                                id, self.cols as u16, self.rows as u16,
+                                self.args.session_command.as_deref(),
+                            ).unwrap_or_else(|e| panic!("Failed to spawn planeai-local session {}: {}", id, e)))
+                        }
+                        other => {
+                            eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local", other);
+                            return;
+                        }
+                    };
                     let term = new_term(self.cols, self.rows);
                     let processor = new_processor();
                     let snapshot = snapshot_grid(&term);
@@ -193,7 +221,7 @@ impl MultiApp {
                         "session_id": id, "session_name": &name,
                     }));
                     self.sessions.push(Session {
-                        id, name, backend: Box::new(shell), term, processor, snapshot,
+                        id, name, backend, term, processor, snapshot,
                         cache: Cache::new(), bytes_processed: 0, parse_times: Vec::new(),
                         render_works: Vec::new(), dirty: false,
                     });
