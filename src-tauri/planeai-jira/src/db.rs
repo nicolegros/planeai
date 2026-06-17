@@ -12,7 +12,7 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
         conn.query_row("SELECT version FROM jira_schema_version", [], |r| r.get(0))?;
 
     let migrations: &[&str] = &[
-        // v1: jira_issues table + FK column on tasks
+        // v1: jira_issues table
         "CREATE TABLE IF NOT EXISTS jira_issues (
             issue_key TEXT PRIMARY KEY,
             jira_project TEXT NOT NULL,
@@ -24,6 +24,13 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             sync_status TEXT NOT NULL DEFAULT 'synced',
             last_synced_at TEXT NOT NULL
         );",
+        // v2: jira_task_links — owns the mapping between tasks and jira issues
+        "CREATE TABLE IF NOT EXISTS jira_task_links (
+            task_key TEXT NOT NULL,
+            issue_key TEXT NOT NULL REFERENCES jira_issues(issue_key),
+            PRIMARY KEY (task_key),
+            UNIQUE (issue_key)
+        );",
     ];
 
     for (i, sql) in migrations.iter().enumerate() {
@@ -34,28 +41,6 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
                 params![i + 1],
             )?;
         }
-    }
-
-    // Add jira_issue_key FK column to tasks if it doesn't exist yet
-    let has_column: bool = conn
-        .prepare("PRAGMA table_info(tasks)")
-        .and_then(|mut stmt| {
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            let mut found = false;
-            for r in rows {
-                if r.map(|name| name == "jira_issue_key").unwrap_or(false) {
-                    found = true;
-                    break;
-                }
-            }
-            Ok(found)
-        })
-        .unwrap_or(true); // if tasks table doesn't exist, skip
-
-    if !has_column {
-        conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN jira_issue_key TEXT REFERENCES jira_issues(issue_key);",
-        )?;
     }
 
     Ok(())
