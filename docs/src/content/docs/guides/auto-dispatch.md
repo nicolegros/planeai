@@ -15,8 +15,8 @@ Auto-dispatch (internally called Symphony Mode) polls your task board, picks the
     "poll_interval_ms": 5000,
     "max_concurrent": 3,
     "provider": "kiro",
-    "terminal_states": ["done", "cancelled"]
-  }
+    "terminal_states": ["done", "cancelled"],
+  },
 }
 ```
 
@@ -31,13 +31,13 @@ The dispatch loop follows four phases:
 
 ## Configuration Reference
 
-| Field               | Type       | Default       | Description                                      |
-| ------------------- | ---------- | ------------- | ------------------------------------------------ |
-| `enabled`           | `boolean`  | `false`       | Enable auto-dispatch                             |
-| `poll_interval_ms`  | `number`   | `5000`        | Milliseconds between task board polls            |
-| `max_concurrent`    | `number`   | `3`           | Maximum simultaneous agent sessions              |
-| `provider`          | `string`   | —             | Provider to use for dispatched sessions          |
-| `terminal_states`   | `string[]` | `["done"]`    | Task statuses that mean "finished"               |
+| Field              | Type       | Default    | Description                             |
+| ------------------ | ---------- | ---------- | --------------------------------------- |
+| `enabled`          | `boolean`  | `false`    | Enable auto-dispatch                    |
+| `poll_interval_ms` | `number`   | `5000`     | Milliseconds between task board polls   |
+| `max_concurrent`   | `number`   | `3`        | Maximum simultaneous agent sessions     |
+| `provider`         | `string`   | —          | Provider to use for dispatched sessions |
+| `terminal_states`  | `string[]` | `["done"]` | Task statuses that mean "finished"      |
 
 ## Behavior Details
 
@@ -83,12 +83,12 @@ Start with `max_concurrent: 1` until you're comfortable with the dispatch behavi
 
 Control auto-dispatch from the command menu (Cmd+K):
 
-| Command                  | Description                    |
-| ------------------------ | ------------------------------ |
-| `dispatch:start`         | Start the dispatch loop        |
-| `dispatch:stop`          | Pause dispatching              |
-| `dispatch:status`        | Show current dispatch state    |
-| `dispatch:next`          | Manually dispatch next task    |
+| Command           | Description                 |
+| ----------------- | --------------------------- |
+| `dispatch:start`  | Start the dispatch loop     |
+| `dispatch:stop`   | Pause dispatching           |
+| `dispatch:status` | Show current dispatch state |
+| `dispatch:next`   | Manually dispatch next task |
 
 :::note
 CLI commands are also available via keyboard shortcuts configurable in the settings.

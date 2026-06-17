@@ -16,7 +16,7 @@ Themes are plain CSS files stored in `~/.config/planeai/themes/`. Each file defi
 3. Set the theme in your config:
    ```jsonc
    {
-     "theme": "my-theme"
+     "theme": "my-theme",
    }
    ```
 
@@ -42,63 +42,63 @@ Themes define variables in `:root` (light mode) and `.dark` (dark mode):
 
 ### UI Colors
 
-| Token             | Description                     |
-| ----------------- | ------------------------------- |
-| `--surface-0`     | Base background                 |
-| `--surface-1`     | Elevated surface                |
-| `--surface-2`     | Card / panel background         |
-| `--surface-3`     | Hover state background          |
-| `--primary-500`   | Primary accent color            |
-| `--primary-600`   | Primary hover                   |
-| `--primary-700`   | Primary active/pressed          |
-| `--error-500`     | Error / destructive actions     |
-| `--warning-500`   | Warning indicators              |
+| Token           | Description                 |
+| --------------- | --------------------------- |
+| `--surface-0`   | Base background             |
+| `--surface-1`   | Elevated surface            |
+| `--surface-2`   | Card / panel background     |
+| `--surface-3`   | Hover state background      |
+| `--primary-500` | Primary accent color        |
+| `--primary-600` | Primary hover               |
+| `--primary-700` | Primary active/pressed      |
+| `--error-500`   | Error / destructive actions |
+| `--warning-500` | Warning indicators          |
 
 ### Radii
 
-| Token              | Description           |
-| ------------------ | --------------------- |
-| `--radius-sm`      | Small elements        |
-| `--radius-md`      | Buttons, inputs       |
-| `--radius-lg`      | Cards, panels         |
+| Token         | Description     |
+| ------------- | --------------- |
+| `--radius-sm` | Small elements  |
+| `--radius-md` | Buttons, inputs |
+| `--radius-lg` | Cards, panels   |
 
 ### Terminal Colors (16 ANSI + Chrome)
 
-| Token               | Description              |
-| ------------------- | ------------------------ |
-| `--term-black`      | ANSI black               |
-| `--term-red`        | ANSI red                 |
-| `--term-green`      | ANSI green               |
-| `--term-yellow`     | ANSI yellow              |
-| `--term-blue`       | ANSI blue                |
-| `--term-magenta`    | ANSI magenta             |
-| `--term-cyan`       | ANSI cyan                |
-| `--term-white`      | ANSI white               |
-| `--term-bright-*`   | Bright variants (×8)     |
-| `--term-bg`         | Terminal background       |
-| `--term-fg`         | Terminal foreground       |
-| `--term-cursor`     | Cursor color             |
+| Token             | Description          |
+| ----------------- | -------------------- |
+| `--term-black`    | ANSI black           |
+| `--term-red`      | ANSI red             |
+| `--term-green`    | ANSI green           |
+| `--term-yellow`   | ANSI yellow          |
+| `--term-blue`     | ANSI blue            |
+| `--term-magenta`  | ANSI magenta         |
+| `--term-cyan`     | ANSI cyan            |
+| `--term-white`    | ANSI white           |
+| `--term-bright-*` | Bright variants (×8) |
+| `--term-bg`       | Terminal background  |
+| `--term-fg`       | Terminal foreground  |
+| `--term-cursor`   | Cursor color         |
 
 ### Editor Colors
 
-| Token               | Description              |
-| ------------------- | ------------------------ |
-| `--editor-bg`       | Editor background        |
-| `--editor-fg`       | Editor foreground        |
-| `--editor-line`     | Current line highlight   |
-| `--editor-selection`| Selection background     |
+| Token                | Description            |
+| -------------------- | ---------------------- |
+| `--editor-bg`        | Editor background      |
+| `--editor-fg`        | Editor foreground      |
+| `--editor-line`      | Current line highlight |
+| `--editor-selection` | Selection background   |
 
 ### Syntax Highlighting
 
-| Token               | Description              |
-| ------------------- | ------------------------ |
-| `--syntax-keyword`  | Keywords                 |
-| `--syntax-string`   | String literals          |
-| `--syntax-comment`  | Comments                 |
-| `--syntax-function` | Function names           |
-| `--syntax-variable` | Variables                |
-| `--syntax-number`   | Numeric literals         |
-| `--syntax-type`     | Type annotations         |
+| Token               | Description      |
+| ------------------- | ---------------- |
+| `--syntax-keyword`  | Keywords         |
+| `--syntax-string`   | String literals  |
+| `--syntax-comment`  | Comments         |
+| `--syntax-function` | Function names   |
+| `--syntax-variable` | Variables        |
+| `--syntax-number`   | Numeric literals |
+| `--syntax-type`     | Type annotations |
 
 ## Minimal Theme Example
 
@@ -124,12 +124,12 @@ Themes define variables in `:root` (light mode) and `.dark` (dark mode):
 
 ## Bundled Themes
 
-| Theme      | Description                      |
-| ---------- | -------------------------------- |
-| `dark`     | Default dark theme               |
-| `light`    | Clean light theme                |
-| `midnight` | High-contrast dark               |
-| `solarized`| Solarized color palette          |
+| Theme       | Description             |
+| ----------- | ----------------------- |
+| `dark`      | Default dark theme      |
+| `light`     | Clean light theme       |
+| `midnight`  | High-contrast dark      |
+| `solarized` | Solarized color palette |
 
 ## Tips
 
