@@ -77,11 +77,7 @@ impl JiraSync {
         mapping: &crate::config::JiraProjectMapping,
         result: &mut SyncResult,
     ) -> Result<(), crate::Error> {
-        let issues = self
-            .client
-            .search(&mapping.jql)
-            .await
-            .map_err(|e| crate::Error::Client(e.to_string()))?;
+        let issues = self.client.search(&mapping.jql).await?;
 
         let mut seen_keys = HashSet::new();
 
@@ -108,26 +104,20 @@ impl JiraSync {
                 None => {
                     let status = map_status(&issue.status, &mapping.status_map);
                     let priority = map_priority(issue.priority.as_deref());
-                    let task = self
-                        .task_provider
-                        .create(CreateParams {
-                            title: issue.summary.clone(),
-                            description: issue.description.clone(),
-                            status: Some(status),
-                            priority,
-                            tags: issue.labels.clone(),
-                            ..Default::default()
-                        })
-                        .map_err(|e| crate::Error::TaskProvider(e.to_string()))?;
+                    let task = self.task_provider.create(CreateParams {
+                        title: issue.summary.clone(),
+                        description: issue.description.clone(),
+                        status: Some(status),
+                        priority,
+                        tags: issue.labels.clone(),
+                        ..Default::default()
+                    })?;
 
                     self.repo.link_task(&task.key, &issue.issue_key)?;
                     result.created += 1;
                 }
                 Some(task_key) => {
-                    let task = self
-                        .task_provider
-                        .get(&task_key)
-                        .map_err(|e| crate::Error::TaskProvider(e.to_string()))?;
+                    let task = self.task_provider.get(&task_key)?;
 
                     let new_status = map_status(&issue.status, &mapping.status_map);
                     let needs_update = task.title != issue.summary
@@ -135,17 +125,15 @@ impl JiraSync {
                         || task.status != new_status;
 
                     if needs_update {
-                        self.task_provider
-                            .update(
-                                &task_key,
-                                UpdateParams {
-                                    title: Some(issue.summary.clone()),
-                                    description: Some(issue.description.clone()),
-                                    status: Some(new_status),
-                                    ..Default::default()
-                                },
-                            )
-                            .map_err(|e| crate::Error::TaskProvider(e.to_string()))?;
+                        self.task_provider.update(
+                            &task_key,
+                            UpdateParams {
+                                title: Some(issue.summary.clone()),
+                                description: Some(issue.description.clone()),
+                                status: Some(new_status),
+                                ..Default::default()
+                            },
+                        )?;
                         result.updated += 1;
                     }
 

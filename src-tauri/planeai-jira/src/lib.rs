@@ -35,3 +35,15 @@ impl From<rusqlite::Error> for Error {
         Self::Storage(e.to_string())
     }
 }
+
+impl From<crate::client::Error> for Error {
+    fn from(e: crate::client::Error) -> Self {
+        Self::Client(e.to_string())
+    }
+}
+
+impl From<planeai_tasks::provider::Error> for Error {
+    fn from(e: planeai_tasks::provider::Error) -> Self {
+        Self::TaskProvider(e.to_string())
+    }
+}
