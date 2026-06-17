@@ -166,7 +166,7 @@
       </div>
 
       <div class="space-y-1">
-        <Label for="mapping-project-{i}">planeai project</Label>
+        <Label>planeai project</Label>
         <Select items={projectItems} value={mapping.planeai_project} onValueChange={(v) => updateMapping(i, { planeai_project: v })} placeholder="Select project" />
       </div>
 
