@@ -3,13 +3,15 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-const MAX_BUFFER: usize = 512 * 1024; // 512KB bounded buffer
+pub const MAX_BUFFER: usize = 512 * 1024; // 512KB bounded buffer
+pub const QUEUE_POLICY: &str = "drop_oldest";
 
 pub struct Shell {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     reader_buf: Arc<Mutex<Vec<u8>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub max_pending_bytes: Arc<Mutex<usize>>,
+    pub bytes_dropped: Arc<Mutex<u64>>,
     pub exited: Arc<Mutex<bool>>,
 }
 
@@ -51,6 +53,8 @@ impl Shell {
         let buf_clone = Arc::clone(&reader_buf);
         let max_pending_bytes = Arc::new(Mutex::new(0usize));
         let max_pending_clone = Arc::clone(&max_pending_bytes);
+        let bytes_dropped = Arc::new(Mutex::new(0u64));
+        let bytes_dropped_clone = Arc::clone(&bytes_dropped);
         let exited = Arc::new(Mutex::new(false));
         let exited_clone = Arc::clone(&exited);
 
@@ -64,6 +68,7 @@ impl Shell {
                         // Bounded: drop oldest if over limit
                         if buf.len() + n > MAX_BUFFER {
                             let drain = (buf.len() + n).saturating_sub(MAX_BUFFER);
+                            *bytes_dropped_clone.lock().unwrap() += drain as u64;
                             buf.drain(..drain);
                         }
                         buf.extend_from_slice(&tmp[..n]);
@@ -85,6 +90,7 @@ impl Shell {
             reader_buf,
             master: Arc::new(Mutex::new(master)),
             max_pending_bytes,
+            bytes_dropped,
             exited,
         }
     }
@@ -108,6 +114,10 @@ impl Shell {
             let _ = w.write_all(data);
             let _ = w.flush();
         }
+    }
+
+    pub fn bytes_dropped(&self) -> u64 {
+        *self.bytes_dropped.lock().unwrap()
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {

@@ -14,12 +14,15 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::Processor;
+use arboard::Clipboard;
 use clap::Parser as ClapParser;
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::widget::Canvas;
 use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
+use iced::event;
+use iced::window;
 use serde_json::json;
 
 // --- CLI ---
@@ -232,6 +235,11 @@ struct App {
     // window size tracking
     last_cols: u16,
     last_rows: u16,
+    // warmup
+    warmup_done: bool,
+    frame_deltas_after_warmup: Vec<f64>,
+    // paste
+    input_events_failed: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +247,7 @@ enum Message {
     Tick,
     KeyEvent(keyboard::Event),
     PtyPoll,
+    WindowResized(Size),
 }
 
 impl App {
@@ -258,10 +267,12 @@ impl App {
         let snapshot = snapshot_grid(&term);
 
         let pty = if is_shell_mode {
+            let cmd = args.command.as_deref()
+                .or(args.flood_command.as_deref());
             Some(shell::Shell::spawn_command(
                 args.cols as u16,
                 args.rows as u16,
-                args.command.as_deref(),
+                cmd,
             ))
         } else {
             None
@@ -281,6 +292,8 @@ impl App {
                 pty_output_batches: 0, pty_output_bytes: 0, max_pending_pty_output: 0,
                 input_bench_sent: 0, input_bench_last: None,
                 last_cols: args.cols as u16, last_rows: args.rows as u16,
+                warmup_done: false, frame_deltas_after_warmup: Vec::new(),
+                input_events_failed: 0,
             },
             iced::Task::none(),
         )
@@ -315,8 +328,52 @@ impl App {
 
     fn update(&mut self, message: Message) {
         match message {
+            Message::WindowResized(size) => {
+                if self.pty.is_none() { return; }
+                // Compute new cols/rows from window size
+                let cw = 9.0f32;
+                let ch = 18.0f32;
+                let new_cols = (size.width / cw).floor() as u16;
+                let new_rows = (size.height / ch).floor() as u16;
+                if new_cols < 2 || new_rows < 2 { return; }
+                if new_cols == self.last_cols && new_rows == self.last_rows { return; }
+
+                let resize_start = Instant::now();
+                // Resize alacritty_terminal
+                let term_size = TermSize { cols: new_cols as usize, rows: new_rows as usize };
+                self.term.resize(term_size);
+                // Resize PTY
+                self.pty.as_ref().unwrap().resize(new_cols, new_rows);
+                let latency = resize_start.elapsed().as_secs_f64() * 1000.0;
+
+                self.emit("pty_resize", json!({
+                    "cols": new_cols,
+                    "rows": new_rows,
+                    "prev_cols": self.last_cols,
+                    "prev_rows": self.last_rows,
+                    "resize_latency_ms": latency,
+                }));
+
+                self.last_cols = new_cols;
+                self.last_rows = new_rows;
+                self.snapshot = snapshot_grid(&self.term);
+                self.cache.clear();
+            }
             Message::KeyEvent(keyboard::Event::KeyPressed { key, modifiers, text, .. }) => {
                 if self.pty.is_none() { return; }
+
+                // Paste: Cmd+V (macOS) or Ctrl+V (Linux/Windows without Ctrl encoding)
+                let is_paste = if cfg!(target_os = "macos") {
+                    modifiers.command() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                } else {
+                    modifiers.control() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                };
+
+                if is_paste {
+                    self.handle_paste();
+                    return;
+                }
+
                 self.input_events_received += 1;
                 self.input_id_counter += 1;
                 let input_id = self.input_id_counter;
@@ -376,7 +433,19 @@ impl App {
                     let frame_delta = self.last_frame_instant
                         .map(|prev| now.duration_since(prev).as_secs_f64() * 1000.0);
                     self.last_frame_instant = Some(now);
-                    if let Some(fd) = frame_delta { self.frame_deltas.push(fd); }
+                    if let Some(fd) = frame_delta {
+                        self.frame_deltas.push(fd);
+                        // Warmup: skip early frames
+                        if !self.warmup_done {
+                            let warmup_ms = ARGS.get().unwrap().warmup_ms.unwrap_or(500);
+                            if ts_ms(&self.boot_instant) > warmup_ms as f64 {
+                                self.warmup_done = true;
+                            }
+                        }
+                        if self.warmup_done {
+                            self.frame_deltas_after_warmup.push(fd);
+                        }
+                    }
 
                     let pending_after = self.pty.as_ref().unwrap().pending_len();
                     self.emit("pty_output_batch", json!({
@@ -452,7 +521,18 @@ impl App {
                 let frame_delta_ms = self.last_frame_instant
                     .map(|prev| now.duration_since(prev).as_secs_f64() * 1000.0);
                 self.last_frame_instant = Some(now);
-                if let Some(fd) = frame_delta_ms { self.frame_deltas.push(fd); }
+                if let Some(fd) = frame_delta_ms {
+                    self.frame_deltas.push(fd);
+                    if !self.warmup_done {
+                        let warmup_ms = ARGS.get().unwrap().warmup_ms.unwrap_or(500);
+                        if ts_ms(&self.boot_instant) > warmup_ms as f64 {
+                            self.warmup_done = true;
+                        }
+                    }
+                    if self.warmup_done {
+                        self.frame_deltas_after_warmup.push(fd);
+                    }
+                }
 
                 let end = (self.offset + args.chunk_size).min(self.data.len());
                 let chunk = self.data[self.offset..end].to_vec();
@@ -521,6 +601,49 @@ impl App {
         }
     }
 
+    fn handle_paste(&mut self) {
+        let mut clipboard = match Clipboard::new() {
+            Ok(c) => c,
+            Err(_) => {
+                self.input_events_failed += 1;
+                return;
+            }
+        };
+        let text = match clipboard.get_text() {
+            Ok(t) => t,
+            Err(_) => {
+                self.input_events_failed += 1;
+                return;
+            }
+        };
+        if text.is_empty() { return; }
+
+        self.input_events_received += 1;
+        self.input_id_counter += 1;
+        let input_id = self.input_id_counter;
+        let bytes = text.as_bytes();
+
+        self.emit("input_event_received", json!({
+            "input_id": input_id,
+            "input_kind": "paste",
+            "input_bytes": bytes.len(),
+        }));
+
+        // Write paste content to PTY (no bracketed paste mode — documented limitation)
+        let write_start = Instant::now();
+        self.pty.as_ref().unwrap().write(bytes);
+        let latency = write_start.elapsed().as_secs_f64() * 1000.0;
+        self.input_write_latencies.push(latency);
+        self.input_events_written += 1;
+
+        self.emit("input_write_done", json!({
+            "input_id": input_id,
+            "input_kind": "paste",
+            "input_bytes": bytes.len(),
+            "input_write_latency_ms": latency,
+        }));
+    }
+
     fn finish_replay(&mut self) {
         let args = ARGS.get().unwrap();
         let replay_start = self.replay_start.unwrap();
@@ -543,9 +666,11 @@ impl App {
         let avg_mb_s = if wall_time_ms > 0.0 { (total_bytes as f64 / 1_048_576.0) / (wall_time_ms / 1000.0) } else { 0.0 };
 
         let mut fd = self.frame_deltas.clone(); fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd_warmup = self.frame_deltas_after_warmup.clone(); fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut rw = self.render_works.clone(); rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut pt = self.parse_times.clone(); pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let startup_ms = replay_start.duration_since(self.boot_instant).as_secs_f64() * 1000.0;
+        let warmup_ms = args.warmup_ms.unwrap_or(500);
 
         let summary = json!({
             "schema_version": 1, "event_type": "summary", "backend": args.backend,
@@ -561,8 +686,11 @@ impl App {
             "drain_time_ms": 0.0, "total_replay_time_ms": wall_time_ms,
             "average_mb_per_sec": avg_mb_s,
             "p50_frame_delta_ms": percentile(&fd, 50.0),
-            "p95_frame_delta_ms": percentile(&fd, 95.0),
-            "p99_frame_delta_ms": percentile(&fd, 99.0),
+            "p95_frame_delta_ms": percentile(&fd_warmup, 95.0),
+            "p99_frame_delta_ms": percentile(&fd_warmup, 99.0),
+            "warmup_ms": warmup_ms,
+            "frame_samples_total": self.frame_deltas.len(),
+            "frame_samples_after_warmup": self.frame_deltas_after_warmup.len(),
             "p50_render_work_ms": percentile(&rw, 50.0),
             "p95_render_work_ms": percentile(&rw, 95.0),
             "p99_render_work_ms": percentile(&rw, 99.0),
@@ -572,9 +700,9 @@ impl App {
             "p50_write_latency_ms": null,
             "p95_write_latency_ms": null,
             "p99_write_latency_ms": null,
-            "frames_over_16_7ms": fd.iter().filter(|&&t| t > 16.7).count(),
-            "frames_over_33_3ms": fd.iter().filter(|&&t| t > 33.3).count(),
-            "frames_over_50ms": fd.iter().filter(|&&t| t > 50.0).count(),
+            "frames_over_16_7ms": fd_warmup.iter().filter(|&&t| t > 16.7).count(),
+            "frames_over_33_3ms": fd_warmup.iter().filter(|&&t| t > 33.3).count(),
+            "frames_over_50ms": fd_warmup.iter().filter(|&&t| t > 50.0).count(),
             "max_queue_depth_bytes": self.max_pending_unparsed,
             "queue_depth_at_end_bytes": self.data.len().saturating_sub(self.offset),
             "fixture_bytes_loaded": self.data.len(),
@@ -582,6 +710,9 @@ impl App {
             "max_pending_unrendered_bytes": 0,
             "max_pending_input_bytes": 0,
             "max_pending_pty_output_bytes": 0,
+            "output_queue_capacity_bytes": null,
+            "output_queue_policy": "synchronous",
+            "output_bytes_dropped": 0,
             "startup_time_ms": startup_ms,
             "final_rss_mb": get_rss_mb(),
             "final_js_heap_mb": null,
@@ -596,6 +727,7 @@ impl App {
             "input_events_received": 0,
             "input_events_written": 0,
             "input_events_echoed": null,
+            "input_events_failed": 0,
             "max_input_queue_depth": 0,
             "pty_output_batches": 0,
             "pty_output_bytes": 0,
@@ -613,16 +745,19 @@ impl App {
         self.emit("shell_exit", json!({ "wall_time_ms": wall_time_ms }));
 
         let mut fd = self.frame_deltas.clone(); fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd_warmup = self.frame_deltas_after_warmup.clone(); fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut rw = self.render_works.clone(); rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut pt = self.parse_times.clone(); pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut iwl = self.input_write_latencies.clone(); iwl.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         let max_pty = self.pty.as_ref().map(|p| *p.max_pending_bytes.lock().unwrap()).unwrap_or(0);
+        let bytes_dropped = self.pty.as_ref().map(|p| p.bytes_dropped()).unwrap_or(0);
+        let warmup_ms = args.warmup_ms.unwrap_or(500);
 
         let summary = json!({
             "schema_version": 1, "event_type": "summary", "backend": args.backend,
             "fixture": if args.command.is_some() { "<command>" } else { "<shell>" },
-            "cols": args.cols, "rows": args.rows,
+            "cols": self.last_cols, "rows": self.last_rows,
             "chunk_size": args.chunk_size, "chunk_interval_ms": args.chunk_interval_ms,
             "replay_mode": "live",
             "total_bytes": self.pty_output_bytes,
@@ -633,9 +768,14 @@ impl App {
             "wall_time_ms": wall_time_ms, "producer_time_ms": wall_time_ms,
             "drain_time_ms": 0.0, "total_replay_time_ms": wall_time_ms,
             "average_mb_per_sec": if wall_time_ms > 0.0 { (self.pty_output_bytes as f64 / 1_048_576.0) / (wall_time_ms / 1000.0) } else { 0.0 },
+            // All frame deltas (raw)
             "p50_frame_delta_ms": percentile(&fd, 50.0),
-            "p95_frame_delta_ms": percentile(&fd, 95.0),
-            "p99_frame_delta_ms": percentile(&fd, 99.0),
+            "p95_frame_delta_ms": percentile(&fd_warmup, 95.0),
+            "p99_frame_delta_ms": percentile(&fd_warmup, 99.0),
+            // Warmup-corrected
+            "warmup_ms": warmup_ms,
+            "frame_samples_total": self.frame_deltas.len(),
+            "frame_samples_after_warmup": self.frame_deltas_after_warmup.len(),
             "p50_render_work_ms": percentile(&rw, 50.0),
             "p95_render_work_ms": percentile(&rw, 95.0),
             "p99_render_work_ms": percentile(&rw, 99.0),
@@ -645,16 +785,20 @@ impl App {
             "p50_write_latency_ms": null,
             "p95_write_latency_ms": null,
             "p99_write_latency_ms": null,
-            "frames_over_16_7ms": fd.iter().filter(|&&t| t > 16.7).count(),
-            "frames_over_33_3ms": fd.iter().filter(|&&t| t > 33.3).count(),
-            "frames_over_50ms": fd.iter().filter(|&&t| t > 50.0).count(),
-            "max_queue_depth_bytes": max_pty,
+            "frames_over_16_7ms": fd_warmup.iter().filter(|&&t| t > 16.7).count(),
+            "frames_over_33_3ms": fd_warmup.iter().filter(|&&t| t > 33.3).count(),
+            "frames_over_50ms": fd_warmup.iter().filter(|&&t| t > 50.0).count(),
+            // Queue/backpressure
+            "output_queue_capacity_bytes": shell::MAX_BUFFER,
+            "output_queue_policy": shell::QUEUE_POLICY,
+            "output_bytes_dropped": bytes_dropped,
+            "max_pending_pty_output_bytes": max_pty,
             "queue_depth_at_end_bytes": self.pty.as_ref().map(|p| p.pending_len()).unwrap_or(0),
+            "max_queue_depth_bytes": max_pty,
             "fixture_bytes_loaded": 0,
             "max_pending_unparsed_bytes": 0,
             "max_pending_unrendered_bytes": 0,
             "max_pending_input_bytes": 0,
-            "max_pending_pty_output_bytes": max_pty,
             "startup_time_ms": 0.0,
             "final_rss_mb": get_rss_mb(),
             "final_js_heap_mb": null,
@@ -663,12 +807,14 @@ impl App {
             "p50_input_write_latency_ms": if iwl.is_empty() { json!(null) } else { json!(percentile(&iwl, 50.0)) },
             "p95_input_write_latency_ms": if iwl.is_empty() { json!(null) } else { json!(percentile(&iwl, 95.0)) },
             "p99_input_write_latency_ms": if iwl.is_empty() { json!(null) } else { json!(percentile(&iwl, 99.0)) },
+            "max_input_write_latency_ms": if iwl.is_empty() { json!(null) } else { json!(iwl.last().unwrap()) },
             "p50_input_to_echo_latency_ms": null,
             "p95_input_to_echo_latency_ms": null,
             "p99_input_to_echo_latency_ms": null,
             "input_events_received": self.input_events_received,
             "input_events_written": self.input_events_written,
             "input_events_echoed": null,
+            "input_events_failed": self.input_events_failed,
             "max_input_queue_depth": 0,
             "pty_output_batches": self.pty_output_batches,
             "pty_output_bytes": self.pty_output_bytes,
@@ -703,6 +849,13 @@ impl App {
         if self.pty.is_some() {
             subs.push(keyboard::listen().map(Message::KeyEvent));
             subs.push(iced::time::every(Duration::from_millis(16)).map(|_| Message::PtyPoll));
+            subs.push(event::listen_with(|ev, _status, _id| {
+                if let iced::Event::Window(window::Event::Resized(size)) = ev {
+                    Some(Message::WindowResized(size))
+                } else {
+                    None
+                }
+            }));
         }
 
         if !self.done && !self.data.is_empty() && !self.is_shell_mode {
