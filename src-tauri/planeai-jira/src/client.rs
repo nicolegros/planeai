@@ -1,4 +1,4 @@
-use reqwest::{Client, Method, Response, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
@@ -70,30 +70,20 @@ impl JiraClient {
         )
     }
 
-    async fn request(&self, method: Method, path: &str) -> Result<Response, Error> {
-        let url = format!("{}{}", self.base_url(), path);
+    async fn send_with_retry(
+        &self,
+        build: impl Fn(&str) -> reqwest::RequestBuilder,
+    ) -> Result<Response, Error> {
         let token = self.auth.access_token().await?;
-        debug!(%method, %url, "jira request");
-
-        let resp = self
-            .client
-            .request(method.clone(), &url)
-            .bearer_auth(&token)
-            .send()
-            .await?;
+        let resp = build(&token).send().await?;
 
         if resp.status() == StatusCode::UNAUTHORIZED {
-            warn!(%url, "received 401, refreshing token and retrying");
+            warn!("received 401, refreshing token and retrying");
             self.auth.invalidate_token().await;
             let new_token = self.auth.access_token().await?;
-            let retry = self
-                .client
-                .request(method, &url)
-                .bearer_auth(&new_token)
-                .send()
-                .await?;
+            let retry = build(&new_token).send().await?;
             if retry.status() == StatusCode::UNAUTHORIZED {
-                warn!(%url, "retry after refresh still 401");
+                warn!("retry after refresh still 401");
                 return Err(Error::Unauthorized);
             }
             return Self::check_status(retry).await;
@@ -130,58 +120,26 @@ impl JiraClient {
         let mut start_at = 0u64;
 
         loop {
-            let url = format!("{}/search", self.base_url());
-            let token = self.auth.access_token().await?;
             debug!(start_at, "fetching search page");
+            let url = format!("{}/search", self.base_url());
+            let start_str = start_at.to_string();
 
-            let resp = self
-                .client
-                .get(&url)
-                .bearer_auth(&token)
-                .query(&[
-                    ("jql", jql),
-                    (
-                        "fields",
-                        "summary,description,status,priority,labels,parent,issuelinks",
-                    ),
-                    ("maxResults", "50"),
-                    ("startAt", &start_at.to_string()),
-                ])
-                .send()
-                .await?;
-
-            if resp.status() == StatusCode::UNAUTHORIZED {
-                warn!(start_at, "search got 401, refreshing token");
-                self.auth.invalidate_token().await;
-                let new_token = self.auth.access_token().await?;
-                let retry = self
-                    .client
-                    .get(&url)
-                    .bearer_auth(&new_token)
-                    .query(&[
+            let page: SearchResponse = self
+                .send_with_retry(|token| {
+                    self.client.get(&url).bearer_auth(token).query(&[
                         ("jql", jql),
                         (
                             "fields",
                             "summary,description,status,priority,labels,parent,issuelinks",
                         ),
                         ("maxResults", "50"),
-                        ("startAt", &start_at.to_string()),
+                        ("startAt", start_str.as_str()),
                     ])
-                    .send()
-                    .await?;
-                if retry.status() == StatusCode::UNAUTHORIZED {
-                    return Err(Error::Unauthorized);
-                }
-                let page: SearchResponse = Self::check_status(retry).await?.json().await?;
-                parse_page(&page, &mut issues);
-                if start_at + 50 >= page.total {
-                    break;
-                }
-                start_at += 50;
-                continue;
-            }
+                })
+                .await?
+                .json()
+                .await?;
 
-            let page: SearchResponse = Self::check_status(resp).await?.json().await?;
             parse_page(&page, &mut issues);
             if start_at + 50 >= page.total {
                 break;
@@ -195,8 +153,11 @@ impl JiraClient {
 
     #[instrument(skip(self))]
     pub async fn transition(&self, issue_key: &str, transition_name: &str) -> Result<(), Error> {
-        let path = format!("/issue/{}/transitions", issue_key);
-        let resp = self.request(Method::GET, &path).await?;
+        let url = format!("{}/issue/{}/transitions", self.base_url(), issue_key);
+
+        let resp = self
+            .send_with_retry(|token| self.client.get(&url).bearer_auth(token))
+            .await?;
         let data: TransitionsResponse = resp.json().await?;
 
         let found = data.transitions.iter().find(|t| {
@@ -211,47 +172,16 @@ impl JiraClient {
                 .iter()
                 .filter_map(|t| t.to.as_ref().map(|to| to.name.as_str()))
                 .collect();
-            warn!(
-                issue_key,
-                transition_name,
-                ?available,
-                "transition not found"
-            );
+            warn!(issue_key, transition_name, ?available, "transition not found");
             Error::ApiError(format!(
                 "transition '{}' not found. Available: {:?}",
                 transition_name, available
             ))
         })?;
 
-        let url = format!("{}/issue/{}/transitions", self.base_url(), issue_key);
-        let token = self.auth.access_token().await?;
         let body = serde_json::json!({"transition": {"id": transition.id}});
-
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
+        self.send_with_retry(|token| self.client.post(&url).bearer_auth(token).json(&body))
             .await?;
-
-        if resp.status() == StatusCode::UNAUTHORIZED {
-            self.auth.invalidate_token().await;
-            let new_token = self.auth.access_token().await?;
-            let retry = self
-                .client
-                .post(&url)
-                .bearer_auth(&new_token)
-                .json(&body)
-                .send()
-                .await?;
-            if retry.status() == StatusCode::UNAUTHORIZED {
-                return Err(Error::Unauthorized);
-            }
-            Self::check_status(retry).await?;
-        } else {
-            Self::check_status(resp).await?;
-        }
 
         debug!(issue_key, transition_name, "transition complete");
         Ok(())
@@ -260,7 +190,6 @@ impl JiraClient {
     #[instrument(skip(self, body))]
     pub async fn comment(&self, issue_key: &str, body: &str) -> Result<(), Error> {
         let url = format!("{}/issue/{}/comment", self.base_url(), issue_key);
-        let token = self.auth.access_token().await?;
         let adf_body = serde_json::json!({
             "body": {
                 "type": "doc",
@@ -269,31 +198,8 @@ impl JiraClient {
             }
         });
 
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&token)
-            .json(&adf_body)
-            .send()
+        self.send_with_retry(|token| self.client.post(&url).bearer_auth(token).json(&adf_body))
             .await?;
-
-        if resp.status() == StatusCode::UNAUTHORIZED {
-            self.auth.invalidate_token().await;
-            let new_token = self.auth.access_token().await?;
-            let retry = self
-                .client
-                .post(&url)
-                .bearer_auth(&new_token)
-                .json(&adf_body)
-                .send()
-                .await?;
-            if retry.status() == StatusCode::UNAUTHORIZED {
-                return Err(Error::Unauthorized);
-            }
-            Self::check_status(retry).await?;
-        } else {
-            Self::check_status(resp).await?;
-        }
 
         debug!(issue_key, "comment posted");
         Ok(())
