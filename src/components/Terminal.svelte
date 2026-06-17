@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Channel } from "@tauri-apps/api/core";
   import { pty } from "../lib/api";
-  import { Terminal, type ITerminalAddon } from "@xterm/xterm";
+  import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { WebglAddon } from "@xterm/addon-webgl";
@@ -30,7 +30,7 @@
   let containerEl: HTMLDivElement;
   let term: Terminal;
   let fitAddon: FitAddon;
-  let webglAddon: ITerminalAddon | null = null;
+  let webglAddon: WebglAddon | null = null;
   let attached = $state(false);
 
   const SCROLLBACK_LINES = 20_000;
