@@ -32,8 +32,28 @@
   let fitAddon: FitAddon;
   let attached = $state(false);
 
-  const SCROLLBACK_LINES = 100_000;
+  const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
+  const INPUT_BATCH_MS = 4;
+
+  // ── Input write batching ──────────────────────────────────────────────────
+  let inputQueue: number[] = [];
+  let inputTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function queueWrite(bytes: number[]) {
+    inputQueue.push(...bytes);
+    if (!inputTimer) {
+      inputTimer = setTimeout(flushInput, INPUT_BATCH_MS);
+    }
+  }
+
+  function flushInput() {
+    inputTimer = null;
+    if (inputQueue.length === 0) return;
+    const batch = inputQueue;
+    inputQueue = [];
+    pty.write(sessionId, batch);
+  }
 
   function terminalFontStack(primary: string): string {
     const quoted = `"${primary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -53,11 +73,16 @@
       fontSize: s.terminal.font_size,
       fontFamily: terminalFontStack(s.terminal.font_family),
       theme: themeColors,
-      scrollback: SCROLLBACK_LINES,
+      scrollback: s.scrollback_lines ?? SCROLLBACK_LINES,
       convertEol: true,
       scrollOnUserInput: false,
       allowProposedApi: true,
       macOptionIsMeta: s.terminal.option_as_meta,
+      linkHandler: {
+        activate: (_event, uri) => {
+          openUrl(uri).catch(() => {});
+        },
+      },
     });
 
     fitAddon = new FitAddon();
@@ -67,12 +92,15 @@
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
 
-    // WebLinksAddon — clickable URLs
-    term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
-        openUrl(uri).catch(() => {});
-      })
-    );
+    // WebLinksAddon — clickable URLs (optional, can be disabled for perf)
+    if (s.web_links !== false) {
+      term.loadAddon(
+        new WebLinksAddon((event, uri) => {
+          event.preventDefault();
+          openUrl(uri).catch(() => {});
+        })
+      );
+    }
 
     term.open(containerEl);
 
@@ -89,7 +117,7 @@
       const text = e.clipboardData?.getData("text");
       if (text) {
         const bytes = Array.from(new TextEncoder().encode(text));
-        pty.write(sessionId, bytes);
+        queueWrite(bytes);
       }
     });
 
@@ -113,7 +141,7 @@
             const bytes = Array.from(
               new TextEncoder().encode(`\x1b[${mode};0$y`)
             );
-            pty.write(sessionId, bytes);
+            queueWrite(bytes);
             return true;
           }
         );
@@ -124,7 +152,7 @@
             const bytes = Array.from(
               new TextEncoder().encode(`\x1b[?${mode};0$y`)
             );
-            pty.write(sessionId, bytes);
+            queueWrite(bytes);
             return true;
           }
         );
@@ -153,7 +181,7 @@
         case "paste":
           ev.preventDefault();
           navigator.clipboard.readText().then((text) => {
-            if (text) pty.write(sessionId, [...new TextEncoder().encode(text)]);
+            if (text) queueWrite([...new TextEncoder().encode(text)]);
           }).catch(() => {});
           return false;
         case "scroll_page_up":
@@ -176,7 +204,7 @@
           return true;
         case "send_bytes":
           ev.preventDefault();
-          pty.write(sessionId, action.bytes);
+          queueWrite(action.bytes);
           return false;
       }
     });
@@ -190,7 +218,7 @@
       }
       if (!filtered) return;
       const bytes = Array.from(new TextEncoder().encode(filtered));
-      pty.write(sessionId, bytes);
+      queueWrite(bytes);
       onUserInput?.();
     });
 

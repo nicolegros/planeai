@@ -133,6 +133,7 @@ impl SessionBackend for LocalBackend {
 struct DaemonBackend {
     writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<planeai_ipc::r#async::AsyncIpcStream>>>,
     cancelled: Arc<AtomicBool>,
+    flow: Arc<FlowControl>,
     session_id: String,
 }
 
@@ -172,15 +173,19 @@ impl SessionBackend for DaemonBackend {
     }
 
     fn pause(&self) -> Result<(), String> {
+        self.flow.pause();
         Ok(())
     }
 
     fn resume(&self) -> Result<(), String> {
+        self.flow.resume();
         Ok(())
     }
 
     fn detach(&self) {
         self.cancelled.store(true, Ordering::Release);
+        // Unblock the flusher if paused so it can exit
+        self.flow.resume();
     }
 }
 
@@ -398,6 +403,7 @@ impl PtyManager {
     }
 
     /// Attach to a daemon-managed session via data connection.
+    /// Uses reader+flusher threads with coalescing (same pattern as local backend).
     fn attach_daemon(
         &self,
         session_id: &str,
@@ -407,6 +413,7 @@ impl PtyManager {
     ) -> Result<(), String> {
         tracing::info!(session_id, "attaching to daemon session");
         let cancelled = Arc::new(AtomicBool::new(false));
+        let flow = Arc::new(FlowControl::new());
         let sid = session_id.to_string();
 
         {
@@ -417,6 +424,7 @@ impl PtyManager {
         }
 
         let cancelled_clone = cancelled.clone();
+        let flow_clone = flow.clone();
         let sid_clone = sid.clone();
         let observer = self.observer.read().unwrap().clone();
         let sessions_arc = self.sessions.clone();
@@ -437,6 +445,7 @@ impl PtyManager {
             let backend: Box<dyn SessionBackend> = Box::new(DaemonBackend {
                 writer: writer_arc,
                 cancelled: cancelled_clone.clone(),
+                flow: flow_clone.clone(),
                 session_id: sid_clone.clone(),
             });
 
@@ -445,7 +454,62 @@ impl PtyManager {
                 s.insert(sid_clone.clone(), backend);
             }
 
-            // Read loop: forward output frames to frontend
+            // Coalescing buffer shared between async reader and sync flusher
+            let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
+                Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
+            let done = Arc::new(AtomicBool::new(false));
+
+            // ── Flusher thread (coalesces output before sending to frontend) ──
+            let pending_f = pending.clone();
+            let done_f = done.clone();
+            let cancelled_f = cancelled_clone.clone();
+            let flow_f = flow_clone;
+            let exit_key = sid_clone.clone();
+            let app_flusher = app.clone();
+            thread::spawn(move || {
+                let (lock, cv) = &*pending_f;
+                loop {
+                    {
+                        let mut g = lock.lock().unwrap();
+                        while g.is_empty() {
+                            if done_f.load(Ordering::Acquire) {
+                                if !g.is_empty() {
+                                    let chunk = std::mem::take(&mut *g);
+                                    let _ = on_data.send(Response::new(chunk));
+                                }
+                                if !cancelled_f.load(Ordering::Acquire) {
+                                    let _ = app_flusher.emit(
+                                        "pty-exited",
+                                        serde_json::json!({ "pty_key": exit_key }),
+                                    );
+                                }
+                                return;
+                            }
+                            let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
+                            g = next;
+                        }
+                    }
+
+                    // Wait for flow control (backpressure from frontend)
+                    flow_f.wait_if_paused();
+
+                    thread::sleep(FLUSH_COALESCE);
+
+                    let chunk = std::mem::take(&mut *lock.lock().unwrap());
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    if on_data.send(Response::new(chunk)).is_err() {
+                        break;
+                    }
+                }
+                if !cancelled_f.load(Ordering::Acquire) {
+                    let _ =
+                        app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
+                }
+            });
+
+            // ── Async reader: accumulates daemon frames into coalescing buffer ──
             let mut reader = reader;
             loop {
                 if cancelled_clone.load(Ordering::Acquire) {
@@ -454,17 +518,17 @@ impl PtyManager {
                 match planeai_daemon::protocol::read_frame(&mut reader).await {
                     Ok((_frame_type, payload)) => {
                         observer.on_output(&sid_clone, payload.len());
-                        if on_data.send(Response::new(payload)).is_err() {
-                            break;
-                        }
+                        let (lock, cv) = &*pending;
+                        let mut g = lock.lock().unwrap();
+                        g.extend_from_slice(&payload);
+                        cv.notify_one();
                     }
                     Err(_) => break,
                 }
             }
 
-            if !cancelled_clone.load(Ordering::Acquire) {
-                let _ = app.emit("pty-exited", serde_json::json!({ "pty_key": sid_clone }));
-            }
+            done.store(true, Ordering::Release);
+            pending.1.notify_one();
         });
 
         Ok(())

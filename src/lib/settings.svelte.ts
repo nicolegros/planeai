@@ -57,6 +57,9 @@ export interface AppConfig {
   projects_base_path?: string | null;
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;
+  scrollback_lines?: number | null;
+  max_mounted_terminals?: number | null;
+  web_links?: boolean | null;
 }
 
 let config = $state<AppConfig>({
