@@ -4363,6 +4363,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "serde_json",
+ "smol_str",
 ]
 
 [[package]]

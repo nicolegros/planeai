@@ -22,7 +22,7 @@ echo
 
 # Step 1: Generate fixtures (including mixed-agent-like)
 echo "[1/7] Generating fixtures..."
-python3 "$SCRIPT_DIR/generate-fixtures.py" 524288
+python3 "$SCRIPT_DIR/generate-fixtures.py" --size small
 echo
 
 # Step 2: Build if binary doesn't exist
