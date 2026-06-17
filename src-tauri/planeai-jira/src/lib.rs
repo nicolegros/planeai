@@ -1,8 +1,12 @@
 pub mod auth;
+pub mod client;
 pub mod config;
 pub mod db;
 pub mod model;
 pub mod repository;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[derive(Debug)]
 pub enum Error {
