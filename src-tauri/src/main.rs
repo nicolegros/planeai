@@ -127,9 +127,7 @@ fn main() {
                 |_, _, _, _| Err("tmux not available".to_string()),
             );
 
-            app.manage(ConfigState(Mutex::new(cfg.clone())));
-
-            // Jira integration
+            // Jira integration (before cfg is moved into ConfigState)
             let jira_state = jira::init_jira(&cfg);
             if let Some(ref state) = jira_state {
                 if let (Some(sync), Some(cancel)) = (&state.sync, &state.cancel) {
@@ -139,6 +137,8 @@ fn main() {
                     tracing::info!("jira sync loop started");
                 }
             }
+
+            app.manage(ConfigState(Mutex::new(cfg)));
             app.manage(commands::JiraHandle(Mutex::new(jira_state)));
 
             // Scaffold themes dir with bundled themes if missing

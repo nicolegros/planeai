@@ -63,4 +63,5 @@ export interface SyncResult {
   created: number;
   updated: number;
   stale: number;
+  errors: number;
 }

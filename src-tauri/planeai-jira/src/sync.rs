@@ -11,7 +11,7 @@ use crate::repository::JiraRepository;
 use planeai_tasks::model::{CreateParams, Status, UpdateParams};
 use planeai_tasks::provider::TaskProvider;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SyncResult {
     pub created: usize,
     pub updated: usize,
