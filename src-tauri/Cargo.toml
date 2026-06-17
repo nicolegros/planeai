@@ -1,5 +1,5 @@
 [workspace]
-members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc"]
+members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc", "planeai-iced-spike"]
 resolver = "2"
 
 [workspace.dependencies]
