@@ -36,6 +36,8 @@ use commands::*;
 use state::*;
 
 fn main() {
+    startup::raise_fd_limit();
+
     let app_dir = paths::app_data_dir();
     std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
     let log_dir = app_dir.join("logs");

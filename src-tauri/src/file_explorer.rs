@@ -217,6 +217,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires macOS Accessibility permissions to send Apple events to Finder"]
     fn delete_to_trash_removes_from_listing() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();

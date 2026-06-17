@@ -2975,6 +2975,7 @@ dependencies = [
  "clap",
  "font-kit",
  "json_comments",
+ "libc",
  "notify",
  "planeai-core",
  "planeai-daemon",

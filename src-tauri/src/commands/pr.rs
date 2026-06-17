@@ -5,39 +5,47 @@ use crate::db;
 use crate::pr;
 use crate::state::{ConfigState, DbState};
 
-use crate::commands::sessions::helpers::{resolve_task_manager, session_cwd};
+use crate::commands::sessions::helpers::session_cwd;
 
-/// Check PR status for a single session and handle transitions.
-pub(crate) fn poll_pr_for_session(
+/// Result of the check phase — contains everything needed to persist.
+pub(crate) struct PrCheckResult {
+    pub status: pr::PrStatus,
+    pub transition: Option<pr::PrTransition>,
+}
+
+/// Phase 1: Check PR status by spawning an external process. No DB connection needed.
+/// Returns None if ineligible or no PR found.
+pub(crate) fn check_pr(
+    pr_cmd: &str,
+    branch: &str,
+    cwd: &str,
+    old_pr_state: Option<&str>,
+) -> Result<Option<PrCheckResult>, String> {
+    let status = match pr::check_pr_status(pr_cmd, branch, std::path::Path::new(cwd))? {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let transition = pr::detect_transition(old_pr_state, &status);
+    Ok(Some(PrCheckResult { status, transition }))
+}
+
+/// Phase 2: Persist PR check result to DB and fire lifecycle hooks.
+pub(crate) fn persist_pr_result(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
-    session: &db::Session,
-) -> Result<bool, String> {
-    let pr_cmd = match &cfg.pr_status {
-        Some(cmd) => cmd,
-        None => return Ok(false),
-    };
-    if !pr::is_poll_eligible(&session.status, session.pr_state.as_deref()) {
-        return Ok(false);
-    }
-    let cwd = match session_cwd(conn, session) {
-        Some(c) => c,
-        None => return Ok(false),
-    };
-    let status = match pr::check_pr_status(pr_cmd, &session.branch, std::path::Path::new(&cwd))? {
-        Some(s) => s,
-        None => return Ok(false),
-    };
-    let transition = pr::detect_transition(session.pr_state.as_deref(), &status);
-    let _ = db::update_pr_state(conn, &session.id, &status.url, &status.state);
-    if let Some(ref t) = transition {
-        if let Some(ref task_key) = session.task_key {
-            if let Ok(tm) = resolve_task_manager(cfg) {
-                pr::fire_pr_hook(tm, t, task_key, std::path::Path::new(&cwd));
+    session_id: &str,
+    task_key: Option<&str>,
+    cwd: &str,
+    result: &PrCheckResult,
+) {
+    let _ = db::update_pr_state(conn, session_id, &result.status.url, &result.status.state);
+    if let Some(ref t) = result.transition {
+        if let Some(key) = task_key {
+            if let Some(tm) = cfg.task_management.as_ref() {
+                pr::fire_pr_hook(tm, t, key, std::path::Path::new(cwd));
             }
         }
     }
-    Ok(transition.is_some())
 }
 
 fn new_pr_url(cwd: &str, branch: &str, base_branch: Option<&str>) -> Result<String, String> {

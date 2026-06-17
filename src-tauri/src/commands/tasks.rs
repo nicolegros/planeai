@@ -8,7 +8,7 @@ use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 use crate::db;
 use crate::state::{ConfigState, DbState};
 
-use crate::commands::pr::poll_pr_for_session;
+use crate::commands::pr::{check_pr, persist_pr_result};
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
@@ -181,16 +181,44 @@ pub fn fire_task_notify_hook(
     db_state: State<DbState>,
     config_state: State<ConfigState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    if session.task_key.is_some() {
-        if let Some(cwd) = session_cwd(&conn, &session) {
-            fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
+    // Snapshot what we need, then release locks before spawning external process.
+    let (session, pr_cmd, cwd) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if session.task_key.is_some() {
+            if let Some(cwd) = session_cwd(&conn, &session) {
+                fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
+            }
         }
+        let pr_cmd = cfg.pr_status.clone();
+        let cwd = session_cwd(&conn, &session);
+        (session, pr_cmd, cwd)
+    };
+
+    // Phase 1: check (no lock held, spawns external process)
+    let Some(pr_cmd) = pr_cmd else { return Ok(()) };
+    if !crate::pr::is_poll_eligible(&session.status, session.pr_state.as_deref()) {
+        return Ok(());
     }
-    poll_pr_for_session(&conn, &cfg, &session)?;
+    let Some(cwd) = cwd else { return Ok(()) };
+    let result = match check_pr(&pr_cmd, &session.branch, &cwd, session.pr_state.as_deref())? {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    // Phase 2: persist (re-acquire lock briefly)
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+    persist_pr_result(
+        &conn,
+        &cfg,
+        &session.id,
+        session.task_key.as_deref(),
+        &cwd,
+        &result,
+    );
     Ok(())
 }

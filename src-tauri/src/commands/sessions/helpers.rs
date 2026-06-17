@@ -37,12 +37,6 @@ pub(crate) fn fire_task_hook(
     crate::session_ops::fire_task_hook(cfg, session, hook_name, cwd, conn);
 }
 
-pub(crate) fn resolve_task_manager(cfg: &config::Config) -> Result<&config::TaskManager, String> {
-    cfg.task_management
-        .as_ref()
-        .ok_or("No task management configured".to_string())
-}
-
 /// Check if a provider has hook-based idle detection.
 pub(crate) fn provider_has_hook(provider_key: &str, cfg: &config::Config) -> bool {
     let Some(provider) = cfg.providers.get(provider_key) else {

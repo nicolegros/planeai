@@ -13,13 +13,13 @@ Once installed, it's available as `planeai-cli` on your PATH.
 
 ## Global Behavior
 
-| Behavior       | Details                                                        |
-| -------------- | -------------------------------------------------------------- |
-| Output format  | JSON (single line) by default                                  |
-| Pretty output  | Add `--pretty` to any command for indented JSON or tables      |
-| Errors         | Printed to stderr as `{"error": "..."}`, exits with code 1    |
-| Database       | Uses the same SQLite database as the desktop app               |
-| Config         | Reads `~/.config/planeai/config.json` (same as the app)        |
+| Behavior      | Details                                                    |
+| ------------- | ---------------------------------------------------------- |
+| Output format | JSON (single line) by default                              |
+| Pretty output | Add `--pretty` to any command for indented JSON or tables  |
+| Errors        | Printed to stderr as `{"error": "..."}`, exits with code 1 |
+| Database      | Uses the same SQLite database as the desktop app           |
+| Config        | Reads `~/.config/planeai/config.json` (same as the app)    |
 
 ---
 
@@ -35,18 +35,18 @@ Create and launch a new agent session.
 planeai-cli session create --project <name> --branch <branch> [options]
 ```
 
-| Flag             | Description                                          |
-| ---------------- | ---------------------------------------------------- |
-| `--project`      | Project name (required)                              |
-| `--branch`       | Git branch to use (required)                         |
-| `--name`         | Display name for the session                         |
-| `--new-branch`   | Create the branch if it doesn't exist                |
-| `--worktree`     | Use a git worktree instead of checking out in-place  |
-| `--base-branch`  | Base branch for new branch / worktree (default: main)|
-| `--yolo`         | Enable autonomous mode (skip confirmations)          |
-| `--provider`     | Provider to use (overrides default_provider)         |
-| `--task-key`     | Associate a task key with this session               |
-| `--prompt`       | Initial prompt to send to the agent                  |
+| Flag            | Description                                           |
+| --------------- | ----------------------------------------------------- |
+| `--project`     | Project name (required)                               |
+| `--branch`      | Git branch to use (required)                          |
+| `--name`        | Display name for the session                          |
+| `--new-branch`  | Create the branch if it doesn't exist                 |
+| `--worktree`    | Use a git worktree instead of checking out in-place   |
+| `--base-branch` | Base branch for new branch / worktree (default: main) |
+| `--yolo`        | Enable autonomous mode (skip confirmations)           |
+| `--provider`    | Provider to use (overrides default_provider)          |
+| `--task-key`    | Associate a task key with this session                |
+| `--prompt`      | Initial prompt to send to the agent                   |
 
 ### `session ls`
 
@@ -56,9 +56,9 @@ List active sessions.
 planeai-cli session ls [--archived] [--pretty]
 ```
 
-| Flag         | Description                  |
-| ------------ | ---------------------------- |
-| `--archived` | Show archived sessions only  |
+| Flag         | Description                 |
+| ------------ | --------------------------- |
+| `--archived` | Show archived sessions only |
 
 ### `session delete`
 
@@ -120,15 +120,15 @@ Create a new task.
 planeai-cli task add <title> [options]
 ```
 
-| Flag            | Description                                      |
-| --------------- | ------------------------------------------------ |
-| `--desc`        | Task description (default: empty)                |
-| `--priority`    | Priority number (default: 0)                     |
-| `--tags`        | Comma-separated tags                             |
-| `--blocked-by`  | Comma-separated task keys that block this task   |
-| `--parent`      | Parent task key (for subtasks)                   |
-| `--base-branch` | Base branch for this task (default: main)        |
-| `--project`     | Project name (otherwise resolved from CWD)       |
+| Flag            | Description                                    |
+| --------------- | ---------------------------------------------- |
+| `--desc`        | Task description (default: empty)              |
+| `--priority`    | Priority number (default: 0)                   |
+| `--tags`        | Comma-separated tags                           |
+| `--blocked-by`  | Comma-separated task keys that block this task |
+| `--parent`      | Parent task key (for subtasks)                 |
+| `--base-branch` | Base branch for this task (default: main)      |
+| `--project`     | Project name (otherwise resolved from CWD)     |
 
 ### `task show`
 
@@ -146,10 +146,10 @@ List tasks with optional filters.
 planeai-cli task ls [--status <status>] [--tags <tags>] [--project <name>]
 ```
 
-| Flag       | Description                                        |
-| ---------- | -------------------------------------------------- |
-| `--status` | Filter by status: `todo`, `in_progress`, `done`    |
-| `--tags`   | Comma-separated tags to filter by                  |
+| Flag       | Description                                     |
+| ---------- | ----------------------------------------------- |
+| `--status` | Filter by status: `todo`, `in_progress`, `done` |
+| `--tags`   | Comma-separated tags to filter by               |
 
 ### `task move`
 
@@ -169,14 +169,14 @@ Edit an existing task.
 planeai-cli task edit <key> [options]
 ```
 
-| Flag            | Description                 |
-| --------------- | --------------------------- |
-| `--title`       | New title                   |
-| `--desc`        | New description             |
-| `--priority`    | New priority                |
-| `--tags`        | Replace tags (comma-sep)    |
-| `--blocked-by`  | Replace blockers (comma-sep)|
-| `--base-branch` | New base branch             |
+| Flag            | Description                  |
+| --------------- | ---------------------------- |
+| `--title`       | New title                    |
+| `--desc`        | New description              |
+| `--priority`    | New priority                 |
+| `--tags`        | Replace tags (comma-sep)     |
+| `--blocked-by`  | Replace blockers (comma-sep) |
+| `--base-branch` | New base branch              |
 
 ### `task delete`
 

@@ -1,12 +1,39 @@
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
-use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::provider_has_hook;
 use crate::config;
 use crate::db;
 use crate::notify::SharedNotifyState;
 use crate::state::{ConfigState, DbState};
+
+/// Raise the soft file-descriptor limit to the hard limit (Unix only).
+/// macOS defaults to a soft limit of 256 which is easily exhausted when
+/// managing many sessions that each spawn external processes.
+#[cfg(unix)]
+pub fn raise_fd_limit() {
+    unsafe {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+            let target = rlim.rlim_max.min(10240);
+            if rlim.rlim_cur < target {
+                let old = rlim.rlim_cur;
+                rlim.rlim_cur = target;
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) == 0 {
+                    tracing::info!(old, new = target, "raised file descriptor limit");
+                } else {
+                    tracing::warn!(old, target, "setrlimit failed");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn raise_fd_limit() {}
 
 /// Revive sessions on startup: recreate dead tmux sessions.
 /// Daemon sessions are managed by the daemon process and don't need reviving here.
@@ -198,31 +225,78 @@ pub fn register_active_sessions(
 
 /// Start background PR status poller (every 2 minutes).
 pub fn start_pr_poller(app_handle: &tauri::AppHandle) {
+    use crate::commands::pr::{check_pr, persist_pr_result};
+
     let app_handle = app_handle.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(120));
         let db = app_handle.state::<DbState>();
         let cfg_state = app_handle.state::<ConfigState>();
+
+        // Snapshot eligible sessions while holding locks briefly.
+        let (pr_cmd, eligible) = {
+            let Ok(conn) = db.0.lock() else { continue };
+            let Ok(cfg) = cfg_state.0.lock() else {
+                continue;
+            };
+            let Some(pr_cmd) = cfg.pr_status.clone() else {
+                continue;
+            };
+            let Ok(sessions) = db::list_sessions(&conn) else {
+                continue;
+            };
+            let eligible: Vec<_> = sessions
+                .into_iter()
+                .filter(|s| crate::pr::is_poll_eligible(&s.status, s.pr_state.as_deref()))
+                .filter_map(|s| {
+                    let cwd = crate::commands::sessions::helpers::session_cwd(&conn, &s)?;
+                    Some((s, cwd))
+                })
+                .collect();
+            (pr_cmd, eligible)
+        };
+        // Locks released — spawn external processes without holding DB mutex.
+
+        let results: Vec<_> = eligible
+            .iter()
+            .filter_map(|(session, cwd)| {
+                match check_pr(&pr_cmd, &session.branch, cwd, session.pr_state.as_deref()) {
+                    Ok(Some(r)) => Some((session, cwd.as_str(), r)),
+                    Ok(None) => None,
+                    Err(e) => {
+                        let _ = app_handle.emit("cleanup-error", e);
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        if results.is_empty() {
+            continue;
+        }
+
+        // Re-acquire locks briefly to persist all results.
         let Ok(conn) = db.0.lock() else { continue };
         let Ok(cfg) = cfg_state.0.lock() else {
             continue;
         };
-        if cfg.pr_status.is_none() {
-            continue;
-        }
-        let Ok(sessions) = db::list_sessions(&conn) else {
-            continue;
-        };
         let mut changed = false;
-        for session in &sessions {
-            match poll_pr_for_session(&conn, &cfg, session) {
-                Ok(true) => changed = true,
-                Err(e) => {
-                    let _ = app_handle.emit("cleanup-error", e);
-                }
-                _ => {}
+        for (session, cwd, result) in &results {
+            if result.transition.is_some() {
+                changed = true;
             }
+            persist_pr_result(
+                &conn,
+                &cfg,
+                &session.id,
+                session.task_key.as_deref(),
+                cwd,
+                result,
+            );
         }
+        drop(conn);
+        drop(cfg);
+
         if changed {
             let _ = app_handle.emit("sessions-changed", ());
         }
@@ -617,5 +691,24 @@ mod tests {
 
         let ns = notify_state.lock().unwrap();
         assert_eq!(ns.get_meta("s1").unwrap().name, "feature/cool");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn raise_fd_limit_does_not_lower_current_limit() {
+        raise_fd_limit();
+        unsafe {
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim);
+            // After raising, the soft limit should be > default macOS 256
+            assert!(
+                rlim.rlim_cur >= 256,
+                "soft limit should be at least 256, got {}",
+                rlim.rlim_cur
+            );
+        }
     }
 }
