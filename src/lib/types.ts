@@ -61,3 +61,15 @@ export interface CiCheck {
   conclusion: string | null;
   url: string | null;
 }
+
+export interface JiraStatus {
+  connected: boolean;
+  site: string | null;
+}
+
+export interface SyncResult {
+  created: number;
+  updated: number;
+  stale: number;
+  errors: number;
+}

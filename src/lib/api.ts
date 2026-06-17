@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck } from "./types";
+import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck, JiraStatus, SyncResult } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
 export interface LaunchSessionParams {
@@ -144,6 +144,13 @@ export const notify = {
 
 export const symphony = {
   getStatus: () => invoke<string>("get_symphony_status"),
+};
+
+export const jira = {
+  connect: () => invoke("jira_connect"),
+  disconnect: () => invoke("jira_disconnect"),
+  syncNow: () => invoke<SyncResult>("jira_sync_now"),
+  status: () => invoke<JiraStatus>("jira_status"),
 };
 
 export const preferences = {
