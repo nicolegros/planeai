@@ -21,8 +21,10 @@ pub enum Error {
     Http(#[from] reqwest::Error),
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct JiraIssue {
+/// Wire type returned by the Jira search API. Callers map this to `model::JiraIssue`
+/// by supplying `jira_project`, `sync_status`, and `last_synced_at`.
+#[derive(Debug, Clone)]
+pub struct FetchedIssue {
     pub issue_key: String,
     pub summary: String,
     pub description: String,
@@ -123,7 +125,7 @@ impl JiraClient {
     }
 
     #[instrument(skip(self), fields(jql))]
-    pub async fn search(&self, jql: &str) -> Result<Vec<JiraIssue>, Error> {
+    pub async fn search(&self, jql: &str) -> Result<Vec<FetchedIssue>, Error> {
         let mut issues = Vec::new();
         let mut start_at = 0u64;
 
@@ -366,7 +368,7 @@ fn extract_plain_text(adf: &serde_json::Value) -> String {
     }
 }
 
-fn parse_page(page: &SearchResponse, issues: &mut Vec<JiraIssue>) {
+fn parse_page(page: &SearchResponse, issues: &mut Vec<FetchedIssue>) {
     for raw in &page.issues {
         let description = raw
             .fields
@@ -375,7 +377,7 @@ fn parse_page(page: &SearchResponse, issues: &mut Vec<JiraIssue>) {
             .map(extract_plain_text)
             .unwrap_or_default();
 
-        issues.push(JiraIssue {
+        issues.push(FetchedIssue {
             issue_key: raw.key.clone(),
             summary: raw.fields.summary.clone().unwrap_or_default(),
             description,
