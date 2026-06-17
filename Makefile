@@ -15,6 +15,12 @@ lint: ## Check formatting and clippy
 dev:
 	pnpm tauri dev
 
+dogfood: ## Run with planeai-pty + durable logs + log viewer
+	PLANEAI_LOCAL_PTY_CORE=planeai-pty \
+	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
+	PLANEAI_DOGFOOD_LOG_VIEWER=1 \
+	pnpm tauri dev
+
 build:
 	pnpm tauri build -b app
 
