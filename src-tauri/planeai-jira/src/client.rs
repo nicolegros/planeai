@@ -172,7 +172,12 @@ impl JiraClient {
                 .iter()
                 .filter_map(|t| t.to.as_ref().map(|to| to.name.as_str()))
                 .collect();
-            warn!(issue_key, transition_name, ?available, "transition not found");
+            warn!(
+                issue_key,
+                transition_name,
+                ?available,
+                "transition not found"
+            );
             Error::ApiError(format!(
                 "transition '{}' not found. Available: {:?}",
                 transition_name, available

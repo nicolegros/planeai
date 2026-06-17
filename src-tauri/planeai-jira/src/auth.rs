@@ -133,36 +133,8 @@ impl JiraAuth {
     /// Create a JiraAuth with a pre-loaded access token for integration/client tests.
     #[cfg(test)]
     pub(crate) fn with_fixed_token(token: &str, token_url: String) -> Self {
-        use std::collections::HashMap;
-        use std::sync::Mutex as StdMutex;
-
-        struct MemStore(StdMutex<HashMap<String, String>>);
-        impl TokenStore for MemStore {
-            fn get(&self, key: &str) -> Result<String, Error> {
-                self.0
-                    .lock()
-                    .unwrap()
-                    .get(key)
-                    .cloned()
-                    .ok_or_else(|| Error::Keyring(format!("not found: {key}")))
-            }
-            fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-                self.0
-                    .lock()
-                    .unwrap()
-                    .insert(key.to_string(), value.to_string());
-                Ok(())
-            }
-            fn delete(&self, key: &str) -> Result<(), Error> {
-                self.0.lock().unwrap().remove(key);
-                Ok(())
-            }
-        }
-
-        let store = MemStore(StdMutex::new(HashMap::from([(
-            "refresh_token".to_string(),
-            "test_refresh".to_string(),
-        )])));
+        let store =
+            crate::test_support::MemStore::with_entries(vec![("refresh_token", "test_refresh")]);
 
         let token_state = Some(TokenState {
             access_token: token.to_string(),
@@ -384,41 +356,9 @@ async fn wait_for_callback(listener: &TcpListener, expected_state: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::Mutex as StdMutex;
+    use crate::test_support::MemStore;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    /// In-memory token store for deterministic tests.
-    struct MemoryStore(StdMutex<HashMap<String, String>>);
-
-    impl MemoryStore {
-        fn new() -> Self {
-            Self(StdMutex::new(HashMap::new()))
-        }
-    }
-
-    impl TokenStore for MemoryStore {
-        fn get(&self, key: &str) -> Result<String, Error> {
-            self.0
-                .lock()
-                .unwrap()
-                .get(key)
-                .cloned()
-                .ok_or_else(|| Error::Keyring(format!("not found: {key}")))
-        }
-        fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-            self.0
-                .lock()
-                .unwrap()
-                .insert(key.to_string(), value.to_string());
-            Ok(())
-        }
-        fn delete(&self, key: &str) -> Result<(), Error> {
-            self.0.lock().unwrap().remove(key);
-            Ok(())
-        }
-    }
 
     #[test]
     fn pkce_verifier_length_and_charset() {
@@ -515,7 +455,7 @@ mod tests {
 
         let auth = JiraAuth::with_test_config(
             "https://mysite.atlassian.net",
-            Box::new(MemoryStore::new()),
+            Box::new(MemStore::new()),
             format!("{}/oauth/token", mock_server.uri()),
             format!("{}/oauth/token/accessible-resources", mock_server.uri()),
         );
@@ -547,7 +487,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let store = MemoryStore::new();
+        let store = MemStore::new();
         store.set("refresh_token", "old_refresh").unwrap();
 
         let auth = JiraAuth::with_test_config(
@@ -572,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_clears_state() {
-        let store = MemoryStore::new();
+        let store = MemStore::new();
         store.set("refresh_token", "rt").unwrap();
         store.set("cloud_id", "cid").unwrap();
 
@@ -597,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_connected_reflects_store() {
-        let store = MemoryStore::new();
+        let store = MemStore::new();
         let auth = JiraAuth::with_test_config(
             "https://x.atlassian.net",
             Box::new(store),
@@ -624,7 +564,7 @@ mod tests {
 
         let auth = JiraAuth::with_test_config(
             "https://mysite.atlassian.net",
-            Box::new(MemoryStore::new()),
+            Box::new(MemStore::new()),
             String::new(),
             format!("{}/resources", mock_server.uri()),
         );
