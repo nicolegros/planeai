@@ -295,7 +295,10 @@ async fn wait_for_callback(listener: &TcpListener, expected_state: &str) -> Resu
     let mut request_line = String::new();
     buf_reader.read_line(&mut request_line).await?;
 
-    let path = request_line.split_whitespace().nth(1).ok_or(Error::NoCode)?;
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or(Error::NoCode)?;
 
     let full_url = format!("http://localhost{path}");
     let parsed = Url::parse(&full_url)?;
