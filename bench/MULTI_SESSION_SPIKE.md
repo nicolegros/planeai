@@ -245,9 +245,9 @@ python3 bench/summarize-metrics.py bench/results/smoke-*.jsonl
 ### `planeai-local`
 
 - Uses `pty_core.rs` — Tauri-independent extraction of the production PTY backend
-- Reader thread → coalescing buffer → flusher thread (4ms coalesce) → push via `TerminalOutputSink`
+- Reader thread → coalescing buffer → flusher thread (conditional 4ms coalesce) → push via `TerminalOutputSink`
 - ChannelSink bridges push→pull: bounded 512KB buffer with blocking backpressure
-- Lower throughput (~0.33 MB/s in flood test) due to flusher coalescing on critical path
+- **High throughput: ~46 MB/s in 3-session flood** (after performance fixes, see below)
 - Lossless: 0 bytes dropped under all tested loads
 - Faithfully reproduces production `pty.rs` behavior (reader/flusher/FlowControl pattern)
 - Supports: write, resize, pause/resume, exit detection
@@ -259,9 +259,9 @@ spike-local:
   PTY → reader thread → 512KB buffer → try_read_batch() → alacritty_terminal
 
 planeai-local:
-  PTY → reader thread → coalescing buffer → flusher thread (4ms sleep)
+  PTY → reader thread → coalescing buffer → flusher thread (conditional 4ms sleep)
       → TerminalOutputSink::send() → ChannelSink (512KB blocking buffer)
-      → try_read_batch() → alacritty_terminal
+      → try_read_batch() [drain loop, 2MB budget] → alacritty_terminal
 ```
 
 ### Which source is default?
@@ -270,18 +270,15 @@ planeai-local:
 
 ### Performance Comparison (3 sessions, flood-output.py, 5s)
 
-| Metric | spike-local | planeai-local |
-|--------|-------------|---------------|
-| Throughput (MB/s) | 41 | 0.33 |
-| Total bytes (5s) | 215 MB | 1.7 MB |
-| p99 frame delta | 42 ms | 33 ms |
-| p95 parse time | 2.2 ms | 4.2 ms |
-| p95 render work | 0.11 ms | 0.04 ms |
-| Bytes dropped | 0 | 0 |
-| Max pending | 512 KB | 507 KB |
-| RSS | 284 MB | 306 MB |
+| Metric | spike-local | planeai-local | tauri-xterm (baseline) |
+|--------|-------------|---------------|------------------------|
+| Throughput (MB/s) | 46.4 | 45.9 | ~2.6 |
+| Total bytes (5s) | 244 MB | 241 MB | ~13 MB |
+| p99 frame delta | 25.7 ms | 34.6 ms | several ms (many >16.7) |
+| Bytes dropped | 0 | 0 | 0 |
+| Max pending | 512 KB | 512 KB | N/A |
 
-The throughput difference is expected: planeai-local's flusher adds 4ms coalescing sleep per batch, which creates backpressure when the bounded buffer fills. In production, this coalescing reduces frontend render calls. In the spike, it limits peak throughput but produces smoother output delivery.
+planeai-local is now at parity with spike-local and **17x faster** than the old Tauri/xterm baseline.
 
 ### Usage
 
@@ -327,6 +324,71 @@ This was intentionally deferred to avoid risking the production Tauri app.
 4. **Session names:** Fixed as "Session 1", "Session 2", etc. No rename support.
 5. **No session persistence:** Sessions die when the app closes. No tmux/daemon reconnect.
 6. **Queue policy per-app:** All sessions share the same queue policy (from CLI flag).
-7. **planeai-local throughput:** Coalescing flusher limits peak throughput to ~0.3 MB/s under flood conditions. This is a faithful reproduction of production behavior, not a bug.
+7. **planeai-local throughput:** Now at parity with spike-local (~46 MB/s). Conditional flusher coalescing preserves low-load batching without penalizing flood throughput.
 8. **planeai-local has no OutputObserver:** The production backend's `OutputObserver` trait (for byte-counting hooks) is not wired up in the extracted core.
 9. **No Tauri adapter yet:** The shared core is not yet consumed by the production Tauri app. It lives spike-side only.
+
+## Performance Fix History
+
+### planeai-local: 0.31 MB/s → 45.9 MB/s (148x improvement)
+
+**Root cause:** Three compounding bottlenecks in the push-to-pull pipeline.
+
+#### Bottleneck 1: Flusher slept unconditionally (pty_core.rs)
+
+The flusher thread had `thread::sleep(4ms)` on every iteration, even under flood.
+This capped throughput at ~`buffer_size / 4ms` regardless of data availability.
+
+**Fix:** Conditional sleep — only coalesce when pending buffer is < 4096 bytes.
+Under flood, the buffer is always large, so sleep is skipped entirely.
+
+#### Bottleneck 2: ChannelSink deadlock on large batches (planeai_local.rs)
+
+The sink's blocking condition `buf.len() + bytes.len() > MAX_BUFFER` would deadlock
+when a single batch exceeded 512KB (because even with empty buffer, the check fails).
+Under flood, the flusher coalesces many reads into one large batch (often >512KB).
+
+**Fix:** Allow any single batch into an empty buffer regardless of size.
+Only block when buffer already has data AND adding more would exceed the cap.
+
+#### Bottleneck 3: UI drained one batch per poll (multi_session.rs)
+
+The UI poll loop called `try_read_batch()` only once per session per 16ms tick.
+Even with data available, it took only one batch, leaving the producer blocked.
+
+**Fix:** Drain loop with 2MB-per-session budget. Multiple batches consumed per poll.
+Rendering (snapshot_grid) happens once per poll after all batches are parsed.
+
+#### Batch sizes before/after
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Avg batch to UI | ~100 KB (rare) | ~160-500 KB (frequent) |
+| Batches per poll | 1 | 3-5 |
+| Flusher batches/sec | 2-6 | 100-500 |
+| Flusher sleep total (5s) | ~3000 ms | ~50 ms (flood only) |
+
+#### 4ms coalescing status
+
+Still present but conditional:
+- Under low load (< 4096 bytes pending): sleeps 4ms to batch small writes
+- Under flood (≥ 4096 bytes pending): no sleep, flushes immediately
+- FLUSH_MAX_IDLE (50ms) timeout still prevents indefinite waits on empty buffer
+
+#### Output lossless?
+
+Yes — 0 bytes dropped in all configurations tested:
+- 1/3/5 sessions × flood workload × 5 seconds
+- ChannelSink uses blocking backpressure (condvar wait)
+- `--output-queue-policy block` is enforced for planeai-local
+
+#### Remaining bottlenecks
+
+- p99 frame delta is 34.6ms for planeai-local vs 25.7ms for spike-local (extra flusher thread scheduling)
+- Python flood_output.py is the actual throughput limit (~27 MB/s per session)
+- Single active session rendering caps at ~26 MB/s regardless of source
+
+#### Ready for shared-core extraction?
+
+Yes. `pty_core.rs` is Tauri-independent, performant, and lossless. Next step is
+moving it to `planeai-core` crate and having production `pty.rs` use it.

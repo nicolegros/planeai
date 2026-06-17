@@ -4,7 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
-use crate::adapter::PlaneAiTerminalSession;
+use crate::adapter::{PipelineDiag, PlaneAiTerminalSession};
 
 pub const MAX_BUFFER: usize = 512 * 1024; // 512KB bounded buffer
 
@@ -223,5 +223,24 @@ impl PlaneAiTerminalSession for Shell {
 
     fn bytes_dropped(&self) -> u64 {
         *self.bytes_dropped_count.lock().unwrap()
+    }
+
+    fn pipeline_diag(&self) -> PipelineDiag {
+        PipelineDiag {
+            pty_reader_bytes_total: 0, // spike-local has no separate reader counter
+            pty_reader_reads_total: 0,
+            flusher_batches_total: 0, // spike-local has no flusher
+            flusher_bytes_total: 0,
+            flusher_wakeups_total: 0,
+            flusher_sleep_ms_total: 0.0,
+            sink_send_calls_total: 0,
+            sink_send_bytes_total: 0,
+            output_queue_capacity_bytes: MAX_BUFFER,
+            max_pending_pty_output_bytes: *self.max_pending_bytes.lock().unwrap() as u64,
+            queue_depth_at_end_bytes: self.reader_buf.lock().unwrap().len(),
+            output_bytes_dropped: *self.bytes_dropped_count.lock().unwrap(),
+            producer_block_count: *self.producer_block_count.lock().unwrap(),
+            producer_block_duration_ms: *self.producer_block_duration_ms.lock().unwrap(),
+        }
     }
 }

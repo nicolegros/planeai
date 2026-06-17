@@ -6,7 +6,7 @@
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -63,6 +63,31 @@ const FLUSH_COALESCE: Duration = Duration::from_millis(4);
 const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
 const READ_BUF: usize = 16 * 1024;
 
+// ─── Diagnostics ─────────────────────────────────────────────────────────────
+
+/// Shared atomic counters for pipeline diagnostics.
+pub struct PtyDiagCounters {
+    pub reader_bytes: AtomicU64,
+    pub reader_reads: AtomicU64,
+    pub flusher_batches: AtomicU64,
+    pub flusher_bytes: AtomicU64,
+    pub flusher_wakeups: AtomicU64,
+    pub flusher_sleep_ns: AtomicU64,
+}
+
+impl PtyDiagCounters {
+    pub fn new() -> Self {
+        Self {
+            reader_bytes: AtomicU64::new(0),
+            reader_reads: AtomicU64::new(0),
+            flusher_batches: AtomicU64::new(0),
+            flusher_bytes: AtomicU64::new(0),
+            flusher_wakeups: AtomicU64::new(0),
+            flusher_sleep_ns: AtomicU64::new(0),
+        }
+    }
+}
+
 // ─── Local PTY Session ───────────────────────────────────────────────────────
 
 pub struct LocalPtySession {
@@ -71,6 +96,7 @@ pub struct LocalPtySession {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     flow: Arc<FlowControl>,
     exited: Arc<AtomicBool>,
+    pub diag: Arc<PtyDiagCounters>,
 }
 
 impl LocalPtySession {
@@ -105,6 +131,7 @@ impl LocalPtySession {
         let mut reader = pair.master.try_clone_reader()?;
         let flow = Arc::new(FlowControl::new());
         let exited = Arc::new(AtomicBool::new(false));
+        let diag = Arc::new(PtyDiagCounters::new());
 
         // Shared coalescing buffer between reader and flusher
         let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
@@ -115,6 +142,7 @@ impl LocalPtySession {
         let pending_r = pending.clone();
         let done_r = done.clone();
         let flow_r = flow.clone();
+        let diag_r = diag.clone();
         thread::spawn(move || {
             let mut buf = [0u8; READ_BUF];
             loop {
@@ -122,6 +150,8 @@ impl LocalPtySession {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        diag_r.reader_reads.fetch_add(1, Ordering::Relaxed);
+                        diag_r.reader_bytes.fetch_add(n as u64, Ordering::Relaxed);
                         let (lock, cv) = &*pending_r;
                         let mut g = lock.lock().unwrap();
                         g.extend_from_slice(&buf[..n]);
@@ -139,6 +169,7 @@ impl LocalPtySession {
         let done_f = done;
         let exited_f = exited.clone();
         let flow_f = flow.clone();
+        let diag_f = diag.clone();
         thread::spawn(move || {
             let (lock, cv) = &*pending_f;
             loop {
@@ -148,6 +179,8 @@ impl LocalPtySession {
                         if done_f.load(Ordering::Acquire) {
                             if !g.is_empty() {
                                 let chunk = std::mem::take(&mut *g);
+                                diag_f.flusher_batches.fetch_add(1, Ordering::Relaxed);
+                                diag_f.flusher_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                                 let _ = sink.send(TerminalSessionEvent::Output {
                                     session_id: id, bytes: chunk,
                                 });
@@ -158,16 +191,27 @@ impl LocalPtySession {
                             });
                             return;
                         }
+                        diag_f.flusher_wakeups.fetch_add(1, Ordering::Relaxed);
                         let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
                         g = next;
                     }
+                    // Only coalesce if buffer is small — skip sleep under flood
+                    if g.len() < 4096 {
+                        drop(g);
+                        flow_f.wait_if_paused();
+                        let t = std::time::Instant::now();
+                        thread::sleep(FLUSH_COALESCE);
+                        diag_f.flusher_sleep_ns.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    } else {
+                        drop(g);
+                        flow_f.wait_if_paused();
+                    }
                 }
-
-                flow_f.wait_if_paused();
-                thread::sleep(FLUSH_COALESCE);
 
                 let chunk = std::mem::take(&mut *lock.lock().unwrap());
                 if chunk.is_empty() { continue; }
+                diag_f.flusher_batches.fetch_add(1, Ordering::Relaxed);
+                diag_f.flusher_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
                 if sink.send(TerminalSessionEvent::Output {
                     session_id: id, bytes: chunk,
                 }).is_err() {
@@ -183,6 +227,7 @@ impl LocalPtySession {
             master: Arc::new(Mutex::new(pair.master)),
             flow,
             exited,
+            diag,
         })
     }
 }

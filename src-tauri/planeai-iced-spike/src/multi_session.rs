@@ -51,6 +51,10 @@ struct MultiApp {
     last_frame_ms: f64,
     cols: usize,
     rows: usize,
+    // UI drain metrics
+    ui_poll_count: u64,
+    ui_batches_drained_total: u64,
+    ui_bytes_drained_total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +124,7 @@ impl MultiApp {
             inactive_parse_times: Vec::new(), frame_deltas: Vec::new(),
             last_frame_instant: None, frames: 0, done: false,
             last_frame_ms: 0.0, cols, rows,
+            ui_poll_count: 0, ui_batches_drained_total: 0, ui_bytes_drained_total: 0,
         }, iced::Task::none())
     }
 
@@ -280,31 +285,46 @@ impl MultiApp {
                 }
                 self.last_frame_instant = Some(now);
 
+                self.ui_poll_count += 1;
                 for i in 0..self.sessions.len() {
-                    let output = self.sessions[i].backend.try_read_batch().unwrap_or(None);
-                    if let Some(data) = output {
-                        let batch_len = data.len();
-                        self.sessions[i].bytes_processed += batch_len as u64;
-                        let parse_start = Instant::now();
-                        let session = &mut self.sessions[i];
-                        session.processor.advance(&mut session.term, &data);
-                        let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
-                        session.parse_times.push(parse_ms);
+                    const MAX_BYTES_PER_SESSION_PER_POLL: usize = 2 * 1024 * 1024; // 2 MB
+                    let mut total_drained = 0usize;
+                    loop {
+                        if total_drained >= MAX_BYTES_PER_SESSION_PER_POLL { break; }
+                        let output = self.sessions[i].backend.try_read_batch().unwrap_or(None);
+                        match output {
+                            Some(data) => {
+                                let batch_len = data.len();
+                                total_drained += batch_len;
+                                self.ui_batches_drained_total += 1;
+                                self.ui_bytes_drained_total += batch_len as u64;
+                                self.sessions[i].bytes_processed += batch_len as u64;
+                                let parse_start = Instant::now();
+                                let session = &mut self.sessions[i];
+                                session.processor.advance(&mut session.term, &data);
+                                let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
+                                session.parse_times.push(parse_ms);
 
-                        if i == self.active {
-                            self.active_parse_times.push(parse_ms);
-                            let render_start = Instant::now();
-                            let session = &mut self.sessions[i];
-                            session.snapshot = snapshot_grid(&session.term);
-                            session.cache.clear();
-                            let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-                            self.sessions[i].render_works.push(render_ms);
-                            self.active_render_works.push(render_ms);
-                            self.sessions[i].dirty = false;
-                        } else {
-                            self.inactive_parse_times.push(parse_ms);
-                            self.sessions[i].dirty = true;
+                                if i == self.active {
+                                    self.active_parse_times.push(parse_ms);
+                                } else {
+                                    self.inactive_parse_times.push(parse_ms);
+                                    self.sessions[i].dirty = true;
+                                }
+                            }
+                            None => break,
                         }
+                    }
+                    // Only snapshot the active session once after all batches are drained
+                    if i == self.active && total_drained > 0 {
+                        let render_start = Instant::now();
+                        let session = &mut self.sessions[i];
+                        session.snapshot = snapshot_grid(&session.term);
+                        session.cache.clear();
+                        let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+                        self.sessions[i].render_works.push(render_ms);
+                        self.active_render_works.push(render_ms);
+                        self.sessions[i].dirty = false;
                     }
                 }
                 self.frames += 1;
@@ -341,6 +361,7 @@ impl MultiApp {
         let max_pending: Vec<u64> = self.sessions.iter().map(|s| s.backend.max_pending_bytes() as u64).collect();
         let dropped: Vec<u64> = self.sessions.iter().map(|s| s.backend.bytes_dropped()).collect();
         let total_dropped: u64 = dropped.iter().sum();
+        let pipeline_diags: Vec<_> = self.sessions.iter().map(|s| s.backend.pipeline_diag()).collect();
 
         let summary = json!({
             "schema_version": 1, "event_type": "summary",
@@ -373,6 +394,12 @@ impl MultiApp {
             "max_pending_pty_output_bytes_per_session": max_pending,
             "output_bytes_dropped_total": total_dropped,
             "output_bytes_dropped_per_session": dropped,
+            "ui_poll_count": self.ui_poll_count,
+            "ui_batches_drained_total": self.ui_batches_drained_total,
+            "ui_bytes_drained_total": self.ui_bytes_drained_total,
+            "ui_avg_batches_per_poll": if self.ui_poll_count > 0 { self.ui_batches_drained_total as f64 / self.ui_poll_count as f64 } else { 0.0 },
+            "ui_avg_bytes_per_poll": if self.ui_poll_count > 0 { self.ui_bytes_drained_total as f64 / self.ui_poll_count as f64 } else { 0.0 },
+            "pipeline_diag_per_session": pipeline_diags,
             "final_rss_mb": get_rss_mb(),
         });
         self.metrics_lines.push(summary);

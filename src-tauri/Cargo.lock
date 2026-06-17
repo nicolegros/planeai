@@ -4420,6 +4420,7 @@ dependencies = [
  "iced",
  "libc",
  "portable-pty",
+ "serde",
  "serde_json",
  "smol_str",
 ]
