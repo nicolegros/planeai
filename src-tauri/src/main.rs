@@ -16,6 +16,7 @@ mod output_observer;
 mod paths;
 mod pr;
 mod pty;
+mod pty_planeai_core_adapter;
 mod session_backend;
 mod session_ops;
 mod startup;
@@ -211,6 +212,9 @@ fn main() {
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
             tracing::info!("app setup complete");
+            let pty_core_mode = std::env::var("PLANEAI_LOCAL_PTY_CORE")
+                .unwrap_or_else(|_| "legacy".to_string());
+            tracing::info!("local PTY core: {}", pty_core_mode);
 
             Ok(())
         })

@@ -5,7 +5,6 @@ pub mod common;
 pub mod input;
 mod multi_session;
 pub mod planeai_local;
-pub mod pty_core;
 pub mod shell;
 
 use std::fs;

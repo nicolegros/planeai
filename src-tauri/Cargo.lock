@@ -4357,6 +4357,7 @@ dependencies = [
  "planeai-core",
  "planeai-daemon",
  "planeai-ipc",
+ "planeai-pty",
  "planeai-tasks",
  "portable-pty",
  "regex",

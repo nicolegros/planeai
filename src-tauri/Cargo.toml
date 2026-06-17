@@ -46,6 +46,7 @@ planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }
 planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
+planeai-pty = { path = "planeai-pty" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }

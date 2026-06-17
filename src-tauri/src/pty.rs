@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
+use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
 use crate::session_backend::SessionBackend;
 #[cfg(not(windows))]
 use crate::tmux;
@@ -247,6 +248,33 @@ impl PtyManager {
         } = target
         {
             return self.attach_daemon(&sid, socket_path, app, on_data);
+        }
+
+        // planeai-pty path for Shell targets when PLANEAI_LOCAL_PTY_CORE=planeai-pty
+        if let PtyTarget::Shell { ref command, ref args, ref cwd } = target {
+            if use_planeai_pty_core() {
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let observer = self.observer.read().unwrap().clone();
+                let socket_path = self.socket_path.lock().unwrap().clone();
+                let backend = PlaneaiPtyBackend::spawn(
+                    session_id,
+                    command,
+                    args,
+                    cwd,
+                    dark_mode,
+                    app,
+                    on_data,
+                    cancelled,
+                    observer,
+                    socket_path.as_deref(),
+                )?;
+                let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
+                if let Some(old) = sessions.get(session_id) {
+                    old.detach();
+                }
+                sessions.insert(session_id.to_string(), Box::new(backend));
+                return Ok(());
+            }
         }
 
         let pty_system = native_pty_system();
@@ -608,4 +636,11 @@ impl PtyManager {
         let backend = sessions.get(session_id).ok_or("session not attached")?;
         backend.resume()
     }
+}
+
+/// Returns true when the planeai-pty backend should be used for local PTY sessions.
+fn use_planeai_pty_core() -> bool {
+    std::env::var("PLANEAI_LOCAL_PTY_CORE")
+        .map(|v| v == "planeai-pty")
+        .unwrap_or(false)
 }
