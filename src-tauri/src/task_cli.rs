@@ -41,6 +41,7 @@ pub fn run_task_add(
         .create(CreateParams {
             title: title.to_string(),
             description: description.to_string(),
+            status: None,
             priority,
             tags: tags.to_vec(),
             blocked_by: blocked_by.to_vec(),

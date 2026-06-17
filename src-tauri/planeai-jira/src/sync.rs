@@ -113,24 +113,12 @@ impl JiraSync {
                         .create(CreateParams {
                             title: issue.summary.clone(),
                             description: issue.description.clone(),
+                            status: Some(status),
                             priority,
                             tags: issue.labels.clone(),
                             ..Default::default()
                         })
                         .map_err(|e| crate::Error::TaskProvider(e.to_string()))?;
-
-                    // Set the correct status if not todo
-                    if status != Status::Todo {
-                        self.task_provider
-                            .update(
-                                &task.key,
-                                UpdateParams {
-                                    status: Some(status),
-                                    ..Default::default()
-                                },
-                            )
-                            .map_err(|e| crate::Error::TaskProvider(e.to_string()))?;
-                    }
 
                     self.repo.link_task(&task.key, &issue.issue_key)?;
                     result.created += 1;
