@@ -13,18 +13,28 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
     let labels_json: String = row.get(6)?;
     let sync_status_str: String = row.get(7)?;
     let ts: String = row.get(8)?;
+    let issue_key: String = row.get(0)?;
     Ok(JiraIssue {
-        issue_key: row.get(0)?,
         jira_project: row.get(1)?,
         summary: row.get(2)?,
         description: row.get(3)?,
         status: row.get(4)?,
         priority: row.get(5)?,
-        labels: serde_json::from_str(&labels_json).unwrap_or_default(),
-        sync_status: SyncStatus::parse(&sync_status_str).unwrap_or(SyncStatus::Synced),
+        labels: serde_json::from_str(&labels_json).unwrap_or_else(|e| {
+            tracing::warn!(issue_key = %issue_key, error = %e, "invalid labels JSON, defaulting to empty");
+            Vec::new()
+        }),
+        sync_status: SyncStatus::parse(&sync_status_str).unwrap_or_else(|| {
+            tracing::warn!(issue_key = %issue_key, value = %sync_status_str, "unknown sync_status, defaulting to Synced");
+            SyncStatus::Synced
+        }),
         last_synced_at: chrono::DateTime::parse_from_rfc3339(&ts)
             .map(|dt| dt.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now()),
+            .unwrap_or_else(|e| {
+                tracing::warn!(issue_key = %issue_key, error = %e, "invalid last_synced_at, defaulting to now");
+                Utc::now()
+            }),
+        issue_key,
     })
 }
 
