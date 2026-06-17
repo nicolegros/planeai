@@ -148,6 +148,23 @@ impl Backend for TauriBackend {
         Err("tmux is not supported on Windows".to_string())
     }
 
+    fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String> {
+        let socket_path = planeai_ipc::daemon_socket_path();
+        let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
+        let scrollback = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.daemon_scrollback_bytes.unwrap_or(1_048_576)
+        };
+
+        crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
+
+        let mut env = std::collections::HashMap::new();
+        env.insert("TERM", "xterm-256color");
+        env.insert("PLANEAI_SESSION_ID", session_id);
+        crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
+    }
+
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| e.to_string())?;
         crate::db::create_session_with_id(

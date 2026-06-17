@@ -4,6 +4,7 @@ mod cleanup;
 mod command;
 mod commands;
 mod config;
+mod daemon;
 mod daemon_client;
 mod db;
 mod file_explorer;
