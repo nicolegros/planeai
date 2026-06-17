@@ -181,10 +181,11 @@ impl TaskProvider for SqliteRepository {
             .map_err(|e| Error::Storage(e.to_string()))?;
         let key = self.next_key(&conn)?;
         let now = Utc::now().to_rfc3339();
+        let status = params.status.unwrap_or(Status::Todo);
 
         conn.execute(
             "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![key, self.prefix, params.title, params.description, "todo", params.priority, params.parent_key, now, now],
+            params![key, self.prefix, params.title, params.description, status.as_str(), params.priority, params.parent_key, now, now],
         ).map_err(|e| Error::Storage(e.to_string()))?;
 
         for bk in &params.blocked_by {
@@ -208,7 +209,7 @@ impl TaskProvider for SqliteRepository {
             &key,
             params.title,
             params.description,
-            "todo".to_string(),
+            status.as_str().to_string(),
             params.priority,
             params.parent_key,
             now.clone(),

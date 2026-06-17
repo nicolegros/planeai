@@ -110,6 +110,7 @@ pub fn create_task_item(
     repo.create(CreateParams {
         title,
         description,
+        status: None,
         priority,
         tags,
         blocked_by,
