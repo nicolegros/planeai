@@ -5,7 +5,10 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 vi.mock("../api", () => ({
-  pty: { closeTab: vi.fn(() => Promise.resolve()) },
+  pty: {
+    closeTab: vi.fn(() => Promise.resolve()),
+    incrementTabCount: vi.fn(() => Promise.resolve()),
+  },
 }));
 
 vi.mock("../session-orchestrator.svelte", () => ({
@@ -14,7 +17,7 @@ vi.mock("../session-orchestrator.svelte", () => ({
 
 import { pty } from "../api";
 import { initSession, getTabs, destroySession, setActiveTab } from "../session-tabs.svelte";
-import { handleCloseTab, closeShellTab } from "../tab-layout.svelte";
+import { handleCloseTab, closeShellTab, handleNewTab } from "../tab-layout.svelte";
 
 describe("handleCloseTab", () => {
   beforeEach(() => {
@@ -64,5 +67,18 @@ describe("closeShellTab", () => {
     expect(pty.closeTab).toHaveBeenCalledWith("s1", 2);
     expect(tabCountAtCloseCall).toBe(3);
     expect(getTabs("s1").length).toBe(2);
+  });
+});
+
+describe("handleNewTab", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    destroySession("s1");
+    initSession("s1", 1);
+  });
+
+  it("increments tab count in db", async () => {
+    await handleNewTab();
+    expect(pty.incrementTabCount).toHaveBeenCalledWith("s1");
   });
 });

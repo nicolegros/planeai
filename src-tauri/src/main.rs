@@ -256,6 +256,7 @@ fn main() {
             save_mru_order,
             spawn_tab,
             close_tab,
+            increment_tab_count,
             check_tmux_available,
             restart_session,
             archive_session,

@@ -50,8 +50,6 @@ pub fn spawn_tab(
         .0
         .attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
 
-    let new_count = session.tab_count + 1;
-    db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -71,6 +69,16 @@ pub fn close_tab(
         .ok_or("session not found")?;
     let new_count = (session.tab_count - 1).max(1);
     db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn increment_tab_count(session_id: String, db_state: State<DbState>) -> Result<(), String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    db::update_tab_count(&conn, &session_id, session.tab_count + 1).map_err(|e| e.to_string())?;
     Ok(())
 }
 
