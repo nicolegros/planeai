@@ -42,13 +42,18 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
 impl JiraRepository {
     pub fn new(conn: Connection) -> Result<Self, Error> {
         migrate(&conn)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn upsert_issue(&self, issue: &JiraIssue) -> Result<(), Error> {
         let labels_json =
             serde_json::to_string(&issue.labels).map_err(|e| Error::Storage(e.to_string()))?;
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         conn.execute(
             "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -77,7 +82,10 @@ impl JiraRepository {
     }
 
     pub fn mark_stale(&self, issue_keys: &[&str]) -> Result<(), Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         for key in issue_keys {
             conn.execute(
                 "UPDATE jira_issues SET sync_status = 'stale' WHERE issue_key = ?1",
@@ -88,7 +96,10 @@ impl JiraRepository {
     }
 
     pub fn mark_synced(&self, issue_key: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         conn.execute(
             "UPDATE jira_issues SET sync_status = 'synced', last_synced_at = ?1 WHERE issue_key = ?2",
             params![Utc::now().to_rfc3339(), issue_key],
@@ -97,7 +108,10 @@ impl JiraRepository {
     }
 
     pub fn get_issue(&self, issue_key: &str) -> Result<Option<JiraIssue>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1",
         )?;
@@ -112,7 +126,10 @@ impl JiraRepository {
     }
 
     pub fn list_synced_keys(&self, jira_project: &str) -> Result<Vec<String>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'",
         )?;
@@ -125,7 +142,10 @@ impl JiraRepository {
     }
 
     pub fn get_task_issue_key(&self, task_key: &str) -> Result<Option<String>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         let result = conn.query_row(
             "SELECT issue_key FROM jira_task_links WHERE task_key = ?1",
             params![task_key],
@@ -139,7 +159,10 @@ impl JiraRepository {
     }
 
     pub fn link_task(&self, task_key: &str, issue_key: &str) -> Result<(), Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2)",
             params![task_key, issue_key],
@@ -148,7 +171,10 @@ impl JiraRepository {
     }
 
     pub fn find_task_by_issue_key(&self, issue_key: &str) -> Result<Option<String>, Error> {
-        let conn = self.conn.lock().map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         let result = conn.query_row(
             "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
             params![issue_key],

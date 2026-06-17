@@ -63,7 +63,7 @@ impl JiraSync {
     pub async fn sync_now(&self) -> Result<SyncResult, crate::Error> {
         let mut result = SyncResult::default();
 
-        for (_name, mapping) in &self.config.projects {
+        for mapping in self.config.projects.values() {
             match self.sync_project(mapping, &mut result).await {
                 Ok(()) => {}
                 Err(e) => {
@@ -170,10 +170,7 @@ impl JiraSync {
     }
 }
 
-fn map_status(
-    jira_status: &str,
-    status_map: &std::collections::HashMap<String, String>,
-) -> Status {
+fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>) -> Status {
     status_map
         .get(jira_status)
         .and_then(|v| Status::parse(v))
@@ -246,11 +243,15 @@ mod tests {
         })
     }
 
-    fn setup_db() -> (Arc<crate::repository::JiraRepository>, Arc<planeai_tasks::sqlite::SqliteRepository>) {
-        let jira_repo = Arc::new(crate::repository::JiraRepository::new(
-            Connection::open_in_memory().unwrap(),
-        ).unwrap());
-        let task_repo = Arc::new(planeai_tasks::sqlite::SqliteRepository::open_in_memory("TST").unwrap());
+    fn setup_db() -> (
+        Arc<crate::repository::JiraRepository>,
+        Arc<planeai_tasks::sqlite::SqliteRepository>,
+    ) {
+        let jira_repo = Arc::new(
+            crate::repository::JiraRepository::new(Connection::open_in_memory().unwrap()).unwrap(),
+        );
+        let task_repo =
+            Arc::new(planeai_tasks::sqlite::SqliteRepository::open_in_memory("TST").unwrap());
         (jira_repo, task_repo)
     }
 
