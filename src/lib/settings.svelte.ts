@@ -39,6 +39,31 @@ export interface TaskManager {
   auto_dispatch?: AutoDispatchConfig | null;
 }
 
+export interface JiraStatusMapping {
+  jira_status: string;
+  planeai_status: string;
+}
+
+export interface JiraWriteback {
+  on_start?: string | null;
+  on_complete?: string | null;
+  comment?: boolean;
+}
+
+export interface JiraProjectMapping {
+  planeai_project: string;
+  jira_project_key: string;
+  jql_filter?: string | null;
+  status_map?: JiraStatusMapping[];
+  writeback?: JiraWriteback | null;
+}
+
+export interface JiraConfig {
+  site_url?: string | null;
+  sync_interval_ms?: number | null;
+  project_mappings?: JiraProjectMapping[];
+}
+
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
@@ -57,6 +82,7 @@ export interface AppConfig {
   projects_base_path?: string | null;
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;
+  integrations?: { jira?: JiraConfig | null } | null;
 }
 
 let config = $state<AppConfig>({

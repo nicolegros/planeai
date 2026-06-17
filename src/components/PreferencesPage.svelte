@@ -7,7 +7,8 @@
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
   import { Select, Input, Button } from "./ui";
-  import { Palette, Bot, ListTodo, Settings } from "@lucide/svelte";
+  import { Palette, Bot, ListTodo, Settings, Cable } from "@lucide/svelte";
+  import JiraSettings from "./JiraSettings.svelte";
 
   const config = $derived(getSettings());
   let fontItems = $state<{ value: string; label: string }[]>([]);
@@ -179,7 +180,7 @@
 
 <div class="h-screen flex flex-col overflow-hidden bg-surface-50 dark:bg-surface-950">
   <nav class="flex justify-center gap-1 border-b border-surface-200 dark:border-surface-700 px-8 pt-4">
-    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "More", icon: Settings}] as tab (tab.name)}
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Integrations", icon: Cable}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
         class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-200'}"
         onclick={() => activeTab = tab.name}
@@ -482,6 +483,10 @@
         <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={enableTaskManagement}>Enable Task Management</button>
       {/if}
     </section>
+    {/if}
+
+    {#if activeTab === "Integrations"}
+    <JiraSettings />
     {/if}
 
     {#if activeTab === "More"}
