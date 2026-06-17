@@ -128,6 +128,7 @@ export async function handleNewTab(): Promise<void> {
   setActiveTab(id, tabIndex);
   diffTabActive = { ...diffTabActive, [id]: false };
   editorTabActive = { ...editorTabActive, [id]: false };
+  pty.incrementTabCount(id);
 }
 
 export async function handleCloseTab(): Promise<void> {
@@ -148,8 +149,12 @@ export async function handleCloseTab(): Promise<void> {
     getCurrentWindow().close();
     return;
   }
-  removeTab(id, active);
-  await pty.closeTab(id, active);
+  await closeShellTab(id, active);
+}
+
+export async function closeShellTab(sessionId: string, tabIndex: number): Promise<void> {
+  await pty.closeTab(sessionId, tabIndex);
+  removeTab(sessionId, tabIndex);
 }
 
 export function handleNextTab(): void {

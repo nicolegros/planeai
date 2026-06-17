@@ -4,14 +4,9 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { sessions as sessionsApi, pty, symphony, tasks } from "./api";
+import { sessions as sessionsApi, symphony, tasks } from "./api";
 import type { Session } from "./types";
-import {
-  initSession,
-  removeTab,
-  getTabCount,
-  destroySession as destroyTabState,
-} from "./session-tabs.svelte";
+import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { playTaskComplete } from "./soundPlayer";
@@ -20,7 +15,11 @@ import {
   activateSession as poolActivate,
   removeSession as poolRemove,
 } from "./terminal-pool.svelte";
-import { cleanup as tabLayoutCleanup, resetAll as tabLayoutReset } from "./tab-layout.svelte";
+import {
+  cleanup as tabLayoutCleanup,
+  resetAll as tabLayoutReset,
+  closeShellTab,
+} from "./tab-layout.svelte";
 
 // Re-export tab layout functions for consumers still importing from orchestrator
 export {
@@ -50,6 +49,7 @@ export {
   setEditorModified,
   closeDiffTab,
   closeEditorTab,
+  closeShellTab,
   focusEditorTab,
 } from "./tab-layout.svelte";
 
@@ -211,8 +211,7 @@ export function startEventListeners(): () => void {
       if (colonIdx !== -1) {
         const sessionId = pty_key.slice(0, colonIdx);
         const tabIndex = parseInt(pty_key.slice(colonIdx + 1), 10);
-        removeTab(sessionId, tabIndex);
-        pty.closeTab(sessionId, tabIndex);
+        closeShellTab(sessionId, tabIndex);
       } else {
         if (!sessions.find((x) => x.id === pty_key)) return;
         sessions = sessions.map((x) => (x.id === pty_key ? { ...x, status: "exited" } : x));
