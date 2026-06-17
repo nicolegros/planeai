@@ -148,8 +148,12 @@ export async function handleCloseTab(): Promise<void> {
     getCurrentWindow().close();
     return;
   }
-  removeTab(id, active);
-  await pty.closeTab(id, active);
+  await closeShellTab(id, active);
+}
+
+export async function closeShellTab(sessionId: string, tabIndex: number): Promise<void> {
+  await pty.closeTab(sessionId, tabIndex);
+  removeTab(sessionId, tabIndex);
 }
 
 export function handleNextTab(): void {

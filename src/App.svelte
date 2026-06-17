@@ -25,7 +25,7 @@
   import EditorTab from "./components/EditorTab.svelte";
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
-  import { getTabs, getActiveTabIndex, removeTab } from "./lib/session-tabs.svelte";
+  import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
 
@@ -171,7 +171,7 @@
       if (!activeSessionId) return;
       if (i === -1) orchestrator.closeDiffTab(activeSessionId);
       else if (i === -2) orchestrator.closeEditorTab(activeSessionId);
-      else { removeTab(activeSessionId, i); pty.closeTab(activeSessionId, i); }
+      else { orchestrator.closeShellTab(activeSessionId, i); }
     }}
     onAddTab={() => orchestrator.handleNewTab()}
     {symphonyStatus}
