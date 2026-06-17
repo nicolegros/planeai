@@ -289,11 +289,12 @@ fn daemon_spawn(
         .write_all(&[0x00])
         .map_err(|e| format!("handshake failed: {e}"))?;
 
+    let (shell_program, shell_args) = planeai_core::command::shell_args(command);
     let req = serde_json::json!({
         "cmd": "spawn",
         "session_id": session_id,
-        "command": command,
-        "args": [],
+        "command": shell_program,
+        "args": shell_args,
         "cwd": cwd,
     });
     let payload = serde_json::to_vec(&req).map_err(|e| e.to_string())?;
