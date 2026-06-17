@@ -306,15 +306,71 @@ cargo run --release --bin planeai-iced-spike -- \
 - Would need: session listing (tmux list-sessions), attach via PtyTarget::TmuxAttach
 - Blocked on: tmux session lifecycle management, detach/reattach semantics in the spike
 
-## What Remains: Full Production Backend Extraction
+## Shared Crate: `planeai-pty`
 
-The shared core (`pty_core.rs`) currently lives inside the spike crate. To fully unify:
+### Location
 
-1. Move `pty_core.rs` to `planeai-core` or a new `planeai-pty` crate
-2. Make the production Tauri `pty.rs` use the shared core (implement `TerminalOutputSink` for `Channel<Response>` + `AppHandle`)
+`src-tauri/planeai-pty/` — workspace member of the `src-tauri/` Cargo workspace.
+
+### What it is
+
+planeai-pty is shared PTY/session I/O infrastructure. It is not a terminal emulator and does not render or parse ANSI.
+
+### What moved into the crate
+
+- `LocalPtySession` — local PTY spawn with reader/flusher coalescing threads
+- `PtyEvent` (was `TerminalSessionEvent`) — push-based output/exit/error events
+- `PtyEventSink` (was `TerminalOutputSink`) — trait for receiving events
+- `LocalPtyConfig` — session spawn configuration (command, shell, cwd, env, cols, rows, coalesce params, queue policy)
+- `QueuePolicy` — `Block` (default) / `DropOldest`
+- `PipelineDiagnostics` (was `PtyDiagCounters`) — atomic reader/flusher counters
+- `FlowControl` — internal pause/resume condvar (not public)
+- Conditional coalescing fix (no 4ms sleep under flood)
+- Lossless blocking flusher behavior
+
+### What intentionally stayed outside the crate
+
+- `ChannelSink` (Iced adapter's bounded push-to-pull bridge) — in spike's `planeai_local.rs`
+- `PlaneAiTerminalSession` / `PlaneAiTerminalSession` trait — in spike's `adapter.rs`
+- Terminal parsing (alacritty_terminal) — in spike's `multi_session.rs`
+- Terminal rendering (Iced canvas) — in spike
+- Benchmark UI, metrics, CLI — in spike
+- Production Tauri `pty.rs` — unchanged
+- Daemon/tmux backends — not yet integrated
+
+### How the Iced spike uses the crate
+
+The spike's `planeai_local.rs` implements `PtyEventSink` with a `ChannelSink` that:
+1. Receives `PtyEvent::Output` pushes from the crate's flusher thread
+2. Stores bytes in a bounded buffer (512KB, blocking backpressure)
+3. Exposes `try_read_batch()` for the spike's poll-based UI loop
+
+### Does production Tauri use the crate yet?
+
+No. Production `pty.rs` remains unchanged. The next step would be implementing `PtyEventSink` for `Channel<Response>` + `AppHandle` in the Tauri backend.
+
+### Dependencies of planeai-pty
+
+- `portable-pty = "0.8"`
+- `anyhow = "1"`
+
+No Tauri, Iced, alacritty_terminal, xterm, serde, or tokio dependencies.
+
+### Current performance (post-extraction, 3-session flood, 5s)
+
+| Source | MB/s | p99 frame delta | output_bytes_dropped |
+|--------|------|-----------------|---------------------|
+| spike-local | 25.24 | 23.1 ms | 0 |
+| planeai-local | 24.97 | 22.9 ms | 0 |
+
+(At parity. Absolute throughput lower than previous 46 MB/s baseline due to larger terminal window 191×88 in this test environment.)
+
+### Next step: Tauri adapter
+
+To integrate into production:
+1. Implement `PtyEventSink` for `Channel<Response>` + `AppHandle` in `src-tauri/src/pty.rs`
+2. Replace the production reader/flusher with `LocalPtySession::spawn(config, tauri_sink)`
 3. Remove duplicated reader/flusher logic from `pty.rs`
-
-This was intentionally deferred to avoid risking the production Tauri app.
 
 ## Known Limitations
 
@@ -326,7 +382,7 @@ This was intentionally deferred to avoid risking the production Tauri app.
 6. **Queue policy per-app:** All sessions share the same queue policy (from CLI flag).
 7. **planeai-local throughput:** Now at parity with spike-local (~46 MB/s). Conditional flusher coalescing preserves low-load batching without penalizing flood throughput.
 8. **planeai-local has no OutputObserver:** The production backend's `OutputObserver` trait (for byte-counting hooks) is not wired up in the extracted core.
-9. **No Tauri adapter yet:** The shared core is not yet consumed by the production Tauri app. It lives spike-side only.
+9. **No Tauri adapter yet:** `planeai-pty` crate exists but the production Tauri app does not consume it yet. Only the Iced spike uses it.
 
 ## Performance Fix History
 
@@ -390,5 +446,6 @@ Yes — 0 bytes dropped in all configurations tested:
 
 #### Ready for shared-core extraction?
 
-Yes. `pty_core.rs` is Tauri-independent, performant, and lossless. Next step is
-moving it to `planeai-core` crate and having production `pty.rs` use it.
+Done. The shared core now lives in `src-tauri/planeai-pty/`. The Iced spike's
+`planeai-local` source consumes it via `planeai_pty::LocalPtySession`. Next step
+is having production `pty.rs` implement `PtyEventSink` and use the same crate.

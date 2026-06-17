@@ -4419,6 +4419,7 @@ dependencies = [
  "clap",
  "iced",
  "libc",
+ "planeai-pty",
  "portable-pty",
  "serde",
  "serde_json",
@@ -4432,6 +4433,14 @@ dependencies = [
  "libc",
  "tokio",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "planeai-pty"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "portable-pty",
 ]
 
 [[package]]

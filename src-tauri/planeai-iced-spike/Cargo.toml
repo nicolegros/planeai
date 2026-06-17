@@ -18,3 +18,4 @@ libc = "0.2"
 portable-pty = "0.8"
 smol_str = "0.2"
 arboard = "3"
+planeai-pty = { path = "../planeai-pty" }

@@ -1,13 +1,14 @@
 //! PlaneAI-local session source for the Iced spike.
 //!
-//! Bridges the push-based TerminalOutputSink from pty_core into the
+//! Bridges the push-based PtyEventSink from planeai-pty into the
 //! pull-based PlaneAiTerminalSession trait used by the spike's multi-session UI.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use planeai_pty::{LocalPtyConfig, LocalPtySession, PtyEvent, PtyEventSink};
+
 use crate::adapter::{PipelineDiag, PlaneAiTerminalSession};
-use crate::pty_core::{LocalPtySession, TerminalOutputSink, TerminalSessionEvent, TerminalSessionHandle};
 
 const MAX_BUFFER: usize = 512 * 1024; // 512KB, matches spike-local
 
@@ -23,10 +24,10 @@ struct ChannelSink {
     block_ns: AtomicU64,
 }
 
-impl TerminalOutputSink for ChannelSink {
-    fn send(&self, event: TerminalSessionEvent) -> anyhow::Result<()> {
+impl PtyEventSink for ChannelSink {
+    fn send(&self, event: PtyEvent) -> anyhow::Result<()> {
         match event {
-            TerminalSessionEvent::Output { bytes, .. } => {
+            PtyEvent::Output { bytes, .. } => {
                 self.send_calls.fetch_add(1, Ordering::Relaxed);
                 self.send_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 let mut buf = self.buf.lock().unwrap();
@@ -44,7 +45,7 @@ impl TerminalOutputSink for ChannelSink {
                 let len = buf.len() as u64;
                 let _ = self.max_pending.fetch_max(len, Ordering::Relaxed);
             }
-            TerminalSessionEvent::Exit { .. } | TerminalSessionEvent::Error { .. } => {
+            PtyEvent::Exit { .. } | PtyEvent::Error { .. } => {
                 self.exited.store(true, Ordering::Release);
             }
         }
@@ -52,7 +53,7 @@ impl TerminalOutputSink for ChannelSink {
     }
 }
 
-/// PlaneAI-local session: uses extracted PTY core with push-to-pull bridge.
+/// PlaneAI-local session: uses planeai-pty crate with push-to-pull bridge.
 pub struct PlaneAiLocalSession {
     session: LocalPtySession,
     buf: Arc<Mutex<Vec<u8>>>,
@@ -85,7 +86,15 @@ impl PlaneAiLocalSession {
             block_ns: AtomicU64::new(0),
         });
 
-        let session = LocalPtySession::spawn(id, cols, rows, command, sink.clone())?;
+        let config = LocalPtyConfig {
+            session_id: id,
+            command: command.map(|s| s.to_string()),
+            cols,
+            rows,
+            ..Default::default()
+        };
+
+        let session = LocalPtySession::spawn(config, sink.clone())?;
 
         Ok(Self { session, buf, buf_not_full, sink_exited, max_pending, sink })
     }
