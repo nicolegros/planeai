@@ -1,7 +1,10 @@
 #![recursion_limit = "256"]
 
-mod input;
-mod shell;
+pub mod adapter;
+pub mod common;
+pub mod input;
+mod multi_session;
+pub mod shell;
 
 use std::fs;
 use std::io::Write;
@@ -28,47 +31,55 @@ use serde_json::json;
 // --- CLI ---
 
 #[derive(ClapParser, Debug, Clone)]
-struct Args {
+pub struct Args {
     #[arg(long)]
-    replay: Option<PathBuf>,
+    pub replay: Option<PathBuf>,
     #[arg(long)]
-    shell: bool,
+    pub shell: bool,
     #[arg(long)]
-    command: Option<String>,
+    pub command: Option<String>,
     #[arg(long, default_value_t = 120)]
-    cols: usize,
+    pub cols: usize,
     #[arg(long, default_value_t = 40)]
-    rows: usize,
+    pub rows: usize,
     #[arg(long, default_value_t = 16384)]
-    chunk_size: usize,
+    pub chunk_size: usize,
     #[arg(long, default_value_t = 4)]
-    chunk_interval_ms: u64,
+    pub chunk_interval_ms: u64,
     #[arg(long)]
-    metrics: Option<PathBuf>,
+    pub metrics: Option<PathBuf>,
     #[arg(long, default_value = "iced-alacritty")]
-    backend: String,
+    pub backend: String,
     #[arg(long)]
-    exit_when_done: bool,
+    pub exit_when_done: bool,
     #[arg(long)]
-    snapshot: Option<PathBuf>,
+    pub snapshot: Option<PathBuf>,
     #[arg(long)]
-    font_size: Option<f32>,
+    pub font_size: Option<f32>,
     #[arg(long)]
-    scrollback_lines: Option<usize>,
+    pub scrollback_lines: Option<usize>,
     #[arg(long)]
-    max_runtime_ms: Option<u64>,
+    pub max_runtime_ms: Option<u64>,
     #[arg(long)]
-    warmup_ms: Option<u64>,
+    pub warmup_ms: Option<u64>,
     #[arg(long)]
-    input_benchmark: bool,
+    pub input_benchmark: bool,
     #[arg(long, default_value_t = 50)]
-    input_interval_ms: u64,
+    pub input_interval_ms: u64,
     #[arg(long, default_value_t = 100)]
-    input_events: u64,
+    pub input_events: u64,
     #[arg(long)]
-    flood_command: Option<String>,
+    pub flood_command: Option<String>,
     #[arg(long, default_value = "block")]
-    output_queue_policy: String,
+    pub output_queue_policy: String,
+    #[arg(long)]
+    pub multi_session: bool,
+    #[arg(long, default_value_t = 3)]
+    pub sessions: usize,
+    #[arg(long)]
+    pub session_command: Option<String>,
+    #[arg(long, default_value = "spike-local")]
+    pub session_source: String,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();
@@ -273,6 +284,7 @@ impl App {
                 .or(args.flood_command.as_deref());
             let policy = shell::QueuePolicy::from_str(&args.output_queue_policy);
             Some(shell::Shell::spawn_with_policy(
+                0,
                 args.cols as u16,
                 args.rows as u16,
                 cmd,
@@ -925,6 +937,11 @@ fn title(_state: &App) -> String { String::from("PlaneAI Iced Terminal Spike") }
 
 fn main() -> iced::Result {
     let args = Args::parse();
+
+    // Multi-session mode
+    if args.multi_session {
+        return multi_session::run(args);
+    }
 
     // Validate: need one of --replay, --shell, or --command
     if args.replay.is_none() && !args.shell && args.command.is_none() {

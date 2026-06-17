@@ -40,7 +40,13 @@ def get_parse_or_write(s, p):
     if v is not None and v != 0:
         return v
     v = s.get(f"p{p}_parse_time_ms")
-    return v if v is not None else 0
+    if v is not None:
+        return v
+    # Multi-session active parse time
+    v = s.get(f"p{p}_active_parse_time_ms")
+    if v is not None:
+        return v
+    return 0
 
 
 def get_frame_delta(s, p):
@@ -51,7 +57,10 @@ def get_frame_delta(s, p):
 
 
 def get_render_work(s, p):
-    return s.get(f"p{p}_render_work_ms") or 0
+    v = s.get(f"p{p}_render_work_ms")
+    if v:
+        return v
+    return s.get(f"p{p}_active_render_work_ms") or 0
 
 
 def get_memory(s):
@@ -137,15 +146,34 @@ def fmt(val, decimals=2, suffix=""):
     return f"{val:.{decimals}f}{suffix}"
 
 
+def get_mode(s):
+    """Detect mode from summary."""
+    m = s.get("mode")
+    if m:
+        return m
+    if s.get("replay_mode"):
+        return s.get("replay_mode")
+    return "unknown"
+
+
+def get_sessions(s):
+    return s.get("session_count", 1)
+
+
+def get_switch_latency(s, p):
+    return s.get(f"p{p}_session_switch_latency_ms")
+
+
 def format_table(groups):
     headers = [
-        "backend", "fixture", "size", "mode", "runs",
+        "backend", "fixture", "size", "mode", "sessions", "runs",
         "wall_ms", "MB/s",
         "p95_parse_or_write_ms", "p99_parse_or_write_ms",
         "p95_frame_delta_ms", "p99_frame_delta_ms",
         "p95_render_work_ms", "p99_render_work_ms",
+        "p95_switch_latency_ms", "p99_switch_latency_ms",
         "frames>16.7", "frames>33.3", "frames>50",
-        "max_pending_input_KB", "queue_end_KB",
+        "output_bytes_dropped", "max_pending_output_KB",
         "memory_MB", "notes",
     ]
 
@@ -161,6 +189,16 @@ def format_table(groups):
         mode = "max" if interval == 0 else f"{interval}ms"
         fix_name = Path(fixture).stem if "/" in fixture else fixture.replace(".ansi", "")
 
+        # Override mode for multi-session summaries
+        for s in summaries:
+            m = get_mode(s)
+            if m == "multi-session":
+                mode = "multi"
+                break
+            elif m not in ("unknown",):
+                mode = m
+                break
+
         warnings = check_warnings(summaries, key)
 
         rows.append([
@@ -168,6 +206,7 @@ def format_table(groups):
             fix_name,
             f"{cols}x{row_count}",
             mode,
+            str(median([get_sessions(s) for s in summaries])),
             str(n),
             fmt(med("wall_time_ms") or med("total_replay_time_ms"), 0),
             fmt(med("average_mb_per_sec"), 2),
@@ -177,11 +216,13 @@ def format_table(groups):
             fmt(median([get_frame_delta(s, 99) for s in summaries]), 1),
             fmt(median([get_render_work(s, 95) for s in summaries]), 2),
             fmt(median([get_render_work(s, 99) for s in summaries]), 2),
+            fmt(median([get_switch_latency(s, 95) or 0 for s in summaries]), 2),
+            fmt(median([get_switch_latency(s, 99) or 0 for s in summaries]), 2),
             fmt(med("frames_over_16_7ms"), 0),
             fmt(med("frames_over_33_3ms"), 0),
             fmt(med("frames_over_50ms"), 0),
-            fmt(median([get_max_pending_input(s) for s in summaries]) / 1024, 0),
-            fmt(median([get_queue_end(s) for s in summaries]) / 1024, 0),
+            fmt(med("output_bytes_dropped_total"), 0),
+            fmt(median([s.get("max_pending_pty_output_bytes_total", 0) or get_max_pending_input(s) for s in summaries]) / 1024, 0),
             fmt(median([get_memory(s) for s in summaries]), 0),
             "; ".join(warnings),
         ])

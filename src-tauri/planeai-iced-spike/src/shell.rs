@@ -4,13 +4,13 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Instant;
 
+use crate::adapter::PlaneAiTerminalSession;
+
 pub const MAX_BUFFER: usize = 512 * 1024; // 512KB bounded buffer
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QueuePolicy {
-    /// Lossless: PTY reader blocks when buffer is full until UI drains.
     Block,
-    /// Lossy: drop oldest bytes when buffer is full (stress testing only).
     DropOldest,
 }
 
@@ -31,12 +31,13 @@ impl QueuePolicy {
 }
 
 pub struct Shell {
+    id: usize,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     reader_buf: Arc<Mutex<Vec<u8>>>,
     buf_not_full: Arc<Condvar>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub max_pending_bytes: Arc<Mutex<usize>>,
-    pub bytes_dropped: Arc<Mutex<u64>>,
+    pub bytes_dropped_count: Arc<Mutex<u64>>,
     pub producer_block_count: Arc<Mutex<u64>>,
     pub producer_block_duration_ms: Arc<Mutex<f64>>,
     pub exited: Arc<Mutex<bool>>,
@@ -44,15 +45,11 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn spawn(cols: u16, rows: u16) -> Self {
-        Self::spawn_with_policy(cols, rows, None, QueuePolicy::Block)
+    pub fn spawn(id: usize, cols: u16, rows: u16) -> Self {
+        Self::spawn_with_policy(id, cols, rows, None, QueuePolicy::Block)
     }
 
-    pub fn spawn_command(cols: u16, rows: u16, command: Option<&str>) -> Self {
-        Self::spawn_with_policy(cols, rows, command, QueuePolicy::Block)
-    }
-
-    pub fn spawn_with_policy(cols: u16, rows: u16, command: Option<&str>, policy: QueuePolicy) -> Self {
+    pub fn spawn_with_policy(id: usize, cols: u16, rows: u16, command: Option<&str>, policy: QueuePolicy) -> Self {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -82,8 +79,8 @@ impl Shell {
         let condvar_clone = Arc::clone(&buf_not_full);
         let max_pending_bytes = Arc::new(Mutex::new(0usize));
         let max_pending_clone = Arc::clone(&max_pending_bytes);
-        let bytes_dropped = Arc::new(Mutex::new(0u64));
-        let bytes_dropped_clone = Arc::clone(&bytes_dropped);
+        let bytes_dropped_count = Arc::new(Mutex::new(0u64));
+        let bytes_dropped_clone = Arc::clone(&bytes_dropped_count);
         let producer_block_count = Arc::new(Mutex::new(0u64));
         let block_count_clone = Arc::clone(&producer_block_count);
         let producer_block_duration_ms = Arc::new(Mutex::new(0.0f64));
@@ -100,7 +97,6 @@ impl Shell {
                         let mut buf = buf_clone.lock().unwrap();
                         match policy {
                             QueuePolicy::Block => {
-                                // Block until there's room
                                 if buf.len() + n > MAX_BUFFER {
                                     *block_count_clone.lock().unwrap() += 1;
                                     let block_start = Instant::now();
@@ -122,9 +118,7 @@ impl Shell {
                         buf.extend_from_slice(&tmp[..n]);
                         let len = buf.len();
                         let mut max = max_pending_clone.lock().unwrap();
-                        if len > *max {
-                            *max = len;
-                        }
+                        if len > *max { *max = len; }
                     }
                     Err(_) => break,
                 }
@@ -134,12 +128,13 @@ impl Shell {
 
         let master: Box<dyn MasterPty + Send> = pair.master;
         Shell {
+            id,
             writer,
             reader_buf,
             buf_not_full,
             master: Arc::new(Mutex::new(master)),
             max_pending_bytes,
-            bytes_dropped,
+            bytes_dropped_count,
             producer_block_count,
             producer_block_duration_ms,
             exited,
@@ -150,17 +145,16 @@ impl Shell {
     pub fn drain(&self) -> Vec<u8> {
         let mut buf = self.reader_buf.lock().unwrap();
         let data = std::mem::take(&mut *buf);
-        // Notify the producer that buffer space is available
         self.buf_not_full.notify_one();
         data
     }
 
-    pub fn has_exited(&self) -> bool {
-        *self.exited.lock().unwrap()
-    }
-
     pub fn pending_len(&self) -> usize {
         self.reader_buf.lock().unwrap().len()
+    }
+
+    pub fn has_exited(&self) -> bool {
+        *self.exited.lock().unwrap()
     }
 
     pub fn write(&self, data: &[u8]) {
@@ -171,7 +165,13 @@ impl Shell {
     }
 
     pub fn bytes_dropped(&self) -> u64 {
-        *self.bytes_dropped.lock().unwrap()
+        *self.bytes_dropped_count.lock().unwrap()
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) {
+        if let Ok(m) = self.master.lock() {
+            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        }
     }
 
     pub fn producer_block_count(&self) -> u64 {
@@ -181,10 +181,47 @@ impl Shell {
     pub fn producer_block_duration_ms(&self) -> f64 {
         *self.producer_block_duration_ms.lock().unwrap()
     }
+}
 
-    pub fn resize(&self, cols: u16, rows: u16) {
-        if let Ok(m) = self.master.lock() {
-            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+impl PlaneAiTerminalSession for Shell {
+    fn id(&self) -> usize { self.id }
+
+    fn write(&self, data: &[u8]) -> anyhow::Result<()> {
+        let mut w = self.writer.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        w.write_all(data)?;
+        w.flush()?;
+        Ok(())
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        let m = self.master.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    fn try_read_batch(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        let mut buf = self.reader_buf.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
+        if buf.is_empty() {
+            return Ok(None);
         }
+        let data = std::mem::take(&mut *buf);
+        self.buf_not_full.notify_one();
+        Ok(Some(data))
+    }
+
+    fn has_exited(&self) -> bool {
+        *self.exited.lock().unwrap()
+    }
+
+    fn pending_bytes(&self) -> usize {
+        self.reader_buf.lock().unwrap().len()
+    }
+
+    fn max_pending_bytes(&self) -> usize {
+        *self.max_pending_bytes.lock().unwrap()
+    }
+
+    fn bytes_dropped(&self) -> u64 {
+        *self.bytes_dropped_count.lock().unwrap()
     }
 }
