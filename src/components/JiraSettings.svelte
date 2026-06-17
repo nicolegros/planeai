@@ -15,6 +15,21 @@
   let connecting = $state(false);
   let syncing = $state(false);
   let projectItems = $state<{ value: string; label: string }[]>([]);
+  let mappingKeys = $state<string[]>([]);
+  let statusPairKeys = $state<string[][]>([]);
+
+  // Keep key arrays in sync with mappings length
+  $effect(() => {
+    while (mappingKeys.length < mappings.length) mappingKeys.push(crypto.randomUUID());
+    mappingKeys.length = mappings.length;
+    while (statusPairKeys.length < mappings.length) statusPairKeys.push([]);
+    statusPairKeys.length = mappings.length;
+    for (let i = 0; i < mappings.length; i++) {
+      const pairCount = mappings[i].status_map?.length ?? 0;
+      while (statusPairKeys[i].length < pairCount) statusPairKeys[i].push(crypto.randomUUID());
+      statusPairKeys[i].length = pairCount;
+    }
+  });
 
   const planeaiStatuses = [
     { value: "todo", label: "todo" },
@@ -143,7 +158,7 @@
 <!-- Project Mappings -->
 <section class="space-y-3">
   <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Project Mappings</h2>
-  {#each mappings as mapping, i (i)}
+  {#each mappings as mapping, i (mappingKeys[i])}
     <div class="rounded-lg border border-surface-200 dark:border-surface-700 p-4 space-y-3">
       <div class="flex items-center justify-between">
         <span class="text-sm font-medium text-surface-900 dark:text-surface-50">Mapping {i + 1}</span>
@@ -169,7 +184,7 @@
       <div class="space-y-2">
         <!-- svelte-ignore a11y_label_has_associated_control -->
         <label class="text-xs text-surface-700 dark:text-surface-400">Status map</label>
-        {#each mapping.status_map ?? [] as pair, j (j)}
+        {#each mapping.status_map ?? [] as pair, j (statusPairKeys[i]?.[j])}
           <div class="flex items-center gap-2">
             <Input value={pair.jira_status} placeholder="Jira status" onchange={(e) => updateStatusPair(i, j, { jira_status: e.currentTarget.value })} class="flex-1" aria-label="Jira status name" />
             <span class="text-xs text-surface-500">→</span>
