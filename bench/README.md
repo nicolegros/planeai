@@ -1,167 +1,180 @@
-# Iced Terminal Rendering Spike — Benchmark Harness
+# PlaneAI Terminal Benchmark Harness
 
-Spike to evaluate native Rust terminal rendering with **Iced** + **alacritty_terminal** as an alternative to the current Tauri + xterm.js path.
+Compares the Tauri + xterm.js terminal path against a native Rust/Iced + alacritty_terminal spike. Both consume the same `.ansi` byte fixtures under identical replay settings and produce comparable JSONL metrics.
+
+**See [INTEGRATION_CONTRACT.md](./INTEGRATION_CONTRACT.md)** for the shared schema, CLI interface, and metric naming rules.
 
 ## Quick Start
 
 ```bash
-# 1. Generate fixture files (~2 MB each)
-python3 bench/generate-fixtures.py
+# 1. Generate fixtures
+python bench/generate-fixtures.py --size medium --output-dir bench/fixtures
 
-# 2. Build the spike in release mode
-cargo build --release -p planeai-iced-spike
+# 2. Build the app
+pnpm tauri build
 
-# 3. Run the replay benchmark
-cargo run --release --bin planeai-iced-spike -- \
-  --replay bench/fixtures/ansi-flood.ansi \
-  --cols 120 \
-  --rows 40 \
-  --chunk-size 16384 \
-  --chunk-interval-ms 4 \
-  --metrics bench/results/iced-ansi-flood.jsonl \
-  --exit-when-done
+# 3. Run one benchmark
+PLANEAI_BENCH_REPLAY=$(pwd)/bench/fixtures/mixed-agent-like.ansi \
+PLANEAI_BENCH_METRICS=$(pwd)/bench/results/tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.jsonl \
+PLANEAI_BENCH_EXIT=1 \
+./src-tauri/target/release/planeai
 
-# 4. Summarize results
-python3 bench/summarize-metrics.py bench/results/*.jsonl
+# 4. Summarize
+python bench/summarize-metrics.py bench/results/*.jsonl
 ```
 
-## Building
-
-From the repo root:
+## Generate Synthetic Fixtures
 
 ```bash
-cd src-tauri
-cargo build --release -p planeai-iced-spike
+python bench/generate-fixtures.py --size medium --output-dir bench/fixtures
 ```
 
-The binary is at `target/release/planeai-iced-spike`.
+- `--size small|medium|large` — ~256KB / ~2MB / ~16MB
+- `--fixtures` — Specific fixtures (default: all five)
 
-## Generating Fixtures
+| Fixture | Content |
+|---------|---------|
+| `ansi-flood.ansi` | High-volume colored text |
+| `long-lines.ansi` | Long markdown-like lines |
+| `colors-heavy.ansi` | Dense ANSI color/style sequences |
+| `progress-bars.ansi` | Carriage-return progress, spinners |
+| `mixed-agent-like.ansi` | AI agent output (code blocks, errors, thinking) |
+
+## Capture a Real Session
 
 ```bash
-python3 bench/generate-fixtures.py [size_in_bytes]
+PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/my-session.ansi pnpm tauri dev
 ```
 
-Default size is 2 MB per fixture. Generates:
+Optionally filter to one session:
+```bash
+PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/real.ansi \
+PLANEAI_BENCH_CAPTURE_SESSION=<uuid> \
+pnpm tauri dev
+```
 
-| Fixture | Description |
-|---------|-------------|
-| `ansi-flood.ansi` | High-throughput colored text lines |
-| `long-lines.ansi` | Lines exceeding terminal width (wrap testing) |
-| `colors-heavy.ansi` | Dense 256-color and truecolor sequences |
-| `progress-bars.ansi` | Carriage-return progress bars (overwrite testing) |
+## Run Tauri+xterm Benchmark
 
-## Running the Benchmark
+### Direct (env vars)
 
 ```bash
-cargo run --release --bin planeai-iced-spike -- [OPTIONS]
+PLANEAI_BENCH_REPLAY=$(pwd)/bench/fixtures/mixed-agent-like.ansi \
+PLANEAI_BENCH_COLS=120 \
+PLANEAI_BENCH_ROWS=40 \
+PLANEAI_BENCH_CHUNK_SIZE=16384 \
+PLANEAI_BENCH_CHUNK_INTERVAL_MS=4 \
+PLANEAI_BENCH_METRICS=$(pwd)/bench/results/tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.jsonl \
+PLANEAI_BENCH_SNAPSHOT=$(pwd)/bench/results/tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.txt \
+PLANEAI_BENCH_EXIT=1 \
+./src-tauri/target/release/planeai
 ```
 
-### Options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--replay <path>` | required | Path to `.ansi` fixture file |
-| `--cols <n>` | 120 | Terminal columns |
-| `--rows <n>` | 40 | Terminal rows |
-| `--chunk-size <bytes>` | 16384 | Bytes fed per tick |
-| `--chunk-interval-ms <ms>` | 4 | Milliseconds between chunks |
-| `--metrics <path>` | none | Output JSONL metrics file |
-| `--exit-when-done` | false | Exit after replay completes |
-
-## Metrics Output
-
-The `--metrics` file is JSONL. Each line except the last is a per-chunk event:
-
-```json
-{"timestamp_ms":12,"event_type":"chunk","bytes_total":16384,"bytes_since_last_event":16384,"frames_total":1,"parse_time_ms":0.42,"render_time_ms":0.0,"frame_time_ms":0.55,"dirty_rows":40,"queue_depth_bytes":2080768,"rss_mb":45.2,"cols":120,"rows":40}
-```
-
-The last line is the summary:
-
-```json
-{"total_bytes":2097152,"total_replay_time_ms":520.3,"average_mb_per_sec":3.84,"p50_frame_time_ms":0.35,"p95_frame_time_ms":0.82,"p99_frame_time_ms":1.4,"frames_over_16_7ms":0,"frames_over_33_3ms":0,"p50_parse_time_ms":0.30,"p95_parse_time_ms":0.70,"p99_parse_time_ms":1.1,"max_queue_depth_bytes":2080768,"final_rss_mb":48.0}
-```
-
-## Summarizing Results
+### Automated runner
 
 ```bash
-python3 bench/summarize-metrics.py bench/results/*.jsonl
+python bench/run-benchmark.py \
+  --fixtures mixed-agent-like.ansi long-lines.ansi \
+  --backends tauri-xterm \
+  --runs 3 --mode realtime \
+  --output-dir bench/results
 ```
 
-Prints a comparison table across all metric files.
+## Run Iced Spike Benchmark
 
-## Comparing Against Tauri + xterm.js
-
-To compare, run the same fixture through the existing xterm.js renderer (via the Tauri app or a standalone xterm.js harness), then compare:
-
-1. **Throughput (MB/s)** — how fast bytes are consumed
-2. **Frame time percentiles** — smoothness of rendering
-3. **Parse time percentiles** — how fast the terminal parser processes input
-4. **RSS** — memory overhead
-
-The Iced spike is headless-friendly (with `--exit-when-done`) and produces structured metrics, making automated comparison easy.
-
-## What's Implemented
-
-- [x] Replay mode: reads fixture, feeds to alacritty_terminal in chunks
-- [x] Configurable chunk size and interval
-- [x] Canvas-based grid rendering with monospace font
-- [x] ANSI foreground/background colors (16 named + 256 indexed + truecolor)
-- [x] Cursor rendering
-- [x] JSONL metrics with per-chunk events and final summary
-- [x] Percentile calculations (p50/p95/p99)
-- [x] RSS measurement (macOS)
-- [x] Fixture generator (4 types)
-- [x] Metrics summarizer script
-
-## What's Missing / Known Issues
-
-- [ ] Bold/italic/underline text attributes not rendered
-- [ ] Selection support
-- [ ] Hyperlink rendering
-- [ ] Mouse interaction
-- [ ] Live PTY mode (stretch goal)
-- [ ] render_time_ms is approximate (measured as frame_time - parse_time, not actual GPU time)
-- [ ] Font metrics are approximated (fixed cell width/height based on window size)
-- [ ] No scrollback rendering (only visible viewport — this is intentional)
-- [ ] Terminal resize during replay not supported
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────┐
-│  main.rs                                     │
-│                                              │
-│  ┌─────────┐   chunks    ┌───────────────┐  │
-│  │ Fixture │ ──────────▶ │ alacritty_    │  │
-│  │  file   │             │ terminal::Term │  │
-│  └─────────┘             └───────┬───────┘  │
-│                                  │ grid()   │
-│                          ┌───────▼───────┐  │
-│                          │ GridSnapshot   │  │
-│                          └───────┬───────┘  │
-│                                  │          │
-│                          ┌───────▼───────┐  │
-│                          │ Iced Canvas   │  │
-│                          │ (TermRenderer) │  │
-│                          └───────────────┘  │
-│                                              │
-│  Metrics ──▶ JSONL file                      │
-└─────────────────────────────────────────────┘
+Set the binary path (avoids rebuild each run):
+```bash
+export PLANEAI_ICED_SPIKE_BIN=./target/release/planeai-iced-spike
 ```
 
-## File Layout
+Then run:
+```bash
+python bench/run-benchmark.py \
+  --backends tauri-xterm iced-alacritty \
+  --fixtures mixed-agent-like.ansi \
+  --runs 3 --mode realtime
+```
+
+Or directly:
+```bash
+planeai-iced-spike \
+  --replay bench/fixtures/mixed-agent-like.ansi \
+  --cols 120 --rows 40 --chunk-size 16384 --chunk-interval-ms 4 \
+  --metrics bench/results/iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.jsonl \
+  --backend iced-alacritty --exit-when-done
+```
+
+## Summarize Results
+
+```bash
+python bench/summarize-metrics.py bench/results/*.jsonl
+python bench/summarize-metrics.py bench/results/*.jsonl --json
+```
+
+The summarizer handles both backend schemas automatically and shows a unified comparison table.
+
+## Metrics Reference
+
+See [INTEGRATION_CONTRACT.md](./INTEGRATION_CONTRACT.md) for the full schema.
+
+Key metrics:
+| Metric | Backend | Meaning |
+|--------|---------|---------|
+| `write_latency_ms` | tauri-xterm | term.write → callback |
+| `parse_time_ms` | iced-alacritty | bytes → terminal state |
+| `frame_delta_ms` | both | time between visual frames |
+| `render_work_ms` | iced-alacritty | GPU render pass time |
+| `average_mb_per_sec` | both | throughput |
+| `frames_over_16_7ms` | both | frames exceeding 60fps budget |
+| `max_queue_depth_bytes` | both | peak backlog |
+
+## Pass/Fail Guidance
+
+**Realtime** (chunk_interval_ms > 0):
+- p95 frame delta ≥30% lower than tauri-xterm, OR frames>33.3ms cut by ≥50%
+- Queue depth doesn't grow unbounded
+
+**Maxspeed** (chunk_interval_ms = 0):
+- ≥1.5× higher MB/s, OR similar throughput with better p95/p99 frame time
+
+**Memory**: Not materially worse; stops growing after replay.
+
+**Pacing**: The harness warns if `wall_time_ms < expected_min_replay_time_ms * 0.8`.
+
+## Result Naming
+
+```
+{backend}_{fixture_stem}_{cols}x{rows}_{chunk_kb}k_{interval_ms}ms_run{n}.jsonl
+```
+
+Examples:
+```
+tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.jsonl
+iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.jsonl
+```
+
+## File Structure
 
 ```
 bench/
-├── README.md              ← this file
-├── generate-fixtures.py   ← fixture generator
-├── summarize-metrics.py   ← metrics comparison tool
-├── fixtures/              ← generated .ansi files (gitignored)
-└── results/               ← output .jsonl files (gitignored)
-src-tauri/
-└── planeai-iced-spike/
-    ├── Cargo.toml
-    └── src/main.rs        ← the spike binary
+├── INTEGRATION_CONTRACT.md  ← shared schema between harness and spike
+├── README.md                ← this file
+├── generate-fixtures.py     ← synthetic fixture generator
+├── run-benchmark.py         ← automated benchmark runner
+├── summarize-metrics.py     ← results summarizer
+├── fixtures/                ← generated .ansi files (gitignored)
+├── captures/                ← real session captures (gitignored)
+└── results/                 ← JSONL metrics + snapshots (gitignored)
+
+src/lib/benchmark/
+├── metrics.ts               ← JSONL collector (tauri-xterm)
+└── replay.ts                ← replay orchestrator
+
+src-tauri/src/bench.rs       ← Rust commands for replay + metrics I/O
 ```
+
+## Known Limitations
+
+- WebGL renderer performance varies with GPU state
+- `performance.memory` only works in Chromium-based webviews (js_heap_mb = null otherwise)
+- First run may include initialization overhead — use ≥3 runs and look at median
+- Iced spike is not implemented in this repo — only detected and invoked

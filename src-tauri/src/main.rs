@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bench;
 mod cleanup;
 mod command;
 mod commands;
@@ -279,6 +280,11 @@ fn main() {
             check_cli_installed,
             install_cli,
             get_symphony_status,
+            bench::bench_replay_file,
+            bench::bench_fixture_info,
+            bench::bench_write_metrics,
+            bench::bench_write_snapshot,
+            bench::bench_get_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

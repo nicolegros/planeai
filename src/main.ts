@@ -12,7 +12,18 @@ if (page === "preferences") {
     mount(PreferencesPage, { target: document.getElementById("app")! });
   });
 } else {
-  import("./App.svelte").then(({ default: App }) => {
-    mount(App, { target: document.getElementById("app")! });
+  // Check if we're in benchmark replay mode
+  import("@tauri-apps/api/core").then(({ invoke }) => {
+    invoke("bench_get_config").then((config: unknown) => {
+      if (config) {
+        import("./components/BenchmarkRunner.svelte").then(({ default: BenchmarkRunner }) => {
+          mount(BenchmarkRunner, { target: document.getElementById("app")!, props: { config } });
+        });
+      } else {
+        import("./App.svelte").then(({ default: App }) => {
+          mount(App, { target: document.getElementById("app")! });
+        });
+      }
+    });
   });
 }
