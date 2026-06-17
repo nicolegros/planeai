@@ -48,6 +48,7 @@ pub fn encode_key_event(key: &Key, modifiers: &Modifiers, text: &Option<smol_str
         Key::Named(named) => {
             let bytes: &[u8] = match named {
                 Named::Enter => b"\r",
+                Named::Space => b" ",
                 Named::Backspace => b"\x7f",
                 Named::Tab => b"\t",
                 Named::Escape => b"\x1b",

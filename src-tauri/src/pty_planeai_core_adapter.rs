@@ -7,7 +7,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
@@ -105,20 +105,28 @@ impl PlaneaiPtyBackend {
             match LogSink::open(&log_path) {
                 Some(log_sink) => {
                     tracing::info!(session_id, path = %log_path.display(), "session log enabled");
-                    let meta = serde_json::json!({
-                        "session_id": session_id,
-                        "started_at": Utc::now().to_rfc3339(),
-                        "pty_core": "planeai-pty",
-                        "command": &full_command,
-                        "cols": 80,
-                        "rows": 24,
-                        "log_file": &log_filename
-                    });
+                    let meta = SessionMeta {
+                        schema_version: 1,
+                        session_id: session_id.to_string(),
+                        pty_core: "planeai-pty".to_string(),
+                        started_at: Utc::now().to_rfc3339(),
+                        ended_at: None,
+                        command: full_command.clone(),
+                        cwd: cwd.to_string(),
+                        cols: 80,
+                        rows: 24,
+                        ansi_log_file: log_filename,
+                        bytes_written: 0,
+                        bytes_dropped: 0,
+                        exit_status: None,
+                        status: "running".to_string(),
+                    };
                     let meta_path = session_log_dir.join("meta.json");
-                    if let Err(e) = fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap_or_default()) {
+                    if let Err(e) = write_meta(&meta_path, &meta) {
                         tracing::warn!("failed to write session metadata: {e}");
                     }
-                    Arc::new(TeeSink::new(tauri_sink, vec![Arc::new(log_sink)]))
+                    let tracking_sink = TrackingLogSink::new(log_sink, meta_path, meta);
+                    Arc::new(TeeSink::new(tauri_sink, vec![Arc::new(tracking_sink)]))
                 }
                 None => tauri_sink,
             }
@@ -204,6 +212,90 @@ impl PtyEventSink for TeeSink {
     }
 }
 
+// ─── Session Metadata ────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SessionMeta {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub pty_core: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub command: String,
+    pub cwd: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub ansi_log_file: String,
+    pub bytes_written: u64,
+    pub bytes_dropped: u64,
+    pub exit_status: Option<i32>,
+    pub status: String,
+}
+
+fn write_meta(path: &PathBuf, meta: &SessionMeta) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(meta).unwrap_or_default();
+    fs::write(path, json)
+}
+
+// ─── TrackingLogSink (durable ANSI log + metadata updates) ──────────────────
+
+/// Wraps LogSink with byte tracking and metadata finalization on Exit.
+pub struct TrackingLogSink {
+    log_sink: LogSink,
+    bytes_written: AtomicU64,
+    bytes_dropped: AtomicU64,
+    meta_path: PathBuf,
+    meta: Mutex<SessionMeta>,
+}
+
+impl TrackingLogSink {
+    fn new(log_sink: LogSink, meta_path: PathBuf, meta: SessionMeta) -> Self {
+        Self {
+            log_sink,
+            bytes_written: AtomicU64::new(0),
+            bytes_dropped: AtomicU64::new(0),
+            meta_path,
+            meta: Mutex::new(meta),
+        }
+    }
+
+    fn finalize(&self, exit_status: Option<i32>) {
+        if let Ok(mut meta) = self.meta.lock() {
+            meta.ended_at = Some(Utc::now().to_rfc3339());
+            meta.exit_status = exit_status;
+            meta.status = "exited".to_string();
+            meta.bytes_written = self.bytes_written.load(Ordering::Relaxed);
+            meta.bytes_dropped = self.bytes_dropped.load(Ordering::Relaxed);
+            if let Err(e) = write_meta(&self.meta_path, &meta) {
+                tracing::warn!("failed to finalize session metadata: {e}");
+            }
+        }
+    }
+}
+
+impl PtyEventSink for TrackingLogSink {
+    fn send(&self, event: PtyEvent) -> anyhow::Result<()> {
+        match &event {
+            PtyEvent::Output { bytes, .. } => {
+                let len = bytes.len() as u64;
+                if self.log_sink.send(event).is_ok() {
+                    self.bytes_written.fetch_add(len, Ordering::Relaxed);
+                } else {
+                    self.bytes_dropped.fetch_add(len, Ordering::Relaxed);
+                }
+            }
+            PtyEvent::Exit { status, .. } => {
+                self.finalize(*status);
+            }
+            PtyEvent::Error { .. } => {}
+        }
+        Ok(())
+    }
+}
+
 // ─── LogSink (durable ANSI log) ─────────────────────────────────────────────
 
 /// Writes raw PTY output bytes to a .ansi log file. Buffered, synchronous writes.
@@ -234,6 +326,7 @@ impl PtyEventSink for LogSink {
             if let Ok(mut f) = self.file.lock() {
                 if let Err(e) = f.write_all(&bytes) {
                     tracing::warn!("session log write error: {e}");
+                    return Err(anyhow::anyhow!("write failed: {e}"));
                 }
             }
         }

@@ -26,10 +26,11 @@
     onCreateTask: () => void;
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
+    onOpenLogViewer?: () => void;
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -470,6 +471,16 @@
                 >
                   Open pull request
                 </Command.Item>
+                {#if onOpenLogViewer}
+                <Command.Item
+                  value="session log viewer"
+                  keywords={["log", "replay", "dogfood", "debug", "ansi", "session logs"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  onSelect={() => { onOpenLogViewer(); close(); }}
+                >
+                  Session log viewer <span class="text-xs opacity-50 ml-1">dogfood</span>
+                </Command.Item>
+                {/if}
                 <Command.Item
                   value="archived sessions"
                   keywords={["archived", "restore", "old", "hidden"]}

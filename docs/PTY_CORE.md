@@ -42,7 +42,12 @@ The crate has **no** Tauri, Iced, alacritty, or xterm dependencies.
 
 3. **`TeeSink`** — multiplexes events to primary (frontend) + secondary (log) sinks
 
-4. **`LogSink`** — writes raw output bytes to `.ansi` log file for durable session capture
+4. **`TrackingLogSink`** — wraps `LogSink` with byte counting and metadata finalization:
+   - Tracks `bytes_written` and `bytes_dropped` via atomic counters
+   - On `PtyEvent::Exit`: finalizes `meta.json` with ended_at, exit_status, status, final byte counts
+   - Write errors are logged but never crash the app
+
+5. **`LogSink`** — writes raw output bytes to `.ansi` log file in append mode
 
 The adapter is only used for `PtyTarget::Shell` (local tab sessions). Tmux and daemon targets are unaffected.
 
@@ -72,10 +77,8 @@ local PTY core: legacy
 When `PLANEAI_SESSION_LOG_DIR` is set, sessions using the planeai-pty path write raw output to:
 
 ```
-$PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/<timestamp>_output.ansi
+$PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/<YYYYMMDDTHHMMSSZ>_output.ansi
 ```
-
-Where `<timestamp>` is UTC compact ISO 8601 (e.g., `20260617T192400Z`).
 
 A JSON metadata sidecar is written alongside:
 ```
@@ -83,10 +86,10 @@ $PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/meta.json
 ```
 
 Properties:
-- Raw bytes only (preserves ANSI escapes, cursor movement, colors)
+- Raw bytes only in `.ansi` (preserves ANSI escapes, cursor movement, colors)
 - No JSON envelope in the .ansi file
 - Directory per session — multiple runs create separate timestamped logs
-- Append-mode, synchronous-buffered writes (in the flusher thread)
+- Append-mode, synchronous-buffered writes
 - Write errors are logged but don't crash the app or block UI delivery
 - Only active when `PLANEAI_LOCAL_PTY_CORE=planeai-pty`
 - Parent directories are created automatically
@@ -98,27 +101,65 @@ PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
 pnpm tauri dev
 ```
 
-## Metadata sidecar
+## Metadata sidecar schema
 
-Each session log directory contains a `meta.json` with:
+Each session log directory contains a `meta.json` with schema version 1:
 
 ```json
 {
+  "schema_version": 1,
   "session_id": "abc123-def456",
-  "started_at": "2026-06-17T19:24:00+00:00",
   "pty_core": "planeai-pty",
+  "started_at": "2026-06-17T19:24:00+00:00",
+  "ended_at": "2026-06-17T19:30:00+00:00",
   "command": "/bin/zsh",
+  "cwd": "/Users/me/projects",
   "cols": 80,
   "rows": 24,
-  "log_file": "20260617T192400Z_output.ansi"
+  "ansi_log_file": "20260617T192400Z_output.ansi",
+  "bytes_written": 123456,
+  "bytes_dropped": 0,
+  "exit_status": 0,
+  "status": "exited"
 }
 ```
 
-The sidecar is written once at session start. It is not updated during the session.
+**Lifecycle:**
+1. Written at session start with `status: "running"`, `bytes_written: 0`, `ended_at: null`
+2. Updated on session exit with final values
+
+## Log Catalog Backend
+
+`src-tauri/src/session_logs.rs` provides Tauri commands for log discovery and replay:
+
+| Command | Description |
+|---------|-------------|
+| `get_session_log_dir()` | Returns configured log directory path |
+| `is_dogfood_log_viewer_enabled()` | Returns true if `PLANEAI_DOGFOOD_LOG_VIEWER=1` |
+| `list_session_logs()` | Scans sessions dir, returns metadata for all saved sessions |
+| `get_session_log_metadata(session_id)` | Returns metadata for a specific session |
+| `read_session_log_chunk(path, offset, length)` | Reads a chunk of a `.ansi` file (capped at 256 KiB) |
+| `open_session_log_folder(path)` | Opens the log directory in the OS file manager |
+
+### Security
+
+- All file operations validate the path is strictly under `PLANEAI_SESSION_LOG_DIR/sessions/`
+- Uses `fs::canonicalize()` to resolve symlinks and prevent path traversal
+- `read_session_log_chunk` caps at 256 KiB per request
+- Corrupt/missing metadata is handled gracefully (returns empty list or error)
 
 ## Log replay
 
-Durable `.ansi` logs can be replayed through the Iced spike for visual inspection or benchmarking:
+### In the Tauri app (dogfood log viewer)
+
+Gated behind `PLANEAI_DOGFOOD_LOG_VIEWER=1`. Access via Command Palette → "Session log viewer".
+
+- Streams `.ansi` file in 64 KiB chunks at 16ms intervals
+- Uses xterm.js in read-only mode (disableStdin: true)
+- Supports pause/resume/stop/restart
+- Shows bytes replayed counter
+
+### In the Iced spike
 
 ```bash
 cargo run --release -p planeai-iced-spike -- \
@@ -130,15 +171,6 @@ cargo run --release -p planeai-iced-spike -- \
   --metrics bench/results/replay-dogfood.jsonl \
   --backend iced-alacritty \
   --exit-when-done
-```
-
-This feeds the log file through the alacritty terminal emulator in the Iced window, simulating the original session output at the configured chunk rate.
-
-To replay without metrics collection (just visual inspection):
-```bash
-cargo run --release -p planeai-iced-spike -- \
-  --replay /tmp/planeai-session-logs/sessions/<session-id>/<timestamp>_output.ansi \
-  --cols 120 --rows 40
 ```
 
 ## Performance
@@ -153,61 +185,6 @@ Iced spike benchmark (headless, 25MB flood test):
 
 Both paths are at parity. The planeai-pty path uses the same coalescing strategy (4ms coalesce, 50ms max idle, 16KB read buffer).
 
-## Manual GUI smoke checklist
-
-Run in both modes and verify each item:
-
-### Legacy mode
-```bash
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
-```
-
-### PlaneAI PTY mode
-```bash
-PLANEAI_LOCAL_PTY_CORE=planeai-pty \
-PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
-pnpm tauri dev
-```
-
-### Checklist
-
-| # | Check | Legacy | PlaneAI PTY |
-|---|-------|--------|-------------|
-| 1 | App starts without crash | | |
-| 2 | Startup log says which PTY core is active | | |
-| 3 | Create local terminal session | | |
-| 4 | Type `echo hello` — output appears | | |
-| 5 | Paste multi-line command | | |
-| 6 | Run noisy command (`find / -name '*.rs' 2>/dev/null`) | | |
-| 7 | Ctrl-C interrupts running command | | |
-| 8 | Resize terminal window | | |
-| 9 | Close session cleanly | | |
-| 10 | No backend panic in logs | | |
-| 11 | No frontend error overlay | | |
-| 12 | `.ansi` log file created (PTY mode only) | N/A | |
-| 13 | `.ansi` log grows during output | N/A | |
-| 14 | `meta.json` sidecar exists | N/A | |
-| 15 | App can restart after using new path | | |
-
-## Known test failures
-
-| Test | Crate | Related to planeai-pty | Notes |
-|------|-------|------------------------|-------|
-| `file_explorer::tests::delete_to_trash_removes_from_listing` | `planeai` (main binary) | **No** | macOS sandbox/permissions issue |
-
-**Details:**
-
-```
-thread 'file_explorer::tests::delete_to_trash_removes_from_listing' panicked at src/file_explorer.rs:225:68:
-called `Result::unwrap()` on an `Err` value: "Error during a `trash` operation:
-Os { code: 1, description: \"The AppleScript exited with error. stderr:
-29:131: execution error: Not authorized to send Apple events to Finder. (-1743)\n\" }"
-```
-
-- **Root cause:** The `trash` crate uses AppleScript to move files to Trash on macOS, which requires Accessibility/Automation permissions that CI runners and some dev environments don't grant.
-- **Affects main branch:** Yes — this is a pre-existing failure, not introduced by planeai-pty work.
-- **Workaround:** Grant Terminal/IDE automation access to Finder in System Settings → Privacy & Security → Automation, or run with `--skip delete_to_trash`.
-
 ## What remains before daemon/tmux integration
 
 1. **Make planeai-pty the default** — requires more production dogfooding
@@ -215,12 +192,18 @@ Os { code: 1, description: \"The AppleScript exited with error. stderr:
 3. **Daemon backend via planeai-pty** — add a `DaemonPtySession` or equivalent
 4. **Tmux backend via planeai-pty** — if desired (currently tmux attach is simple enough)
 5. **Background-threaded LogSink** — current implementation is synchronous-buffered; could move to a dedicated write thread if latency becomes an issue
+6. **Log rotation/cleanup** — not yet implemented
 
 ## Known limitations
 
 - planeai-pty is only wired for `PtyTarget::Shell` (local tabs). Session attach (tmux/daemon) still uses legacy paths.
-- The `session_id` in `LocalPtyConfig` is typed as `usize` while production uses `String`. The adapter currently passes `0` — this is fine because the session ID routing is done at the `PtyManager` level.
+- The `session_id` in `LocalPtyConfig` is typed as `usize` while production uses `String`. The adapter passes `0` — routing is done at the `PtyManager` level.
 - Durable logs are only available in planeai-pty mode, not legacy mode.
 - Full Tauri+xterm live PTY benchmarks require manual GUI testing.
-- The Tauri benchmark harness (`run-tauri-matrix.sh`) tests replay mode only, not live PTY throughput.
+- Read-only replay does not restore a live process.
+- xterm.js rendering bottleneck still exists for very large replays.
+- Iced UI is still a prototype.
+- Long multi-hour sessions are not fully stress-tested.
+- Log cleanup/rotation is not implemented.
+- Sensitive data may be stored in raw logs.
 - The `delete_to_trash_removes_from_listing` test fails on macOS due to AppleScript permissions (unrelated to planeai-pty).

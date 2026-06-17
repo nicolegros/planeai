@@ -18,6 +18,7 @@ mod pr;
 mod pty;
 mod pty_planeai_core_adapter;
 mod session_backend;
+mod session_logs;
 mod session_ops;
 mod startup;
 mod state;
@@ -289,6 +290,12 @@ fn main() {
             bench::bench_write_metrics,
             bench::bench_write_snapshot,
             bench::bench_get_config,
+            session_logs::get_session_log_dir,
+            session_logs::list_session_logs,
+            session_logs::get_session_log_metadata,
+            session_logs::read_session_log_chunk,
+            session_logs::open_session_log_folder,
+            session_logs::is_dogfood_log_viewer_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
