@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { Session, TaskItem, Project } from "../types";
+import type { Session, TaskItem } from "../types";
 
 // Test the derivation logic used by UnifiedSidebar
-
-function makeProject(id: string, name: string, path: string): Project {
-  return { id, name, path };
-}
 
 function makeSession(id: string, projectId: string, taskKey: string | null = null): Session {
   return {
@@ -121,7 +117,6 @@ describe("unified sidebar logic", () => {
 
   describe("flat nav ordering", () => {
     it("orphans come before tasks for same project", () => {
-      const _projects = [makeProject("p1", "proj", "/path")];
       const sessions = [makeSession("s1", "p1", null), makeSession("s2", "p1", "T-1")];
       const tasks = [makeTask("T-1", "in_progress")];
       const allTaskKeys = new Set(tasks.map((t) => t.key));
