@@ -10,6 +10,8 @@ import type {
   CiCheck,
   PrStatus,
   CommitEntry,
+  JiraStatus,
+  SyncResult,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
@@ -207,6 +209,13 @@ export const notify = {
 
 export const symphony = {
   getStatus: () => invoke<string>("get_symphony_status"),
+};
+
+export const jira = {
+  connect: () => invoke("jira_connect"),
+  disconnect: () => invoke("jira_disconnect"),
+  syncNow: () => invoke<SyncResult>("jira_sync_now"),
+  status: () => invoke<JiraStatus>("jira_status"),
 };
 
 export const preferences = {
