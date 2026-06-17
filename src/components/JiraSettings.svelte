@@ -24,17 +24,14 @@
   ];
 
   onMount(async () => {
-    try {
-      status = await jira.status();
-    } catch (e) {
-      showSnackbar(String(e));
-    }
-    try {
-      const projs = await projects.list();
-      projectItems = projs.map((p: Project) => ({ value: p.name, label: p.name }));
-    } catch (e) {
-      showSnackbar(String(e));
-    }
+    const [statusResult, projectsResult] = await Promise.allSettled([
+      jira.status(),
+      projects.list(),
+    ]);
+    if (statusResult.status === "fulfilled") status = statusResult.value;
+    else showSnackbar(String(statusResult.reason));
+    if (projectsResult.status === "fulfilled") projectItems = projectsResult.value.map((p: Project) => ({ value: p.name, label: p.name }));
+    else showSnackbar(String(projectsResult.reason));
   });
 
   function saveJira(patch: Partial<JiraConfig>) {
