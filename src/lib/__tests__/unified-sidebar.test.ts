@@ -152,6 +152,48 @@ describe("unified sidebar logic", () => {
     });
   });
 
+  describe("auto-collapse empty projects", () => {
+    function isProjectCollapsed(
+      project: Project,
+      collapsedSections: Record<string, boolean>,
+      orphansByProject: { project: Project; sessions: Session[] }[],
+      tasksByProject: Record<string, TaskItem[]>,
+    ): boolean {
+      const key = `project:${project.id}`;
+      return collapsedSections[key] ?? (
+        (orphansByProject.find((g) => g.project.id === project.id)?.sessions ?? []).length === 0 &&
+        (tasksByProject[project.path] ?? []).length === 0
+      );
+    }
+
+    it("empty project defaults to collapsed", () => {
+      const p = makeProject("p1", "empty", "/empty");
+      expect(isProjectCollapsed(p, {}, [], {})).toBe(true);
+    });
+
+    it("project with orphan sessions defaults to expanded", () => {
+      const p = makeProject("p1", "proj", "/proj");
+      const orphans = [{ project: p, sessions: [makeSession("s1", "p1")] }];
+      expect(isProjectCollapsed(p, {}, orphans, {})).toBe(false);
+    });
+
+    it("project with tasks defaults to expanded", () => {
+      const p = makeProject("p1", "proj", "/proj");
+      expect(isProjectCollapsed(p, {}, [], { "/proj": [makeTask("T-1", "todo")] })).toBe(false);
+    });
+
+    it("respects explicit user toggle to expanded", () => {
+      const p = makeProject("p1", "empty", "/empty");
+      expect(isProjectCollapsed(p, { "project:p1": false }, [], {})).toBe(false);
+    });
+
+    it("respects explicit user toggle to collapsed", () => {
+      const p = makeProject("p1", "proj", "/proj");
+      const orphans = [{ project: p, sessions: [makeSession("s1", "p1")] }];
+      expect(isProjectCollapsed(p, { "project:p1": true }, orphans, {})).toBe(true);
+    });
+  });
+
   describe("flat nav ordering", () => {
     it("includes project_header, orphans, status_header, and tasks in order", () => {
       const projects = [makeProject("p1", "proj", "/path")];

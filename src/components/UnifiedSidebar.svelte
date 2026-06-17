@@ -64,6 +64,15 @@
     projectAutoMode[project.id] = !current;
   }
 
+  // Empty projects default to collapsed unless explicitly toggled
+  function isProjectCollapsed(project: Project): boolean {
+    const key = `project:${project.id}`;
+    return collapsedSections[key] ?? (
+      (orphansByProject.find(g => g.project.id === project.id)?.sessions ?? []).length === 0 &&
+      (tasksByProject[project.path] ?? []).length === 0
+    );
+  }
+
   // Rename
   $effect(() => {
     if (renamingSessionId) {
@@ -154,7 +163,7 @@
     for (const project of projects) {
       const projectKey = `project:${project.id}`;
       result.push({ type: "project_header", project });
-      if (collapsedSections[projectKey]) continue;
+      if (isProjectCollapsed(project)) continue;
       // Orphans first
       const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? [];
       for (const s of projectOrphans) result.push({ type: "orphan", session: s });
@@ -290,7 +299,7 @@
         {@const statusGroups = groupByStatus(projectTasks)}
         {@const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? []}
         {@const projectKey = `project:${project.id}`}
-        {@const projectCollapsed = collapsedSections[projectKey]}
+        {@const projectCollapsed = isProjectCollapsed(project)}
         {@const projectNavIdx = flatNav.findIndex(n => n.type === "project_header" && n.project.id === project.id)}
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
