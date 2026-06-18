@@ -19,3 +19,7 @@ portable-pty = "0.8"
 smol_str = "0.2"
 arboard = "3"
 planeai-pty = { path = "../planeai-pty" }
+planeai-daemon = { path = "../planeai-daemon" }
+planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
+tokio = { workspace = true }
+tracing = { workspace = true }

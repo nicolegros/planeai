@@ -189,7 +189,7 @@ Both paths are at parity. The planeai-pty path uses the same coalescing strategy
 
 1. **Make planeai-pty the default** — requires more production dogfooding
 2. **Remove legacy `LocalBackend`** — once planeai-pty is proven stable in production
-3. **Daemon backend via planeai-pty** — add a `DaemonPtySession` or equivalent
+3. ~~**Daemon backend via planeai-pty**~~ — ✅ Done. See [DAEMON_PTY_CORE.md](./DAEMON_PTY_CORE.md)
 4. **Tmux backend via planeai-pty** — if desired (currently tmux attach is simple enough)
 5. **Background-threaded LogSink** — current implementation is synchronous-buffered; could move to a dedicated write thread if latency becomes an issue
 6. **Log rotation/cleanup** — not yet implemented

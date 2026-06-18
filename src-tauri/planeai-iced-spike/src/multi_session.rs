@@ -89,8 +89,14 @@ impl MultiApp {
                         args.session_command.as_deref(),
                     ).unwrap_or_else(|e| panic!("Failed to spawn planeai-local session {}: {}", i, e)))
                 }
+                "planeai-daemon" => {
+                    Box::new(crate::daemon_session::DaemonSession::spawn(
+                        i, cols as u16, rows as u16,
+                        args.session_command.as_deref(),
+                    ).unwrap_or_else(|e| panic!("Failed to spawn planeai-daemon session {}: {}", i, e)))
+                }
                 other => {
-                    eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local", other);
+                    eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local, planeai-daemon", other);
                     std::process::exit(1);
                 }
             };
@@ -210,8 +216,14 @@ impl MultiApp {
                                 self.args.session_command.as_deref(),
                             ).unwrap_or_else(|e| panic!("Failed to spawn planeai-local session {}: {}", id, e)))
                         }
+                        "planeai-daemon" => {
+                            Box::new(crate::daemon_session::DaemonSession::spawn(
+                                id, self.cols as u16, self.rows as u16,
+                                self.args.session_command.as_deref(),
+                            ).unwrap_or_else(|e| panic!("Failed to spawn planeai-daemon session {}: {}", id, e)))
+                        }
                         other => {
-                            eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local", other);
+                            eprintln!("Error: unsupported --session-source '{}'. Supported: spike-local, planeai-local, planeai-daemon", other);
                             return;
                         }
                     };
@@ -366,11 +378,13 @@ impl MultiApp {
         let summary = json!({
             "schema_version": 1, "event_type": "summary",
             "backend": self.args.backend, "session_source": self.args.session_source,
+            "daemon_pty_core": std::env::var("PLANEAI_DAEMON_PTY_CORE").unwrap_or_else(|_| "legacy".to_string()),
             "mode": "multi-session", "session_count": self.sessions.len(),
             "cols": self.cols, "rows": self.rows,
             "wall_time_ms": wall_ms, "total_bytes": total_bytes,
             "total_bytes_active_sessions": active_bytes,
             "total_bytes_inactive_sessions": inactive_bytes,
+            "total_daemon_output_bytes": if self.args.session_source == "planeai-daemon" { total_bytes } else { 0 },
             "average_mb_per_sec": if wall_ms > 0.0 { (total_bytes as f64 / 1_048_576.0) / (wall_ms / 1000.0) } else { 0.0 },
             "p50_session_switch_latency_ms": pct_or_null(&sw, 50.0),
             "p95_session_switch_latency_ms": pct_or_null(&sw, 95.0),

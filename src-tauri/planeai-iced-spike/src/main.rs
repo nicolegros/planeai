@@ -2,6 +2,7 @@
 
 pub mod adapter;
 pub mod common;
+pub mod daemon_session;
 pub mod input;
 mod multi_session;
 pub mod planeai_local;

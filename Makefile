@@ -15,12 +15,18 @@ lint: ## Check formatting and clippy
 dev:
 	pnpm tauri dev
 
-dogfood: ## Run with planeai-pty + durable logs + log viewer
-	PLANEAI_LOCAL_PTY_CORE=planeai-pty \
+dogfood: ## Run Iced native UI with daemon-backed sessions + durable logs
+	cd src-tauri && \
 	PLANEAI_DAEMON_PTY_CORE=planeai-pty \
-	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
-	PLANEAI_DOGFOOD_LOG_VIEWER=1 \
-	pnpm tauri dev
+	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+	cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
+		--multi-session \
+		--sessions 1 \
+		--session-source planeai-daemon \
+		--session-command bash \
+		--cols 120 \
+		--rows 40 \
+		--backend iced-alacritty
 
 build:
 	pnpm tauri build -b app

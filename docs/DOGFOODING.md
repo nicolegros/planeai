@@ -293,12 +293,41 @@ Per user guidance: **keep opt-in OR make default** — either is acceptable base
 ## Known Limitations
 
 - planeai-pty is only wired for local shell sessions (`PtyTarget::Shell`)
-- Daemon/tmux sessions still use the legacy path
+- Daemon/tmux sessions still use the legacy path (daemon supports planeai-pty via env var)
 - Read-only replay does not restore a live process
 - xterm.js rendering bottleneck exists for very large replays
-- Iced UI is still a prototype (not production)
+- Iced UI supports daemon sessions via `--session-source planeai-daemon`
 - Long multi-hour sessions are not fully stress-tested
 - Log cleanup/rotation is not automatic (logs accumulate)
 - Sensitive data (passwords, tokens) is stored in raw logs
 - Log viewer is a dev panel, not a polished user feature
 - Tests require `--test-threads=1` due to shared env vars
+
+## Iced Daemon Dogfooding
+
+The Iced native spike can be used for daemon-backed dogfooding:
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
+  --multi-session --sessions 1 \
+  --session-source planeai-daemon \
+  --session-command "bash" \
+  --cols 120 --rows 40 \
+  --backend iced-alacritty
+```
+
+### Dogfood Readiness: Limited
+
+**Ready for:** Developer testing, performance evaluation, smoke testing daemon persistence.
+
+**Not ready for:** Daily driver usage. Missing:
+- Detach/reattach (close kills sessions)
+- Session list UI
+- Daemon reconnect on crash
+- Config-based daemon startup
+
+### Recommendation
+
+The daemon Iced path is ready for **limited dogfooding**: performance comparison, daemon protocol validation, and durable log testing. Use `planeai-local` for daily development until detach/reattach is implemented.

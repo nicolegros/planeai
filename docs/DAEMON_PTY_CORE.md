@@ -166,9 +166,43 @@ PLANEAI_DAEMON_PTY_CORE=legacy pnpm tauri dev
 - Durable logs may contain secrets (raw terminal output)
 - Log viewer replay is read-only — does not restore a process
 - xterm.js rendering bottleneck still exists in Tauri
-- Iced UI daemon attach is not implemented yet
+- Iced UI daemon sessions work (see below)
 - Long multi-hour daemon sessions are not fully stress-tested
 - No pause/resume backpressure from daemon to planeai-pty (backpressure is client-side only)
+
+---
+
+## Iced Native Daemon Sessions
+
+The Iced spike (`planeai-iced-spike`) can now connect to daemon sessions:
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
+  --multi-session --sessions 3 \
+  --session-source planeai-daemon \
+  --session-command "bash" \
+  --cols 120 --rows 40 \
+  --backend iced-alacritty
+```
+
+### How it works
+
+1. Iced adapter spawns a dedicated tokio runtime (2 threads, shared OnceLock)
+2. Spawns session via control connection (JSON-line)
+3. Opens data connection (binary frames)
+4. Reads FRAME_OUTPUT into bounded buffer (512KB, lossless backpressure)
+5. Input forwarded via mpsc → FRAME_INPUT
+6. Resize sent via separate control connection
+
+### Policy
+
+- **tmux**: optional, not default, not required for normal PlaneAI usage
+- **daemon**: legacy remains default; `PLANEAI_DAEMON_PTY_CORE=planeai-pty` for new backend
+- **local**: unchanged unless separately decided
+
+See `bench/ICED_DAEMON_SPIKE.md` for full documentation.
 
 ---
 

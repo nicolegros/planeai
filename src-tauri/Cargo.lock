@@ -4422,11 +4422,15 @@ dependencies = [
  "clap",
  "iced",
  "libc",
+ "planeai-daemon",
+ "planeai-ipc",
  "planeai-pty",
  "portable-pty",
  "serde",
  "serde_json",
  "smol_str",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
