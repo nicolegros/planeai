@@ -135,3 +135,29 @@ export const preferences = {
   getLogDir: () => invoke<string>("get_log_dir"),
   getThemeCss: () => invoke<string>("get_theme_css"),
 };
+
+export interface SessionLogEntry {
+  session_id: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  pty_core: string;
+  ansi_log_path: string;
+  meta_path: string;
+  bytes_written: number;
+  bytes_dropped: number;
+  command: string;
+  cwd: string;
+}
+
+export const sessionLogs = {
+  isEnabled: () => invoke<boolean>("is_dogfood_log_viewer_enabled"),
+  getDir: () => invoke<string>("get_session_log_dir"),
+  list: () => invoke<SessionLogEntry[]>("list_session_logs"),
+  getMetadata: (sessionId: string) =>
+    invoke<SessionLogEntry>("get_session_log_metadata", { sessionId }),
+  readChunk: (path: string, offset: number, length: number) =>
+    invoke<number[]>("read_session_log_chunk", { path, offset, length }),
+  openFolder: (path: string) => invoke("open_session_log_folder", { path }),
+  delete: (sessionId: string) => invoke("delete_session_log", { sessionId }),
+};

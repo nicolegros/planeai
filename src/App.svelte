@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pty, notify } from "./lib/api";
+  import { sessions as sessionsApi, pty, notify, sessionLogs } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -25,6 +25,7 @@
   import EditorTab from "./components/EditorTab.svelte";
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
+  import LogViewer from "./components/LogViewer.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -42,6 +43,8 @@
   let showQuitConfirm = $state(false);
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
+  let showLogViewer = $state(false);
+  let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
   let renamingSessionId = $state<string | null>(null);
@@ -101,6 +104,7 @@
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
+    sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
     const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; });
 
     const cleanup = installKeyboardRouter(
@@ -245,6 +249,7 @@
       onCreateTask={() => { if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
       onToggleDiff={() => orchestrator.toggleDiff()}
       onOpenFile={(path) => orchestrator.openFile(path)}
+      onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
@@ -384,6 +389,12 @@
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+    {/if}
+
+    {#if showLogViewer}
+      <div class="absolute inset-0 z-30">
+        <LogViewer onClose={() => { showLogViewer = false; }} />
+      </div>
     {/if}
   </section>
 

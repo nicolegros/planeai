@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bench;
 mod cleanup;
 mod command;
 mod commands;
@@ -15,7 +16,9 @@ mod output_observer;
 mod paths;
 mod pr;
 mod pty;
+mod pty_planeai_core_adapter;
 mod session_backend;
+mod session_logs;
 mod session_ops;
 mod startup;
 mod state;
@@ -111,6 +114,22 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+            // Config-driven PTY core selection (env var takes priority)
+            if std::env::var("PLANEAI_LOCAL_PTY_CORE").is_err() {
+                if let Some(ref core) = cfg.local_pty_core {
+                    std::env::set_var("PLANEAI_LOCAL_PTY_CORE", core);
+                }
+            }
+            if std::env::var("PLANEAI_DAEMON_PTY_CORE").is_err() {
+                if let Some(ref core) = cfg.daemon_pty_core {
+                    std::env::set_var("PLANEAI_DAEMON_PTY_CORE", core);
+                }
+            }
+            if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
+                if let Some(ref dir) = cfg.session_log_dir {
+                    std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
+                }
+            }
             tracing::info!("config loaded");
 
             // Revive sessions
@@ -210,6 +229,12 @@ fn main() {
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
             tracing::info!("app setup complete");
+            let pty_core_mode =
+                std::env::var("PLANEAI_LOCAL_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
+            tracing::info!("local PTY core: {}", pty_core_mode);
+            let daemon_pty_core_mode =
+                std::env::var("PLANEAI_DAEMON_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
+            tracing::info!("daemon PTY core: {}", daemon_pty_core_mode);
 
             Ok(())
         })
@@ -279,6 +304,18 @@ fn main() {
             check_cli_installed,
             install_cli,
             get_symphony_status,
+            bench::bench_replay_file,
+            bench::bench_fixture_info,
+            bench::bench_write_metrics,
+            bench::bench_write_snapshot,
+            bench::bench_get_config,
+            session_logs::get_session_log_dir,
+            session_logs::list_session_logs,
+            session_logs::get_session_log_metadata,
+            session_logs::read_session_log_chunk,
+            session_logs::open_session_log_folder,
+            session_logs::delete_session_log,
+            session_logs::is_dogfood_log_viewer_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

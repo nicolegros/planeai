@@ -1,5 +1,12 @@
 [workspace]
-members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc"]
+members = [
+  "planeai-core",
+  "planeai-tasks",
+  "planeai-daemon",
+  "planeai-ipc",
+  "planeai-iced-spike",
+  "planeai-pty",
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -24,6 +31,7 @@ tempfile = "3"
 name = "planeai"
 version = "0.0.0"
 edition = "2021"
+default-run = "planeai"
 
 [lib]
 name = "planeai"
@@ -46,6 +54,7 @@ planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }
 planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
+planeai-pty = { path = "planeai-pty" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }

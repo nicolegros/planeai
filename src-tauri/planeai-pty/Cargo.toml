@@ -1,0 +1,9 @@
+[package]
+name = "planeai-pty"
+version = "0.1.0"
+edition = "2021"
+description = "Shared PTY/session I/O infrastructure for PlaneAI. Not a terminal emulator."
+
+[dependencies]
+portable-pty = "0.8"
+anyhow = "1"

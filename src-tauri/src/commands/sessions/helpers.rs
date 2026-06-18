@@ -145,6 +145,9 @@ mod tests {
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
+            local_pty_core: None,
+            daemon_pty_core: None,
+            session_log_dir: None,
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
     }

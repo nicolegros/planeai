@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
+use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
 use crate::session_backend::SessionBackend;
 #[cfg(not(windows))]
 use crate::tmux;
@@ -195,14 +196,31 @@ pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: RwLock<Arc<dyn OutputObserver>>,
     socket_path: Mutex<Option<String>>,
+    capture_file: Option<Arc<Mutex<std::fs::File>>>,
+    capture_session: Option<String>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
+        let (capture_file, capture_session) = match std::env::var("PLANEAI_BENCH_CAPTURE") {
+            Ok(path) => {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .expect("failed to open PLANEAI_BENCH_CAPTURE file");
+                tracing::info!("bench capture writing to: {}", path);
+                let session_filter = std::env::var("PLANEAI_BENCH_CAPTURE_SESSION").ok();
+                (Some(Arc::new(Mutex::new(file))), session_filter)
+            }
+            Err(_) => (None, None),
+        };
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: RwLock::new(Arc::new(NoopObserver)),
             socket_path: Mutex::new(None),
+            capture_file,
+            capture_session,
         }
     }
 
@@ -230,6 +248,38 @@ impl PtyManager {
         } = target
         {
             return self.attach_daemon(&sid, socket_path, app, on_data);
+        }
+
+        // planeai-pty path for Shell targets when PLANEAI_LOCAL_PTY_CORE=planeai-pty
+        if let PtyTarget::Shell {
+            ref command,
+            ref args,
+            ref cwd,
+        } = target
+        {
+            if use_planeai_pty_core() {
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let observer = self.observer.read().unwrap().clone();
+                let socket_path = self.socket_path.lock().unwrap().clone();
+                let backend = PlaneaiPtyBackend::spawn(
+                    session_id,
+                    command,
+                    args,
+                    cwd,
+                    dark_mode,
+                    app,
+                    on_data,
+                    cancelled,
+                    observer,
+                    socket_path.as_deref(),
+                )?;
+                let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
+                if let Some(old) = sessions.get(session_id) {
+                    old.detach();
+                }
+                sessions.insert(session_id.to_string(), Box::new(backend));
+                return Ok(());
+            }
         }
 
         let pty_system = native_pty_system();
@@ -362,6 +412,11 @@ impl PtyManager {
         let exit_key = session_id.to_string();
         let app_flusher = app.clone();
         let cancelled_f = cancelled;
+        let capture_f = match (&self.capture_file, &self.capture_session) {
+            (Some(f), None) => Some(f.clone()),
+            (Some(f), Some(s)) if s == session_id => Some(f.clone()),
+            _ => None,
+        };
         thread::spawn(move || {
             let (lock, cv) = &*pending_f;
             loop {
@@ -371,6 +426,9 @@ impl PtyManager {
                         if done_f.load(Ordering::Acquire) {
                             if !g.is_empty() {
                                 let chunk = std::mem::take(&mut *g);
+                                if let Some(ref cf) = capture_f {
+                                    let _ = cf.lock().unwrap().write_all(&chunk);
+                                }
                                 let _ = on_data.send(Response::new(chunk));
                             }
                             if !cancelled_f.load(Ordering::Acquire) {
@@ -389,6 +447,9 @@ impl PtyManager {
                 let chunk = std::mem::take(&mut *lock.lock().unwrap());
                 if chunk.is_empty() {
                     continue;
+                }
+                if let Some(ref cf) = capture_f {
+                    let _ = cf.lock().unwrap().write_all(&chunk);
                 }
                 if on_data.send(Response::new(chunk)).is_err() {
                     break;
@@ -428,6 +489,11 @@ impl PtyManager {
         let sid_clone = sid.clone();
         let observer = self.observer.read().unwrap().clone();
         let sessions_arc = self.sessions.clone();
+        let capture_d = match (&self.capture_file, &self.capture_session) {
+            (Some(f), None) => Some(f.clone()),
+            (Some(f), Some(s)) if s == session_id => Some(f.clone()),
+            _ => None,
+        };
 
         tauri::async_runtime::spawn(async move {
             let data_conn = match DataConnection::open(&socket_path, &sid_clone).await {
@@ -475,6 +541,9 @@ impl PtyManager {
                             if done_f.load(Ordering::Acquire) {
                                 if !g.is_empty() {
                                     let chunk = std::mem::take(&mut *g);
+                                    if let Some(ref cf) = capture_d {
+                                        let _ = cf.lock().unwrap().write_all(&chunk);
+                                    }
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
@@ -498,6 +567,9 @@ impl PtyManager {
                     let chunk = std::mem::take(&mut *lock.lock().unwrap());
                     if chunk.is_empty() {
                         continue;
+                    }
+                    if let Some(ref cf) = capture_d {
+                        let _ = cf.lock().unwrap().write_all(&chunk);
                     }
                     if on_data.send(Response::new(chunk)).is_err() {
                         break;
@@ -569,4 +641,11 @@ impl PtyManager {
         let backend = sessions.get(session_id).ok_or("session not attached")?;
         backend.resume()
     }
+}
+
+/// Returns true when the planeai-pty backend should be used for local PTY sessions.
+fn use_planeai_pty_core() -> bool {
+    std::env::var("PLANEAI_LOCAL_PTY_CORE")
+        .map(|v| v == "planeai-pty")
+        .unwrap_or(false)
 }

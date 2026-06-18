@@ -1,0 +1,25 @@
+[package]
+name = "planeai-iced-spike"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "planeai-iced"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal = "0.26"
+anyhow = "1"
+iced = { version = "0.14", features = ["canvas", "tokio"] }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
+portable-pty = "0.8"
+smol_str = "0.2"
+arboard = "3"
+planeai-pty = { path = "../planeai-pty" }
+planeai-daemon = { path = "../planeai-daemon" }
+planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
