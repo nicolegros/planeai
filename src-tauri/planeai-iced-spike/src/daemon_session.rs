@@ -431,6 +431,137 @@ impl DaemonSession {
         })
     }
 
+    /// Spawn a new session via the daemon with an explicit working directory.
+    pub fn spawn_with_cwd(
+        id: usize,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        cwd: &std::path::Path,
+        extra_path_dirs: &[String],
+    ) -> anyhow::Result<Self> {
+        ensure_daemon_running_sync()?;
+
+        let session_id = format!("iced-{}-{}", id, std::process::id());
+        let socket = daemon_socket_path();
+        let rt = daemon_runtime();
+
+        let cmd = command.unwrap_or("bash");
+        let (program, args) = parse_command(cmd);
+
+        let spawn_start = Instant::now();
+        rt.block_on(async {
+            let mut stream = AsyncIpcStream::connect(&socket).await?;
+            stream.write_all(&[CONN_CONTROL]).await?;
+            let req = serde_json::json!({
+                "cmd": "spawn",
+                "session_id": &session_id,
+                "command": program,
+                "args": args,
+                "cwd": cwd.to_string_lossy(),
+                "env": {
+                    "TERM": "xterm-256color",
+                    "PATH": planeai_core::command::augmented_path(extra_path_dirs),
+                },
+            });
+            let mut line = serde_json::to_string(&req)?;
+            line.push('\n');
+            stream.write_all(line.as_bytes()).await?;
+            let (mut reader, _) = tokio::io::split(stream);
+            let mut buf_reader = BufReader::new(&mut reader);
+            let mut resp_line = String::new();
+            buf_reader.read_line(&mut resp_line).await?;
+            let resp: serde_json::Value = serde_json::from_str(resp_line.trim())?;
+            if let Some(err) = resp.get("error") {
+                anyhow::bail!("daemon spawn error: {}", err);
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
+        let spawn_latency_ms = spawn_start.elapsed().as_secs_f64() * 1000.0;
+
+        rt.block_on(async {
+            send_control_command(
+                &socket,
+                &serde_json::json!({
+                    "cmd": "resize",
+                    "session_id": &session_id,
+                    "cols": cols,
+                    "rows": rows,
+                }),
+            )
+            .await
+        })?;
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let buf_not_full = Arc::new(Condvar::new());
+        let exited = Arc::new(AtomicBool::new(false));
+        let max_pending = Arc::new(AtomicU64::new(0));
+        let recv_bytes = Arc::new(AtomicU64::new(0));
+        let send_calls = Arc::new(AtomicU64::new(0));
+        let send_bytes_counter = Arc::new(AtomicU64::new(0));
+        let block_count = Arc::new(AtomicU64::new(0));
+        let block_ns = Arc::new(AtomicU64::new(0));
+
+        let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
+
+        let attach_start = Instant::now();
+        let buf_clone = buf.clone();
+        let buf_not_full_clone = buf_not_full.clone();
+        let exited_clone = exited.clone();
+        let max_pending_clone = max_pending.clone();
+        let recv_bytes_clone = recv_bytes.clone();
+        let block_count_clone = block_count.clone();
+        let block_ns_clone = block_ns.clone();
+        let sid = session_id.clone();
+        let socket_clone = socket.clone();
+
+        rt.spawn(async move {
+            if let Err(e) = data_loop(
+                &socket_clone,
+                &sid,
+                input_rx,
+                buf_clone,
+                buf_not_full_clone,
+                exited_clone,
+                max_pending_clone,
+                recv_bytes_clone,
+                block_count_clone,
+                block_ns_clone,
+            )
+            .await
+            {
+                tracing::debug!("daemon data loop ended: {e}");
+            }
+        });
+
+        let sid_resize = session_id.clone();
+        let socket_resize = socket.clone();
+        rt.spawn(async move {
+            resize_loop(&socket_resize, &sid_resize, resize_rx).await;
+        });
+
+        let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
+
+        Ok(Self {
+            id,
+            session_id,
+            buf,
+            buf_not_full,
+            exited,
+            max_pending,
+            input_tx,
+            resize_tx,
+            recv_bytes,
+            send_calls,
+            send_bytes: send_bytes_counter,
+            block_count,
+            block_ns,
+            spawn_latency_ms,
+            attach_latency_ms,
+        })
+    }
+
     pub fn spawn_latency_ms(&self) -> f64 {
         self.spawn_latency_ms
     }

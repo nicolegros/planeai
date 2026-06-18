@@ -15,7 +15,16 @@ lint: ## Check formatting and clippy
 dev:
 	pnpm tauri dev
 
-dogfood: ## Run Iced native UI with daemon-backed sessions + durable logs
+dogfood: ## Run Iced workflow shell with daemon + durable logs
+	cd src-tauri && \
+	PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+	cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
+		--planeai-workflow \
+		--agent-command "kiro-cli chat" \
+		--backend iced-alacritty
+
+dogfood-multi: ## Run Iced multi-session spike (legacy)
 	cd src-tauri && \
 	PLANEAI_DAEMON_PTY_CORE=planeai-pty \
 	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
