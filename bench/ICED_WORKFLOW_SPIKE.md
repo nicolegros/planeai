@@ -25,15 +25,15 @@ target/release/planeai-iced -- \
 
 ## CLI Flags
 
-| Flag                | Description                              | Default            |
-| ------------------- | ---------------------------------------- | ------------------ |
-| `--planeai-workflow` | Enable workflow mode                     | off                |
-| `--cwd <path>`       | Project working directory                | current dir        |
-| `--agent-command`    | Command to launch agent sessions         | `kiro-cli chat`    |
-| `--extra-path-dirs`  | Additional PATH dirs (repeatable)        | none               |
-| `--backend`          | Renderer backend                         | `iced-alacritty`   |
-| `--cols`             | Initial terminal columns                 | 120                |
-| `--rows`             | Initial terminal rows                    | 40                 |
+| Flag                 | Description                       | Default          |
+| -------------------- | --------------------------------- | ---------------- |
+| `--planeai-workflow` | Enable workflow mode              | off              |
+| `--cwd <path>`       | Project working directory         | current dir      |
+| `--agent-command`    | Command to launch agent sessions  | `kiro-cli chat`  |
+| `--extra-path-dirs`  | Additional PATH dirs (repeatable) | none             |
+| `--backend`          | Renderer backend                  | `iced-alacritty` |
+| `--cols`             | Initial terminal columns          | 120              |
+| `--rows`             | Initial terminal rows             | 40               |
 
 ## Architecture
 
@@ -64,16 +64,16 @@ target/release/planeai-iced -- \
 
 ## Keyboard Shortcuts
 
-| Shortcut         | Action                              |
-| ---------------- | ----------------------------------- |
-| Cmd+N            | Launch new agent session            |
-| Cmd+O            | Open project picker (path input)    |
-| Cmd+R            | Refresh daemon session list         |
-| Cmd+W            | Detach active session               |
-| Cmd+Shift+W      | Kill active session                 |
-| Cmd+A            | Attach to first unattached session  |
-| Cmd+1..9         | Switch to session N                 |
-| Cmd+V            | Paste                               |
+| Shortcut    | Action                             |
+| ----------- | ---------------------------------- |
+| Cmd+N       | Launch new agent session           |
+| Cmd+O       | Open project picker (path input)   |
+| Cmd+R       | Refresh daemon session list        |
+| Cmd+W       | Detach active session              |
+| Cmd+Shift+W | Kill active session                |
+| Cmd+A       | Attach to first unattached session |
+| Cmd+1..9    | Switch to session N                |
+| Cmd+V       | Paste                              |
 
 ## Session Lifecycle
 
@@ -91,6 +91,7 @@ Close the Iced window → sessions persist. Restart → existing sessions shown 
 PATH is constructed by `planeai_core::command::augmented_path()`:
 
 Priority (highest → lowest):
+
 1. `PLANEAI_EXTRA_PATH` env var (colon-separated)
 2. `--extra-path-dirs` CLI flag / config `extra_path_dirs`
 3. Conventional developer dirs (`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, etc.)
@@ -99,25 +100,24 @@ Priority (highest → lowest):
 **No setup-specific paths are hardcoded.** User-specific shims must come from config/env.
 
 Config example (`~/.config/planeai/config.json`):
+
 ```json
 {
-  "extra_path_dirs": [
-    "~/.local/bin",
-    "~/.cargo/bin",
-    "/opt/homebrew/bin"
-  ]
+  "extra_path_dirs": ["~/.local/bin", "~/.cargo/bin", "/opt/homebrew/bin"]
 }
 ```
 
 ## Durable Logs
 
 When `PLANEAI_SESSION_LOG_DIR` is set:
+
 - Raw `.ansi` output logged per session
 - `meta.json` sidecar with command, cwd, timestamps, bytes_written, bytes_dropped
 - Session cards show 📄 indicator when log exists
 - bytes_dropped shown with ⚠ if nonzero
 
 Replay existing logs:
+
 ```bash
 cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
   --replay /tmp/planeai-daemon-session-logs/sessions/<id>/<ts>_output.ansi \

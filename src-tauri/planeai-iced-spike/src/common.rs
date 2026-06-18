@@ -241,3 +241,64 @@ impl<'a> Program<()> for TermRenderer<'a> {
         vec![geom]
     }
 }
+
+/// Keyboard shortcuts overlay widget.
+pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
+    use iced::widget::{column, row, text};
+    use iced::Length;
+
+    let mod_key = if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl+"
+    };
+
+    let mut col = column![text("Keyboard Shortcuts")
+        .size(16)
+        .color(Color::from_rgb8(255, 255, 255))
+        .font(Font::MONOSPACE)]
+    .spacing(4)
+    .padding(20)
+    .width(Length::Fixed(320.0));
+
+    // Helper to add a section header
+    macro_rules! header {
+        ($col:expr, $label:expr) => {
+            $col = $col.push(text("").size(8));
+            $col = $col.push(
+                text($label)
+                    .size(12)
+                    .color(Color::from_rgb8(100, 200, 255))
+                    .font(Font::MONOSPACE),
+            );
+        };
+    }
+    macro_rules! shortcut {
+        ($col:expr, $key:expr, $desc:expr) => {
+            $col = $col.push(row![
+                text($key).size(12).color(Color::from_rgb8(200, 200, 200)).font(Font::MONOSPACE).width(Length::Fixed(140.0)),
+                text($desc).size(12).color(Color::from_rgb8(160, 160, 160)).font(Font::MONOSPACE),
+            ].spacing(8));
+        };
+    }
+
+    header!(col, "Sessions");
+    shortcut!(col, format!("{}N", mod_key), "New session");
+    shortcut!(col, format!("{}A", mod_key), "Attach session");
+    shortcut!(col, format!("{}W", mod_key), "Detach session");
+    shortcut!(col, format!("{}⇧W", mod_key), "Kill session");
+    shortcut!(col, format!("{}1–9", mod_key), "Jump to session");
+    shortcut!(col, format!("{}Tab", mod_key), "Next session");
+    shortcut!(col, format!("{}⇧Tab", mod_key), "Previous session");
+    shortcut!(col, format!("{}R", mod_key), "Refresh daemon list");
+
+    header!(col, "Terminal");
+    shortcut!(col, format!("{}V", mod_key), "Paste");
+
+    header!(col, "View");
+    shortcut!(col, format!("{}O", mod_key), "Open project picker");
+    shortcut!(col, format!("{}/", mod_key), "Keyboard shortcuts");
+    shortcut!(col, "Escape", "Dismiss overlay");
+
+    col
+}

@@ -8,13 +8,16 @@ use arboard::Clipboard;
 use iced::keyboard;
 use iced::widget::canvas::{self, Cache, Program};
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{event, window, Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
+use iced::{
+    event, window, Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription,
+    Theme,
+};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
 use crate::daemon_session::{
-    attach, daemon_is_connected, ensure_daemon_running_sync, kill_daemon_session,
-    detach_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
+    attach, daemon_is_connected, detach_daemon_session, ensure_daemon_running_sync,
+    kill_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
 };
 use crate::input;
 use crate::Args;
@@ -65,6 +68,8 @@ struct WorkflowApp {
     // Status/error
     last_error: Option<String>,
     error_time: Option<Instant>,
+    // Shortcuts overlay
+    show_shortcuts: bool,
     // Session counter for unique ids
     next_id: usize,
 }
@@ -85,10 +90,14 @@ impl WorkflowApp {
         // Actually we use a static — set by run() before boot.
         let args = WORKFLOW_ARGS.get().unwrap();
 
-        let project_cwd = args.cwd.clone().unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        });
-        let agent_command = args.agent_command.clone().unwrap_or_else(|| "kiro-cli chat".to_string());
+        let project_cwd = args
+            .cwd
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let agent_command = args
+            .agent_command
+            .clone()
+            .unwrap_or_else(|| "kiro-cli chat".to_string());
         let extra_path_dirs = args.extra_path_dirs.clone();
         let cols = args.cols;
         let rows = args.rows;
@@ -125,6 +134,7 @@ impl WorkflowApp {
                 project_input: String::new(),
                 last_error: None,
                 error_time: None,
+                show_shortcuts: false,
                 next_id: 0,
             },
             iced::Task::none(),
@@ -251,7 +261,11 @@ impl WorkflowApp {
 
     fn check_log_exists(&self, session_id: &str) -> bool {
         if let Ok(dir) = std::env::var("PLANEAI_SESSION_LOG_DIR") {
-            PathBuf::from(dir).join("sessions").join(session_id).join("meta.json").exists()
+            PathBuf::from(dir)
+                .join("sessions")
+                .join(session_id)
+                .join("meta.json")
+                .exists()
         } else {
             false
         }
@@ -306,14 +320,20 @@ impl WorkflowApp {
                     return;
                 }
                 let session = &mut self.sessions[self.active];
-                let term_size = TermSize { cols: self.cols, rows: self.rows };
+                let term_size = TermSize {
+                    cols: self.cols,
+                    rows: self.rows,
+                };
                 session.term.resize(term_size);
                 let _ = session.backend.resize(new_cols, new_rows);
                 session.snapshot = snapshot_grid(&session.term);
                 session.cache.clear();
             }
             Message::KeyEvent(keyboard::Event::KeyPressed {
-                key, modifiers, text: txt, ..
+                key,
+                modifiers,
+                text: txt,
+                ..
             }) => {
                 // If picking project, Enter submits, Escape cancels
                 if self.picking_project {
@@ -325,42 +345,82 @@ impl WorkflowApp {
                     return;
                 }
 
+                // Shortcuts overlay: Escape dismisses
+                if self.show_shortcuts {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.show_shortcuts = false;
+                    }
+                    return;
+                }
+
                 let cmd = if cfg!(target_os = "macos") {
                     modifiers.command()
                 } else {
                     modifiers.control()
                 };
 
+                // Cmd+/ — toggle shortcuts overlay
+                if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "/") {
+                    self.show_shortcuts = !self.show_shortcuts;
+                    return;
+                }
+
                 // Cmd+N — launch new session
-                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n") {
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n")
+                {
                     self.launch_session();
                     return;
                 }
                 // Cmd+O — open project picker
-                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "o") {
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "o")
+                {
                     self.picking_project = !self.picking_project;
                     self.project_input = self.project_cwd.to_string_lossy().to_string();
                     return;
                 }
                 // Cmd+R — refresh daemon sessions
-                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r") {
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r")
+                {
                     self.refresh_daemon_list();
                     return;
                 }
                 // Cmd+W — detach active session
-                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w") {
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w")
+                {
                     self.detach_active();
                     return;
                 }
                 // Cmd+Shift+W — kill active session
-                if cmd && modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W") {
+                if cmd
+                    && modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W")
+                {
                     self.kill_active();
                     return;
                 }
                 // Cmd+A — attach first unattached
-                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "a") {
-                    let attached_ids: Vec<&str> = self.sessions.iter().map(|s| s.session_id.as_str()).collect();
-                    if let Some(info) = self.daemon_sessions_listed.iter().find(|i| i.alive && !attached_ids.contains(&i.session_id.as_str())) {
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "a")
+                {
+                    let attached_ids: Vec<&str> = self
+                        .sessions
+                        .iter()
+                        .map(|s| s.session_id.as_str())
+                        .collect();
+                    if let Some(info) = self
+                        .daemon_sessions_listed
+                        .iter()
+                        .find(|i| i.alive && !attached_ids.contains(&i.session_id.as_str()))
+                    {
                         let sid = info.session_id.clone();
                         self.attach_session(sid);
                     }
@@ -379,9 +439,11 @@ impl WorkflowApp {
                 }
                 // Paste
                 let is_paste = if cfg!(target_os = "macos") {
-                    modifiers.command() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                    modifiers.command()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
                 } else {
-                    modifiers.control() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                    modifiers.control()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
                 };
                 if is_paste {
                     if !self.sessions.is_empty() {
@@ -447,7 +509,10 @@ impl WorkflowApp {
                     if !s.log_file_exists {
                         if let Ok(dir) = std::env::var("PLANEAI_SESSION_LOG_DIR") {
                             s.log_file_exists = PathBuf::from(&dir)
-                                .join("sessions").join(&s.session_id).join("meta.json").exists();
+                                .join("sessions")
+                                .join(&s.session_id)
+                                .join("meta.json")
+                                .exists();
                         }
                     }
                 }
@@ -464,9 +529,8 @@ impl WorkflowApp {
         } else {
             ("⚠ daemon disconnected", Color::from_rgb8(255, 150, 50))
         };
-        left_panel_content = left_panel_content.push(
-            text(indicator).size(11).color(color).font(Font::MONOSPACE),
-        );
+        left_panel_content =
+            left_panel_content.push(text(indicator).size(11).color(color).font(Font::MONOSPACE));
         left_panel_content = left_panel_content.push(text("").size(4));
 
         // Session cards
@@ -477,12 +541,18 @@ impl WorkflowApp {
                 SessionStatus::Exited => "○",
                 SessionStatus::Detached => "◌",
             };
-            let cwd_name = s.cwd.file_name()
+            let cwd_name = s
+                .cwd
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| s.cwd.to_string_lossy().to_string());
             let log_indicator = if s.log_file_exists { "📄" } else { "" };
             let dropped = s.backend.bytes_dropped();
-            let drop_indicator = if dropped > 0 { format!(" ⚠{dropped}d") } else { String::new() };
+            let drop_indicator = if dropped > 0 {
+                format!(" ⚠{dropped}d")
+            } else {
+                String::new()
+            };
             let cmd_short = s.command.split_whitespace().next().unwrap_or("?");
             let label = format!(
                 "{}{} {} {} {}B{}{}",
@@ -500,14 +570,17 @@ impl WorkflowApp {
                 (SessionStatus::Detached, _) => Color::from_rgb8(200, 150, 50),
                 _ => Color::from_rgb8(180, 180, 180),
             };
-            left_panel_content = left_panel_content.push(
-                text(label).size(11).color(color).font(Font::MONOSPACE),
-            );
+            left_panel_content =
+                left_panel_content.push(text(label).size(11).color(color).font(Font::MONOSPACE));
         }
 
         // Unattached daemon sessions
         if !self.daemon_sessions_listed.is_empty() {
-            let attached_ids: Vec<&str> = self.sessions.iter().map(|s| s.session_id.as_str()).collect();
+            let attached_ids: Vec<&str> = self
+                .sessions
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect();
             let unattached: Vec<&DaemonSessionInfo> = self
                 .daemon_sessions_listed
                 .iter()
@@ -516,7 +589,10 @@ impl WorkflowApp {
             if !unattached.is_empty() {
                 left_panel_content = left_panel_content.push(text("").size(4));
                 left_panel_content = left_panel_content.push(
-                    text("── detached ──").size(10).color(Color::from_rgb8(120, 120, 120)).font(Font::MONOSPACE),
+                    text("── detached ──")
+                        .size(10)
+                        .color(Color::from_rgb8(120, 120, 120))
+                        .font(Font::MONOSPACE),
                 );
                 for info in unattached.iter().take(5) {
                     let label = format!(
@@ -529,19 +605,19 @@ impl WorkflowApp {
                     } else {
                         Color::from_rgb8(100, 100, 100)
                     };
-                    left_panel_content = left_panel_content.push(
-                        text(label).size(11).color(color).font(Font::MONOSPACE),
-                    );
+                    left_panel_content = left_panel_content
+                        .push(text(label).size(11).color(color).font(Font::MONOSPACE));
                 }
             }
         }
 
-        let left_panel = container(left_panel_content)
-            .padding(8)
-            .style(|_: &Theme| container::Style {
-                background: Some(Color::from_rgb8(20, 20, 20).into()),
-                ..Default::default()
-            });
+        let left_panel =
+            container(left_panel_content)
+                .padding(8)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(20, 20, 20).into()),
+                    ..Default::default()
+                });
 
         // Terminal area
         let terminal_area: Element<'_, Message> = if self.sessions.is_empty() {
@@ -603,13 +679,13 @@ impl WorkflowApp {
         // Build layout
         let main_content = row![left_panel, column![terminal_area, status_bar]];
 
-        if self.picking_project {
+        let base: Element<'_, Message> = if self.picking_project {
             let picker = container(
                 text_input("Enter project path...", &self.project_input)
                     .on_input(Message::ProjectInputChanged)
                     .on_submit(Message::ProjectInputSubmit)
                     .size(14)
-                    .width(Length::Fill)
+                    .width(Length::Fill),
             )
             .width(Length::Fill)
             .padding(4)
@@ -620,6 +696,22 @@ impl WorkflowApp {
             column![picker, main_content].into()
         } else {
             main_content.into()
+        };
+
+        if self.show_shortcuts {
+            use iced::widget::stack;
+            let overlay = container(shortcuts_overlay())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgba8(0, 0, 0, 0.7).into()),
+                    ..Default::default()
+                });
+            stack![base, overlay].into()
+        } else {
+            base
         }
     }
 

@@ -69,6 +69,8 @@ struct MultiApp {
     ui_poll_count: u64,
     ui_batches_drained_total: u64,
     ui_bytes_drained_total: u64,
+    // Shortcuts overlay
+    show_shortcuts: bool,
     // Daemon lifecycle
     daemon_connected: bool,
     daemon_sessions_listed: Vec<DaemonSessionInfo>,
@@ -231,6 +233,7 @@ impl MultiApp {
                 ui_bytes_drained_total: 0,
                 daemon_connected,
                 daemon_sessions_listed,
+                show_shortcuts: false,
                 detach_on_close,
                 kill_on_close,
                 last_health_check: None,
@@ -463,14 +466,29 @@ impl MultiApp {
                 text: txt,
                 ..
             }) => {
-                if self.sessions.is_empty() {
-                    return;
-                }
                 let cmd = if cfg!(target_os = "macos") {
                     modifiers.command()
                 } else {
                     modifiers.control()
                 };
+
+                // Escape dismisses shortcuts overlay
+                if self.show_shortcuts {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.show_shortcuts = false;
+                    }
+                    return;
+                }
+
+                // Cmd+/ — toggle shortcuts overlay
+                if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "/") {
+                    self.show_shortcuts = !self.show_shortcuts;
+                    return;
+                }
+
+                if self.sessions.is_empty() {
+                    return;
+                }
 
                 // Cmd+1..9
                 if cmd && !modifiers.shift() {
@@ -999,7 +1017,23 @@ impl MultiApp {
             ..Default::default()
         });
 
-        row![left_panel, column![terminal_canvas, status_bar]].into()
+        let base = row![left_panel, column![terminal_canvas, status_bar]];
+
+        if self.show_shortcuts {
+            use iced::widget::stack;
+            let overlay = container(shortcuts_overlay())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgba8(0, 0, 0, 0.7).into()),
+                    ..Default::default()
+                });
+            stack![base, overlay].into()
+        } else {
+            base.into()
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {

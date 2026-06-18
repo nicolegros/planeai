@@ -477,48 +477,51 @@ target/release/planeai-iced -- \
 
 ### Manual Checklist
 
-| # | Check | Result |
-|---|-------|--------|
-| 1 | App opens without crash | |
-| 2 | Daemon connected indicator visible (⚡) | |
-| 3 | Selected project shown in status bar | |
-| 4 | Cmd+N launches agent session | |
-| 5 | Agent command starts (output appears) | |
-| 6 | Typing works (input forwarded to PTY) | |
-| 7 | Paste works (Cmd+V) | |
-| 8 | Ctrl-C works (sends to agent) | |
-| 9 | Resize works (terminal reflows) | |
-| 10 | Session card shows ● running status | |
-| 11 | Cmd+W detaches session | |
-| 12 | Close Iced app (sessions persist) | |
-| 13 | Restart Iced app | |
-| 14 | Existing session listed in left panel | |
-| 15 | Cmd+A attaches to existing session | |
-| 16 | Scrollback output replayed on attach | |
-| 17 | Live output continues after attach | |
-| 18 | Input works after reattach | |
-| 19 | Durable log exists (📄 indicator) | |
-| 20 | Replay log works (`--replay <ansi-file>`) | |
-| 21 | Cmd+Shift+W kills session | |
-| 22 | No bytes dropped (check meta.json) | |
-| 23 | No backend panic in stderr | |
-| 24 | No frontend panic | |
-| 25 | Cmd+O opens project path input | |
+| #   | Check                                     | Result |
+| --- | ----------------------------------------- | ------ |
+| 1   | App opens without crash                   |        |
+| 2   | Daemon connected indicator visible (⚡)   |        |
+| 3   | Selected project shown in status bar      |        |
+| 4   | Cmd+N launches agent session              |        |
+| 5   | Agent command starts (output appears)     |        |
+| 6   | Typing works (input forwarded to PTY)     |        |
+| 7   | Paste works (Cmd+V)                       |        |
+| 8   | Ctrl-C works (sends to agent)             |        |
+| 9   | Resize works (terminal reflows)           |        |
+| 10  | Session card shows ● running status       |        |
+| 11  | Cmd+W detaches session                    |        |
+| 12  | Close Iced app (sessions persist)         |        |
+| 13  | Restart Iced app                          |        |
+| 14  | Existing session listed in left panel     |        |
+| 15  | Cmd+A attaches to existing session        |        |
+| 16  | Scrollback output replayed on attach      |        |
+| 17  | Live output continues after attach        |        |
+| 18  | Input works after reattach                |        |
+| 19  | Durable log exists (📄 indicator)         |        |
+| 20  | Replay log works (`--replay <ansi-file>`) |        |
+| 21  | Cmd+Shift+W kills session                 |        |
+| 22  | No bytes dropped (check meta.json)        |        |
+| 23  | No backend panic in stderr                |        |
+| 24  | No frontend panic                         |        |
+| 25  | Cmd+O opens project path input            |        |
 
 ### PATH Configuration
 
 PATH is constructed by `augmented_path()`:
+
 1. `PLANEAI_EXTRA_PATH` env (overrides all config)
 2. `--extra-path-dirs` CLI flag
 3. Conventional dirs (`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`)
 4. Inherited PATH
 
 For user-specific tools, set in env or config:
+
 ```bash
 export PLANEAI_EXTRA_PATH="$HOME/.guardrails/shims:$HOME/.local/bin"
 ```
 
 Or in `~/.config/planeai/config.json`:
+
 ```json
 { "extra_path_dirs": ["~/.guardrails/shims"] }
 ```
@@ -527,13 +530,13 @@ Or in `~/.config/planeai/config.json`:
 
 ### Troubleshooting
 
-| Issue | Fix |
-|-------|-----|
-| "daemon disconnected" | Ensure `planeai-daemon` is on PATH or in same dir as binary |
-| Command not found | Check PATH construction: `PLANEAI_EXTRA_PATH` or `--extra-path-dirs` |
-| No durable logs | Set `PLANEAI_SESSION_LOG_DIR` |
-| Attach shows no output | Daemon ring buffer (1MB) may have been exceeded |
-| Session not listed | Run Cmd+R to refresh daemon list |
+| Issue                  | Fix                                                                  |
+| ---------------------- | -------------------------------------------------------------------- |
+| "daemon disconnected"  | Ensure `planeai-daemon` is on PATH or in same dir as binary          |
+| Command not found      | Check PATH construction: `PLANEAI_EXTRA_PATH` or `--extra-path-dirs` |
+| No durable logs        | Set `PLANEAI_SESSION_LOG_DIR`                                        |
+| Attach shows no output | Daemon ring buffer (1MB) may have been exceeded                      |
+| Session not listed     | Run Cmd+R to refresh daemon list                                     |
 
 ### Policy Notes
 

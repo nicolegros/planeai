@@ -137,7 +137,7 @@ GUI apps inherit a minimal system PATH that may not include directories where yo
 ```jsonc
 {
   // Directories prepended to PATH when launching sessions
-  "extra_path_dirs": ["~/.guardrails/shims", "~/custom-tools/bin"]
+  "extra_path_dirs": ["~/.guardrails/shims", "~/custom-tools/bin"],
 }
 ```
 

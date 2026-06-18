@@ -48,7 +48,7 @@ open: bundle
 
 test:
 	pnpm test
-	cd src-tauri && cargo test --workspace
+	cd src-tauri && env -u PLANEAI_DAEMON_PTY_CORE -u PLANEAI_SESSION_LOG_DIR cargo test --workspace
 
 test-e2e: build
 	./tests/e2e_session_persistence.sh
