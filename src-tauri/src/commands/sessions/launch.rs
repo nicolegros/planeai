@@ -184,14 +184,29 @@ pub async fn launch_session(
         crate::daemon_client::ensure_daemon_running(&sidecar_path, &socket_path, scrollback_bytes)
             .await?;
 
-        let (program, args) = planeai_core::command::shell_args(&cmd);
+        let launch_req = planeai_core::session_launch::CreateSessionRequest {
+            session_id: session_id.clone(),
+            project_cwd: std::path::PathBuf::from(&working_dir),
+            session_target: planeai_core::session_launch::SessionTarget::Daemon,
+            agent_command: cmd.clone(),
+            env: std::collections::HashMap::new(),
+            extra_path_dirs: extra_path_dirs.clone(),
+            cols: 80,
+            rows: 24,
+            durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        };
+        let launch_result = planeai_core::session_launch::prepare_session(&launch_req)
+            .map_err(|e| e.to_string())?;
 
-        let mut env = std::collections::HashMap::new();
-        env.insert("TERM".to_string(), "xterm-256color".to_string());
-        env.insert("PLANEAI_SESSION_ID".to_string(), session_id.clone());
-        env.insert(
-            "PATH".to_string(),
-            crate::command::augmented_path(&extra_path_dirs),
+        tracing::info!(
+            caller = "tauri",
+            shared_launch_service = true,
+            target = "daemon",
+            cwd = %launch_result.cwd.display(),
+            command_label = %launch_result.command_label,
+            durable_logs = launch_req.durable_logs,
+            extra_path_dirs_count = launch_req.extra_path_dirs.len(),
+            "session created via shared launch service"
         );
 
         let mut ds = daemon_state.0.lock().await;
@@ -207,7 +222,13 @@ pub async fn launch_session(
             }
         };
         client
-            .spawn_session(&session_id, program, &args, &working_dir, Some(&env))
+            .spawn_session(
+                &launch_result.session_id,
+                &launch_result.program,
+                &launch_result.args,
+                &working_dir,
+                Some(&launch_result.env),
+            )
             .await?;
     }
 

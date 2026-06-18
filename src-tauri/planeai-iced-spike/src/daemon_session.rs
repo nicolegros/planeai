@@ -309,11 +309,35 @@ impl DaemonSession {
         ensure_daemon_running_sync()?;
 
         let session_id = format!("iced-{}-{}", id, std::process::id());
+        let cmd = command.unwrap_or("bash");
+
+        let launch_req = planeai_core::session_launch::CreateSessionRequest {
+            session_id: session_id.clone(),
+            project_cwd: std::env::current_dir().unwrap_or_default(),
+            session_target: planeai_core::session_launch::SessionTarget::Daemon,
+            agent_command: cmd.to_string(),
+            env: std::collections::HashMap::new(),
+            extra_path_dirs: vec![],
+            cols,
+            rows,
+            durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        };
+        let launch_result = planeai_core::session_launch::prepare_session(&launch_req)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        tracing::info!(
+            caller = "iced",
+            shared_launch_service = true,
+            target = "daemon",
+            cwd = %launch_result.cwd.display(),
+            command_label = %launch_result.command_label,
+            durable_logs = launch_req.durable_logs,
+            extra_path_dirs_count = launch_req.extra_path_dirs.len(),
+            "session created via shared launch service"
+        );
+
         let socket = daemon_socket_path();
         let rt = daemon_runtime();
-
-        let cmd = command.unwrap_or("bash");
-        let (program, args) = parse_command(cmd);
 
         // Spawn session via control connection
         let spawn_start = Instant::now();
@@ -322,14 +346,11 @@ impl DaemonSession {
             stream.write_all(&[CONN_CONTROL]).await?;
             let req = serde_json::json!({
                 "cmd": "spawn",
-                "session_id": &session_id,
-                "command": program,
-                "args": args,
-                "cwd": std::env::current_dir().unwrap_or_default().to_string_lossy(),
-                "env": {
-                    "TERM": "xterm-256color",
-                    "PATH": planeai_core::command::augmented_path(&[]),
-                },
+                "session_id": &launch_result.session_id,
+                "command": &launch_result.program,
+                "args": &launch_result.args,
+                "cwd": launch_result.cwd.to_string_lossy(),
+                "env": &launch_result.env,
             });
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');
@@ -443,11 +464,35 @@ impl DaemonSession {
         ensure_daemon_running_sync()?;
 
         let session_id = format!("iced-{}-{}", id, std::process::id());
+        let cmd = command.unwrap_or("bash");
+
+        let launch_req = planeai_core::session_launch::CreateSessionRequest {
+            session_id: session_id.clone(),
+            project_cwd: cwd.to_path_buf(),
+            session_target: planeai_core::session_launch::SessionTarget::Daemon,
+            agent_command: cmd.to_string(),
+            env: std::collections::HashMap::new(),
+            extra_path_dirs: extra_path_dirs.to_vec(),
+            cols,
+            rows,
+            durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+        };
+        let launch_result = planeai_core::session_launch::prepare_session(&launch_req)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        tracing::info!(
+            caller = "iced",
+            shared_launch_service = true,
+            target = "daemon",
+            cwd = %launch_result.cwd.display(),
+            command_label = %launch_result.command_label,
+            durable_logs = launch_req.durable_logs,
+            extra_path_dirs_count = launch_req.extra_path_dirs.len(),
+            "session created via shared launch service"
+        );
+
         let socket = daemon_socket_path();
         let rt = daemon_runtime();
-
-        let cmd = command.unwrap_or("bash");
-        let (program, args) = parse_command(cmd);
 
         let spawn_start = Instant::now();
         rt.block_on(async {
@@ -455,14 +500,11 @@ impl DaemonSession {
             stream.write_all(&[CONN_CONTROL]).await?;
             let req = serde_json::json!({
                 "cmd": "spawn",
-                "session_id": &session_id,
-                "command": program,
-                "args": args,
-                "cwd": cwd.to_string_lossy(),
-                "env": {
-                    "TERM": "xterm-256color",
-                    "PATH": planeai_core::command::augmented_path(extra_path_dirs),
-                },
+                "session_id": &launch_result.session_id,
+                "command": &launch_result.program,
+                "args": &launch_result.args,
+                "cwd": launch_result.cwd.to_string_lossy(),
+                "env": &launch_result.env,
             });
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');
@@ -733,13 +775,4 @@ async fn send_control_command(
     let mut resp = String::new();
     buf_reader.read_line(&mut resp).await?;
     Ok(())
-}
-
-fn parse_command(cmd: &str) -> (&str, Vec<&str>) {
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if parts.is_empty() {
-        ("bash", vec![])
-    } else {
-        (parts[0], parts[1..].to_vec())
-    }
 }

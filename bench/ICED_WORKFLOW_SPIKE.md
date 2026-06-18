@@ -156,9 +156,98 @@ Verifies: daemon start, spawn with cwd, output, list, input, detach, reattach, k
 - Production app (`pnpm tauri dev`) is unchanged
 - Workflow mode is a separate Iced prototype binary
 - They share: planeai-core, planeai-daemon, planeai-pty, daemon protocol
+- **Both use `planeai_core::session_launch::prepare_session` for session creation**
 - Workflow mode does NOT replace the Tauri app
 - tmux remains optional, not default
+
+### Session Creation Parity
+
+As of this milestone, Tauri and Iced share session creation semantics via a shared service in `planeai-core`.
+
+**Shared service owns:**
+
+- Command resolution (via `shell_args` — proper `/bin/sh -c` wrapping)
+- CWD validation
+- PATH/env construction (via `augmented_path` with dedup)
+- Session ID propagation (PLANEAI_SESSION_ID env var)
+- TERM env var setting
+- Error types for invalid cwd / empty command
+
+**UI-specific (NOT shared):**
+
+- Daemon connection management (Tauri: async DaemonClient, Iced: block_on with shared runtime)
+- DB persistence (Tauri only)
+- Git worktree creation (Tauri only)
+- tmux routing (Tauri only, via config)
+- Notify hook registration (Tauri only)
+- Provider session ID discovery (Tauri only)
+- Iced UI session cards / attach/detach lifecycle
+
+**Parity verified by:**
+
+- 10 unit tests in `planeai-core/tests/session_launch_parity_test.rs`
+- Workflow smoke test confirms shared service path end-to-end
+- Production Tauri release build succeeds
+
+**How to test parity:**
+
+```bash
+cargo test -p planeai-core --test session_launch_parity_test
+```
 
 ## Rollback
 
 Stop using workflow mode. The daemon backend, protocol, and durable logs are shared infrastructure used by both apps. No migration needed.
+
+---
+
+## Session Creation Parity Audit
+
+**Date:** 2026-06-18
+
+### Production Tauri path (`src-tauri/src/commands/sessions/launch.rs`)
+
+1. `launch_session` Tauri command receives frontend args
+2. Phase 1: Reads config (provider, command, backend, scrollback_bytes, extra_path_dirs)
+3. Phase 2: Git worktree/branch creation, session_id generation
+4. Phase 3 (daemon): ensures daemon running → **calls `prepare_session()`** → spawns via `DaemonClient`
+5. Phase 3 (tmux): `tmux::create_session_with_cmd`
+6. Phase 4: DB write, notify registration, task hooks
+
+### Current Iced path (`planeai-iced-spike/src/daemon_session.rs`)
+
+1. `DaemonSession::spawn_with_cwd` called from workflow UI
+2. Ensures daemon running
+3. **Calls `prepare_session()`** — resolves command, env, PATH
+4. Sends spawn JSON over control socket (block_on)
+5. Opens data connection for I/O
+6. No DB, no git, no notify, no tmux
+
+### Duplicated logic (ELIMINATED)
+
+Before this milestone, both paths independently:
+
+- Split the command string (Iced used naive whitespace split; Tauri used `shell_args`)
+- Built env with TERM + PATH
+- Called `augmented_path` separately
+
+Now both call `planeai_core::session_launch::prepare_session()`.
+
+### Missing production semantics in Iced (ACCEPTABLE)
+
+These remain Tauri-only by design:
+
+- DB persistence
+- Git worktree creation
+- Notify hook registration
+- Provider session ID discovery
+- tmux routing
+
+### Recommended shared boundary
+
+```
+planeai_core::session_launch::prepare_session()
+```
+
+Owns: command resolution, CWD validation, env construction, PATH augmentation.
+Does NOT own: daemon connection, spawn call, DB, git, UI state.

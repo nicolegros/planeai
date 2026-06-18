@@ -5,6 +5,7 @@ use crate::config;
 
 /// Build a PATH string with user-local bin directories prepended.
 /// Delegates to planeai_core::command::augmented_path with config dirs.
+#[cfg(test)]
 pub fn augmented_path(config_dirs: &[String]) -> String {
     planeai_core::command::augmented_path(config_dirs)
 }

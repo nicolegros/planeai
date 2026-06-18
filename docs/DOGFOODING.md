@@ -556,3 +556,35 @@ target/release/planeai-workflow-smoke \
   --agent-command "python3 -c 'import time; print(\"agent ready\", flush=True); time.sleep(30)'" \
   --metrics bench/results/workflow-smoke.jsonl
 ```
+
+## Shared Session Launch Service
+
+**Date:** 2026-06-18
+
+Both Tauri and Iced workflow now create daemon sessions through the same shared service:
+
+```
+planeai_core::session_launch::prepare_session(CreateSessionRequest) → CreateSessionResult
+```
+
+This ensures:
+
+- Same command resolution (shell_args: `/bin/sh -c "..."`)
+- Same PATH construction (augmented_path with dedup)
+- Same env vars (TERM, PLANEAI_SESSION_ID, PATH)
+- Same CWD validation
+- Same error semantics
+
+**How to launch an agent session from Iced workflow:**
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+PATH="$(pwd)/target/release:$PATH" \
+target/release/planeai-iced -- \
+  --planeai-workflow \
+  --cwd /path/to/project \
+  --agent-command "kiro-cli chat"
+```
+
+Then press Cmd+N to launch a session through the shared service.
