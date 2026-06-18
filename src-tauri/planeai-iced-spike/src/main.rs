@@ -7,6 +7,7 @@ pub mod input;
 mod multi_session;
 pub mod planeai_local;
 pub mod shell;
+mod workflow;
 
 use std::fs;
 use std::io::Write;
@@ -88,6 +89,14 @@ pub struct Args {
     pub kill_on_close: bool,
     #[arg(long)]
     pub kill_sessions_on_exit: bool,
+    #[arg(long)]
+    pub planeai_workflow: bool,
+    #[arg(long)]
+    pub cwd: Option<PathBuf>,
+    #[arg(long)]
+    pub agent_command: Option<String>,
+    #[arg(long)]
+    pub extra_path_dirs: Vec<String>,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();
@@ -1152,6 +1161,11 @@ fn title(_state: &App) -> String {
 
 fn main() -> iced::Result {
     let args = Args::parse();
+
+    // Workflow mode
+    if args.planeai_workflow {
+        return workflow::run(args);
+    }
 
     // Multi-session mode
     if args.multi_session {

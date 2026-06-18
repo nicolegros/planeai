@@ -135,6 +135,10 @@ fn shell_command(cmd_str: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that read/write PLANEAI_EXTRA_PATH env var.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn no_guardrails_path_in_conventional_dirs() {
@@ -179,7 +183,7 @@ mod tests {
 
     #[test]
     fn config_provided_extra_dirs_are_added() {
-        // Only test when env override is not set
+        let _lock = ENV_MUTEX.lock().unwrap();
         if std::env::var("PLANEAI_EXTRA_PATH").is_ok() {
             return;
         }
@@ -192,6 +196,7 @@ mod tests {
 
     #[test]
     fn config_dirs_come_before_conventional() {
+        let _lock = ENV_MUTEX.lock().unwrap();
         if std::env::var("PLANEAI_EXTRA_PATH").is_ok() {
             return;
         }
@@ -214,9 +219,7 @@ mod tests {
 
     #[test]
     fn env_overrides_config() {
-        // Test the override logic: when PLANEAI_EXTRA_PATH is set, config_dirs are ignored.
-        // We test by temporarily setting and removing the var in a single-threaded context.
-        // The guard tests above skip when the env is set, so the worst case is a skip.
+        let _lock = ENV_MUTEX.lock().unwrap();
         let marker = "/planeai_test_env_override_8f3a";
         unsafe {
             std::env::set_var("PLANEAI_EXTRA_PATH", marker);
