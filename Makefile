@@ -23,7 +23,6 @@ dogfood: ## Run Iced native UI with daemon-backed sessions + durable logs
 		--multi-session \
 		--sessions 1 \
 		--session-source planeai-daemon \
-		--session-command bash \
 		--cols 120 \
 		--rows 40 \
 		--backend iced-alacritty
