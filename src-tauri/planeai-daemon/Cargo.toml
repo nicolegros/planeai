@@ -9,8 +9,10 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1"
+chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
+planeai-pty = { path = "../planeai-pty" }
 portable-pty = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }

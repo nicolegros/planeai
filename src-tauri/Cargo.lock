@@ -4398,8 +4398,10 @@ name = "planeai-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "planeai-ipc",
+ "planeai-pty",
  "portable-pty",
  "serde",
  "serde_json",

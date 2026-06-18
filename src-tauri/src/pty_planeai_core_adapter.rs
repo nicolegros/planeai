@@ -109,6 +109,7 @@ impl PlaneaiPtyBackend {
                         schema_version: 1,
                         session_id: session_id.to_string(),
                         pty_core: "planeai-pty".to_string(),
+                        session_source: Some("local".to_string()),
                         started_at: Utc::now().to_rfc3339(),
                         ended_at: None,
                         command: full_command.clone(),
@@ -219,6 +220,8 @@ pub struct SessionMeta {
     pub schema_version: u32,
     pub session_id: String,
     pub pty_core: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_source: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub command: String,
