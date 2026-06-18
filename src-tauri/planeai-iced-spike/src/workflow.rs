@@ -56,6 +56,7 @@ struct WorkflowApp {
     active: usize,
     project_cwd: PathBuf,
     agent_command: String,
+    provider_label: String,
     extra_path_dirs: Vec<String>,
     cols: usize,
     rows: usize,
@@ -90,15 +91,31 @@ impl WorkflowApp {
         // Actually we use a static — set by run() before boot.
         let args = WORKFLOW_ARGS.get().unwrap();
 
+        // Load config: CLI/env > config file > defaults
+        let config = if let Some(ref path) = args.config {
+            planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+        } else {
+            planeai_core::session_launch::load_default_config()
+        };
+
         let project_cwd = args
             .cwd
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let agent_command = args
-            .agent_command
-            .clone()
-            .unwrap_or_else(|| "kiro-cli chat".to_string());
-        let extra_path_dirs = args.extra_path_dirs.clone();
+
+        // Agent command: CLI flag > config default provider command > fallback
+        let agent_command = if let Some(ref cmd) = args.agent_command {
+            cmd.clone()
+        } else if let Some(provider) = config.providers.get(&config.default_provider) {
+            provider.command.clone()
+        } else {
+            "kiro-cli chat".to_string()
+        };
+
+        // Extra PATH dirs: CLI augments config
+        let mut extra_path_dirs = config.extra_path_dirs.clone();
+        extra_path_dirs.extend(args.extra_path_dirs.iter().cloned());
+
         let cols = args.cols;
         let rows = args.rows;
 
@@ -124,6 +141,7 @@ impl WorkflowApp {
                 active: 0,
                 project_cwd,
                 agent_command,
+                provider_label: config.default_provider.clone(),
                 extra_path_dirs,
                 cols,
                 rows,
@@ -649,7 +667,7 @@ impl WorkflowApp {
             let s = &self.sessions[self.active];
             format!(" | {} | {}B", s.command, s.bytes_processed)
         } else {
-            String::new()
+            format!(" | {} | {}", self.provider_label, self.agent_command)
         };
         let error_display = self.last_error.as_deref().unwrap_or("");
         let status_text = format!(

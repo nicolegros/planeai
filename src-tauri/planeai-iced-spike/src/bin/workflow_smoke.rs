@@ -28,8 +28,10 @@ use planeai_iced_spike::daemon_session::{
 struct Args {
     #[arg(long, default_value = "/tmp/planeai-smoke-project")]
     cwd: PathBuf,
-    #[arg(long, default_value = "python3 -c 'print(\"agent ready\")'; sleep 30")]
-    agent_command: String,
+    #[arg(long)]
+    agent_command: Option<String>,
+    #[arg(long)]
+    config: Option<PathBuf>,
     #[arg(long)]
     metrics: Option<PathBuf>,
     #[arg(long, default_value_t = 120)]
@@ -56,6 +58,23 @@ fn main() {
     let args = Args::parse();
     eprintln!("=== Workflow Smoke Test ===\n");
 
+    // Resolve agent command: CLI > config > default
+    let config = if let Some(ref path) = args.config {
+        planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+    } else {
+        planeai_core::session_launch::load_default_config()
+    };
+    let agent_command = if let Some(ref cmd) = args.agent_command {
+        cmd.clone()
+    } else if let Some(provider) = config.providers.get(&config.default_provider) {
+        provider.command.clone()
+    } else {
+        "python3 -c 'print(\"agent ready\")'; sleep 30".to_string()
+    };
+    eprintln!("  config_loaded: {}", args.config.is_some());
+    eprintln!("  agent_command: {agent_command}");
+    eprintln!("  cwd: {}\n", args.cwd.display());
+
     // Ensure cwd exists
     fs::create_dir_all(&args.cwd).expect("failed to create cwd directory");
 
@@ -78,9 +97,13 @@ fn main() {
             1,
             args.cols,
             args.rows,
-            Some(&args.agent_command),
+            Some(&agent_command),
             &args.cwd,
-            &[],
+            &config
+                .extra_path_dirs
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         )
     });
     let session = match session {

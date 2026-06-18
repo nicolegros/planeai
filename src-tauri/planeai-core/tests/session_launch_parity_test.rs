@@ -150,3 +150,160 @@ fn durable_log_setting_propagates() {
     // Callers check it. Verify it doesn't affect the result env incorrectly.
     assert!(!result.env.contains_key("PLANEAI_SESSION_LOG_DIR"));
 }
+
+// ─── Config resolution tests ─────────────────────────────────────────────────
+
+use planeai_core::session_launch::{
+    resolve_from_config, LaunchConfig, ProviderConfig, SessionLaunchOverrides,
+};
+
+#[test]
+fn config_default_agent_command_resolves() {
+    let mut config = LaunchConfig::default();
+    config.providers.insert(
+        "test".to_string(),
+        ProviderConfig {
+            command: "test-agent run".to_string(),
+            yolo_flag: None,
+        },
+    );
+    config.default_provider = "test".to_string();
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.command_label, "test-agent run");
+}
+
+#[test]
+fn cli_agent_command_overrides_config() {
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        agent_command: Some("custom-agent --fast".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.command_label, "custom-agent --fast");
+}
+
+#[test]
+fn config_extra_path_dirs_applied() {
+    let config = LaunchConfig {
+        extra_path_dirs: vec!["/config/bin".to_string()],
+        ..Default::default()
+    };
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert!(resolved
+        .request
+        .extra_path_dirs
+        .contains(&"/config/bin".to_string()));
+}
+
+#[test]
+fn cli_extra_path_dirs_augment_config() {
+    let config = LaunchConfig {
+        extra_path_dirs: vec!["/config/bin".to_string()],
+        ..Default::default()
+    };
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        extra_path_dirs: vec!["/cli/bin".to_string()],
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert!(resolved
+        .request
+        .extra_path_dirs
+        .contains(&"/config/bin".to_string()));
+    assert!(resolved
+        .request
+        .extra_path_dirs
+        .contains(&"/cli/bin".to_string()));
+}
+
+#[test]
+fn missing_config_falls_back_to_cli() {
+    let config = LaunchConfig {
+        providers: HashMap::new(),
+        default_provider: "nonexistent".to_string(),
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        agent_command: Some("fallback-agent".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.command_label, "fallback-agent");
+}
+
+#[test]
+fn missing_config_and_cli_returns_error() {
+    let config = LaunchConfig {
+        providers: HashMap::new(),
+        default_provider: "nonexistent".to_string(),
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let err = resolve_from_config(&config, &overrides).unwrap_err();
+    assert!(matches!(err, CreateSessionError::CommandEmpty));
+}
+
+#[test]
+fn daemon_target_is_default() {
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.request.session_target, SessionTarget::Daemon);
+}
+
+#[test]
+fn tmux_target_explicit_via_config() {
+    let config = LaunchConfig {
+        session_backend: Some("tmux".to_string()),
+        ..Default::default()
+    };
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.request.session_target, SessionTarget::Tmux);
+}
+
+#[test]
+fn auto_approve_adds_yolo_flag() {
+    let mut config = LaunchConfig::default();
+    config.providers.insert(
+        "test".to_string(),
+        ProviderConfig {
+            command: "agent".to_string(),
+            yolo_flag: Some("--yolo".to_string()),
+        },
+    );
+    config.default_provider = "test".to_string();
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        auto_approve: true,
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.command_label, "agent --yolo");
+}

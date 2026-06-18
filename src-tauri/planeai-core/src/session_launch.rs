@@ -12,6 +12,187 @@ pub enum SessionTarget {
     Tmux,
 }
 
+// ─── Shared config types (UI-neutral) ────────────────────────────────────────
+
+/// Minimal provider definition needed for session launch.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ProviderConfig {
+    pub command: String,
+    #[serde(default)]
+    pub yolo_flag: Option<String>,
+}
+
+/// Minimal app config subset needed for session launch resolution.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct LaunchConfig {
+    #[serde(default)]
+    pub providers: HashMap<String, ProviderConfig>,
+    #[serde(default = "default_provider")]
+    pub default_provider: String,
+    #[serde(default)]
+    pub session_backend: Option<String>,
+    #[serde(default)]
+    pub session_log_dir: Option<String>,
+    #[serde(default)]
+    pub extra_path_dirs: Vec<String>,
+}
+
+fn default_provider() -> String {
+    "kiro".to_string()
+}
+
+impl Default for LaunchConfig {
+    fn default() -> Self {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "kiro".to_string(),
+            ProviderConfig {
+                command: "kiro-cli chat".to_string(),
+                yolo_flag: Some("--trust-all-tools".to_string()),
+            },
+        );
+        providers.insert(
+            "claude".to_string(),
+            ProviderConfig {
+                command: "claude".to_string(),
+                yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+            },
+        );
+        Self {
+            providers,
+            default_provider: "kiro".to_string(),
+            session_backend: None,
+            session_log_dir: None,
+            extra_path_dirs: Vec::new(),
+        }
+    }
+}
+
+/// Load a LaunchConfig from a JSON file path. Falls back to defaults on error.
+pub fn load_launch_config(path: &std::path::Path) -> Result<LaunchConfig, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("cannot parse config {}: {e}", path.display()))
+}
+
+/// Load config from the standard PlaneAI config location.
+pub fn load_default_config() -> LaunchConfig {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let config_dir = format!("{home}/.config/planeai");
+    #[cfg(not(target_os = "macos"))]
+    let config_dir = std::env::var("XDG_CONFIG_HOME")
+        .map(|d| format!("{d}/planeai"))
+        .unwrap_or_else(|_| format!("{home}/.config/planeai"));
+
+    let path = PathBuf::from(&config_dir).join("config.json");
+    if path.exists() {
+        load_launch_config(&path).unwrap_or_default()
+    } else {
+        LaunchConfig::default()
+    }
+}
+
+// ─── Overrides and resolver ──────────────────────────────────────────────────
+
+/// CLI/env overrides for session launch.
+#[derive(Debug, Clone, Default)]
+pub struct SessionLaunchOverrides {
+    pub cwd: Option<PathBuf>,
+    pub agent_command: Option<String>,
+    pub provider_id: Option<String>,
+    pub extra_path_dirs: Vec<String>,
+    pub session_target: Option<SessionTarget>,
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+    pub auto_approve: bool,
+}
+
+/// Resolved launch configuration with provenance notes.
+#[derive(Debug, Clone)]
+pub struct ResolvedLaunchConfig {
+    pub request: CreateSessionRequest,
+    pub provider_label: Option<String>,
+    pub command_label: String,
+}
+
+/// Resolve a CreateSessionRequest from config + overrides.
+///
+/// Precedence: CLI overrides > env vars > config file > defaults.
+pub fn resolve_from_config(
+    config: &LaunchConfig,
+    overrides: &SessionLaunchOverrides,
+) -> Result<ResolvedLaunchConfig, CreateSessionError> {
+    // Provider resolution
+    let provider_id = overrides
+        .provider_id
+        .as_deref()
+        .unwrap_or(&config.default_provider);
+    let provider = config.providers.get(provider_id);
+
+    // Command resolution: CLI > provider config > default
+    let agent_command = if let Some(ref cmd) = overrides.agent_command {
+        cmd.clone()
+    } else if let Some(p) = provider {
+        if overrides.auto_approve {
+            if let Some(ref flag) = p.yolo_flag {
+                format!("{} {flag}", p.command)
+            } else {
+                p.command.clone()
+            }
+        } else {
+            p.command.clone()
+        }
+    } else {
+        return Err(CreateSessionError::CommandEmpty);
+    };
+
+    // CWD: CLI > current dir
+    let cwd = overrides
+        .cwd
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Extra PATH dirs: CLI augments config. Env override handled inside augmented_path.
+    let mut extra_path_dirs = config.extra_path_dirs.clone();
+    extra_path_dirs.extend(overrides.extra_path_dirs.iter().cloned());
+
+    // Session target: CLI > config > default (daemon)
+    let config_target = match config.session_backend.as_deref() {
+        Some("tmux") => SessionTarget::Tmux,
+        Some("local") => SessionTarget::Local,
+        _ => SessionTarget::Daemon,
+    };
+    let session_target = overrides.session_target.clone().unwrap_or(config_target);
+
+    // Durable logs: env > config
+    let durable_logs =
+        std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok() || config.session_log_dir.is_some();
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let request = CreateSessionRequest {
+        session_id,
+        project_cwd: cwd,
+        session_target,
+        agent_command: agent_command.clone(),
+        env: HashMap::new(),
+        extra_path_dirs,
+        cols: overrides.cols.unwrap_or(120),
+        rows: overrides.rows.unwrap_or(40),
+        durable_logs,
+    };
+
+    Ok(ResolvedLaunchConfig {
+        request,
+        provider_label: Some(provider_id.to_string()),
+        command_label: agent_command,
+    })
+}
+
 /// UI-neutral request to create a session.
 #[derive(Debug, Clone)]
 pub struct CreateSessionRequest {

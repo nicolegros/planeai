@@ -143,7 +143,7 @@ Verifies: daemon start, spawn with cwd, output, list, input, detach, reattach, k
 - Project picker is text-based (no native file dialog)
 - No recent projects list (manual path entry only)
 - No log replay within workflow mode (use `--replay` flag separately)
-- No config file loading yet (CLI/env only)
+- Config loaded from `~/.config/planeai/config.json` (or `--config` flag)
 - Daemon crash = sessions lost (no crash recovery)
 - Scrollback limited to daemon 1MB ring buffer
 - No multi-project support (one project per window)
@@ -251,3 +251,41 @@ planeai_core::session_launch::prepare_session()
 
 Owns: command resolution, CWD validation, env construction, PATH augmentation.
 Does NOT own: daemon connection, spawn call, DB, git, UI state.
+
+---
+
+## Config/Provider Parity
+
+**Date:** 2026-06-18
+
+### Config loading
+
+Iced workflow now loads the same PlaneAI config file (`~/.config/planeai/config.json`) as the production Tauri app.
+
+### Precedence (shared by Tauri and Iced)
+
+1. **CLI flags** (`--agent-command`, `--cwd`, `--extra-path-dirs`)
+2. **Environment variables** (`PLANEAI_EXTRA_PATH`, `PLANEAI_SESSION_LOG_DIR`, `PLANEAI_DAEMON_PTY_CORE`)
+3. **Config file** (`~/.config/planeai/config.json`)
+4. **Defaults** (kiro-cli chat, daemon backend, conventional PATH dirs)
+
+### Shared resolver
+
+```rust
+planeai_core::session_launch::resolve_from_config(&LaunchConfig, &SessionLaunchOverrides)
+    → Result<ResolvedLaunchConfig, CreateSessionError>
+```
+
+### Default backend
+
+`daemon` is always the default. Users who want tmux set `"session_backend": "tmux"` in config.
+
+### Config-based smoke test
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+cargo run --release -p planeai-iced-spike --bin planeai-workflow-smoke -- \
+  --config /tmp/planeai-smoke-config.json \
+  --cwd /tmp/planeai-smoke-project \
+  --metrics bench/results/workflow-config-smoke.jsonl
+```

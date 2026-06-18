@@ -441,13 +441,7 @@ pub fn should_accept_provider_session_id(
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
         Some(b) => b.as_str(),
-        None => {
-            if tmux_available() {
-                "tmux"
-            } else {
-                "daemon"
-            }
-        }
+        None => "daemon",
     }
 }
 
@@ -790,14 +784,8 @@ mod tests {
         let config = Config::default();
         assert!(config.session_backend.is_none());
         let result = resolve_backend(&config);
-        // The key behavior: it returns either "tmux" or "daemon", never panics
-        assert!(result == "tmux" || result == "daemon");
-        // And it matches tmux_available()
-        if tmux_available() {
-            assert_eq!(result, "tmux");
-        } else {
-            assert_eq!(result, "daemon");
-        }
+        // Default is always daemon regardless of tmux availability
+        assert_eq!(result, "daemon");
     }
 
     #[test]
