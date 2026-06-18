@@ -17,7 +17,10 @@ if (page === "preferences") {
     invoke("bench_get_config").then((config: unknown) => {
       if (config) {
         import("./components/BenchmarkRunner.svelte").then(({ default: BenchmarkRunner }) => {
-          mount(BenchmarkRunner, { target: document.getElementById("app")!, props: { config } });
+          mount(BenchmarkRunner, {
+            target: document.getElementById("app")!,
+            props: { config: config as import("./lib/benchmark/replay").ReplayOptions },
+          });
         });
       } else {
         import("./App.svelte").then(({ default: App }) => {

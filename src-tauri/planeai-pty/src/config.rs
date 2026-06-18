@@ -1,16 +1,11 @@
 use crate::event::SessionId;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum QueuePolicy {
+    #[default]
     Block,
     DropOldest,
-}
-
-impl Default for QueuePolicy {
-    fn default() -> Self {
-        Self::Block
-    }
 }
 
 pub struct LocalPtyConfig {
