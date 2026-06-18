@@ -28,6 +28,8 @@ PlaneAI manages AI coding agent sessions. The domain model is shared across fron
 └──────────────────────────────────┘
 ```
 
+Tauri's `db::create_session_with_id()` delegates to `SessionService::create()`. Both share a single migration path (`planeai_core::services::migrate`) that is safe to run on existing production databases.
+
 ## Projects
 
 | Field | Type | Description |
@@ -106,6 +108,18 @@ archived → active (restore)
 | Daemon protocol | `planeai_daemon::protocol` |
 | IPC transport | `planeai_ipc` |
 | Durable logging | Daemon-side (transparent) |
+
+## How Tauri Uses Shared Services
+
+Tauri's `db::create_session_with_id()` delegates to `planeai_core::services::SessionService::create()`. This ensures:
+- Single INSERT implementation for sessions
+- Same column set used by both frontends
+- No schema drift between Tauri and Iced session records
+
+Tauri still owns:
+- `db::migrate()` (superset: includes settings table, tmux_name NOT NULL migration)
+- Project create/archive/delete (UI-specific flows not yet extracted)
+- MRU ordering, PR state updates, provider_session_id discovery
 
 ## What Remains Prototype-Only (Iced)
 

@@ -320,7 +320,7 @@ impl WorkflowApp {
                 });
                 self.active = self.sessions.len() - 1;
                 // Persist to shared DB
-                if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+                let db_err = if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
                     if let Ok(conn) = db.lock() {
                         let params = CreateSessionParams {
                             id: session_id.clone(),
@@ -328,12 +328,19 @@ impl WorkflowApp {
                             name: self.provider_label.clone(),
                             backend: "daemon".to_string(),
                             auto_approve: true,
-                            command: Some(self.agent_command.clone()),
-                            cwd: Some(self.project_cwd.to_string_lossy().to_string()),
                             ..Default::default()
                         };
-                        let _ = SessionService::create(&conn, &params);
+                        SessionService::create(&conn, &params)
+                            .err()
+                            .map(|e| format!("DB persist failed: {e}"))
+                    } else {
+                        None
                     }
+                } else {
+                    None
+                };
+                if let Some(msg) = db_err {
+                    self.set_error(msg);
                 }
                 self.refresh_persisted_sessions();
             }
@@ -386,7 +393,7 @@ impl WorkflowApp {
                 self.active = self.sessions.len() - 1;
                 self.clear_error();
                 // Persist to shared DB
-                if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+                let db_err = if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
                     if let Ok(conn) = db.lock() {
                         let params = CreateSessionParams {
                             id: session_id.clone(),
@@ -394,12 +401,19 @@ impl WorkflowApp {
                             name: command.to_string(),
                             backend: "daemon".to_string(),
                             auto_approve: true,
-                            command: Some(command.to_string()),
-                            cwd: Some(self.project_cwd.to_string_lossy().to_string()),
                             ..Default::default()
                         };
-                        let _ = SessionService::create(&conn, &params);
+                        SessionService::create(&conn, &params)
+                            .err()
+                            .map(|e| format!("DB persist failed: {e}"))
+                    } else {
+                        None
                     }
+                } else {
+                    None
+                };
+                if let Some(msg) = db_err {
+                    self.set_error(msg);
                 }
                 self.refresh_persisted_sessions();
             }

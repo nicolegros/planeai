@@ -339,29 +339,39 @@ pub fn create_session_with_id(
     task_key: Option<&str>,
     base_branch: Option<&str>,
 ) -> Result<Session> {
-    let created_at = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![id, project_id, name, tmux_name, branch, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch],
-    )?;
-    Ok(Session {
+    let params = planeai_core::services::CreateSessionParams {
         id: id.to_string(),
         project_id: project_id.to_string(),
         name: name.to_string(),
         tmux_name: tmux_name.map(|s| s.to_string()),
         branch: branch.to_string(),
-        status: "active".to_string(),
-        created_at,
         worktree_path: worktree_path.map(|s| s.to_string()),
         provider: provider.map(|s| s.to_string()),
         backend: backend.to_string(),
-        provider_session_id: None,
-        tab_count: 1,
         auto_approve,
         task_key: task_key.map(|s| s.to_string()),
         base_branch: base_branch.map(|s| s.to_string()),
-        pr_url: None,
-        pr_state: None,
+        ..Default::default()
+    };
+    let record = planeai_core::services::SessionService::create(conn, &params)?;
+    Ok(Session {
+        id: record.id,
+        project_id: record.project_id,
+        name: record.name,
+        tmux_name: record.tmux_name,
+        branch: record.branch,
+        status: record.status,
+        created_at: record.created_at,
+        worktree_path: record.worktree_path,
+        provider: record.provider,
+        backend: record.backend,
+        provider_session_id: record.provider_session_id,
+        tab_count: record.tab_count,
+        auto_approve: record.auto_approve,
+        task_key: record.task_key,
+        base_branch: record.base_branch,
+        pr_url: record.pr_url,
+        pr_state: record.pr_state,
     })
 }
 

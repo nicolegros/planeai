@@ -151,8 +151,6 @@ fn main() {
             project_id: project.id.clone(),
             name: "smoke-test".to_string(),
             backend: "daemon".to_string(),
-            command: Some(agent_command.clone()),
-            cwd: Some(args.cwd.to_string_lossy().to_string()),
             ..Default::default()
         };
         SessionService::create(&conn, &params).map_err(|e| anyhow::anyhow!("{e}"))

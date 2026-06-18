@@ -1,6 +1,7 @@
-//! Shared PlaneAI domain services — UI-neutral persistence for projects, sessions, worktrees, tasks.
+//! Shared PlaneAI domain services — UI-neutral persistence for projects and sessions.
 //!
 //! Both Tauri and Iced call into these services. No UI framework dependency.
+//! Migration uses the same idempotent ALTER TABLE pattern as the production db.rs.
 
 use std::path::{Path, PathBuf};
 
@@ -29,43 +30,51 @@ pub fn open_db_at(path: &Path) -> SqlResult<Connection> {
     Ok(conn)
 }
 
-fn migrate(conn: &Connection) -> SqlResult<()> {
+/// Idempotent migration — identical logic to production src-tauri/src/db.rs::migrate().
+/// Safe to run on fresh DBs and existing production DBs alike.
+pub fn migrate(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            path TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active',
-            auto_mode INTEGER NOT NULL DEFAULT 0,
-            task_manager TEXT
+            path TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL REFERENCES projects(id),
             name TEXT NOT NULL DEFAULT '',
             tmux_name TEXT,
-            branch TEXT NOT NULL DEFAULT '',
+            branch TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL,
-            worktree_path TEXT,
-            provider TEXT,
-            backend TEXT NOT NULL DEFAULT 'daemon',
-            provider_session_id TEXT,
-            tab_count INTEGER NOT NULL DEFAULT 1,
-            auto_approve INTEGER NOT NULL DEFAULT 1,
-            task_key TEXT,
-            base_branch TEXT,
-            mru_position INTEGER,
-            pr_url TEXT,
-            pr_state TEXT,
-            auto_dispatched INTEGER NOT NULL DEFAULT 0,
-            command TEXT,
-            cwd TEXT
+            created_at TEXT NOT NULL
         );",
     )?;
-    // Add columns that may not exist in older DBs
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN command TEXT");
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN cwd TEXT");
+    // Idempotent column additions (same as production db.rs)
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
+    let _ =
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
+    let _ =
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
+    let _ = conn
+        .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
+    let _ =
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN base_branch TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_url TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_state TEXT");
+    let _ = conn.execute_batch(
+        "ALTER TABLE sessions ADD COLUMN auto_dispatched INTEGER NOT NULL DEFAULT 0",
+    );
+    let _ =
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+    // Migrate direct backend → daemon
+    let _ = conn.execute_batch("UPDATE sessions SET backend = 'daemon' WHERE backend = 'direct'");
     Ok(())
 }
 
@@ -79,13 +88,14 @@ pub struct Project {
     pub status: String,
 }
 
-// ─── Session types ───────────────────────────────────────────────────────────
+// ─── Session types (matches production db::Session) ──────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionRecord {
     pub id: String,
     pub project_id: String,
     pub name: String,
+    pub tmux_name: Option<String>,
     pub branch: String,
     pub status: String,
     pub created_at: String,
@@ -93,11 +103,41 @@ pub struct SessionRecord {
     pub provider: Option<String>,
     pub backend: String,
     pub provider_session_id: Option<String>,
+    pub tab_count: i64,
+    pub auto_approve: bool,
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
+    pub pr_url: Option<String>,
+    pub pr_state: Option<String>,
+    pub mru_position: Option<i64>,
     pub auto_dispatched: bool,
-    pub command: Option<String>,
-    pub cwd: Option<String>,
+}
+
+/// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched";
+
+fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
+    Ok(SessionRecord {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        name: row.get(2)?,
+        tmux_name: row.get(3)?,
+        branch: row.get(4)?,
+        status: row.get(5)?,
+        created_at: row.get(6)?,
+        worktree_path: row.get(7)?,
+        provider: row.get(8)?,
+        backend: row.get(9)?,
+        provider_session_id: row.get(10)?,
+        tab_count: row.get(11)?,
+        auto_approve: row.get(12)?,
+        task_key: row.get(13)?,
+        base_branch: row.get(14)?,
+        pr_url: row.get(15)?,
+        pr_state: row.get(16)?,
+        mru_position: row.get(17)?,
+        auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +145,7 @@ pub struct CreateSessionParams {
     pub id: String,
     pub project_id: String,
     pub name: String,
+    pub tmux_name: Option<String>,
     pub branch: String,
     pub worktree_path: Option<String>,
     pub provider: Option<String>,
@@ -113,8 +154,6 @@ pub struct CreateSessionParams {
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
     pub auto_dispatched: bool,
-    pub command: Option<String>,
-    pub cwd: Option<String>,
 }
 
 // ─── ProjectService ──────────────────────────────────────────────────────────
@@ -124,7 +163,6 @@ pub struct ProjectService;
 impl ProjectService {
     /// Find or create a project for the given path. Returns existing if path matches.
     pub fn ensure_project(conn: &Connection, path: &str) -> SqlResult<Project> {
-        // Check if project with this path already exists
         let existing: Option<Project> = conn
             .prepare(
                 "SELECT id, name, path, status FROM projects WHERE path = ?1 AND status = 'active'",
@@ -143,7 +181,6 @@ impl ProjectService {
             return Ok(p);
         }
 
-        // Derive name from path
         let name = Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -202,12 +239,13 @@ impl SessionService {
     pub fn create(conn: &Connection, params: &CreateSessionParams) -> SqlResult<SessionRecord> {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, command, cwd)
-             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 params.id,
                 params.project_id,
                 params.name,
+                params.tmux_name,
                 params.branch,
                 created_at,
                 params.worktree_path,
@@ -217,14 +255,13 @@ impl SessionService {
                 params.task_key,
                 params.base_branch,
                 params.auto_dispatched,
-                params.command,
-                params.cwd,
             ],
         )?;
         Ok(SessionRecord {
             id: params.id.clone(),
             project_id: params.project_id.clone(),
             name: params.name.clone(),
+            tmux_name: params.tmux_name.clone(),
             branch: params.branch.clone(),
             status: "active".to_string(),
             created_at,
@@ -232,40 +269,45 @@ impl SessionService {
             provider: params.provider.clone(),
             backend: params.backend.clone(),
             provider_session_id: None,
+            tab_count: 1,
+            auto_approve: params.auto_approve,
             task_key: params.task_key.clone(),
             base_branch: params.base_branch.clone(),
+            pr_url: None,
+            pr_state: None,
+            mru_position: None,
             auto_dispatched: params.auto_dispatched,
-            command: params.command.clone(),
-            cwd: params.cwd.clone(),
         })
     }
 
-    /// List active sessions for a project.
+    /// List sessions for a project using production filtering/ordering:
+    /// - Include active and exited (not archived/destroyed)
+    /// - Exclude exited sessions whose task_key is in a 'done' task
+    /// - Order by mru_position ASC NULLS LAST, then created_at ASC
     pub fn list_for_project(conn: &Connection, project_id: &str) -> SqlResult<Vec<SessionRecord>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, project_id, name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, task_key, base_branch, auto_dispatched, command, cwd
-             FROM sessions WHERE project_id = ?1 AND status IN ('active', 'exited')
-             ORDER BY created_at ASC"
-        )?;
-        let rows = stmt.query_map(params![project_id], |row| {
-            Ok(SessionRecord {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                name: row.get(2)?,
-                branch: row.get(3)?,
-                status: row.get(4)?,
-                created_at: row.get(5)?,
-                worktree_path: row.get(6)?,
-                provider: row.get(7)?,
-                backend: row.get(8)?,
-                provider_session_id: row.get(9)?,
-                task_key: row.get(10)?,
-                base_branch: row.get(11)?,
-                auto_dispatched: row.get::<_, bool>(12).unwrap_or(false),
-                command: row.get(13)?,
-                cwd: row.get(14)?,
-            })
-        })?;
+        // Use a safe fallback: if the tasks table doesn't exist, skip the task filter.
+        let has_tasks_table: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'")
+            .and_then(|mut s| s.query_row([], |_| Ok(true)))
+            .unwrap_or(false);
+
+        let sql = if has_tasks_table {
+            format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions \
+                 WHERE project_id = ?1 AND status IN ('active', 'exited') \
+                 AND (status = 'active' OR task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
+                 ORDER BY mru_position ASC NULLS LAST, created_at ASC"
+            )
+        } else {
+            format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions \
+                 WHERE project_id = ?1 AND status IN ('active', 'exited') \
+                 ORDER BY mru_position ASC NULLS LAST, created_at ASC"
+            )
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![project_id], row_to_session)?;
         rows.collect()
     }
 
@@ -280,31 +322,11 @@ impl SessionService {
 
     /// Get a single session by ID.
     pub fn get(conn: &Connection, session_id: &str) -> SqlResult<Option<SessionRecord>> {
-        conn.prepare(
-            "SELECT id, project_id, name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, task_key, base_branch, auto_dispatched, command, cwd
-             FROM sessions WHERE id = ?1"
-        )?
-        .query_row(params![session_id], |row| {
-            Ok(SessionRecord {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                name: row.get(2)?,
-                branch: row.get(3)?,
-                status: row.get(4)?,
-                created_at: row.get(5)?,
-                worktree_path: row.get(6)?,
-                provider: row.get(7)?,
-                backend: row.get(8)?,
-                provider_session_id: row.get(9)?,
-                task_key: row.get(10)?,
-                base_branch: row.get(11)?,
-                auto_dispatched: row.get::<_, bool>(12).unwrap_or(false),
-                command: row.get(13)?,
-                cwd: row.get(14)?,
-            })
-        })
-        .ok()
-        .map_or(Ok(None), |s| Ok(Some(s)))
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id = ?1");
+        conn.prepare(&sql)?
+            .query_row(params![session_id], row_to_session)
+            .ok()
+            .map_or(Ok(None), |s| Ok(Some(s)))
     }
 
     /// Link the durable log directory for a session (returns expected path).
@@ -322,7 +344,7 @@ impl SessionService {
     }
 }
 
-// ─── WorktreeService (audit/design only for now) ─────────────────────────────
+// ─── WorktreeService ─────────────────────────────────────────────────────────
 
 pub struct WorktreeService;
 
@@ -347,7 +369,7 @@ impl WorktreeService {
     }
 }
 
-// ─── TaskService (read-only view for now) ────────────────────────────────────
+// ─── TaskService ─────────────────────────────────────────────────────────────
 
 pub struct TaskService;
 

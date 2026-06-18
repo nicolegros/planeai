@@ -67,8 +67,6 @@ fn create_session_record() {
         name: "kiro".to_string(),
         backend: "daemon".to_string(),
         auto_approve: true,
-        command: Some("kiro-cli chat".to_string()),
-        cwd: Some("/tmp/project".to_string()),
         ..Default::default()
     };
     let record = SessionService::create(&conn, &params).unwrap();
@@ -76,8 +74,6 @@ fn create_session_record() {
     assert_eq!(record.project_id, project.id);
     assert_eq!(record.status, "active");
     assert_eq!(record.backend, "daemon");
-    assert_eq!(record.command, Some("kiro-cli chat".to_string()));
-    assert_eq!(record.cwd, Some("/tmp/project".to_string()));
 }
 
 #[test]
@@ -92,8 +88,6 @@ fn iced_and_tauri_create_equivalent_records() {
         name: "kiro".to_string(),
         backend: "daemon".to_string(),
         auto_approve: true,
-        command: Some("kiro-cli chat".to_string()),
-        cwd: Some("/tmp/project".to_string()),
         ..Default::default()
     };
 
@@ -109,8 +103,6 @@ fn iced_and_tauri_create_equivalent_records() {
         auto_approve: true,
         task_key: Some("PLA-5".to_string()),
         base_branch: Some("main".to_string()),
-        command: Some("kiro-cli chat --trust-all-tools".to_string()),
-        cwd: Some("/Users/me/.planeai/worktrees/project/abcd1234".to_string()),
         ..Default::default()
     };
 
@@ -193,19 +185,22 @@ fn destroyed_sessions_excluded_from_active_list() {
 }
 
 #[test]
-fn project_cwd_persisted_in_session() {
+fn worktree_path_persisted_in_session() {
     let conn = test_db();
     let project = ProjectService::ensure_project(&conn, "/tmp/my-repo").unwrap();
     let params = CreateSessionParams {
         id: "s1".to_string(),
         project_id: project.id.clone(),
         backend: "daemon".to_string(),
-        cwd: Some("/tmp/my-repo".to_string()),
+        worktree_path: Some("/home/user/.planeai/worktrees/my-repo/abc123".to_string()),
         ..Default::default()
     };
     SessionService::create(&conn, &params).unwrap();
     let s = SessionService::get(&conn, "s1").unwrap().unwrap();
-    assert_eq!(s.cwd, Some("/tmp/my-repo".to_string()));
+    assert_eq!(
+        s.worktree_path,
+        Some("/home/user/.planeai/worktrees/my-repo/abc123".to_string())
+    );
 }
 
 #[test]
@@ -316,4 +311,100 @@ fn session_task_key_returns_linked_task() {
     .unwrap();
     let key = TaskService::session_task_key(&conn, "s2").unwrap();
     assert_eq!(key, Some("PLA-10".to_string()));
+}
+
+// ─── Production DB compatibility ─────────────────────────────────────────────
+
+/// Simulates opening a production-style DB (created by src-tauri/src/db.rs migrate)
+/// and verifies planeai_core::services can read/list/create/update without errors.
+#[test]
+fn production_db_compat_read_list_create_update() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+    // Simulate production migration (as src-tauri/src/db.rs would create it)
+    conn.execute_batch(
+        "CREATE TABLE projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            auto_mode INTEGER NOT NULL DEFAULT 0,
+            task_manager TEXT
+        );
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id),
+            name TEXT NOT NULL DEFAULT '',
+            tmux_name TEXT,
+            branch TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            worktree_path TEXT,
+            provider TEXT,
+            backend TEXT NOT NULL DEFAULT 'tmux',
+            provider_session_id TEXT,
+            tab_count INTEGER NOT NULL DEFAULT 1,
+            auto_approve INTEGER NOT NULL DEFAULT 1,
+            task_key TEXT,
+            base_branch TEXT,
+            mru_position INTEGER,
+            pr_url TEXT,
+            pr_state TEXT,
+            auto_dispatched INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO projects (id, name, path, status) VALUES ('p1', 'myapp', '/home/user/myapp', 'active');
+        INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, provider, backend, tab_count, auto_approve, task_key)
+            VALUES ('s-existing', 'p1', 'kiro session', 'planeai-myapp-abc', 'feat/thing', 'active', '2024-01-01T00:00:00Z', 'kiro', 'tmux', 2, 1, 'PLA-3');
+        INSERT INTO sessions (id, project_id, name, branch, status, created_at, backend, mru_position)
+            VALUES ('s-daemon', 'p1', 'daemon session', 'main', 'exited', '2024-01-02T00:00:00Z', 'daemon', 0);",
+    )
+    .unwrap();
+
+    // Now run planeai_core::services::migrate on this existing DB (should be safe/idempotent)
+    migrate(&conn).unwrap();
+
+    // Verify we can LIST sessions from production schema
+    let sessions = SessionService::list_for_project(&conn, "p1").unwrap();
+    assert_eq!(sessions.len(), 2);
+    // Verify MRU ordering: s-daemon has mru_position=0, s-existing has NULL
+    assert_eq!(sessions[0].id, "s-daemon");
+    assert_eq!(sessions[1].id, "s-existing");
+
+    // Verify we can READ a session with all production columns
+    let s = SessionService::get(&conn, "s-existing").unwrap().unwrap();
+    assert_eq!(s.tmux_name, Some("planeai-myapp-abc".to_string()));
+    assert_eq!(s.tab_count, 2);
+    assert!(s.auto_approve);
+    assert_eq!(s.task_key, Some("PLA-3".to_string()));
+    assert_eq!(s.backend, "tmux");
+    assert_eq!(s.provider, Some("kiro".to_string()));
+
+    // Verify we can CREATE a new session alongside existing ones
+    let new_params = CreateSessionParams {
+        id: "s-new".to_string(),
+        project_id: "p1".to_string(),
+        name: "new daemon".to_string(),
+        backend: "daemon".to_string(),
+        provider: Some("claude".to_string()),
+        auto_approve: true,
+        branch: "feat/new".to_string(),
+        ..Default::default()
+    };
+    let created = SessionService::create(&conn, &new_params).unwrap();
+    assert_eq!(created.id, "s-new");
+    assert_eq!(created.provider, Some("claude".to_string()));
+
+    // Verify we can UPDATE status
+    SessionService::set_status(&conn, "s-new", "exited").unwrap();
+    let updated = SessionService::get(&conn, "s-new").unwrap().unwrap();
+    assert_eq!(updated.status, "exited");
+
+    // Verify project listing works
+    let projects = ProjectService::list_active(&conn).unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].name, "myapp");
+
+    // Verify ensure_project finds existing by path
+    let found = ProjectService::ensure_project(&conn, "/home/user/myapp").unwrap();
+    assert_eq!(found.id, "p1");
 }
