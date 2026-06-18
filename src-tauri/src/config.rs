@@ -43,6 +43,11 @@ pub struct Config {
     /// Directory for durable session logs. Env var PLANEAI_SESSION_LOG_DIR takes priority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_log_dir: Option<String>,
+    /// Extra directories to prepend to PATH when spawning sessions.
+    /// Use for custom shim directories (e.g. `["~/.guardrails/shims"]`).
+    /// Env var PLANEAI_EXTRA_PATH overrides this (colon-separated).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_path_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -250,6 +255,7 @@ impl Default for Config {
             local_pty_core: None,
             daemon_pty_core: None,
             session_log_dir: None,
+            extra_path_dirs: Vec::new(),
         }
     }
 }
@@ -557,6 +563,7 @@ mod tests {
             local_pty_core: None,
             daemon_pty_core: None,
             session_log_dir: None,
+            extra_path_dirs: Vec::new(),
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();

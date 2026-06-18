@@ -326,6 +326,10 @@ impl DaemonSession {
                 "command": program,
                 "args": args,
                 "cwd": std::env::current_dir().unwrap_or_default().to_string_lossy(),
+                "env": {
+                    "TERM": "xterm-256color",
+                    "PATH": planeai_core::command::augmented_path(&[]),
+                },
             });
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');

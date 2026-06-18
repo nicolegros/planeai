@@ -4422,6 +4422,7 @@ dependencies = [
  "clap",
  "iced",
  "libc",
+ "planeai-core",
  "planeai-daemon",
  "planeai-ipc",
  "planeai-pty",
