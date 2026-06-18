@@ -22,6 +22,43 @@ use crate::daemon_session::{
 use crate::input;
 use crate::Args;
 
+// ─── Recent projects ─────────────────────────────────────────────────────────
+
+const MAX_RECENT_PROJECTS: usize = 20;
+
+fn recent_projects_path() -> PathBuf {
+    planeai_core::session_launch::config_dir().join("recent_projects.json")
+}
+
+fn load_recent_projects() -> Vec<String> {
+    let path = recent_projects_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn save_recent_projects(projects: &[String]) {
+    let path = recent_projects_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(projects).unwrap_or_default();
+    let _ = std::fs::write(&path, json);
+}
+
+fn add_recent_project(path_str: &str) -> Vec<String> {
+    let mut projects = load_recent_projects();
+    // Deduplicate
+    projects.retain(|p| p != path_str);
+    // Insert at front
+    projects.insert(0, path_str.to_string());
+    // Cap at max
+    projects.truncate(MAX_RECENT_PROJECTS);
+    save_recent_projects(&projects);
+    projects
+}
+
 // ─── Session state ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +68,8 @@ enum SessionStatus {
     Attached,
     Exited,
     Detached,
+    Unreachable,
+    Killed,
 }
 
 #[allow(dead_code)]
@@ -47,6 +86,16 @@ struct Session {
     cache: Cache,
     bytes_processed: u64,
     log_file_exists: bool,
+}
+
+// ─── Log replay state ────────────────────────────────────────────────────────
+
+#[allow(dead_code)]
+struct LogReplayState {
+    term: alacritty_terminal::Term<EventProxy>,
+    snapshot: GridSnapshot,
+    cache: Cache,
+    session_id: String,
 }
 
 // ─── App state ───────────────────────────────────────────────────────────────
@@ -66,6 +115,7 @@ struct WorkflowApp {
     // Project picker
     picking_project: bool,
     project_input: String,
+    recent_projects: Vec<String>,
     // Status/error
     last_error: Option<String>,
     error_time: Option<Instant>,
@@ -73,6 +123,13 @@ struct WorkflowApp {
     show_shortcuts: bool,
     // Session counter for unique ids
     next_id: usize,
+    // Log replay
+    log_replay: Option<LogReplayState>,
+    // Launch prompt (Cmd+Shift+N)
+    launch_prompt: bool,
+    launch_prompt_input: String,
+    // Kill confirmation (two-press)
+    kill_armed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -82,23 +139,28 @@ enum Message {
     WindowResized(Size),
     ProjectInputChanged(String),
     ProjectInputSubmit,
+    LaunchPromptChanged(String),
+    LaunchPromptSubmit,
 }
 
 impl WorkflowApp {
     fn boot() -> (Self, iced::Task<Message>) {
-        // Args accessed via std::env since we can't use OnceLock for workflow
-        // The run() function passes args via a thread-local or we reconstruct.
-        // Actually we use a static — set by run() before boot.
         let args = WORKFLOW_ARGS.get().unwrap();
 
-        // Load config: --config flag > default location
+        let mut boot_warnings: Vec<String> = Vec::new();
+
         let config = if let Some(ref path) = args.config {
-            planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+            match planeai_core::session_launch::load_launch_config(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    boot_warnings.push(format!("Config load failed: {e} — using defaults"));
+                    planeai_core::session_launch::LaunchConfig::default()
+                }
+            }
         } else {
             planeai_core::session_launch::load_default_config()
         };
 
-        // Resolve launch params via shared resolver (same as Tauri)
         let overrides = planeai_core::session_launch::SessionLaunchOverrides {
             cwd: args.cwd.clone(),
             agent_command: args.agent_command.clone(),
@@ -107,13 +169,16 @@ impl WorkflowApp {
             rows: Some(args.rows as u16),
             ..Default::default()
         };
-        let resolved = planeai_core::session_launch::resolve_from_config(&config, &overrides)
-            .unwrap_or_else(|e| {
-                eprintln!("config resolution error: {e}, using defaults");
+        let resolved = match planeai_core::session_launch::resolve_from_config(&config, &overrides)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                boot_warnings.push(format!("Config resolve error: {e} — using defaults"));
                 let fallback_config = planeai_core::session_launch::LaunchConfig::default();
                 planeai_core::session_launch::resolve_from_config(&fallback_config, &overrides)
                     .unwrap()
-            });
+            }
+        };
 
         let project_cwd = resolved.request.project_cwd.clone();
         let agent_command = resolved.command_label.clone();
@@ -122,27 +187,27 @@ impl WorkflowApp {
         let cols = resolved.request.cols as usize;
         let rows = resolved.request.rows as usize;
 
-        // Propagate session_log_dir from config if env var not set
         if let Some(ref dir) = resolved.session_log_dir {
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
             }
         }
 
-        // Ensure daemon is running
         let daemon_connected = match ensure_daemon_running_sync() {
             Ok(()) => daemon_is_connected(),
             Err(_) => false,
         };
 
-        // List existing daemon sessions
         let daemon_sessions_listed = if daemon_connected {
             list_daemon_sessions().unwrap_or_default()
         } else {
             Vec::new()
         };
 
-        (
+        // Add cwd to recent projects
+        let recent_projects = add_recent_project(&project_cwd.to_string_lossy());
+
+        let mut result = (
             Self {
                 sessions: Vec::new(),
                 active: 0,
@@ -157,16 +222,36 @@ impl WorkflowApp {
                 last_health_check: Some(Instant::now()),
                 picking_project: false,
                 project_input: String::new(),
+                recent_projects,
                 last_error: None,
                 error_time: None,
                 show_shortcuts: false,
                 next_id: 0,
+                log_replay: None,
+                launch_prompt: false,
+                launch_prompt_input: String::new(),
+                kill_armed: false,
             },
             iced::Task::none(),
-        )
+        );
+        // Surface boot warnings visibly
+        if !boot_warnings.is_empty() {
+            result.0.set_error(boot_warnings.join(" | "));
+        }
+        result
     }
 
     fn launch_session(&mut self) {
+        if self.agent_command.is_empty() {
+            self.set_error("No provider command configured. Use --agent-command or config.".into());
+            return;
+        }
+        if !self.daemon_connected {
+            self.set_error("Daemon unavailable. Cannot launch session.".into());
+            return;
+        }
+        // Show command in status before launch
+        self.clear_error();
         let id = self.next_id;
         self.next_id += 1;
         let result = DaemonSession::spawn_with_cwd(
@@ -188,6 +273,54 @@ impl WorkflowApp {
                     id,
                     session_id,
                     command: self.agent_command.clone(),
+                    cwd: self.project_cwd.clone(),
+                    status: SessionStatus::Running,
+                    backend: Box::new(backend),
+                    term,
+                    processor,
+                    snapshot,
+                    cache: Cache::new(),
+                    bytes_processed: 0,
+                    log_file_exists,
+                });
+                self.active = self.sessions.len() - 1;
+            }
+            Err(e) => {
+                self.set_error(format!("Launch failed: {}", e));
+            }
+        }
+    }
+
+    fn launch_session_with_command(&mut self, command: &str) {
+        if command.is_empty() {
+            self.set_error("Command cannot be empty.".into());
+            return;
+        }
+        if !self.daemon_connected {
+            self.set_error("Daemon unavailable. Cannot launch session.".into());
+            return;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let result = DaemonSession::spawn_with_cwd(
+            id,
+            self.cols as u16,
+            self.rows as u16,
+            Some(command),
+            &self.project_cwd,
+            &self.extra_path_dirs,
+        );
+        match result {
+            Ok(backend) => {
+                let session_id = backend.session_id().to_string();
+                let term = new_term(self.cols, self.rows);
+                let processor = new_processor();
+                let snapshot = snapshot_grid(&term);
+                let log_file_exists = self.check_log_exists(&session_id);
+                self.sessions.push(Session {
+                    id,
+                    session_id,
+                    command: command.to_string(),
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
@@ -250,18 +383,27 @@ impl WorkflowApp {
         if !self.sessions.is_empty() && self.active >= self.sessions.len() {
             self.active = self.sessions.len() - 1;
         }
+        self.refresh_daemon_list();
     }
 
     fn kill_active(&mut self) {
         if self.sessions.is_empty() {
             return;
         }
-        let session = &self.sessions[self.active];
+        if !self.kill_armed {
+            self.kill_armed = true;
+            self.set_error("Kill armed. Press Cmd+Shift+W again to confirm.".into());
+            return;
+        }
+        self.kill_armed = false;
+        let session = &mut self.sessions[self.active];
         let _ = kill_daemon_session(&session.session_id);
+        session.status = SessionStatus::Killed;
         self.sessions.remove(self.active);
         if !self.sessions.is_empty() && self.active >= self.sessions.len() {
             self.active = self.sessions.len() - 1;
         }
+        self.refresh_daemon_list();
     }
 
     fn refresh_daemon_list(&mut self) {
@@ -281,7 +423,16 @@ impl WorkflowApp {
             return;
         }
         self.last_health_check = Some(now);
+        let was_connected = self.daemon_connected;
         self.daemon_connected = daemon_is_connected();
+        if was_connected && !self.daemon_connected {
+            // Mark running sessions as unreachable
+            for s in &mut self.sessions {
+                if s.status == SessionStatus::Running || s.status == SessionStatus::Attached {
+                    s.status = SessionStatus::Unreachable;
+                }
+            }
+        }
     }
 
     fn check_log_exists(&self, session_id: &str) -> bool {
@@ -315,21 +466,108 @@ impl WorkflowApp {
         }
     }
 
+    fn select_project(&mut self, path_str: &str) {
+        let expanded = planeai_core::session_launch::expand_tilde(path_str);
+        let path = PathBuf::from(&expanded);
+        if path.is_dir() {
+            self.project_cwd = path;
+            self.picking_project = false;
+            self.project_input.clear();
+            self.recent_projects = add_recent_project(&expanded);
+            self.clear_error();
+        } else {
+            self.set_error(format!("Not a directory: {}", expanded));
+        }
+    }
+
+    fn open_log_replay(&mut self) {
+        if self.sessions.is_empty() {
+            self.set_error("No active session for log replay.".into());
+            return;
+        }
+        let session = &self.sessions[self.active];
+        let session_id = session.session_id.clone();
+        let log_dir = match std::env::var("PLANEAI_SESSION_LOG_DIR") {
+            Ok(d) => d,
+            Err(_) => {
+                self.set_error("Log replay failed: PLANEAI_SESSION_LOG_DIR not set.".into());
+                return;
+            }
+        };
+        let session_log_dir = PathBuf::from(&log_dir).join("sessions").join(&session_id);
+        // Find the .ansi log file (named <timestamp>_output.ansi)
+        let ansi_path = std::fs::read_dir(&session_log_dir)
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|e| e == "ansi").unwrap_or(false))
+                    .max() // latest file
+            });
+        let ansi_path = match ansi_path {
+            Some(p) => p,
+            None => {
+                self.set_error(format!(
+                    "No log file for session {}",
+                    &session_id[..session_id.len().min(14)]
+                ));
+                return;
+            }
+        };
+        // Canonicalize and verify path stays under log dir
+        let canonical = match ansi_path.canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                self.set_error(format!("Log replay failed: {}", e));
+                return;
+            }
+        };
+        let log_dir_canonical = PathBuf::from(&log_dir)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(&log_dir));
+        if !canonical.starts_with(&log_dir_canonical) {
+            self.set_error("Log replay failed: path escapes session log directory.".into());
+            return;
+        }
+        let data = match std::fs::read(&canonical) {
+            Ok(d) => d,
+            Err(e) => {
+                self.set_error(format!("Log replay failed: {}", e));
+                return;
+            }
+        };
+        let mut term = new_term(self.cols, self.rows);
+        let mut processor = new_processor();
+        processor.advance(&mut term, &data);
+        let snapshot = snapshot_grid(&term);
+        self.log_replay = Some(LogReplayState {
+            term,
+            snapshot,
+            cache: Cache::new(),
+            session_id,
+        });
+    }
+}
+
+impl WorkflowApp {
     fn update(&mut self, message: Message) {
         match message {
             Message::ProjectInputChanged(val) => {
                 self.project_input = val;
             }
             Message::ProjectInputSubmit => {
-                let path = PathBuf::from(&self.project_input);
-                if path.is_dir() {
-                    self.project_cwd = path;
-                    self.picking_project = false;
-                    self.project_input.clear();
-                    self.clear_error();
-                } else {
-                    self.set_error(format!("Not a directory: {}", self.project_input));
-                }
+                let input = self.project_input.clone();
+                self.select_project(&input);
+            }
+            Message::LaunchPromptChanged(val) => {
+                self.launch_prompt_input = val;
+            }
+            Message::LaunchPromptSubmit => {
+                let cmd = self.launch_prompt_input.clone();
+                self.launch_prompt = false;
+                self.launch_prompt_input.clear();
+                self.launch_session_with_command(&cmd);
             }
             Message::WindowResized(size) => {
                 let cw = 9.0f32;
@@ -360,13 +598,49 @@ impl WorkflowApp {
                 text: txt,
                 ..
             }) => {
-                // If picking project, Enter submits, Escape cancels
+                // Log replay mode: Escape exits
+                if self.log_replay.is_some() {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.log_replay = None;
+                    }
+                    return;
+                }
+
+                // Launch prompt mode
+                if self.launch_prompt {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.launch_prompt = false;
+                        self.launch_prompt_input.clear();
+                    }
+                    return;
+                }
+
+                // Project picker mode
                 if self.picking_project {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.picking_project = false;
                         self.project_input.clear();
+                        return;
                     }
-                    // Text input handles Enter via on_submit
+                    // Cmd+1..9 selects from recent projects
+                    let cmd = if cfg!(target_os = "macos") {
+                        modifiers.command()
+                    } else {
+                        modifiers.control()
+                    };
+                    if cmd {
+                        if let keyboard::Key::Character(c) = &key {
+                            if let Ok(digit) = c.as_str().parse::<usize>() {
+                                if (1..=9).contains(&digit) {
+                                    if let Some(path) = self.recent_projects.get(digit - 1).cloned()
+                                    {
+                                        self.select_project(&path);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     return;
                 }
 
@@ -384,9 +658,18 @@ impl WorkflowApp {
                     modifiers.control()
                 };
 
+                // On non-macOS, require Shift for keys that conflict with terminal
+                // (Ctrl+A, Ctrl+L, Ctrl+R, Ctrl+W are terminal sequences)
+                let cmd_safe = if cfg!(target_os = "macos") {
+                    modifiers.command()
+                } else {
+                    modifiers.control() && modifiers.shift()
+                };
+
                 // Cmd+/ — toggle shortcuts overlay
                 if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "/") {
                     self.show_shortcuts = !self.show_shortcuts;
+                    self.kill_armed = false;
                     return;
                 }
 
@@ -396,8 +679,28 @@ impl WorkflowApp {
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n")
                 {
                     self.launch_session();
+                    self.kill_armed = false;
                     return;
                 }
+
+                // Cmd+Shift+N — launch with different command
+                if cmd
+                    && modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n" || c.as_str() == "N")
+                {
+                    self.launch_prompt = true;
+                    self.launch_prompt_input = self.agent_command.clone();
+                    return;
+                }
+
+                // Cmd+L (macOS) / Ctrl+Shift+L (other) — log replay
+                if cmd_safe
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "l" || c.as_str() == "L")
+                {
+                    self.open_log_replay();
+                    return;
+                }
+
                 // Cmd+O — open project picker
                 if cmd
                     && !modifiers.shift()
@@ -405,36 +708,49 @@ impl WorkflowApp {
                 {
                     self.picking_project = !self.picking_project;
                     self.project_input = self.project_cwd.to_string_lossy().to_string();
+                    self.recent_projects = load_recent_projects();
                     return;
                 }
-                // Cmd+R — refresh daemon sessions
-                if cmd
-                    && !modifiers.shift()
-                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r")
+                // Cmd+R (macOS) / Ctrl+Shift+R (other) — refresh
+                if cmd_safe
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r" || c.as_str() == "R")
                 {
                     self.refresh_daemon_list();
                     return;
                 }
-                // Cmd+W — detach active session
-                if cmd
-                    && !modifiers.shift()
-                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w")
-                {
+                // Cmd+W (macOS, no shift) / Ctrl+Shift+W (other, no alt) — detach
+                let is_detach = if cfg!(target_os = "macos") {
+                    modifiers.command()
+                        && !modifiers.shift()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w")
+                } else {
+                    modifiers.control()
+                        && modifiers.shift()
+                        && !modifiers.alt()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W")
+                };
+                if is_detach {
                     self.detach_active();
                     return;
                 }
-                // Cmd+Shift+W — kill active session
-                if cmd
-                    && modifiers.shift()
-                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W")
-                {
+                // Cmd+Shift+W (macOS) / Ctrl+Shift+Alt+W (other) — kill
+                let is_kill = if cfg!(target_os = "macos") {
+                    modifiers.command()
+                        && modifiers.shift()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W")
+                } else {
+                    modifiers.control()
+                        && modifiers.shift()
+                        && modifiers.alt()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W")
+                };
+                if is_kill {
                     self.kill_active();
                     return;
                 }
-                // Cmd+A — attach first unattached
-                if cmd
-                    && !modifiers.shift()
-                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "a")
+                // Cmd+A (macOS) / Ctrl+Shift+A (other) — attach first unattached
+                if cmd_safe
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "a" || c.as_str() == "A")
                 {
                     let attached_ids: Vec<&str> = self
                         .sessions
@@ -484,6 +800,7 @@ impl WorkflowApp {
                 }
                 // Forward input to active session
                 if !self.sessions.is_empty() {
+                    self.kill_armed = false;
                     let bytes = input::encode_key_event(&key, &modifiers, &txt);
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
@@ -530,7 +847,6 @@ impl WorkflowApp {
                     {
                         s.status = SessionStatus::Exited;
                     }
-                    // Refresh log availability
                     if !s.log_file_exists {
                         if let Ok(dir) = std::env::var("PLANEAI_SESSION_LOG_DIR") {
                             s.log_file_exists = PathBuf::from(&dir)
@@ -544,7 +860,9 @@ impl WorkflowApp {
             }
         }
     }
+}
 
+impl WorkflowApp {
     fn view(&self) -> Element<'_, Message> {
         let mut left_panel_content = column![].spacing(2).width(Length::Fixed(180.0));
 
@@ -558,45 +876,67 @@ impl WorkflowApp {
             left_panel_content.push(text(indicator).size(11).color(color).font(Font::MONOSPACE));
         left_panel_content = left_panel_content.push(text("").size(4));
 
-        // Session cards
+        // Session cards (Part 8)
         for (i, s) in self.sessions.iter().enumerate() {
             let status_icon = match s.status {
                 SessionStatus::Running => "●",
                 SessionStatus::Attached => "◉",
                 SessionStatus::Exited => "○",
                 SessionStatus::Detached => "◌",
+                SessionStatus::Unreachable => "✕",
+                SessionStatus::Killed => "☠",
+            };
+            let status_label = match s.status {
+                SessionStatus::Running => "Run",
+                SessionStatus::Attached => "Att",
+                SessionStatus::Exited => "Exit",
+                SessionStatus::Detached => "Det",
+                SessionStatus::Unreachable => "Unr",
+                SessionStatus::Killed => "Kill",
             };
             let cwd_name = s
                 .cwd
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| s.cwd.to_string_lossy().to_string());
-            let log_indicator = if s.log_file_exists { "📄" } else { "" };
+            let log_indicator = if s.log_file_exists { " 📄" } else { "" };
             let dropped = s.backend.bytes_dropped();
             let drop_indicator = if dropped > 0 {
-                format!(" ⚠{dropped}d")
+                format!(" ⚠{dropped}")
             } else {
                 String::new()
             };
             let cmd_short = s.command.split_whitespace().next().unwrap_or("?");
+            let sid_short = &s.session_id[..s.session_id.len().min(14)];
+            let active_marker = if i == self.active { "▶" } else { " " };
+            let provider_short = if !self.provider_label.is_empty() {
+                &self.provider_label
+            } else {
+                cmd_short
+            };
             let label = format!(
-                "{}{} {} {} {}B{}{}",
-                if i == self.active { "▶" } else { " " },
+                "{}{} {} {} {} {} daemon{}{}",
+                active_marker,
                 status_icon,
-                cmd_short,
+                provider_short,
                 cwd_name,
-                s.bytes_processed,
+                sid_short,
+                status_label,
                 drop_indicator,
                 log_indicator,
             );
             let color = match (&s.status, i == self.active) {
                 (_, true) => Color::from_rgb8(100, 200, 255),
-                (SessionStatus::Exited, _) => Color::from_rgb8(120, 120, 120),
-                (SessionStatus::Detached, _) => Color::from_rgb8(200, 150, 50),
+                (SessionStatus::Exited, _) | (SessionStatus::Killed, _) => {
+                    Color::from_rgb8(120, 120, 120)
+                }
+                (SessionStatus::Detached, _) | (SessionStatus::Unreachable, _) => {
+                    Color::from_rgb8(200, 150, 50)
+                }
                 _ => Color::from_rgb8(180, 180, 180),
             };
             left_panel_content =
-                left_panel_content.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                left_panel_content.push(text(label).size(10).color(color).font(Font::MONOSPACE));
         }
 
         // Unattached daemon sessions
@@ -644,8 +984,29 @@ impl WorkflowApp {
                     ..Default::default()
                 });
 
-        // Terminal area
-        let terminal_area: Element<'_, Message> = if self.sessions.is_empty() {
+        // Terminal area (or log replay)
+        let terminal_area: Element<'_, Message> = if let Some(ref replay) = self.log_replay {
+            // Log replay view
+            let banner = container(
+                text("READ-ONLY LOG REPLAY — Escape to exit")
+                    .size(12)
+                    .color(Color::from_rgb8(255, 200, 50))
+                    .font(Font::MONOSPACE),
+            )
+            .width(Length::Fill)
+            .padding(2)
+            .style(|_: &Theme| container::Style {
+                background: Some(Color::from_rgb8(60, 50, 20).into()),
+                ..Default::default()
+            });
+            let canvas_view = Canvas::new(WorkflowTermRenderer {
+                snapshot: &replay.snapshot,
+                cache: &replay.cache,
+            })
+            .width(Length::Fill)
+            .height(Length::Fill);
+            column![banner, canvas_view].into()
+        } else if self.sessions.is_empty() {
             container(
                 text("No sessions. Cmd+N to launch, Cmd+A to attach.")
                     .size(14)
@@ -668,11 +1029,23 @@ impl WorkflowApp {
             .into()
         };
 
-        // Status bar
+        // Status bar (Part 9)
         let project_display = self.project_cwd.to_string_lossy();
         let active_info = if !self.sessions.is_empty() {
             let s = &self.sessions[self.active];
-            format!(" | {} | {}B", s.command, s.bytes_processed)
+            format!(
+                " | {} | {} | {}",
+                s.command,
+                &s.session_id[..s.session_id.len().min(14)],
+                match s.status {
+                    SessionStatus::Running => "Running",
+                    SessionStatus::Attached => "Attached",
+                    SessionStatus::Exited => "Exited",
+                    SessionStatus::Detached => "Detached",
+                    SessionStatus::Unreachable => "Unreachable",
+                    SessionStatus::Killed => "Killed",
+                }
+            )
         } else {
             format!(" | {} | {}", self.provider_label, self.agent_command)
         };
@@ -705,20 +1078,59 @@ impl WorkflowApp {
         let main_content = row![left_panel, column![terminal_area, status_bar]];
 
         let base: Element<'_, Message> = if self.picking_project {
-            let picker = container(
-                text_input("Enter project path...", &self.project_input)
-                    .on_input(Message::ProjectInputChanged)
-                    .on_submit(Message::ProjectInputSubmit)
+            // Project picker with recent list
+            let mut picker_col = column![].spacing(2).width(Length::Fill).padding(4);
+            picker_col = picker_col.push(
+                text_input(
+                    "Enter project path (~/... expanded)...",
+                    &self.project_input,
+                )
+                .on_input(Message::ProjectInputChanged)
+                .on_submit(Message::ProjectInputSubmit)
+                .size(14)
+                .width(Length::Fill),
+            );
+            // Show recent projects
+            if !self.recent_projects.is_empty() {
+                picker_col = picker_col.push(
+                    text("Recent (Cmd+1..9 to select):")
+                        .size(11)
+                        .color(Color::from_rgb8(150, 150, 150))
+                        .font(Font::MONOSPACE),
+                );
+                for (i, p) in self.recent_projects.iter().take(9).enumerate() {
+                    let exists = PathBuf::from(p).is_dir();
+                    let marker = if !exists { " (missing)" } else { "" };
+                    let label = format!(" {}. {}{}", i + 1, p, marker);
+                    let color = if exists {
+                        Color::from_rgb8(180, 180, 180)
+                    } else {
+                        Color::from_rgb8(100, 100, 100)
+                    };
+                    picker_col =
+                        picker_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                }
+            }
+            let picker = container(picker_col).style(|_: &Theme| container::Style {
+                background: Some(Color::from_rgb8(50, 50, 70).into()),
+                ..Default::default()
+            });
+            column![picker, main_content].into()
+        } else if self.launch_prompt {
+            let prompt = container(
+                text_input("Command to launch...", &self.launch_prompt_input)
+                    .on_input(Message::LaunchPromptChanged)
+                    .on_submit(Message::LaunchPromptSubmit)
                     .size(14)
                     .width(Length::Fill),
             )
             .width(Length::Fill)
             .padding(4)
             .style(|_: &Theme| container::Style {
-                background: Some(Color::from_rgb8(50, 50, 70).into()),
+                background: Some(Color::from_rgb8(50, 70, 50).into()),
                 ..Default::default()
             });
-            column![picker, main_content].into()
+            column![prompt, main_content].into()
         } else {
             main_content.into()
         };

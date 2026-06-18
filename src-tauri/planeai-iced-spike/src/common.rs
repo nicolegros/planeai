@@ -284,6 +284,7 @@ pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
 
     header!(col, "Sessions");
     shortcut!(col, format!("{}N", mod_key), "New session");
+    shortcut!(col, format!("{}⇧N", mod_key), "New with custom cmd");
     shortcut!(col, format!("{}A", mod_key), "Attach session");
     shortcut!(col, format!("{}W", mod_key), "Detach session");
     shortcut!(col, format!("{}⇧W", mod_key), "Kill session");
@@ -291,6 +292,7 @@ pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
     shortcut!(col, format!("{}Tab", mod_key), "Next session");
     shortcut!(col, format!("{}⇧Tab", mod_key), "Previous session");
     shortcut!(col, format!("{}R", mod_key), "Refresh daemon list");
+    shortcut!(col, format!("{}L", mod_key), "Replay session log");
 
     header!(col, "Terminal");
     shortcut!(col, format!("{}V", mod_key), "Paste");

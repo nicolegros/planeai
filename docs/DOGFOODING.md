@@ -588,3 +588,212 @@ target/release/planeai-iced -- \
 ```
 
 Then press Cmd+N to launch a session through the shared service.
+
+---
+
+## Iced Workflow Dogfooding (Post PR #147)
+
+> **Date:** 2026-06-18
+> **Status:** Ready for personal dogfooding. Parts 5-10 implemented.
+
+### How to Run
+
+```bash
+cd src-tauri
+cargo build --release -p planeai-iced-spike
+cargo build --release -p planeai --bin planeai-daemon
+
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR="$HOME/.local/share/planeai/session-logs" \
+PATH="$(pwd)/target/release:$PATH" \
+target/release/planeai-iced -- \
+  --planeai-workflow \
+  --cwd /path/to/disposable/project \
+  --backend iced-alacritty
+```
+
+Or use `make dogfood` from the project root.
+
+### Features Available
+
+| Feature                    | Shortcut           | Status |
+| -------------------------- | ------------------ | ------ |
+| Launch session             | Cmd+N              | ✅     |
+| Launch with custom command | Cmd+Shift+N        | ✅     |
+| Project picker             | Cmd+O              | ✅     |
+| Recent projects            | Cmd+1..9 in picker | ✅     |
+| Refresh sessions           | Cmd+R              | ✅     |
+| Attach unattached          | Cmd+A              | ✅     |
+| Detach active              | Cmd+W              | ✅     |
+| Kill active                | Cmd+Shift+W        | ✅     |
+| Switch sessions            | Cmd+1..9           | ✅     |
+| Paste                      | Cmd+V              | ✅     |
+| Log replay                 | Cmd+L              | ✅     |
+| Shortcuts help             | Cmd+/              | ✅     |
+
+### Dogfood Session Log
+
+> Record each real dogfood session here.
+
+#### Session 1: Short sanity check
+
+| Field               | Value                         |
+| ------------------- | ----------------------------- |
+| Date/time           | TODO                          |
+| Project             | /tmp/planeai-smoke-project    |
+| Command             | `python3 -c 'print("hello")'` |
+| Duration            | ~5s                           |
+| Output correct      |                               |
+| Typing works        |                               |
+| Paste works         |                               |
+| Ctrl-C works        |                               |
+| Resize works        |                               |
+| Scrollback works    |                               |
+| Detach works        |                               |
+| Reattach works      |                               |
+| Kill works          |                               |
+| Durable log written |                               |
+| Log replay works    |                               |
+| bytes_dropped       |                               |
+| Errors              |                               |
+| Fallback needed     |                               |
+
+#### Session 2: Real agent in small repo
+
+| Field               | Value                       |
+| ------------------- | --------------------------- |
+| Date/time           | TODO                        |
+| Project             | ~/projects/disposable-repo  |
+| Command             | `kiro-cli chat` or `claude` |
+| Duration            | ~5min                       |
+| Output correct      |                             |
+| Typing works        |                             |
+| Paste works         |                             |
+| Ctrl-C works        |                             |
+| Resize works        |                             |
+| Scrollback works    |                             |
+| Detach works        |                             |
+| Reattach works      |                             |
+| Kill works          |                             |
+| Durable log written |                             |
+| Log replay works    |                             |
+| bytes_dropped       |                             |
+| Errors              |                             |
+| Fallback needed     |                             |
+
+#### Session 3: Noisy output
+
+| Field            | Value                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| Date/time        | TODO                                                                                                  |
+| Project          | /tmp/noisy-test                                                                                       |
+| Command          | `python3 -c 'import time; [print(f"line {i}", flush=True) or time.sleep(0.01) for i in range(1000)]'` |
+| Duration         | ~10s                                                                                                  |
+| Output correct   |                                                                                                       |
+| Typing works     | N/A                                                                                                   |
+| Paste works      | N/A                                                                                                   |
+| Ctrl-C works     |                                                                                                       |
+| Resize works     |                                                                                                       |
+| Scrollback works |                                                                                                       |
+| bytes_dropped    |                                                                                                       |
+| Errors           |                                                                                                       |
+
+#### Session 4: Detach/restart/reattach
+
+| Field                   | Value                      |
+| ----------------------- | -------------------------- |
+| Date/time               | TODO                       |
+| Project                 | /tmp/planeai-smoke-project |
+| Command                 | `bash`                     |
+| Duration                | ~2min                      |
+| Launch                  |                            |
+| Detach (Cmd+W)          |                            |
+| Close app               |                            |
+| Restart app             |                            |
+| Existing session listed |                            |
+| Reattach (Cmd+A)        |                            |
+| Output preserved        |                            |
+| Kill                    |                            |
+| Errors                  |                            |
+
+#### Session 5: Interrupted with Ctrl-C
+
+| Field               | Value                                        |
+| ------------------- | -------------------------------------------- |
+| Date/time           | TODO                                         |
+| Project             | /tmp/planeai-smoke-project                   |
+| Command             | `python3 -c 'import time; time.sleep(9999)'` |
+| Duration            | ~30s                                         |
+| Ctrl-C interrupts   |                                              |
+| Process exits       |                                              |
+| Status shows Exited |                                              |
+| No panic            |                                              |
+| bytes_dropped       |                                              |
+
+#### Session 6 (optional): Long session 20+ min
+
+| Field         | Value                      |
+| ------------- | -------------------------- |
+| Date/time     | TODO                       |
+| Project       | ~/projects/disposable-repo |
+| Command       | agent CLI                  |
+| Duration      |                            |
+| Stable        |                            |
+| bytes_dropped |                            |
+| Memory stable |                            |
+
+### Manual GUI Checklist
+
+Run:
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR="$HOME/.local/share/planeai/session-logs" \
+cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
+  --planeai-workflow \
+  --cwd /path/to/disposable/project \
+  --backend iced-alacritty
+```
+
+| Check                                 | Result |
+| ------------------------------------- | ------ |
+| App opens                             |        |
+| Config loads                          |        |
+| Current project visible in status bar |        |
+| Provider label visible in status bar  |        |
+| Cmd+N launches session                |        |
+| Output appears                        |        |
+| Typing works                          |        |
+| Paste works (Cmd+V)                   |        |
+| Ctrl-C works                          |        |
+| Resize works                          |        |
+| Scrollback works                      |        |
+| Cmd+W detaches session                |        |
+| Close app                             |        |
+| Restart app                           |        |
+| Existing session listed               |        |
+| Cmd+A reattaches                      |        |
+| Durable log exists on disk            |        |
+| Cmd+L shows log replay                |        |
+| Cmd+Shift+W kills with removal        |        |
+| No bytes dropped                      |        |
+| No backend panic                      |        |
+| No frontend panic                     |        |
+| Cmd+O project picker opens            |        |
+| Recent projects shown                 |        |
+| Cmd+1..9 selects recent project       |        |
+| Invalid path shows error              |        |
+| Error auto-dismisses after 5s         |        |
+
+### Known Limitations
+
+- Project picker is text-based (no native file dialog)
+- Log replay shows full file at once (no streaming/scrolling through time)
+- Config loaded from `~/.config/planeai/config.json` only
+- Daemon crash = sessions lost
+- Scrollback limited to daemon 1MB ring buffer
+- No multi-project support (one project per window instance)
+- No task management integration
+- No git worktree integration
+- Session cards are text-only (no click actions, keyboard only)
+- No undo for kill

@@ -141,15 +141,16 @@ Verifies: daemon start, spawn with cwd, output, list, input, detach, reattach, k
 ## Known Limitations
 
 - Project picker is text-based (no native file dialog)
-- No recent projects list (manual path entry only)
-- No log replay within workflow mode (use `--replay` flag separately)
+- ~~No recent projects list~~ → Recent projects stored in `~/.config/planeai/recent_projects.json`, max 20
+- ~~No log replay within workflow mode~~ → Cmd+L opens embedded read-only log replay
 - Config loaded from `~/.config/planeai/config.json` (or `--config` flag)
 - Daemon crash = sessions lost (no crash recovery)
 - Scrollback limited to daemon 1MB ring buffer
 - No multi-project support (one project per window)
 - No task management integration
 - No git worktree integration
-- Session card UI is basic (no click actions, keyboard only)
+- Session card UI is keyboard-only (no click actions)
+- Log replay loads full file at once (no time-scrubbing)
 
 ## Relationship to Production Tauri App
 
