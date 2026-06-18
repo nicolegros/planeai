@@ -41,14 +41,12 @@ fn daemon_socket_path() -> PathBuf {
 }
 
 fn daemon_binary_path() -> PathBuf {
-    // Look for planeai-daemon next to current exe, or in PATH
     let exe = std::env::current_exe().unwrap_or_default();
     let dir = exe.parent().unwrap_or(std::path::Path::new("."));
     let candidate = dir.join("planeai-daemon");
     if candidate.exists() {
         return candidate;
     }
-    // Fallback: assume it's in PATH
     PathBuf::from("planeai-daemon")
 }
 
@@ -57,17 +55,14 @@ pub fn ensure_daemon_running_sync() -> anyhow::Result<()> {
     let rt = daemon_runtime();
     rt.block_on(async {
         let socket = daemon_socket_path();
-        // Try connect
         if AsyncIpcStream::connect(&socket).await.is_ok() {
             return Ok(());
         }
-        // Spawn daemon
         let binary = daemon_binary_path();
         if let Some(parent) = socket.parent() {
             std::fs::create_dir_all(parent)?;
         }
         spawn_detached_daemon(&binary, &socket)?;
-        // Retry with backoff
         for delay in [50, 100, 200, 400, 800] {
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             if AsyncIpcStream::connect(&socket).await.is_ok() {
@@ -91,6 +86,171 @@ fn spawn_detached_daemon(binary: &std::path::Path, socket: &std::path::Path) -> 
     cmd.spawn()?;
     Ok(())
 }
+
+// ─── Lifecycle functions ─────────────────────────────────────────────────────
+
+/// Info about a daemon session from the List command.
+#[derive(Debug, Clone)]
+pub struct DaemonSessionInfo {
+    pub session_id: String,
+    pub alive: bool,
+}
+
+/// List existing daemon sessions.
+pub fn list_daemon_sessions() -> anyhow::Result<Vec<DaemonSessionInfo>> {
+    let rt = daemon_runtime();
+    let socket = daemon_socket_path();
+    rt.block_on(async {
+        let mut stream = AsyncIpcStream::connect(&socket).await?;
+        stream.write_all(&[CONN_CONTROL]).await?;
+        let req = serde_json::json!({ "cmd": "list" });
+        let mut line = serde_json::to_string(&req)?;
+        line.push('\n');
+        stream.write_all(line.as_bytes()).await?;
+        let (reader, _) = tokio::io::split(stream);
+        let mut buf_reader = BufReader::new(reader);
+        let mut resp_line = String::new();
+        buf_reader.read_line(&mut resp_line).await?;
+        let resp: serde_json::Value = serde_json::from_str(resp_line.trim())?;
+        if let Some(err) = resp.get("error") {
+            anyhow::bail!("daemon list error: {}", err);
+        }
+        let sessions = resp.get("sessions")
+            .and_then(|s| s.as_array())
+            .map(|arr| {
+                arr.iter().filter_map(|v| {
+                    Some(DaemonSessionInfo {
+                        session_id: v.get("session_id")?.as_str()?.to_string(),
+                        alive: v.get("alive")?.as_bool().unwrap_or(false),
+                    })
+                }).collect()
+            })
+            .unwrap_or_default();
+        Ok(sessions)
+    })
+}
+
+/// Attach to an existing daemon session (skip spawn, just open data connection).
+pub fn attach(id: usize, session_id: &str, cols: u16, rows: u16) -> anyhow::Result<DaemonSession> {
+    ensure_daemon_running_sync()?;
+    let socket = daemon_socket_path();
+    let rt = daemon_runtime();
+
+    // Send attach command
+    rt.block_on(async {
+        send_control_command(&socket, &serde_json::json!({
+            "cmd": "attach",
+            "session_id": session_id,
+        })).await
+    })?;
+
+    // Resize to current terminal size
+    rt.block_on(async {
+        send_control_command(&socket, &serde_json::json!({
+            "cmd": "resize",
+            "session_id": session_id,
+            "cols": cols,
+            "rows": rows,
+        })).await
+    })?;
+
+    // Open data connection (same as spawn path)
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let buf_not_full = Arc::new(Condvar::new());
+    let exited = Arc::new(AtomicBool::new(false));
+    let max_pending = Arc::new(AtomicU64::new(0));
+    let recv_bytes = Arc::new(AtomicU64::new(0));
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let send_bytes_counter = Arc::new(AtomicU64::new(0));
+    let block_count = Arc::new(AtomicU64::new(0));
+    let block_ns = Arc::new(AtomicU64::new(0));
+
+    let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
+
+    let attach_start = Instant::now();
+    let buf_clone = buf.clone();
+    let buf_not_full_clone = buf_not_full.clone();
+    let exited_clone = exited.clone();
+    let max_pending_clone = max_pending.clone();
+    let recv_bytes_clone = recv_bytes.clone();
+    let block_count_clone = block_count.clone();
+    let block_ns_clone = block_ns.clone();
+    let sid = session_id.to_string();
+    let socket_clone = socket.clone();
+
+    rt.spawn(async move {
+        if let Err(e) = data_loop(
+            &socket_clone, &sid, input_rx,
+            buf_clone, buf_not_full_clone, exited_clone,
+            max_pending_clone, recv_bytes_clone,
+            block_count_clone, block_ns_clone,
+        ).await {
+            tracing::debug!("daemon data loop ended: {e}");
+        }
+    });
+
+    let sid_resize = session_id.to_string();
+    let socket_resize = socket.clone();
+    rt.spawn(async move {
+        resize_loop(&socket_resize, &sid_resize, resize_rx).await;
+    });
+
+    let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(DaemonSession {
+        id,
+        session_id: session_id.to_string(),
+        buf,
+        buf_not_full,
+        exited,
+        max_pending,
+        input_tx,
+        resize_tx,
+        recv_bytes,
+        send_calls,
+        send_bytes: send_bytes_counter,
+        block_count,
+        block_ns,
+        spawn_latency_ms: 0.0,
+        attach_latency_ms,
+    })
+}
+
+/// Send kill command to daemon for a session.
+pub fn kill_daemon_session(session_id: &str) -> anyhow::Result<()> {
+    let rt = daemon_runtime();
+    let socket = daemon_socket_path();
+    rt.block_on(async {
+        send_control_command(&socket, &serde_json::json!({
+            "cmd": "kill",
+            "session_id": session_id,
+        })).await
+    })
+}
+
+/// Send detach command (informational).
+pub fn detach_daemon_session(session_id: &str) -> anyhow::Result<()> {
+    let rt = daemon_runtime();
+    let socket = daemon_socket_path();
+    rt.block_on(async {
+        send_control_command(&socket, &serde_json::json!({
+            "cmd": "detach",
+            "session_id": session_id,
+        })).await
+    })
+}
+
+/// Check if daemon is reachable (quick connect attempt).
+pub fn daemon_is_connected() -> bool {
+    let rt = daemon_runtime();
+    let socket = daemon_socket_path();
+    rt.block_on(async {
+        AsyncIpcStream::connect(&socket).await.is_ok()
+    })
+}
+
+// ─── DaemonSession struct ────────────────────────────────────────────────────
 
 /// Daemon-backed terminal session.
 pub struct DaemonSession {
@@ -143,7 +303,6 @@ impl DaemonSession {
             let mut line = serde_json::to_string(&req)?;
             line.push('\n');
             stream.write_all(line.as_bytes()).await?;
-            // Read response
             let (mut reader, _) = tokio::io::split(stream);
             let mut buf_reader = BufReader::new(&mut reader);
             let mut resp_line = String::new();
@@ -158,22 +317,12 @@ impl DaemonSession {
 
         // Resize immediately
         rt.block_on(async {
-            let mut stream = AsyncIpcStream::connect(&socket).await?;
-            stream.write_all(&[CONN_CONTROL]).await?;
-            let req = serde_json::json!({
+            send_control_command(&socket, &serde_json::json!({
                 "cmd": "resize",
                 "session_id": &session_id,
                 "cols": cols,
                 "rows": rows,
-            });
-            let mut line = serde_json::to_string(&req)?;
-            line.push('\n');
-            stream.write_all(line.as_bytes()).await?;
-            let (mut reader, _) = tokio::io::split(stream);
-            let mut buf_reader = BufReader::new(&mut reader);
-            let mut resp_line = String::new();
-            buf_reader.read_line(&mut resp_line).await?;
-            Ok::<(), anyhow::Error>(())
+            })).await
         })?;
 
         // Open data connection
@@ -212,7 +361,6 @@ impl DaemonSession {
             }
         });
 
-        // Spawn resize task
         let sid_resize = session_id.clone();
         let socket_resize = socket.clone();
         rt.spawn(async move {
@@ -280,7 +428,7 @@ impl PlaneAiTerminalSession for DaemonSession {
         self.max_pending.load(Ordering::Relaxed) as usize
     }
 
-    fn bytes_dropped(&self) -> u64 { 0 } // Lossless: we block
+    fn bytes_dropped(&self) -> u64 { 0 }
 
     fn pipeline_diag(&self) -> PipelineDiag {
         PipelineDiag {
@@ -302,8 +450,9 @@ impl PlaneAiTerminalSession for DaemonSession {
     }
 }
 
+// ─── Async internals ─────────────────────────────────────────────────────────
+
 /// Async data loop: reads output frames from daemon, writes to bounded buffer.
-/// Also forwards input frames from the input channel.
 async fn data_loop(
     socket: &std::path::Path,
     session_id: &str,
@@ -324,7 +473,6 @@ async fn data_loop(
 
     let (mut reader, mut writer) = tokio::io::split(stream);
 
-    // Forward input in background
     let input_task = tokio::spawn(async move {
         while let Some(data) = input_rx.recv().await {
             if write_frame(&mut writer, FRAME_INPUT, &data).await.is_err() {
@@ -333,13 +481,11 @@ async fn data_loop(
         }
     });
 
-    // Read output frames
     loop {
         let result = read_frame(&mut reader).await;
         match result {
             Ok((FRAME_OUTPUT, payload)) => {
                 recv_bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
-                // Write into bounded buffer (block if full, lossless)
                 let mut b = buf.lock().unwrap();
                 if !b.is_empty() && b.len() + payload.len() > MAX_BUFFER {
                     block_count.fetch_add(1, Ordering::Relaxed);
@@ -353,7 +499,7 @@ async fn data_loop(
                 let len = b.len() as u64;
                 max_pending.fetch_max(len, Ordering::Relaxed);
             }
-            Ok(_) => {} // Ignore non-output frames
+            Ok(_) => {}
             Err(_) => break,
         }
     }
@@ -363,7 +509,7 @@ async fn data_loop(
     Ok(())
 }
 
-/// Async resize loop: sends resize commands via separate control connections.
+/// Async resize loop.
 async fn resize_loop(
     socket: &std::path::Path,
     session_id: &str,

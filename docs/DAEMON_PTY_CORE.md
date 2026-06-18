@@ -255,3 +255,37 @@ PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
 PLANEAI_DOGFOOD_LOG_VIEWER=1 \
 pnpm tauri dev
 ```
+
+---
+
+## Daemon Session Lifecycle (Iced)
+
+### Session Lifecycle Commands
+
+The daemon protocol supports these lifecycle commands (all pre-existing, no changes needed):
+
+| Command | Purpose |
+|---------|---------|
+| `spawn` | Create new session |
+| `kill` | Terminate session process |
+| `resize` | Change terminal dimensions |
+| `list` | List all sessions with alive status |
+| `attach` | Informational — note that client is attaching |
+| `detach` | Informational — note that client is detaching |
+
+### Persistence Guarantee
+
+Daemon sessions persist after client disconnect because:
+1. `remove_dead()` only removes sessions where `is_alive() == false` (PTY process exited)
+2. Client disconnection does NOT affect `is_alive()` status
+3. Only explicit `kill` command or PTY process exit marks session dead
+
+### Iced Lifecycle Integration
+
+- On boot: connect to daemon, list sessions, show in UI
+- Cmd+N: spawn new session
+- Cmd+W: detach (disconnect data connection, session persists)
+- Cmd+Shift+W: kill (send kill command, session terminates)
+- Close window: detach all by default (`--detach-on-close`)
+- Restart: reconnect to daemon, list sessions, attach via Cmd+A
+- Health check: every 5s, shows ⚡/⚠ indicator

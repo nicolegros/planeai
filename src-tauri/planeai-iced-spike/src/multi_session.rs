@@ -14,15 +14,26 @@ use serde_json::json;
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
+use crate::daemon_session::DaemonSessionInfo;
 use crate::input;
 use crate::shell::{QueuePolicy, Shell};
 use crate::Args;
 
 static MULTI_ARGS: OnceLock<Args> = OnceLock::new();
 
+#[derive(Debug, Clone, PartialEq)]
+enum SessionStatus {
+    Running,
+    Exited,
+    Detached,
+    Attached,
+}
+
 struct Session {
     id: usize,
     name: String,
+    daemon_session_id: Option<String>,
+    status: SessionStatus,
     backend: Box<dyn PlaneAiTerminalSession>,
     term: alacritty_terminal::Term<EventProxy>,
     processor: Processor,
@@ -55,6 +66,17 @@ struct MultiApp {
     ui_poll_count: u64,
     ui_batches_drained_total: u64,
     ui_bytes_drained_total: u64,
+    // Daemon lifecycle
+    daemon_connected: bool,
+    daemon_sessions_listed: Vec<DaemonSessionInfo>,
+    detach_on_close: bool,
+    kill_on_close: bool,
+    last_health_check: Option<Instant>,
+    // Lifecycle metrics
+    sessions_listed: u64,
+    sessions_attached: u64,
+    sessions_detached: u64,
+    sessions_killed: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +84,12 @@ enum Message {
     Poll,
     KeyEvent(keyboard::Event),
     WindowResized(Size),
+    DaemonList(Vec<DaemonSessionInfo>),
+    DaemonConnected(bool),
+    AttachSession(String),
+    DetachSession(usize),
+    KillSession(usize),
+    RefreshDaemonList,
 }
 
 impl MultiApp {
@@ -73,14 +101,39 @@ impl MultiApp {
         let mut metrics_lines = Vec::new();
         let boot = Instant::now();
 
+        let detach_on_close = args.detach_on_close;
+        let kill_on_close = args.kill_on_close;
+
+        // If daemon source, check connectivity and list existing sessions
+        let mut daemon_connected = false;
+        let mut daemon_sessions_listed = Vec::new();
+        if args.session_source == "planeai-daemon" {
+            daemon_connected = crate::daemon_session::daemon_is_connected();
+            if daemon_connected {
+                if let Ok(listed) = crate::daemon_session::list_daemon_sessions() {
+                    metrics_lines.push(json!({
+                        "schema_version": 1,
+                        "event_type": "daemon_session_listed",
+                        "timestamp_ms": boot.elapsed().as_secs_f64() * 1000.0,
+                        "count": listed.len(),
+                    }));
+                    daemon_sessions_listed = listed;
+                }
+            }
+            metrics_lines.push(json!({
+                "schema_version": 1,
+                "event_type": if daemon_connected { "daemon_connected" } else { "daemon_disconnected" },
+                "timestamp_ms": boot.elapsed().as_secs_f64() * 1000.0,
+            }));
+        }
+
         for i in 0..args.sessions {
             let backend: Box<dyn PlaneAiTerminalSession> = match args.session_source.as_str() {
                 "spike-local" => {
                     let policy = QueuePolicy::from_str(&args.output_queue_policy);
                     Box::new(Shell::spawn_with_policy(
                         i, cols as u16, rows as u16,
-                        args.session_command.as_deref(),
-                        policy,
+                        args.session_command.as_deref(), policy,
                     ))
                 }
                 "planeai-local" => {
@@ -100,6 +153,11 @@ impl MultiApp {
                     std::process::exit(1);
                 }
             };
+            let daemon_session_id = if args.session_source == "planeai-daemon" {
+                Some(format!("iced-{}-{}", i, std::process::id()))
+            } else {
+                None
+            };
             let term = new_term(cols, rows);
             let processor = new_processor();
             let snapshot = snapshot_grid(&term);
@@ -117,7 +175,9 @@ impl MultiApp {
             }));
 
             sessions.push(Session {
-                id: i, name, backend, term, processor, snapshot,
+                id: i, name, daemon_session_id,
+                status: SessionStatus::Running,
+                backend, term, processor, snapshot,
                 cache: Cache::new(), bytes_processed: 0, parse_times: Vec::new(),
                 render_works: Vec::new(), dirty: false,
             });
@@ -131,6 +191,9 @@ impl MultiApp {
             last_frame_instant: None, frames: 0, done: false,
             last_frame_ms: 0.0, cols, rows,
             ui_poll_count: 0, ui_batches_drained_total: 0, ui_bytes_drained_total: 0,
+            daemon_connected, daemon_sessions_listed, detach_on_close, kill_on_close,
+            last_health_check: None,
+            sessions_listed: 0, sessions_attached: 0, sessions_detached: 0, sessions_killed: 0,
         }, iced::Task::none())
     }
 
@@ -157,8 +220,134 @@ impl MultiApp {
         }));
     }
 
+    fn handle_detach(&mut self, idx: usize) {
+        if idx >= self.sessions.len() { return; }
+        let session = &mut self.sessions[idx];
+        if let Some(ref sid) = session.daemon_session_id {
+            let _ = crate::daemon_session::detach_daemon_session(sid);
+            self.metrics_lines.push(json!({
+                "schema_version": 1, "event_type": "daemon_session_detached",
+                "timestamp_ms": ts_ms(&self.boot_instant), "session_id": sid,
+            }));
+            self.sessions_detached += 1;
+        }
+        session.status = SessionStatus::Detached;
+        // Remove from UI
+        let closed_id = session.id;
+        self.metrics_lines.push(json!({
+            "schema_version": 1, "event_type": "session_closed",
+            "backend": self.args.backend, "timestamp_ms": ts_ms(&self.boot_instant),
+            "session_id": closed_id,
+        }));
+        self.sessions.remove(idx);
+        if self.sessions.is_empty() { return; }
+        if self.active >= self.sessions.len() { self.active = self.sessions.len() - 1; }
+        let a = self.active;
+        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term);
+        self.sessions[a].cache.clear();
+    }
+
+    fn handle_kill(&mut self, idx: usize) {
+        if idx >= self.sessions.len() { return; }
+        let session = &self.sessions[idx];
+        if let Some(ref sid) = session.daemon_session_id {
+            let _ = crate::daemon_session::kill_daemon_session(sid);
+            self.metrics_lines.push(json!({
+                "schema_version": 1, "event_type": "daemon_session_killed",
+                "timestamp_ms": ts_ms(&self.boot_instant), "session_id": sid,
+            }));
+            self.sessions_killed += 1;
+        }
+        let closed_id = session.id;
+        self.metrics_lines.push(json!({
+            "schema_version": 1, "event_type": "session_closed",
+            "backend": self.args.backend, "timestamp_ms": ts_ms(&self.boot_instant),
+            "session_id": closed_id,
+        }));
+        self.sessions.remove(idx);
+        if self.sessions.is_empty() { return; }
+        if self.active >= self.sessions.len() { self.active = self.sessions.len() - 1; }
+        let a = self.active;
+        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term);
+        self.sessions[a].cache.clear();
+    }
+
+    fn handle_attach(&mut self, session_id: String) {
+        let id = self.sessions.len();
+        let result = crate::daemon_session::attach(
+            id, &session_id, self.cols as u16, self.rows as u16,
+        );
+        match result {
+            Ok(backend) => {
+                self.metrics_lines.push(json!({
+                    "schema_version": 1, "event_type": "daemon_session_attached",
+                    "timestamp_ms": ts_ms(&self.boot_instant), "session_id": &session_id,
+                }));
+                self.sessions_attached += 1;
+                let term = new_term(self.cols, self.rows);
+                let processor = new_processor();
+                let snapshot = snapshot_grid(&term);
+                let name = format!("Session {} ({})", id + 1, &session_id[..session_id.len().min(12)]);
+                self.sessions.push(Session {
+                    id, name, daemon_session_id: Some(session_id),
+                    status: SessionStatus::Attached,
+                    backend: Box::new(backend), term, processor, snapshot,
+                    cache: Cache::new(), bytes_processed: 0, parse_times: Vec::new(),
+                    render_works: Vec::new(), dirty: false,
+                });
+                self.switch_to(id);
+            }
+            Err(e) => {
+                eprintln!("Failed to attach to session {}: {}", session_id, e);
+            }
+        }
+    }
+
+    fn refresh_daemon_list(&mut self) {
+        if let Ok(listed) = crate::daemon_session::list_daemon_sessions() {
+            self.daemon_sessions_listed = listed;
+            self.sessions_listed += 1;
+            self.metrics_lines.push(json!({
+                "schema_version": 1, "event_type": "daemon_session_listed",
+                "timestamp_ms": ts_ms(&self.boot_instant),
+                "count": self.daemon_sessions_listed.len(),
+            }));
+        }
+    }
+
+    fn check_daemon_health(&mut self) {
+        let now = Instant::now();
+        let should_check = self.last_health_check
+            .map(|t| now.duration_since(t) >= Duration::from_secs(5))
+            .unwrap_or(true);
+        if !should_check { return; }
+        self.last_health_check = Some(now);
+        let was_connected = self.daemon_connected;
+        let start = Instant::now();
+        self.daemon_connected = crate::daemon_session::daemon_is_connected();
+        let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+        if self.daemon_connected != was_connected {
+            self.metrics_lines.push(json!({
+                "schema_version": 1,
+                "event_type": if self.daemon_connected { "daemon_connected" } else { "daemon_disconnected" },
+                "timestamp_ms": ts_ms(&self.boot_instant),
+                "daemon_connect_latency_ms": latency_ms,
+            }));
+            // Refresh list on reconnect
+            if self.daemon_connected && !was_connected {
+                self.refresh_daemon_list();
+            }
+        }
+    }
+
     fn update(&mut self, message: Message) {
         match message {
+            Message::DaemonList(listed) => { self.daemon_sessions_listed = listed; }
+            Message::DaemonConnected(c) => { self.daemon_connected = c; }
+            Message::AttachSession(sid) => { self.handle_attach(sid); }
+            Message::DetachSession(idx) => { self.handle_detach(idx); }
+            Message::KillSession(idx) => { self.handle_kill(idx); }
+            Message::RefreshDaemonList => { self.refresh_daemon_list(); }
             Message::WindowResized(size) => {
                 let cw = 9.0f32;
                 let ch = 18.0f32;
@@ -167,6 +356,7 @@ impl MultiApp {
                 if new_cols == self.cols as u16 && new_rows == self.rows as u16 { return; }
                 self.cols = new_cols as usize;
                 self.rows = new_rows as usize;
+                if self.sessions.is_empty() { return; }
                 let session = &mut self.sessions[self.active];
                 let term_size = TermSize { cols: self.cols, rows: self.rows };
                 session.term.resize(term_size);
@@ -199,8 +389,8 @@ impl MultiApp {
                     }
                     return;
                 }
-                // Cmd+N
-                if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n") {
+                // Cmd+N — new session
+                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n") {
                     let id = self.sessions.len();
                     let backend: Box<dyn PlaneAiTerminalSession> = match self.args.session_source.as_str() {
                         "spike-local" => {
@@ -227,6 +417,11 @@ impl MultiApp {
                             return;
                         }
                     };
+                    let daemon_session_id = if self.args.session_source == "planeai-daemon" {
+                        Some(format!("iced-{}-{}", id, std::process::id()))
+                    } else {
+                        None
+                    };
                     let term = new_term(self.cols, self.rows);
                     let processor = new_processor();
                     let snapshot = snapshot_grid(&term);
@@ -238,28 +433,64 @@ impl MultiApp {
                         "session_id": id, "session_name": &name,
                     }));
                     self.sessions.push(Session {
-                        id, name, backend, term, processor, snapshot,
+                        id, name, daemon_session_id,
+                        status: SessionStatus::Running,
+                        backend, term, processor, snapshot,
                         cache: Cache::new(), bytes_processed: 0, parse_times: Vec::new(),
                         render_works: Vec::new(), dirty: false,
                     });
                     self.switch_to(id);
                     return;
                 }
-                // Cmd+W
-                if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w") {
+                // Cmd+W — detach for daemon, remove for others
+                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w") {
                     if self.sessions.len() <= 1 { return; }
-                    let closed_id = self.sessions[self.active].id;
-                    self.metrics_lines.push(json!({
-                        "schema_version": 1, "event_type": "session_closed",
-                        "backend": self.args.backend,
-                        "timestamp_ms": ts_ms(&self.boot_instant),
-                        "session_id": closed_id,
-                    }));
-                    self.sessions.remove(self.active);
-                    if self.active >= self.sessions.len() { self.active = self.sessions.len() - 1; }
+                    if self.sessions[self.active].daemon_session_id.is_some() {
+                        let idx = self.active;
+                        self.handle_detach(idx);
+                    } else {
+                        let closed_id = self.sessions[self.active].id;
+                        self.metrics_lines.push(json!({
+                            "schema_version": 1, "event_type": "session_closed",
+                            "backend": self.args.backend,
+                            "timestamp_ms": ts_ms(&self.boot_instant),
+                            "session_id": closed_id,
+                        }));
+                        self.sessions.remove(self.active);
+                        if self.active >= self.sessions.len() { self.active = self.sessions.len() - 1; }
+                        let idx = self.active;
+                        self.sessions[idx].snapshot = snapshot_grid(&self.sessions[idx].term);
+                        self.sessions[idx].cache.clear();
+                    }
+                    return;
+                }
+                // Cmd+Shift+W — kill daemon session
+                if cmd && modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "w" || c.as_str() == "W") {
+                    if self.sessions.len() <= 1 { return; }
                     let idx = self.active;
-                    self.sessions[idx].snapshot = snapshot_grid(&self.sessions[idx].term);
-                    self.sessions[idx].cache.clear();
+                    self.handle_kill(idx);
+                    return;
+                }
+                // Cmd+R — refresh daemon list
+                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r") {
+                    if self.args.session_source == "planeai-daemon" {
+                        self.refresh_daemon_list();
+                    }
+                    return;
+                }
+                // Cmd+A — attach to first unattached daemon session
+                if cmd && !modifiers.shift() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "a") {
+                    if self.args.session_source == "planeai-daemon" {
+                        let attached_ids: Vec<&str> = self.sessions.iter()
+                            .filter_map(|s| s.daemon_session_id.as_deref())
+                            .collect();
+                        if let Some(info) = self.daemon_sessions_listed.iter()
+                            .find(|i| i.alive && !attached_ids.contains(&i.session_id.as_str()))
+                        {
+                            let sid = info.session_id.clone();
+                            self.handle_attach(sid);
+                        }
+                    }
                     return;
                 }
                 // Paste
@@ -297,9 +528,14 @@ impl MultiApp {
                 }
                 self.last_frame_instant = Some(now);
 
+                // Periodic daemon health check (every 5s)
+                if self.args.session_source == "planeai-daemon" {
+                    self.check_daemon_health();
+                }
+
                 self.ui_poll_count += 1;
                 for i in 0..self.sessions.len() {
-                    const MAX_BYTES_PER_SESSION_PER_POLL: usize = 2 * 1024 * 1024; // 2 MB
+                    const MAX_BYTES_PER_SESSION_PER_POLL: usize = 2 * 1024 * 1024;
                     let mut total_drained = 0usize;
                     loop {
                         if total_drained >= MAX_BYTES_PER_SESSION_PER_POLL { break; }
@@ -327,7 +563,6 @@ impl MultiApp {
                             None => break,
                         }
                     }
-                    // Only snapshot the active session once after all batches are drained
                     if i == self.active && total_drained > 0 {
                         let render_start = Instant::now();
                         let session = &mut self.sessions[i];
@@ -340,6 +575,15 @@ impl MultiApp {
                     }
                 }
                 self.frames += 1;
+
+                // Update session statuses
+                for s in &mut self.sessions {
+                    if s.status == SessionStatus::Running || s.status == SessionStatus::Attached {
+                        if s.backend.has_exited() {
+                            s.status = SessionStatus::Exited;
+                        }
+                    }
+                }
 
                 if let Some(max_ms) = self.args.max_runtime_ms {
                     if ts_ms(&self.boot_instant) > max_ms as f64 {
@@ -359,6 +603,20 @@ impl MultiApp {
     }
 
     fn finish(&mut self) {
+        // On exit: for daemon sessions, detach (don't kill) by default
+        if self.args.session_source == "planeai-daemon" {
+            for s in &self.sessions {
+                if let Some(ref sid) = s.daemon_session_id {
+                    if self.kill_on_close {
+                        let _ = crate::daemon_session::kill_daemon_session(sid);
+                    } else if self.detach_on_close {
+                        let _ = crate::daemon_session::detach_daemon_session(sid);
+                    }
+                    // If neither flag: just drop connection (daemon keeps session alive)
+                }
+            }
+        }
+
         let wall_ms = ts_ms(&self.boot_instant);
         let total_bytes: u64 = self.sessions.iter().map(|s| s.bytes_processed).sum();
         let active_bytes = self.sessions.get(self.active).map(|s| s.bytes_processed).unwrap_or(0);
@@ -414,6 +672,11 @@ impl MultiApp {
             "ui_avg_batches_per_poll": if self.ui_poll_count > 0 { self.ui_batches_drained_total as f64 / self.ui_poll_count as f64 } else { 0.0 },
             "ui_avg_bytes_per_poll": if self.ui_poll_count > 0 { self.ui_bytes_drained_total as f64 / self.ui_poll_count as f64 } else { 0.0 },
             "pipeline_diag_per_session": pipeline_diags,
+            "sessions_listed": self.sessions_listed,
+            "sessions_attached": self.sessions_attached,
+            "sessions_detached": self.sessions_detached,
+            "sessions_killed": self.sessions_killed,
+            "daemon_connected": self.daemon_connected,
             "final_rss_mb": get_rss_mb(),
         });
         self.metrics_lines.push(summary);
@@ -435,11 +698,62 @@ impl MultiApp {
         if self.sessions.is_empty() { return text("No sessions").into(); }
 
         let mut session_list = column![].spacing(2).width(Length::Fixed(140.0));
+
+        // Daemon status indicator
+        if self.args.session_source == "planeai-daemon" {
+            let (indicator, color) = if self.daemon_connected {
+                ("⚡ connected", Color::from_rgb8(100, 200, 100))
+            } else {
+                ("⚠ disconnected", Color::from_rgb8(255, 150, 50))
+            };
+            session_list = session_list.push(
+                text(indicator).size(11).color(color).font(Font::MONOSPACE)
+            );
+            session_list = session_list.push(text("").size(4)); // spacer
+        }
+
         for (i, s) in self.sessions.iter().enumerate() {
-            let label = if i == self.active { format!("▶ {}", s.name) } else { format!("  {}", s.name) };
-            let color = if i == self.active { Color::from_rgb8(100, 200, 255) } else { Color::from_rgb8(180, 180, 180) };
+            let status_icon = match s.status {
+                SessionStatus::Running => "●",
+                SessionStatus::Attached => "◉",
+                SessionStatus::Exited => "○",
+                SessionStatus::Detached => "◌",
+            };
+            let label = if i == self.active {
+                format!("▶ {} {}", status_icon, s.name)
+            } else {
+                format!("  {} {}", status_icon, s.name)
+            };
+            let color = match (&s.status, i == self.active) {
+                (_, true) => Color::from_rgb8(100, 200, 255),
+                (SessionStatus::Exited, _) => Color::from_rgb8(120, 120, 120),
+                (SessionStatus::Detached, _) => Color::from_rgb8(200, 150, 50),
+                _ => Color::from_rgb8(180, 180, 180),
+            };
             session_list = session_list.push(text(label).size(13).color(color).font(Font::MONOSPACE));
         }
+
+        // Show unattached daemon sessions
+        if self.args.session_source == "planeai-daemon" && !self.daemon_sessions_listed.is_empty() {
+            let attached_ids: Vec<&str> = self.sessions.iter()
+                .filter_map(|s| s.daemon_session_id.as_deref())
+                .collect();
+            let unattached: Vec<&DaemonSessionInfo> = self.daemon_sessions_listed.iter()
+                .filter(|i| !attached_ids.contains(&i.session_id.as_str()))
+                .collect();
+            if !unattached.is_empty() {
+                session_list = session_list.push(text("").size(4));
+                session_list = session_list.push(
+                    text("── detached ──").size(10).color(Color::from_rgb8(120, 120, 120)).font(Font::MONOSPACE)
+                );
+                for info in unattached.iter().take(5) {
+                    let label = format!("  {} {}", if info.alive { "◌" } else { "✕" }, &info.session_id[..info.session_id.len().min(14)]);
+                    let color = if info.alive { Color::from_rgb8(200, 150, 50) } else { Color::from_rgb8(100, 100, 100) };
+                    session_list = session_list.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                }
+            }
+        }
+
         let left_panel = container(session_list).padding(8)
             .style(|_: &Theme| container::Style { background: Some(Color::from_rgb8(20, 20, 20).into()), ..Default::default() });
 

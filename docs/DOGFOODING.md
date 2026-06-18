@@ -305,7 +305,7 @@ Per user guidance: **keep opt-in OR make default** — either is acceptable base
 
 ## Iced Daemon Dogfooding
 
-The Iced native spike can be used for daemon-backed dogfooding:
+The Iced native spike supports full daemon session lifecycle:
 
 ```bash
 PLANEAI_DAEMON_PTY_CORE=planeai-pty \
@@ -313,21 +313,57 @@ PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
 cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
   --multi-session --sessions 1 \
   --session-source planeai-daemon \
-  --session-command "bash" \
   --cols 120 --rows 40 \
   --backend iced-alacritty
 ```
 
-### Dogfood Readiness: Limited
+### Daemon Lifecycle Semantics
 
-**Ready for:** Developer testing, performance evaluation, smoke testing daemon persistence.
+| Action | Behavior |
+|--------|----------|
+| Cmd+W | Detach — session keeps running in daemon |
+| Cmd+Shift+W | Kill — daemon terminates the session |
+| Close window | Detach all daemon sessions (default) |
+| Cmd+R | Refresh daemon session list |
+| Cmd+A | Attach to first unattached daemon session |
+| Cmd+N | Spawn new daemon session |
 
-**Not ready for:** Daily driver usage. Missing:
-- Detach/reattach (close kills sessions)
-- Session list UI
-- Daemon reconnect on crash
-- Config-based daemon startup
+### Reconnect Flow
+
+1. Close Iced window → daemon sessions persist
+2. Restart Iced → connects to daemon, lists sessions
+3. Unattached sessions shown in left panel under "── detached ──"
+4. Cmd+A attaches; scrollback buffer replayed, then live output
+
+### Dogfood Readiness: Ready for limited daily use
+
+**Ready for:**
+- Developer testing
+- Performance evaluation
+- Daemon persistence validation
+- Durable log testing
+- Session lifecycle (spawn/detach/attach/kill)
+- Reconnect after restart
+
+**Not ready for:**
+- Config-based daemon startup (requires env vars)
+- Daemon crash recovery (sessions lost if daemon dies)
+- Polished UI (basic prototype only)
+- Multi-hour unattended sessions (not stress-tested)
+
+### Known Limitations (Daemon Iced Path)
+
+- daemon planeai-pty remains opt-in (`PLANEAI_DAEMON_PTY_CORE=planeai-pty`)
+- tmux remains optional and not default
+- Iced UI is still a prototype (basic usability only)
+- Reconnect scrollback limited to daemon's 1MB ring buffer
+- Attach only works for sessions in the current daemon instance
+- Daemon crash = sessions lost (no crash recovery)
+- Durable logs may contain secrets (raw terminal output)
+- Log replay is read-only (does not restore process state)
+- Production Tauri app still uses xterm.js (unchanged)
+- GUI benchmarks require a macOS display (cannot run headlessly)
 
 ### Recommendation
 
-The daemon Iced path is ready for **limited dogfooding**: performance comparison, daemon protocol validation, and durable log testing. Use `planeai-local` for daily development until detach/reattach is implemented.
+The daemon Iced path is ready for **limited daily dogfooding**: lifecycle works, persistence works, reconnect works. Use for development sessions where you want daemon persistence. Fall back to `planeai-local` for simple throwaway sessions.

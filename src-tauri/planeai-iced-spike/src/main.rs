@@ -82,6 +82,12 @@ pub struct Args {
     pub session_command: Option<String>,
     #[arg(long, default_value = "spike-local")]
     pub session_source: String,
+    #[arg(long, default_value_t = true)]
+    pub detach_on_close: bool,
+    #[arg(long)]
+    pub kill_on_close: bool,
+    #[arg(long)]
+    pub kill_sessions_on_exit: bool,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();
