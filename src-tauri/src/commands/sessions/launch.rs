@@ -100,7 +100,7 @@ pub async fn launch_session(
     task_prompt: Option<String>,
 ) -> Result<db::Session, String> {
     // Phase 1: gather params from config (holding config lock briefly)
-    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes) = {
+    let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let pk = provider.unwrap_or_else(|| cfg.default_provider.clone());
         let provider_def = cfg
@@ -118,7 +118,12 @@ pub async fn launch_session(
         let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
         let sb = cfg.daemon_scrollback_bytes.unwrap_or(1_048_576);
-        (c, pk, he, be, sb)
+        let epd: Vec<String> = cfg
+            .extra_path_dirs
+            .iter()
+            .map(|d| crate::util::expand_tilde(d))
+            .collect();
+        (c, pk, he, be, sb, epd)
     };
 
     // Phase 2: sync work — detect base branch, git worktree/checkout
@@ -184,6 +189,10 @@ pub async fn launch_session(
         let mut env = std::collections::HashMap::new();
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("PLANEAI_SESSION_ID".to_string(), session_id.clone());
+        env.insert(
+            "PATH".to_string(),
+            crate::command::augmented_path(&extra_path_dirs),
+        );
 
         let mut ds = daemon_state.0.lock().await;
         let client = match ds.as_mut() {

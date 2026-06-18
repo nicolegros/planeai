@@ -148,6 +148,7 @@ mod tests {
             local_pty_core: None,
             daemon_pty_core: None,
             session_log_dir: None,
+            extra_path_dirs: Vec::new(),
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
     }

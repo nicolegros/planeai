@@ -3,6 +3,12 @@ use std::process::Command;
 
 use crate::config;
 
+/// Build a PATH string with user-local bin directories prepended.
+/// Delegates to planeai_core::command::augmented_path with config dirs.
+pub fn augmented_path(config_dirs: &[String]) -> String {
+    planeai_core::command::augmented_path(config_dirs)
+}
+
 /// Resolve a command name to its full path, checking user-local bin directories
 /// that may not be in PATH when launched from a GUI app.
 #[cfg(not(windows))]
@@ -90,4 +96,33 @@ pub fn resolve(cmd: &str) -> String {
     }
 
     cmd.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn augmented_path_includes_conventional_dirs() {
+        let path = augmented_path(&[]);
+        let home = config::home_dir();
+        if cfg!(windows) {
+            assert!(
+                path.contains(&format!("{home}\\.cargo\\bin")),
+                "PATH should include .cargo\\bin, got: {path}"
+            );
+        } else {
+            assert!(
+                path.contains(&format!("{home}/.local/bin")),
+                "PATH should include .local/bin, got: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn augmented_path_uses_platform_separator() {
+        let path = augmented_path(&[]);
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        assert!(path.contains(sep), "PATH should use platform separator");
+    }
 }

@@ -129,3 +129,26 @@ Hooks run shell commands at task state transitions.
 :::note
 Hooks run in the working directory of the task's git worktree.
 :::
+
+## Extra PATH Directories
+
+GUI apps inherit a minimal system PATH that may not include directories where your AI agent CLIs are installed. planeai automatically prepends conventional developer directories (`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`, `/opt/homebrew/bin`, `/usr/local/bin`), but if your CLI lives in a custom location, configure `extra_path_dirs`:
+
+```jsonc
+{
+  // Directories prepended to PATH when launching sessions
+  "extra_path_dirs": ["~/.guardrails/shims", "~/custom-tools/bin"]
+}
+```
+
+These directories are prepended before the conventional ones, giving them highest priority.
+
+### Environment Override
+
+Set `PLANEAI_EXTRA_PATH` (colon-separated) to override `extra_path_dirs` without editing the config file:
+
+```bash
+export PLANEAI_EXTRA_PATH="$HOME/.guardrails/shims:$HOME/my-tools/bin"
+```
+
+When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is ignored.
