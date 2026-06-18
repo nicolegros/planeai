@@ -68,27 +68,71 @@ impl Default for LaunchConfig {
     }
 }
 
-/// Load a LaunchConfig from a JSON file path. Falls back to defaults on error.
+/// Expand `~` prefix to the user's home directory.
+pub fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default();
+        format!("{home}/{rest}")
+    } else if path == "~" {
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+    } else {
+        path.to_string()
+    }
+}
+
+/// Load a LaunchConfig from a JSON/JSONC file, merged over defaults.
 pub fn load_launch_config(path: &std::path::Path) -> Result<LaunchConfig, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("cannot parse config {}: {e}", path.display()))
+    // Strip JSONC comments
+    let stripped = json_comments::StripComments::new(content.as_bytes());
+    let user_val: serde_json::Value = serde_json::from_reader(stripped)
+        .map_err(|e| format!("cannot parse config {}: {e}", path.display()))?;
+    // Merge user values over defaults
+    let default_val = serde_json::to_value(LaunchConfig::default()).unwrap();
+    let merged = merge_values(default_val, user_val);
+    serde_json::from_value(merged)
+        .map_err(|e| format!("cannot deserialize config {}: {e}", path.display()))
 }
 
-/// Load config from the standard PlaneAI config location.
-pub fn load_default_config() -> LaunchConfig {
+/// Shallow merge: user keys override default keys at the top level.
+/// For objects, user fields replace default fields (not deep merge).
+fn merge_values(default: serde_json::Value, user: serde_json::Value) -> serde_json::Value {
+    match (default, user) {
+        (serde_json::Value::Object(mut def), serde_json::Value::Object(usr)) => {
+            for (k, v) in usr {
+                def.insert(k, v);
+            }
+            serde_json::Value::Object(def)
+        }
+        (_, user) => user,
+    }
+}
+
+/// Returns the platform-appropriate PlaneAI config directory.
+pub fn config_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default();
-    #[cfg(target_os = "macos")]
-    let config_dir = format!("{home}/.config/planeai");
-    #[cfg(not(target_os = "macos"))]
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .map(|d| format!("{d}/planeai"))
-        .unwrap_or_else(|_| format!("{home}/.config/planeai"));
+    #[cfg(windows)]
+    {
+        let base = std::env::var("APPDATA").unwrap_or_else(|_| format!("{home}\\AppData\\Roaming"));
+        PathBuf::from(base).join("planeai")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{home}/.config"));
+        PathBuf::from(base).join("planeai")
+    }
+}
 
-    let path = PathBuf::from(&config_dir).join("config.json");
+/// Load config from the standard PlaneAI config location (JSONC, merged over defaults).
+pub fn load_default_config() -> LaunchConfig {
+    let path = config_dir().join("config.json");
     if path.exists() {
         load_launch_config(&path).unwrap_or_default()
     } else {
@@ -117,6 +161,7 @@ pub struct ResolvedLaunchConfig {
     pub request: CreateSessionRequest,
     pub provider_label: Option<String>,
     pub command_label: String,
+    pub session_log_dir: Option<String>,
 }
 
 /// Resolve a CreateSessionRequest from config + overrides.
@@ -133,7 +178,7 @@ pub fn resolve_from_config(
         .unwrap_or(&config.default_provider);
     let provider = config.providers.get(provider_id);
 
-    // Command resolution: CLI > provider config > default
+    // Command resolution: CLI > provider config > error
     let agent_command = if let Some(ref cmd) = overrides.agent_command {
         cmd.clone()
     } else if let Some(p) = provider {
@@ -156,9 +201,16 @@ pub fn resolve_from_config(
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Extra PATH dirs: CLI augments config. Env override handled inside augmented_path.
-    let mut extra_path_dirs = config.extra_path_dirs.clone();
-    extra_path_dirs.extend(overrides.extra_path_dirs.iter().cloned());
+    // Extra PATH dirs: config + CLI, all tilde-expanded
+    let mut extra_path_dirs: Vec<String> = config
+        .extra_path_dirs
+        .iter()
+        .chain(overrides.extra_path_dirs.iter())
+        .map(|d| expand_tilde(d))
+        .collect();
+    // Deduplicate
+    let mut seen = std::collections::HashSet::new();
+    extra_path_dirs.retain(|d| seen.insert(d.clone()));
 
     // Session target: CLI > config > default (daemon)
     let config_target = match config.session_backend.as_deref() {
@@ -168,9 +220,11 @@ pub fn resolve_from_config(
     };
     let session_target = overrides.session_target.clone().unwrap_or(config_target);
 
-    // Durable logs: env > config
-    let durable_logs =
-        std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok() || config.session_log_dir.is_some();
+    // Session log dir: env > config
+    let session_log_dir = std::env::var("PLANEAI_SESSION_LOG_DIR")
+        .ok()
+        .or_else(|| config.session_log_dir.as_ref().map(|d| expand_tilde(d)));
+    let durable_logs = session_log_dir.is_some();
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -190,6 +244,7 @@ pub fn resolve_from_config(
         request,
         provider_label: Some(provider_id.to_string()),
         command_label: agent_command,
+        session_log_dir,
     })
 }
 

@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use planeai_core::session_launch::{
-    prepare_session, CreateSessionError, CreateSessionRequest, SessionTarget,
+    expand_tilde, load_launch_config, prepare_session, resolve_from_config, CreateSessionError,
+    CreateSessionRequest, LaunchConfig, ProviderConfig, SessionLaunchOverrides, SessionTarget,
 };
 
 fn tauri_style_request(cwd: PathBuf) -> CreateSessionRequest {
@@ -152,10 +153,6 @@ fn durable_log_setting_propagates() {
 }
 
 // ─── Config resolution tests ─────────────────────────────────────────────────
-
-use planeai_core::session_launch::{
-    resolve_from_config, LaunchConfig, ProviderConfig, SessionLaunchOverrides,
-};
 
 #[test]
 fn config_default_agent_command_resolves() {
@@ -306,4 +303,128 @@ fn auto_approve_adds_yolo_flag() {
     };
     let resolved = resolve_from_config(&config, &overrides).unwrap();
     assert_eq!(resolved.command_label, "agent --yolo");
+}
+
+// ─── JSONC, merge, session_log_dir, tilde expansion tests ────────────────────
+
+#[test]
+fn jsonc_config_loads_successfully() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{
+        // This is a comment
+        "default_provider": "test-agent",
+        "providers": {
+            "test-agent": {
+                "command": "my-agent run" /* inline comment */
+            }
+        }
+    }"#,
+    )
+    .unwrap();
+    let config = load_launch_config(&config_path).unwrap();
+    assert_eq!(config.default_provider, "test-agent");
+    assert_eq!(config.providers["test-agent"].command, "my-agent run");
+}
+
+#[test]
+fn partial_config_merges_over_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    // Only override default_provider — providers should come from defaults
+    std::fs::write(&config_path, r#"{ "default_provider": "claude" }"#).unwrap();
+    let config = load_launch_config(&config_path).unwrap();
+    assert_eq!(config.default_provider, "claude");
+    // Default providers should still exist from merge
+    assert!(config.providers.contains_key("kiro"));
+    assert!(config.providers.contains_key("claude"));
+}
+
+#[test]
+fn session_log_dir_from_config_propagates() {
+    // Only test when env var is not set (env takes priority over config)
+    if std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok() {
+        return; // env var overrides — can't test config propagation
+    }
+    let config = LaunchConfig {
+        session_log_dir: Some("/tmp/test-logs".to_string()),
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert!(resolved.request.durable_logs);
+    assert_eq!(resolved.session_log_dir, Some("/tmp/test-logs".to_string()));
+}
+
+#[test]
+fn session_log_dir_tilde_expanded() {
+    if std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok() {
+        return; // env var overrides — can't test config propagation
+    }
+    let config = LaunchConfig {
+        session_log_dir: Some("~/planeai-logs".to_string()),
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    let dir = resolved.session_log_dir.unwrap();
+    assert!(!dir.starts_with("~"), "tilde should be expanded: {dir}");
+    assert!(dir.contains("planeai-logs"));
+}
+
+#[test]
+fn extra_path_dirs_tilde_expanded() {
+    let config = LaunchConfig {
+        extra_path_dirs: vec!["~/.local/bin".to_string()],
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    for dir in &resolved.request.extra_path_dirs {
+        assert!(
+            !dir.starts_with("~"),
+            "tilde should be expanded in PATH dirs: {dir}"
+        );
+    }
+}
+
+#[test]
+fn expand_tilde_works() {
+    let expanded = expand_tilde("~/foo/bar");
+    assert!(!expanded.starts_with("~"));
+    assert!(expanded.ends_with("/foo/bar"));
+
+    let absolute = expand_tilde("/usr/local/bin");
+    assert_eq!(absolute, "/usr/local/bin");
+
+    let just_tilde = expand_tilde("~");
+    assert!(!just_tilde.starts_with("~"));
+    assert!(!just_tilde.is_empty());
+}
+
+#[test]
+fn no_bash_fallback_when_no_command() {
+    // With no provider and no CLI command, should error not fallback to bash
+    let config = LaunchConfig {
+        providers: HashMap::new(),
+        default_provider: "nonexistent".to_string(),
+        ..Default::default()
+    };
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        ..Default::default()
+    };
+    let err = resolve_from_config(&config, &overrides).unwrap_err();
+    assert!(matches!(err, CreateSessionError::CommandEmpty));
 }

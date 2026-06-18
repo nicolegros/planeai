@@ -309,7 +309,7 @@ impl DaemonSession {
         ensure_daemon_running_sync()?;
 
         let session_id = format!("iced-{}-{}", id, std::process::id());
-        let cmd = command.unwrap_or("bash");
+        let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
             session_id: session_id.clone(),
@@ -464,7 +464,7 @@ impl DaemonSession {
         ensure_daemon_running_sync()?;
 
         let session_id = format!("iced-{}-{}", id, std::process::id());
-        let cmd = command.unwrap_or("bash");
+        let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
             session_id: session_id.clone(),
