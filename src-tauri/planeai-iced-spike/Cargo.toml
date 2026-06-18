@@ -3,9 +3,17 @@ name = "planeai-iced-spike"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "planeai_iced_spike"
+path = "src/lib.rs"
+
 [[bin]]
 name = "planeai-iced"
 path = "src/main.rs"
+
+[[bin]]
+name = "daemon-lifecycle-smoke"
+path = "src/bin/daemon_lifecycle_smoke.rs"
 
 [dependencies]
 alacritty_terminal = "0.26"

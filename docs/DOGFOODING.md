@@ -371,3 +371,83 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 ### Recommendation
 
 The daemon Iced path is ready for **limited daily dogfooding**: lifecycle works, persistence works, reconnect works. Use for development sessions where you want daemon persistence. Fall back to `planeai-local` for simple throwaway sessions.
+
+## Headless Lifecycle Verification (2026-06-18)
+
+Full daemon lifecycle verified headlessly via `daemon-lifecycle-smoke` binary:
+
+| Capability                       | Verified | Method                                                                |
+| -------------------------------- | -------- | --------------------------------------------------------------------- |
+| Daemon start/detect              | ✅       | headless smoke                                                        |
+| Spawn session                    | ✅       | headless smoke                                                        |
+| Receive output                   | ✅       | headless smoke                                                        |
+| Send input                       | ✅       | headless smoke                                                        |
+| Resize                           | ✅       | headless smoke                                                        |
+| Detach without kill              | ✅       | headless smoke                                                        |
+| List sessions post-detach        | ✅       | headless smoke                                                        |
+| Reattach to existing session     | ✅       | headless smoke                                                        |
+| Snapshot output on attach        | ✅       | headless smoke                                                        |
+| Live output after attach         | ✅       | headless smoke                                                        |
+| Explicit kill                    | ✅       | headless smoke                                                        |
+| Session confirmed dead           | ✅       | headless smoke                                                        |
+| Durable log finalized            | ✅       | headless smoke                                                        |
+| bytes_dropped = 0                | ✅       | headless smoke                                                        |
+| Close window → detach (not kill) | ✅       | code review (--detach-on-close default)                               |
+| Scrollback after reattach        | ✅       | headless smoke (snapshot_bytes > 0)                                   |
+| Input after reattach             | ✅       | headless smoke                                                        |
+| Production Tauri builds          | ✅       | cargo build --release -p planeai                                      |
+| All iced-spike tests pass        | ✅       | cargo test -p planeai-iced-spike (14 pass)                            |
+| All daemon tests pass            | ✅       | env -u PLANEAI_DAEMON_PTY_CORE cargo test -p planeai-daemon (14 pass) |
+| All planeai-pty tests pass       | ✅       | cargo test -p planeai-pty (7 pass)                                    |
+| Session logs tests pass          | ✅       | cargo test -p planeai -- session_logs (14 pass)                       |
+
+### Items Requiring Manual GUI Verification
+
+- Close window → restart → reattach → see prior output
+- PageUp/PageDown scrollback after attach
+- Mouse wheel scrollback after attach
+- Cmd+End returns to live output
+- Daemon health indicator visual check
+- Session status icons in left panel
+
+### Daemon Lifecycle Policy (Enforced)
+
+| Action             | Behavior                                                         |
+| ------------------ | ---------------------------------------------------------------- |
+| Close tab (Cmd+W)  | Detach daemon session (doesn't kill)                             |
+| Close window       | Detach all daemon sessions (doesn't kill)                        |
+| Kill (Cmd+Shift+W) | Explicit kill — terminates PTY                                   |
+| Ctrl-C             | Sends to PTY input (doesn't kill session)                        |
+| --exit-when-done   | For benchmarks; combined with --kill-sessions-on-exit to cleanup |
+
+### Scrollback / Ring Buffer
+
+- Daemon ring buffer: 1 MB (configurable via --scrollback-bytes)
+- On attach: full buffer snapshot replayed in 64 KB chunks
+- No duplicate output: snapshot at attach time, live starts after
+- If session output exceeds 1 MB since last attach: older output lost from buffer
+- Durable log (.ansi) contains full history as fallback (replay mode)
+
+### Daemon Health / Reconnect
+
+- Health check every 5s (non-blocking)
+- Connected/disconnected indicator in UI
+- Daemon disconnect does not panic
+- Simple backoff on start: 50/100/200/400/800ms retry
+- Server auto-exits after 30s idle (no clients, no sessions)
+
+### Run the Headless Smoke
+
+```bash
+cd src-tauri
+cargo build --release -p planeai-iced-spike --bin daemon-lifecycle-smoke
+cargo build --release -p planeai --bin planeai-daemon
+
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+PATH="$(pwd)/target/release:$PATH" \
+target/release/daemon-lifecycle-smoke \
+  --session-command "python3 -c 'import time; print(\"ready\", flush=True); time.sleep(30)'" \
+  --cols 120 --rows 40 \
+  --metrics bench/results/daemon-lifecycle-smoke.jsonl
+```

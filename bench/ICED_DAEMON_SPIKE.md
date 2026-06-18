@@ -270,8 +270,6 @@ No protocol changes were made. Uses the existing daemon protocol:
 - [ ] Manual: verify buffered output appears on attach (requires GUI)
 - [ ] Manual: verify input works after attach (requires GUI)
 
-## Dogfooding Checklist
-
 Before daily driver use, verify manually with a display:
 
 1. Start daemon-backed Iced app
@@ -292,3 +290,84 @@ Before daily driver use, verify manually with a display:
 16. Cmd+Shift+W to kill — verify session terminates
 17. Check meta.json shows status=exited
 18. Bytes dropped = 0
+
+## Headless Daemon Lifecycle Smoke Test
+
+A headless binary (`daemon-lifecycle-smoke`) exercises the full lifecycle without an Iced window:
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+cargo run --release -p planeai-iced-spike --bin daemon-lifecycle-smoke -- \
+  --session-command "python3 -c 'import time; print(\"ready\", flush=True); time.sleep(30)'" \
+  --cols 120 --rows 40 \
+  --metrics bench/results/daemon-lifecycle-smoke.jsonl
+```
+
+### Verified Operations (2026-06-18)
+
+| Step | Operation                        | Status |
+| ---- | -------------------------------- | ------ |
+| 1    | Daemon starts or detected        | ✅     |
+| 2    | Spawn daemon session             | ✅     |
+| 3    | Receive output                   | ✅     |
+| 4    | Send input                       | ✅     |
+| 5    | Resize session                   | ✅     |
+| 6    | Detach without killing           | ✅     |
+| 7    | List sessions (finds detached)   | ✅     |
+| 8    | Reattach to same session         | ✅     |
+| 9    | Receive buffered/snapshot output | ✅     |
+| 10   | Receive live output after attach | ✅     |
+| 11   | Kill explicitly                  | ✅     |
+| 12   | Confirm session exits            | ✅     |
+| 13   | Durable log finalized            | ✅     |
+| 14   | bytes_dropped = 0                | ✅     |
+
+### Sample Metrics
+
+```json
+{
+  "daemon_start_ms": 0.356,
+  "spawn_latency_ms": 4.3,
+  "attach_latency_ms": 0.02,
+  "first_output_bytes": 7,
+  "bytes_before_detach": 28,
+  "sessions_listed": 1,
+  "reattach_latency_ms": 0.004,
+  "snapshot_bytes": 28,
+  "live_bytes_after_attach": 18,
+  "output_bytes_dropped": 0,
+  "log_bytes_written": 46,
+  "log_bytes_dropped": 0,
+  "total_ms": 2352,
+  "result": "pass"
+}
+```
+
+## Test Environment Notes
+
+### Disk Space
+
+No issue. 225 GB available / 926 GB total (8% used). No stale artifacts found.
+
+### Log Locations
+
+| What                 | Where                                                                      |
+| -------------------- | -------------------------------------------------------------------------- |
+| Durable session logs | `$PLANEAI_SESSION_LOG_DIR/sessions/<id>/`                                  |
+| Default log dir      | `/tmp/planeai-daemon-session-logs/` (ephemeral)                            |
+| Benchmark metrics    | `bench/results/` (gitignored)                                              |
+| Daemon socket        | `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock` |
+
+### Avoiding Disk Fill
+
+1. Smoke test uses short commands (python print + sleep), not flood output
+2. Daemon ring buffer capped at 1 MB — no unbounded growth
+3. Durable logs grow linearly with session output; clean `/tmp/planeai-daemon-session-logs/`
+4. Flood benchmarks: always set `--max-runtime-ms`
+5. `bench/results/` is gitignored
+
+### Known Test Environment Issues
+
+- `planeai-daemon` data_test.rs: 2 tests fail when `PLANEAI_DAEMON_PTY_CORE=planeai-pty` is set in environment (timing issue with output coalescing). Run daemon tests clean: `env -u PLANEAI_DAEMON_PTY_CORE cargo test -p planeai-daemon`
+- GUI tests require a display — use headless smoke binary for CI
