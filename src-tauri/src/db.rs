@@ -89,22 +89,12 @@ pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
 }
 
 pub fn migrate(conn: &Connection) -> Result<()> {
+    // Project/session schema lives in planeai-core (single source of truth)
+    planeai_core::services::migrate_project_session_schema(conn)?;
+
+    // Settings table is Tauri-specific (not needed by Iced)
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            path TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL REFERENCES projects(id),
-            name TEXT NOT NULL DEFAULT '',
-            tmux_name TEXT,
-            branch TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
+        "CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark',
             terminal_theme_light TEXT NOT NULL DEFAULT 'one-light',
@@ -114,14 +104,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         );
         INSERT OR IGNORE INTO settings (id) VALUES (1);",
     )?;
-    // Add name column to existing databases
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
-    // Add worktree_path column
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
-    // Add font_family column
     let _ = conn
         .execute_batch("ALTER TABLE settings ADD COLUMN font_family TEXT NOT NULL DEFAULT 'Menlo'");
-    // Migrate old settings schema
     let _ = conn.execute_batch(
         "ALTER TABLE settings ADD COLUMN terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark'",
     );
@@ -135,169 +119,97 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL",
     );
-    // Add provider column to sessions
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
-    // Add backend column (defaults to 'tmux' for existing sessions)
-    let _ =
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
-    // Add provider_session_id column
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider_session_id TEXT");
-    // Add tab_count column
-    let _ =
-        conn.execute_batch("ALTER TABLE sessions ADD COLUMN tab_count INTEGER NOT NULL DEFAULT 1");
-    // Add auto_approve column (defaults to true for existing sessions)
-    let _ = conn
-        .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
-
-    // Migrate tmux_name from NOT NULL to nullable for existing databases created before dual-backend.
-    // SQLite doesn't support ALTER COLUMN, so we rebuild the table.
-    let has_not_null: bool = conn
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
-        .and_then(|mut s| s.query_row([], |r| r.get::<_, String>(0)))
-        .map(|sql| sql.contains("tmux_name TEXT NOT NULL"))
-        .unwrap_or(false);
-    if has_not_null {
-        conn.execute_batch(
-            "ALTER TABLE sessions RENAME TO sessions_old;
-             CREATE TABLE sessions (
-                 id TEXT PRIMARY KEY,
-                 project_id TEXT NOT NULL REFERENCES projects(id),
-                 name TEXT NOT NULL DEFAULT '',
-                 tmux_name TEXT,
-                 branch TEXT NOT NULL,
-                 status TEXT NOT NULL DEFAULT 'active',
-                 created_at TEXT NOT NULL,
-                 worktree_path TEXT,
-                 provider TEXT,
-                 backend TEXT NOT NULL DEFAULT 'tmux',
-                 provider_session_id TEXT,
-                 tab_count INTEGER NOT NULL DEFAULT 1,
-                 auto_approve INTEGER NOT NULL DEFAULT 1
-             );
-             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count)
-                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count FROM sessions_old;
-             DROP TABLE sessions_old;"
-        )?;
-    }
-
-    // Add status column to projects
-    let _ =
-        conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
-
-    // Add task_key column to sessions (nullable — only set for task-linked sessions)
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
-
-    // Add base_branch column (nullable — NULL for existing sessions, detected on demand)
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN base_branch TEXT");
-
-    // Add mru_position column (nullable — NULL means "not yet ordered")
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
-
-    // Add pr_url and pr_state columns for PR integration
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_url TEXT");
-    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN pr_state TEXT");
-
-    // Add auto_dispatched column (0 for manually created sessions)
-    let _ = conn.execute_batch(
-        "ALTER TABLE sessions ADD COLUMN auto_dispatched INTEGER NOT NULL DEFAULT 0",
-    );
-
-    // Add auto_mode and task_manager columns to projects (for symphony orchestrator)
-    let _ =
-        conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
-    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
-
-    // Migrate direct backend sessions to daemon (direct backend removed)
-    let _ = conn.execute_batch("UPDATE sessions SET backend = 'daemon' WHERE backend = 'direct'");
-
     Ok(())
 }
 
-// Project CRUD
+// ─── Shared-service adapter ──────────────────────────────────────────────────
+
+/// Convert a shared SessionRecord to the Tauri-facing Session struct.
+fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
+    Session {
+        id: r.id,
+        project_id: r.project_id,
+        name: r.name,
+        tmux_name: r.tmux_name,
+        branch: r.branch,
+        status: r.status,
+        created_at: r.created_at,
+        worktree_path: r.worktree_path,
+        provider: r.provider,
+        backend: r.backend,
+        provider_session_id: r.provider_session_id,
+        tab_count: r.tab_count,
+        auto_approve: r.auto_approve,
+        task_key: r.task_key,
+        base_branch: r.base_branch,
+        pr_url: r.pr_url,
+        pr_state: r.pr_state,
+    }
+}
+
+// Project CRUD — thin wrappers over planeai_core::services::ProjectService
 
 pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Project> {
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
-        params![id, name, path],
-    )?;
+    let p = planeai_core::services::ProjectService::create(conn, name, path)?;
     Ok(Project {
-        id,
-        name: name.to_string(),
-        path: path.to_string(),
+        id: p.id,
+        name: p.name,
+        path: p.path,
     })
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE status = 'active'")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Project {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            path: row.get(2)?,
+    let projects = planeai_core::services::ProjectService::list_active(conn)?;
+    Ok(projects
+        .into_iter()
+        .map(|p| Project {
+            id: p.id,
+            name: p.name,
+            path: p.path,
         })
-    })?;
-    rows.collect()
+        .collect())
 }
 
 pub fn archive_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET status = 'archived' WHERE project_id = ?1",
-        params![id],
-    )?;
-    conn.execute(
-        "UPDATE projects SET status = 'archived' WHERE id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::ProjectService::archive(conn, id)
 }
 
 pub fn list_archived_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE status = 'archived'")?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Project {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            path: row.get(2)?,
+    let projects = planeai_core::services::ProjectService::list_archived(conn)?;
+    Ok(projects
+        .into_iter()
+        .map(|p| Project {
+            id: p.id,
+            name: p.name,
+            path: p.path,
         })
-    })?;
-    rows.collect()
+        .collect())
 }
 
 pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE projects SET status = 'active' WHERE id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::ProjectService::restore(conn, id)
 }
 
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM sessions WHERE project_id = ?1", params![id])?;
-    conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
-    Ok(())
+    planeai_core::services::ProjectService::delete(conn, id)
 }
 
 pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
-    let mut stmt = conn.prepare("SELECT id, name, path FROM projects WHERE id = ?1")?;
-    let mut rows = stmt.query_map(params![id], |row| {
-        Ok(Project {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            path: row.get(2)?,
-        })
-    })?;
-    rows.next().transpose()
+    Ok(
+        planeai_core::services::ProjectService::get_by_id(conn, id)?.map(|p| Project {
+            id: p.id,
+            name: p.name,
+            path: p.path,
+        }),
+    )
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
-    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE project_id = ?1");
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![project_id], row_to_session)?;
-    rows.collect()
+    let records = planeai_core::services::SessionService::list_all_for_project(conn, project_id)?;
+    Ok(records.into_iter().map(record_to_session).collect())
 }
 
-// Session CRUD
+// Session CRUD — thin wrappers over planeai_core::services::SessionService
 
 pub fn create_session(
     conn: &Connection,
@@ -354,107 +266,50 @@ pub fn create_session_with_id(
         ..Default::default()
     };
     let record = planeai_core::services::SessionService::create(conn, &params)?;
-    Ok(Session {
-        id: record.id,
-        project_id: record.project_id,
-        name: record.name,
-        tmux_name: record.tmux_name,
-        branch: record.branch,
-        status: record.status,
-        created_at: record.created_at,
-        worktree_path: record.worktree_path,
-        provider: record.provider,
-        backend: record.backend,
-        provider_session_id: record.provider_session_id,
-        tab_count: record.tab_count,
-        auto_approve: record.auto_approve,
-        task_key: record.task_key,
-        base_branch: record.base_branch,
-        pr_url: record.pr_url,
-        pr_state: record.pr_state,
-    })
+    Ok(record_to_session(record))
 }
 
 pub fn list_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let sql = format!(
-        "SELECT {SESSION_COLUMNS} FROM sessions WHERE status IN ('active', 'exited') \
-         AND (status = 'active' OR task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
-         ORDER BY mru_position ASC NULLS LAST, created_at ASC"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], row_to_session)?;
-    rows.collect()
+    let records = planeai_core::services::SessionService::list_active(conn)?;
+    Ok(records.into_iter().map(record_to_session).collect())
 }
 
 pub fn list_archived_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE status = 'archived'");
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([], row_to_session)?;
-    rows.collect()
+    let records = planeai_core::services::SessionService::list_archived(conn)?;
+    Ok(records.into_iter().map(record_to_session).collect())
 }
 
 pub fn archive_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET status = 'archived' WHERE id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::archive(conn, id)
 }
 
 pub fn delete_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
-    Ok(())
+    planeai_core::services::SessionService::delete(conn, id)
 }
 
 pub fn destroy_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET status = 'destroyed' WHERE id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::destroy(conn, id)
 }
 
 pub fn mark_session_exited(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET status = 'exited' WHERE id = ?1 AND status = 'active'",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::mark_exited(conn, id)
 }
 
 pub fn restore_session(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET status = 'active' WHERE id = ?1",
-        params![id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::restore(conn, id)
 }
 
 #[allow(dead_code)]
 pub fn has_active_checkout_session(conn: &Connection, project_id: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND status = 'active' AND worktree_path IS NULL",
-        params![project_id],
-        |r| r.get(0),
-    )?;
-    Ok(count > 0)
+    planeai_core::services::SessionService::has_active_checkout(conn, project_id)
 }
 
 pub fn project_name_exists(conn: &Connection, name: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM projects WHERE name = ?1",
-        params![name],
-        |r| r.get(0),
-    )?;
-    Ok(count > 0)
+    planeai_core::services::ProjectService::name_exists(conn, name)
 }
 
 pub fn rename_session(conn: &Connection, id: &str, name: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET name = ?2 WHERE id = ?1",
-        params![id, name],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::rename(conn, id, name)
 }
 
 pub fn set_provider_session_id(
@@ -462,47 +317,23 @@ pub fn set_provider_session_id(
     id: &str,
     provider_session_id: &str,
 ) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET provider_session_id = ?2 WHERE id = ?1",
-        params![id, provider_session_id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::set_provider_session_id(conn, id, provider_session_id)
 }
 
 pub fn update_tab_count(conn: &Connection, id: &str, tab_count: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
-        params![id, tab_count],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::update_tab_count(conn, id, tab_count)
 }
 
 pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("UPDATE sessions SET mru_position = NULL", [])?;
-    for (i, id) in session_ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE sessions SET mru_position = ?2 WHERE id = ?1",
-            params![id, i as i64],
-        )?;
-    }
-    tx.commit()?;
-    Ok(())
+    planeai_core::services::SessionService::save_mru_order(conn, session_ids)
 }
 
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id = ?1");
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query_map(params![id], row_to_session)?;
-    rows.next().transpose()
+    Ok(planeai_core::services::SessionService::get(conn, id)?.map(record_to_session))
 }
 
 pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE sessions SET pr_url = ?1, pr_state = ?2 WHERE id = ?3",
-        params![pr_url, pr_state, id],
-    )?;
-    Ok(())
+    planeai_core::services::SessionService::update_pr_state(conn, id, pr_url, pr_state)
 }
 
 #[cfg(test)]

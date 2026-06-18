@@ -289,8 +289,19 @@ impl WorkflowApp {
         self.clear_error();
         let id = self.next_id;
         self.next_id += 1;
-        let result = DaemonSession::spawn_with_cwd(
+
+        // Step 1: Reserve session ID and persist DB record BEFORE spawning
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let persist_err = self.persist_new_session(&session_id, &self.provider_label.clone());
+        if let Some(msg) = persist_err {
+            self.set_error(msg);
+            return;
+        }
+
+        // Step 2: Spawn daemon session using the preallocated session ID
+        let result = DaemonSession::spawn_with_session_id(
             id,
+            &session_id,
             self.cols as u16,
             self.rows as u16,
             Some(&self.agent_command),
@@ -299,7 +310,6 @@ impl WorkflowApp {
         );
         match result {
             Ok(backend) => {
-                let session_id = backend.session_id().to_string();
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
                 let snapshot = snapshot_grid(&term);
@@ -319,33 +329,17 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                // Persist to shared DB
-                let db_err = if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
-                    if let Ok(conn) = db.lock() {
-                        let params = CreateSessionParams {
-                            id: session_id.clone(),
-                            project_id: project.id.clone(),
-                            name: self.provider_label.clone(),
-                            backend: "daemon".to_string(),
-                            auto_approve: true,
-                            ..Default::default()
-                        };
-                        SessionService::create(&conn, &params)
-                            .err()
-                            .map(|e| format!("DB persist failed: {e}"))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(msg) = db_err {
-                    self.set_error(msg);
-                }
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
+                // Step 3: Spawn failed — mark DB record as destroyed to prevent orphan
+                if let Some(ref db) = self.db {
+                    if let Ok(conn) = db.lock() {
+                        let _ = SessionService::set_status(&conn, &session_id, "destroyed");
+                    }
+                }
                 self.set_error(format!("Launch failed: {}", e));
+                self.refresh_persisted_sessions();
             }
         }
     }
@@ -361,8 +355,19 @@ impl WorkflowApp {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let result = DaemonSession::spawn_with_cwd(
+
+        // Step 1: Reserve session ID and persist DB record BEFORE spawning
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let persist_err = self.persist_new_session(&session_id, command);
+        if let Some(msg) = persist_err {
+            self.set_error(msg);
+            return;
+        }
+
+        // Step 2: Spawn daemon session using the preallocated session ID
+        let result = DaemonSession::spawn_with_session_id(
             id,
+            &session_id,
             self.cols as u16,
             self.rows as u16,
             Some(command),
@@ -371,7 +376,6 @@ impl WorkflowApp {
         );
         match result {
             Ok(backend) => {
-                let session_id = backend.session_id().to_string();
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
                 let snapshot = snapshot_grid(&term);
@@ -392,33 +396,17 @@ impl WorkflowApp {
                 });
                 self.active = self.sessions.len() - 1;
                 self.clear_error();
-                // Persist to shared DB
-                let db_err = if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
-                    if let Ok(conn) = db.lock() {
-                        let params = CreateSessionParams {
-                            id: session_id.clone(),
-                            project_id: project.id.clone(),
-                            name: command.to_string(),
-                            backend: "daemon".to_string(),
-                            auto_approve: true,
-                            ..Default::default()
-                        };
-                        SessionService::create(&conn, &params)
-                            .err()
-                            .map(|e| format!("DB persist failed: {e}"))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(msg) = db_err {
-                    self.set_error(msg);
-                }
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
+                // Step 3: Spawn failed — mark DB record as destroyed to prevent orphan
+                if let Some(ref db) = self.db {
+                    if let Ok(conn) = db.lock() {
+                        let _ = SessionService::set_status(&conn, &session_id, "destroyed");
+                    }
+                }
                 self.set_error(format!("Launch failed: {}", e));
+                self.refresh_persisted_sessions();
             }
         }
     }
@@ -515,6 +503,29 @@ impl WorkflowApp {
                     SessionService::list_for_project(&conn, &project.id).unwrap_or_default();
             }
         }
+    }
+
+    /// Persist a new session record to the shared DB. Returns Some(error_msg) on failure.
+    fn persist_new_session(&self, session_id: &str, name: &str) -> Option<String> {
+        if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+            match db.lock() {
+                Ok(conn) => {
+                    let params = CreateSessionParams {
+                        id: session_id.to_string(),
+                        project_id: project.id.clone(),
+                        name: name.to_string(),
+                        backend: "daemon".to_string(),
+                        auto_approve: true,
+                        ..Default::default()
+                    };
+                    if let Err(e) = SessionService::create(&conn, &params) {
+                        return Some(format!("DB persist failed: {e}"));
+                    }
+                }
+                Err(e) => return Some(format!("DB lock failed: {e}")),
+            }
+        }
+        None
     }
 
     fn check_daemon_health(&mut self) {

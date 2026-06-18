@@ -461,9 +461,25 @@ impl DaemonSession {
         cwd: &std::path::Path,
         extra_path_dirs: &[String],
     ) -> anyhow::Result<Self> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        Self::spawn_with_session_id(id, &session_id, cols, rows, command, cwd, extra_path_dirs)
+    }
+
+    /// Spawn a daemon session using a preallocated session ID.
+    /// This allows the caller to create the DB record first, then spawn the daemon
+    /// using the same ID — preventing orphan daemon sessions.
+    pub fn spawn_with_session_id(
+        id: usize,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        cwd: &std::path::Path,
+        extra_path_dirs: &[String],
+    ) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = session_id.to_string();
         let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {

@@ -13,6 +13,386 @@ fn test_db() -> rusqlite::Connection {
     conn
 }
 
+// ─── Migration parity ────────────────────────────────────────────────────────
+
+#[test]
+fn shared_migration_is_idempotent() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    // Run migration three times — should not fail
+    migrate_project_session_schema(&conn).unwrap();
+    migrate_project_session_schema(&conn).unwrap();
+    migrate_project_session_schema(&conn).unwrap();
+    // Verify tables exist
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('projects', 'sessions')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn production_and_core_path_produce_compatible_schema() {
+    // Simulate production db.rs migration path
+    let prod_conn = rusqlite::Connection::open_in_memory().unwrap();
+    prod_conn
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    // Production db.rs calls migrate_project_session_schema + settings
+    migrate_project_session_schema(&prod_conn).unwrap();
+    prod_conn
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            terminal_theme_dark TEXT NOT NULL DEFAULT 'one-dark',
+            terminal_theme_light TEXT NOT NULL DEFAULT 'one-light',
+            font_size INTEGER NOT NULL DEFAULT 14,
+            font_family TEXT NOT NULL DEFAULT 'Menlo',
+            appearance_mode TEXT NOT NULL DEFAULT 'system'
+        );",
+        )
+        .unwrap();
+
+    // Core-only migration path
+    let core_conn = rusqlite::Connection::open_in_memory().unwrap();
+    core_conn
+        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    migrate_project_session_schema(&core_conn).unwrap();
+
+    // Both should have same projects/sessions columns
+    let prod_cols: String = prod_conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+        .unwrap()
+        .query_row([], |r| r.get(0))
+        .unwrap();
+    let core_cols: String = core_conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+        .unwrap()
+        .query_row([], |r| r.get(0))
+        .unwrap();
+    assert_eq!(prod_cols, core_cols);
+
+    let prod_pcols: String = prod_conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'")
+        .unwrap()
+        .query_row([], |r| r.get(0))
+        .unwrap();
+    let core_pcols: String = core_conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'")
+        .unwrap()
+        .query_row([], |r| r.get(0))
+        .unwrap();
+    assert_eq!(prod_pcols, core_pcols);
+}
+
+#[test]
+fn existing_rows_survive_migration() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    migrate_project_session_schema(&conn).unwrap();
+
+    // Insert data
+    conn.execute(
+        "INSERT INTO projects (id, name, path, status) VALUES ('p1', 'myapp', '/tmp/myapp', 'active')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sessions (id, project_id, name, branch, status, created_at, backend) VALUES ('s1', 'p1', 'sess', 'main', 'active', '2024-01-01', 'daemon')",
+        [],
+    )
+    .unwrap();
+
+    // Re-run migration
+    migrate_project_session_schema(&conn).unwrap();
+
+    // Data still there
+    let p = ProjectService::get_by_id(&conn, "p1").unwrap().unwrap();
+    assert_eq!(p.name, "myapp");
+    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
+    assert_eq!(s.name, "sess");
+    assert_eq!(s.backend, "daemon");
+}
+
+#[test]
+fn direct_backend_migrates_to_daemon() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    // Create tables with old-style schema that includes 'direct' backend
+    conn.execute_batch(
+        "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL);
+         CREATE TABLE sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', tmux_name TEXT, branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, backend TEXT NOT NULL DEFAULT 'direct');
+         INSERT INTO projects VALUES ('p1', 'test', '/tmp/test');
+         INSERT INTO sessions (id, project_id, branch, created_at, backend) VALUES ('s1', 'p1', 'main', '2024-01-01', 'direct');",
+    )
+    .unwrap();
+
+    migrate_project_session_schema(&conn).unwrap();
+
+    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
+    assert_eq!(s.backend, "daemon");
+}
+
+// ─── CRUD parity ─────────────────────────────────────────────────────────────
+
+#[test]
+fn project_created_through_shared_service_readable_via_shared() {
+    let conn = test_db();
+    let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
+    let found = ProjectService::get_by_id(&conn, &p.id).unwrap().unwrap();
+    assert_eq!(found.name, "myapp");
+    assert_eq!(found.path, "/tmp/myapp");
+}
+
+#[test]
+fn session_created_through_shared_service_listed_via_shared() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    let params = CreateSessionParams {
+        id: "s1".to_string(),
+        project_id: p.id.clone(),
+        name: "test".to_string(),
+        backend: "daemon".to_string(),
+        ..Default::default()
+    };
+    SessionService::create(&conn, &params).unwrap();
+    let sessions = SessionService::list_for_project(&conn, &p.id).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, "s1");
+}
+
+#[test]
+fn mru_ordering_matches_production_semantics() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    for id in &["a", "b", "c"] {
+        SessionService::create(
+            &conn,
+            &CreateSessionParams {
+                id: id.to_string(),
+                project_id: p.id.clone(),
+                backend: "daemon".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    // Set MRU order: b, a, c
+    SessionService::save_mru_order(&conn, &["b", "a", "c"]).unwrap();
+
+    let sessions = SessionService::list_for_project(&conn, &p.id).unwrap();
+    let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, vec!["b", "a", "c"]);
+
+    // Also test global list_active
+    let all = SessionService::list_active(&conn).unwrap();
+    let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, vec!["b", "a", "c"]);
+}
+
+#[test]
+fn null_mru_sorts_last_by_created_at() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    for id in &["a", "b", "c"] {
+        SessionService::create(
+            &conn,
+            &CreateSessionParams {
+                id: id.to_string(),
+                project_id: p.id.clone(),
+                backend: "daemon".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    // Only set "c" as MRU
+    SessionService::save_mru_order(&conn, &["c"]).unwrap();
+
+    let sessions = SessionService::list_for_project(&conn, &p.id).unwrap();
+    // c first (mru 0), then a and b by created_at
+    assert_eq!(sessions[0].id, "c");
+}
+
+#[test]
+fn status_transitions_persist_consistently() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s1".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // active -> exited via mark_exited
+    SessionService::mark_exited(&conn, "s1").unwrap();
+    assert_eq!(
+        SessionService::get(&conn, "s1").unwrap().unwrap().status,
+        "exited"
+    );
+
+    // exited -> active via restore
+    SessionService::restore(&conn, "s1").unwrap();
+    assert_eq!(
+        SessionService::get(&conn, "s1").unwrap().unwrap().status,
+        "active"
+    );
+
+    // active -> archived
+    SessionService::archive(&conn, "s1").unwrap();
+    assert_eq!(
+        SessionService::get(&conn, "s1").unwrap().unwrap().status,
+        "archived"
+    );
+
+    // archived not in active list
+    assert!(SessionService::list_for_project(&conn, &p.id)
+        .unwrap()
+        .is_empty());
+    // but in archived list
+    assert_eq!(SessionService::list_archived(&conn).unwrap().len(), 1);
+
+    // archived -> destroyed
+    SessionService::destroy(&conn, "s1").unwrap();
+    assert_eq!(
+        SessionService::get(&conn, "s1").unwrap().unwrap().status,
+        "destroyed"
+    );
+}
+
+#[test]
+fn archived_destroyed_filtering_consistent() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "active".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "archived".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "destroyed".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::archive(&conn, "archived").unwrap();
+    SessionService::destroy(&conn, "destroyed").unwrap();
+
+    // Active list: only "active"
+    let active = SessionService::list_for_project(&conn, &p.id).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, "active");
+
+    // Archived list: only "archived"
+    let archived = SessionService::list_archived(&conn).unwrap();
+    assert_eq!(archived.len(), 1);
+    assert_eq!(archived[0].id, "archived");
+
+    // All: shows all 3
+    let all = SessionService::list_all_for_project(&conn, &p.id).unwrap();
+    assert_eq!(all.len(), 3);
+}
+
+#[test]
+fn pr_state_persists_via_shared_service() {
+    let conn = test_db();
+    let p = ProjectService::ensure_project(&conn, "/tmp/proj").unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s1".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::update_pr_state(&conn, "s1", "https://github.com/org/repo/pull/1", "open")
+        .unwrap();
+    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
+    assert_eq!(
+        s.pr_url.as_deref(),
+        Some("https://github.com/org/repo/pull/1")
+    );
+    assert_eq!(s.pr_state.as_deref(), Some("open"));
+}
+
+#[test]
+fn project_archive_cascades_to_sessions() {
+    let conn = test_db();
+    let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s1".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    ProjectService::archive(&conn, &p.id).unwrap();
+
+    // Project not in active list
+    assert!(ProjectService::list_active(&conn).unwrap().is_empty());
+    // Session is archived
+    let s = SessionService::get(&conn, "s1").unwrap().unwrap();
+    assert_eq!(s.status, "archived");
+}
+
+#[test]
+fn project_delete_cascades_to_sessions() {
+    let conn = test_db();
+    let p = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s1".to_string(),
+            project_id: p.id.clone(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    ProjectService::delete(&conn, &p.id).unwrap();
+    assert!(SessionService::get(&conn, "s1").unwrap().is_none());
+}
+
 // ─── ProjectService ──────────────────────────────────────────────────────────
 
 #[test]
@@ -407,4 +787,110 @@ fn production_db_compat_read_list_create_update() {
     // Verify ensure_project finds existing by path
     let found = ProjectService::ensure_project(&conn, "/home/user/myapp").unwrap();
     assert_eq!(found.id, "p1");
+}
+
+// ─── Orphan prevention tests ─────────────────────────────────────────────────
+// These tests verify the invariant: a daemon session cannot exist without a
+// corresponding durable session record.
+
+/// Simulates: DB create succeeds + daemon spawn fails → record marked destroyed.
+/// The Iced workflow follows this exact pattern.
+#[test]
+fn spawn_failure_marks_session_destroyed() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    // Step 1: Create session record (persist-before-spawn)
+    let session_id = "orphan-test-1";
+    let params = CreateSessionParams {
+        id: session_id.to_string(),
+        project_id: project.id.clone(),
+        name: "about to fail spawn".to_string(),
+        backend: "daemon".to_string(),
+        ..Default::default()
+    };
+    SessionService::create(&conn, &params).unwrap();
+
+    // Verify record exists and is active
+    let s = SessionService::get(&conn, session_id).unwrap().unwrap();
+    assert_eq!(s.status, "active");
+
+    // Step 2: Simulate daemon spawn failure — mark destroyed
+    // (In real code, the Iced workflow does this on DaemonSession::spawn_with_session_id error)
+    SessionService::set_status(&conn, session_id, "destroyed").unwrap();
+
+    // Step 3: Verify the record is NOT in the active list (no orphan visible)
+    let active = SessionService::list_for_project(&conn, &project.id).unwrap();
+    assert!(
+        active.is_empty(),
+        "destroyed session should not appear in active list"
+    );
+
+    // The record still exists for audit/debugging
+    let s = SessionService::get(&conn, session_id).unwrap().unwrap();
+    assert_eq!(s.status, "destroyed");
+}
+
+/// Simulates: DB persist fails → launch aborts before spawn → no orphan possible.
+/// This test verifies the invariant that if no DB record exists, no daemon should be spawned.
+#[test]
+fn persist_failure_prevents_spawn() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    // Step 1: First create a session to set up a duplicate ID scenario
+    let session_id = "dup-id";
+    let params = CreateSessionParams {
+        id: session_id.to_string(),
+        project_id: project.id.clone(),
+        name: "first".to_string(),
+        backend: "daemon".to_string(),
+        ..Default::default()
+    };
+    SessionService::create(&conn, &params).unwrap();
+
+    // Step 2: Try to create a second session with same ID (simulates DB failure)
+    let duplicate_params = CreateSessionParams {
+        id: session_id.to_string(),
+        project_id: project.id.clone(),
+        name: "duplicate".to_string(),
+        backend: "daemon".to_string(),
+        ..Default::default()
+    };
+    let result = SessionService::create(&conn, &duplicate_params);
+
+    // Step 3: Verify DB create fails (UNIQUE constraint on id)
+    assert!(result.is_err(), "duplicate insert should fail");
+
+    // Step 4: Because persist failed, no spawn should happen (caller aborts).
+    // Verify original record unchanged (no corruption).
+    let s = SessionService::get(&conn, session_id).unwrap().unwrap();
+    assert_eq!(s.name, "first");
+    assert_eq!(s.status, "active");
+}
+
+/// Verifies: preallocated session ID in DB matches the daemon session ID.
+/// No separate mapping needed — both use the same UUID.
+#[test]
+fn preallocated_session_id_matches_daemon_id() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    let preallocated_id = uuid::Uuid::new_v4().to_string();
+    let params = CreateSessionParams {
+        id: preallocated_id.clone(),
+        project_id: project.id.clone(),
+        name: "preallocated".to_string(),
+        backend: "daemon".to_string(),
+        ..Default::default()
+    };
+    SessionService::create(&conn, &params).unwrap();
+
+    // The daemon would receive this same ID via spawn_with_session_id.
+    // Verify the record uses that exact ID.
+    let s = SessionService::get(&conn, &preallocated_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.id, preallocated_id);
+    assert_eq!(s.backend, "daemon");
 }

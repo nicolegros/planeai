@@ -30,9 +30,15 @@ pub fn open_db_at(path: &Path) -> SqlResult<Connection> {
     Ok(conn)
 }
 
-/// Idempotent migration — identical logic to production src-tauri/src/db.rs::migrate().
-/// Safe to run on fresh DBs and existing production DBs alike.
+/// Convenience alias — runs project/session migrations only.
 pub fn migrate(conn: &Connection) -> SqlResult<()> {
+    migrate_project_session_schema(conn)
+}
+
+/// Idempotent project/session schema migration — the single source of truth.
+/// Called by both Tauri (`db.rs::migrate()`) and Iced/domain code.
+/// Safe to run on fresh DBs and existing production DBs alike.
+pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
@@ -49,7 +55,7 @@ pub fn migrate(conn: &Connection) -> SqlResult<()> {
             created_at TEXT NOT NULL
         );",
     )?;
-    // Idempotent column additions (same as production db.rs)
+    // Idempotent column additions
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
@@ -73,6 +79,43 @@ pub fn migrate(conn: &Connection) -> SqlResult<()> {
     let _ =
         conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+
+    // Migrate tmux_name from NOT NULL to nullable for DBs created before dual-backend.
+    let has_not_null: bool = conn
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+        .and_then(|mut s| s.query_row([], |r| r.get::<_, String>(0)))
+        .map(|sql| sql.contains("tmux_name TEXT NOT NULL"))
+        .unwrap_or(false);
+    if has_not_null {
+        conn.execute_batch(
+            "ALTER TABLE sessions RENAME TO sessions_old;
+             CREATE TABLE sessions (
+                 id TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL REFERENCES projects(id),
+                 name TEXT NOT NULL DEFAULT '',
+                 tmux_name TEXT,
+                 branch TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active',
+                 created_at TEXT NOT NULL,
+                 worktree_path TEXT,
+                 provider TEXT,
+                 backend TEXT NOT NULL DEFAULT 'tmux',
+                 provider_session_id TEXT,
+                 tab_count INTEGER NOT NULL DEFAULT 1,
+                 auto_approve INTEGER NOT NULL DEFAULT 1,
+                 task_key TEXT,
+                 base_branch TEXT,
+                 mru_position INTEGER,
+                 pr_url TEXT,
+                 pr_state TEXT,
+                 auto_dispatched INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched)
+                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched FROM sessions_old;
+             DROP TABLE sessions_old;"
+        )?;
+    }
+
     // Migrate direct backend → daemon
     let _ = conn.execute_batch("UPDATE sessions SET backend = 'daemon' WHERE backend = 'direct'");
     Ok(())
@@ -228,6 +271,83 @@ impl ProjectService {
         .ok()
         .map_or(Ok(None), |p| Ok(Some(p)))
     }
+
+    pub fn get_by_id(conn: &Connection, id: &str) -> SqlResult<Option<Project>> {
+        conn.prepare("SELECT id, name, path, status FROM projects WHERE id = ?1")?
+            .query_row(params![id], |row| {
+                Ok(Project {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    path: row.get(2)?,
+                    status: row.get(3)?,
+                })
+            })
+            .ok()
+            .map_or(Ok(None), |p| Ok(Some(p)))
+    }
+
+    pub fn create(conn: &Connection, name: &str, path: &str) -> SqlResult<Project> {
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            params![id, name, path],
+        )?;
+        Ok(Project {
+            id,
+            name: name.to_string(),
+            path: path.to_string(),
+            status: "active".to_string(),
+        })
+    }
+
+    pub fn archive(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET status = 'archived' WHERE project_id = ?1",
+            params![id],
+        )?;
+        conn.execute(
+            "UPDATE projects SET status = 'archived' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_archived(conn: &Connection) -> SqlResult<Vec<Project>> {
+        let mut stmt =
+            conn.prepare("SELECT id, name, path, status FROM projects WHERE status = 'archived'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Project {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                path: row.get(2)?,
+                status: row.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn restore(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE projects SET status = 'active' WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute("DELETE FROM sessions WHERE project_id = ?1", params![id])?;
+        conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn name_exists(conn: &Connection, name: &str) -> SqlResult<bool> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM projects WHERE name = ?1",
+            params![name],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
+    }
 }
 
 // ─── SessionService ──────────────────────────────────────────────────────────
@@ -341,6 +461,163 @@ impl SessionService {
         Self::durable_log_dir(session_id)
             .map(|d| d.exists())
             .unwrap_or(false)
+    }
+
+    /// List all sessions (active + exited, not archived/destroyed, excluding exited sessions
+    /// whose task_key is in a 'done' task). Ordered by mru_position ASC NULLS LAST, then created_at ASC.
+    pub fn list_active(conn: &Connection) -> SqlResult<Vec<SessionRecord>> {
+        let has_tasks_table: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'")
+            .and_then(|mut s| s.query_row([], |_| Ok(true)))
+            .unwrap_or(false);
+
+        let sql = if has_tasks_table {
+            format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions \
+                 WHERE status IN ('active', 'exited') \
+                 AND (status = 'active' OR task_key IS NULL OR task_key NOT IN (SELECT key FROM tasks WHERE status = 'done')) \
+                 ORDER BY mru_position ASC NULLS LAST, created_at ASC"
+            )
+        } else {
+            format!(
+                "SELECT {SESSION_COLUMNS} FROM sessions \
+                 WHERE status IN ('active', 'exited') \
+                 ORDER BY mru_position ASC NULLS LAST, created_at ASC"
+            )
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_session)?;
+        rows.collect()
+    }
+
+    /// List archived sessions.
+    pub fn list_archived(conn: &Connection) -> SqlResult<Vec<SessionRecord>> {
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE status = 'archived'");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_session)?;
+        rows.collect()
+    }
+
+    /// List all sessions for a project regardless of status.
+    pub fn list_all_for_project(
+        conn: &Connection,
+        project_id: &str,
+    ) -> SqlResult<Vec<SessionRecord>> {
+        let sql = format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE project_id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![project_id], row_to_session)?;
+        rows.collect()
+    }
+
+    /// Archive a session.
+    pub fn archive(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET status = 'archived' WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Destroy (soft-delete) a session.
+    pub fn destroy(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET status = 'destroyed' WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark an active session as exited.
+    pub fn mark_exited(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET status = 'exited' WHERE id = ?1 AND status = 'active'",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Restore a session to active.
+    pub fn restore(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET status = 'active' WHERE id = ?1",
+            params![session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a session record permanently.
+    pub fn delete(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+        Ok(())
+    }
+
+    /// Rename a session.
+    pub fn rename(conn: &Connection, session_id: &str, name: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET name = ?2 WHERE id = ?1",
+            params![session_id, name],
+        )?;
+        Ok(())
+    }
+
+    /// Set provider_session_id.
+    pub fn set_provider_session_id(
+        conn: &Connection,
+        session_id: &str,
+        provider_session_id: &str,
+    ) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET provider_session_id = ?2 WHERE id = ?1",
+            params![session_id, provider_session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Update tab count.
+    pub fn update_tab_count(conn: &Connection, session_id: &str, tab_count: i64) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET tab_count = ?2 WHERE id = ?1",
+            params![session_id, tab_count],
+        )?;
+        Ok(())
+    }
+
+    /// Save MRU ordering. Clears all positions then sets for the given IDs.
+    pub fn save_mru_order(conn: &Connection, session_ids: &[&str]) -> SqlResult<()> {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("UPDATE sessions SET mru_position = NULL", [])?;
+        for (i, id) in session_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE sessions SET mru_position = ?2 WHERE id = ?1",
+                params![id, i as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Update PR state.
+    pub fn update_pr_state(
+        conn: &Connection,
+        session_id: &str,
+        pr_url: &str,
+        pr_state: &str,
+    ) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET pr_url = ?1, pr_state = ?2 WHERE id = ?3",
+            params![pr_url, pr_state, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Check if there's an active checkout (non-worktree) session for a project.
+    pub fn has_active_checkout(conn: &Connection, project_id: &str) -> SqlResult<bool> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND status = 'active' AND worktree_path IS NULL",
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
     }
 }
 
