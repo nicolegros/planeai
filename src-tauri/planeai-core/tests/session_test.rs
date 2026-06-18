@@ -1,5 +1,6 @@
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook, SessionDispatcher};
 use planeai_core::task::{Task, TaskSource};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 struct MockTaskSource {
@@ -99,6 +100,9 @@ impl Backend for RecordingBackend {
     }
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
         Ok(vec![])
+    }
+    fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+        Ok(HashSet::new())
     }
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String> {
         self.fetches

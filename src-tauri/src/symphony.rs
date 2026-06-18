@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
@@ -211,6 +212,21 @@ impl Backend for TauriBackend {
 
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String> {
         crate::git::resolve_base_branch(repo, base)
+    }
+
+    fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+        let conn = self.db.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT task_key FROM sessions WHERE status IN ('active', 'exited') AND task_key IS NOT NULL AND task_key != ''",
+            )
+            .map_err(|e| e.to_string())?;
+        let keys = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(keys)
     }
 
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
