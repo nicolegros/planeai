@@ -15,10 +15,10 @@ lint: ## Check formatting and clippy
 dev:
 	pnpm tauri dev
 
-dogfood: ## Run Iced workflow shell with daemon + durable logs
+dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 	cd src-tauri && \
 	PLANEAI_DAEMON_PTY_CORE=planeai-pty \
-	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
+	PLANEAI_SESSION_LOG_DIR="$${HOME}/.local/share/planeai/session-logs" \
 	cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 		--planeai-workflow \
 		--backend iced-alacritty
