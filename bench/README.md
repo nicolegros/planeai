@@ -32,12 +32,12 @@ python bench/generate-fixtures.py --size medium --output-dir bench/fixtures
 - `--size small|medium|large` — ~256KB / ~2MB / ~16MB
 - `--fixtures` — Specific fixtures (default: all five)
 
-| Fixture | Content |
-|---------|---------|
-| `ansi-flood.ansi` | High-volume colored text |
-| `long-lines.ansi` | Long markdown-like lines |
-| `colors-heavy.ansi` | Dense ANSI color/style sequences |
-| `progress-bars.ansi` | Carriage-return progress, spinners |
+| Fixture                 | Content                                         |
+| ----------------------- | ----------------------------------------------- |
+| `ansi-flood.ansi`       | High-volume colored text                        |
+| `long-lines.ansi`       | Long markdown-like lines                        |
+| `colors-heavy.ansi`     | Dense ANSI color/style sequences                |
+| `progress-bars.ansi`    | Carriage-return progress, spinners              |
 | `mixed-agent-like.ansi` | AI agent output (code blocks, errors, thinking) |
 
 ## Capture a Real Session
@@ -47,6 +47,7 @@ PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/my-session.ansi pnpm tauri dev
 ```
 
 Optionally filter to one session:
+
 ```bash
 PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/real.ansi \
 PLANEAI_BENCH_CAPTURE_SESSION=<uuid> \
@@ -82,11 +83,13 @@ python bench/run-benchmark.py \
 ## Run Iced Spike Benchmark
 
 Set the binary path (avoids rebuild each run):
+
 ```bash
 export PLANEAI_ICED_SPIKE_BIN=./target/release/planeai-iced-spike
 ```
 
 Then run:
+
 ```bash
 python bench/run-benchmark.py \
   --backends tauri-xterm iced-alacritty \
@@ -95,6 +98,7 @@ python bench/run-benchmark.py \
 ```
 
 Or directly:
+
 ```bash
 planeai-iced-spike \
   --replay bench/fixtures/mixed-agent-like.ansi \
@@ -130,10 +134,12 @@ Key metrics:
 ## Pass/Fail Guidance
 
 **Realtime** (chunk_interval_ms > 0):
+
 - p95 frame delta ≥30% lower than tauri-xterm, OR frames>33.3ms cut by ≥50%
 - Queue depth doesn't grow unbounded
 
 **Maxspeed** (chunk_interval_ms = 0):
+
 - ≥1.5× higher MB/s, OR similar throughput with better p95/p99 frame time
 
 **Memory**: Not materially worse; stops growing after replay.
@@ -147,6 +153,7 @@ Key metrics:
 ```
 
 Examples:
+
 ```
 tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.jsonl
 iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.jsonl

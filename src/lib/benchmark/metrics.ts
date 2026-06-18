@@ -118,7 +118,8 @@ export class MetricsCollector {
   }
 
   recordWriteStart(pendingBytes: number, outstandingWrites: number) {
-    if (outstandingWrites > this.maxOutstandingWrites) this.maxOutstandingWrites = outstandingWrites;
+    if (outstandingWrites > this.maxOutstandingWrites)
+      this.maxOutstandingWrites = outstandingWrites;
     this.record("xterm_write_start", {
       pending_write_bytes: pendingBytes,
       queue_depth_bytes: pendingBytes,
@@ -173,9 +174,8 @@ export class MetricsCollector {
 
   async finalize(queueDepthAtEnd: number) {
     const wallTime = performance.now() - this.replayStartMs;
-    const producerTime = this.producerDoneMs > 0
-      ? this.producerDoneMs - this.replayStartMs
-      : wallTime;
+    const producerTime =
+      this.producerDoneMs > 0 ? this.producerDoneMs - this.replayStartMs : wallTime;
     const drainTime = wallTime - producerTime;
 
     this.record("replay_done", {
@@ -194,11 +194,12 @@ export class MetricsCollector {
     const fd = this.frameDeltas;
     const rw = this.renderWorks;
     const totalBytes = this.config.bytesTotal;
-    const mbPerSec = wallTime > 0 ? (totalBytes / (1024 * 1024)) / (wallTime / 1000) : 0;
+    const mbPerSec = wallTime > 0 ? totalBytes / (1024 * 1024) / (wallTime / 1000) : 0;
     const replayMode = this.config.chunkIntervalMs > 0 ? "realtime" : "maxspeed";
-    const expectedMinReplayMs = this.config.chunkIntervalMs > 0
-      ? Math.ceil(totalBytes / this.config.chunkSize) * this.config.chunkIntervalMs
-      : 0;
+    const expectedMinReplayMs =
+      this.config.chunkIntervalMs > 0
+        ? Math.ceil(totalBytes / this.config.chunkSize) * this.config.chunkIntervalMs
+        : 0;
 
     const summary = {
       schema_version: SCHEMA_VERSION,

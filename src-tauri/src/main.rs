@@ -229,11 +229,11 @@ fn main() {
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
             tracing::info!("app setup complete");
-            let pty_core_mode = std::env::var("PLANEAI_LOCAL_PTY_CORE")
-                .unwrap_or_else(|_| "legacy".to_string());
+            let pty_core_mode =
+                std::env::var("PLANEAI_LOCAL_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
             tracing::info!("local PTY core: {}", pty_core_mode);
-            let daemon_pty_core_mode = std::env::var("PLANEAI_DAEMON_PTY_CORE")
-                .unwrap_or_else(|_| "legacy".to_string());
+            let daemon_pty_core_mode =
+                std::env::var("PLANEAI_DAEMON_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
             tracing::info!("daemon PTY core: {}", daemon_pty_core_mode);
 
             Ok(())

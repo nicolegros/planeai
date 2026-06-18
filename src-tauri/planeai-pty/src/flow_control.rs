@@ -7,9 +7,14 @@ pub(crate) struct FlowControl {
 
 impl FlowControl {
     pub fn new() -> Self {
-        Self { paused: Mutex::new(false), cond: Condvar::new() }
+        Self {
+            paused: Mutex::new(false),
+            cond: Condvar::new(),
+        }
     }
-    pub fn pause(&self) { *self.paused.lock().unwrap() = true; }
+    pub fn pause(&self) {
+        *self.paused.lock().unwrap() = true;
+    }
     pub fn resume(&self) {
         let mut p = self.paused.lock().unwrap();
         *p = false;
@@ -17,6 +22,8 @@ impl FlowControl {
     }
     pub fn wait_if_paused(&self) {
         let mut p = self.paused.lock().unwrap();
-        while *p { p = self.cond.wait(p).unwrap(); }
+        while *p {
+            p = self.cond.wait(p).unwrap();
+        }
     }
 }

@@ -251,7 +251,12 @@ impl PtyManager {
         }
 
         // planeai-pty path for Shell targets when PLANEAI_LOCAL_PTY_CORE=planeai-pty
-        if let PtyTarget::Shell { ref command, ref args, ref cwd } = target {
+        if let PtyTarget::Shell {
+            ref command,
+            ref args,
+            ref cwd,
+        } = target
+        {
             if use_planeai_pty_core() {
                 let cancelled = Arc::new(AtomicBool::new(false));
                 let observer = self.observer.read().unwrap().clone();

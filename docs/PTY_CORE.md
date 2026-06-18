@@ -64,6 +64,7 @@ PLANEAI_LOCAL_PTY_CORE=planeai-pty pnpm tauri dev
 ```
 
 The app logs which mode is active at startup:
+
 ```
 local PTY core: legacy
 ```
@@ -81,11 +82,13 @@ $PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/<YYYYMMDDTHHMMSSZ>_output.ansi
 ```
 
 A JSON metadata sidecar is written alongside:
+
 ```
 $PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/meta.json
 ```
 
 Properties:
+
 - Raw bytes only in `.ansi` (preserves ANSI escapes, cursor movement, colors)
 - No JSON envelope in the .ansi file
 - Directory per session — multiple runs create separate timestamped logs
@@ -95,6 +98,7 @@ Properties:
 - Parent directories are created automatically
 
 Example:
+
 ```bash
 PLANEAI_LOCAL_PTY_CORE=planeai-pty \
 PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
@@ -125,6 +129,7 @@ Each session log directory contains a `meta.json` with schema version 1:
 ```
 
 **Lifecycle:**
+
 1. Written at session start with `status: "running"`, `bytes_written: 0`, `ended_at: null`
 2. Updated on session exit with final values
 
@@ -132,14 +137,14 @@ Each session log directory contains a `meta.json` with schema version 1:
 
 `src-tauri/src/session_logs.rs` provides Tauri commands for log discovery and replay:
 
-| Command | Description |
-|---------|-------------|
-| `get_session_log_dir()` | Returns configured log directory path |
-| `is_dogfood_log_viewer_enabled()` | Returns true if `PLANEAI_DOGFOOD_LOG_VIEWER=1` |
-| `list_session_logs()` | Scans sessions dir, returns metadata for all saved sessions |
-| `get_session_log_metadata(session_id)` | Returns metadata for a specific session |
-| `read_session_log_chunk(path, offset, length)` | Reads a chunk of a `.ansi` file (capped at 256 KiB) |
-| `open_session_log_folder(path)` | Opens the log directory in the OS file manager |
+| Command                                        | Description                                                 |
+| ---------------------------------------------- | ----------------------------------------------------------- |
+| `get_session_log_dir()`                        | Returns configured log directory path                       |
+| `is_dogfood_log_viewer_enabled()`              | Returns true if `PLANEAI_DOGFOOD_LOG_VIEWER=1`              |
+| `list_session_logs()`                          | Scans sessions dir, returns metadata for all saved sessions |
+| `get_session_log_metadata(session_id)`         | Returns metadata for a specific session                     |
+| `read_session_log_chunk(path, offset, length)` | Reads a chunk of a `.ansi` file (capped at 256 KiB)         |
+| `open_session_log_folder(path)`                | Opens the log directory in the OS file manager              |
 
 ### Security
 
@@ -177,11 +182,11 @@ cargo run --release -p planeai-iced-spike -- \
 
 Iced spike benchmark (headless, 25MB flood test):
 
-| Metric | spike-local (legacy) | planeai-local (planeai-pty) |
-|--------|---------------------|-----------------------------|
-| Throughput | ~21 MB/s | ~23 MB/s |
-| Bytes dropped | 0 | 0 |
-| p50 frame delta | 16.6 ms | 16.6 ms |
+| Metric          | spike-local (legacy) | planeai-local (planeai-pty) |
+| --------------- | -------------------- | --------------------------- |
+| Throughput      | ~21 MB/s             | ~23 MB/s                    |
+| Bytes dropped   | 0                    | 0                           |
+| p50 frame delta | 16.6 ms              | 16.6 ms                     |
 
 Both paths are at parity. The planeai-pty path uses the same coalescing strategy (4ms coalesce, 50ms max idle, 16KB read buffer).
 
@@ -200,22 +205,22 @@ Both paths are at parity. The planeai-pty path uses the same coalescing strategy
 
 A `LocalPtySession` can be in one of these states:
 
-| State | Description |
-|-------|-------------|
-| **Running** | Child process alive, reader/flusher threads active |
-| **Exited** | Child exited (naturally or killed), reader thread saw EOF, flusher sent `PtyEvent::Exit` |
+| State       | Description                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| **Running** | Child process alive, reader/flusher threads active                                       |
+| **Exited**  | Child exited (naturally or killed), reader thread saw EOF, flusher sent `PtyEvent::Exit` |
 
 ### Transition triggers
 
-| Trigger | Behavior |
-|---------|----------|
-| Shell exits naturally | Reader gets EOF → sets `done` flag → flusher drains pending → sends `PtyEvent::Exit` → metadata finalized |
-| Command exits naturally | Same as shell exit |
-| User closes terminal (UI) | `PlaneaiPtyBackend::detach()` → calls `session.kill()` → kills child process → reader gets EOF → normal exit path |
-| App window closes | Session is dropped → `Drop` impl calls `kill()` → same as above |
-| App process is killed (SIGKILL) | Child process receives SIGHUP (PTY master fd closed by OS). Metadata may not finalize. |
-| Backend receives PTY EOF | Reader thread breaks its loop → sets `done` → flusher detects `done` → sends Exit event |
-| `kill()` called | Sends signal to child process via `portable_pty::Child::kill()`. PTY fd closure follows. |
+| Trigger                         | Behavior                                                                                                          |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Shell exits naturally           | Reader gets EOF → sets `done` flag → flusher drains pending → sends `PtyEvent::Exit` → metadata finalized         |
+| Command exits naturally         | Same as shell exit                                                                                                |
+| User closes terminal (UI)       | `PlaneaiPtyBackend::detach()` → calls `session.kill()` → kills child process → reader gets EOF → normal exit path |
+| App window closes               | Session is dropped → `Drop` impl calls `kill()` → same as above                                                   |
+| App process is killed (SIGKILL) | Child process receives SIGHUP (PTY master fd closed by OS). Metadata may not finalize.                            |
+| Backend receives PTY EOF        | Reader thread breaks its loop → sets `done` → flusher detects `done` → sends Exit event                           |
+| `kill()` called                 | Sends signal to child process via `portable_pty::Child::kill()`. PTY fd closure follows.                          |
 
 ### Child process cleanup
 
@@ -231,11 +236,11 @@ A `LocalPtySession` can be in one of these states:
 
 ### Distinction between close / kill / detach
 
-| Operation | Implementation | Effect |
-|-----------|---------------|--------|
-| **close** (UI "close session") | Calls `detach()` on `SessionBackend` | Calls `session.kill()` — terminates child |
-| **kill** | `LocalPtySession::kill()` | Signals child process to die |
-| **detach** | `PlaneaiPtyBackend::detach()` | Equivalent to kill (no true detach for local sessions) |
+| Operation                      | Implementation                       | Effect                                                 |
+| ------------------------------ | ------------------------------------ | ------------------------------------------------------ |
+| **close** (UI "close session") | Calls `detach()` on `SessionBackend` | Calls `session.kill()` — terminates child              |
+| **kill**                       | `LocalPtySession::kill()`            | Signals child process to die                           |
+| **detach**                     | `PlaneaiPtyBackend::detach()`        | Equivalent to kill (no true detach for local sessions) |
 
 **Important:** There is no "detach-and-keep-running" for planeai-pty local sessions. Detach is kill. This is intentional — persistent sessions use the daemon/tmux backends instead.
 

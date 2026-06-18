@@ -1,7 +1,9 @@
 use planeai_daemon::registry::SessionRegistry;
 use planeai_daemon::session::DaemonSession;
+use std::sync::Mutex;
 use std::time::Duration;
-use tempfile;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn spawn_echo_captures_output() {
@@ -139,12 +141,14 @@ fn registry_remove_dead() {
 
 #[test]
 fn daemon_pty_core_unset_returns_legacy() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::remove_var("PLANEAI_DAEMON_PTY_CORE");
     assert!(!planeai_daemon::session::use_planeai_pty_core());
 }
 
 #[test]
 fn daemon_pty_core_legacy_returns_false() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("PLANEAI_DAEMON_PTY_CORE", "legacy");
     assert!(!planeai_daemon::session::use_planeai_pty_core());
     std::env::remove_var("PLANEAI_DAEMON_PTY_CORE");
@@ -152,6 +156,7 @@ fn daemon_pty_core_legacy_returns_false() {
 
 #[test]
 fn daemon_pty_core_planeai_pty_returns_true() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("PLANEAI_DAEMON_PTY_CORE", "planeai-pty");
     assert!(planeai_daemon::session::use_planeai_pty_core());
     std::env::remove_var("PLANEAI_DAEMON_PTY_CORE");
@@ -159,6 +164,7 @@ fn daemon_pty_core_planeai_pty_returns_true() {
 
 #[test]
 fn daemon_pty_core_invalid_falls_back_to_legacy() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("PLANEAI_DAEMON_PTY_CORE", "banana");
     assert!(!planeai_daemon::session::use_planeai_pty_core());
     std::env::remove_var("PLANEAI_DAEMON_PTY_CORE");
@@ -166,15 +172,9 @@ fn daemon_pty_core_invalid_falls_back_to_legacy() {
 
 #[test]
 fn spawn_planeai_pty_echo_captures_output() {
-    let session = DaemonSession::spawn_planeai_pty(
-        "test-pty-echo",
-        "echo",
-        &["hello-pty"],
-        None,
-        None,
-        4096,
-    )
-    .unwrap();
+    let session =
+        DaemonSession::spawn_planeai_pty("test-pty-echo", "echo", &["hello-pty"], None, None, 4096)
+            .unwrap();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
@@ -192,15 +192,9 @@ fn spawn_planeai_pty_echo_captures_output() {
 
 #[test]
 fn spawn_planeai_pty_write_and_resize() {
-    let session = DaemonSession::spawn_planeai_pty(
-        "test-pty-write",
-        "/bin/cat",
-        &[],
-        None,
-        None,
-        4096,
-    )
-    .unwrap();
+    let session =
+        DaemonSession::spawn_planeai_pty("test-pty-write", "/bin/cat", &[], None, None, 4096)
+            .unwrap();
 
     // Write should not error
     session.write(b"test input\n").unwrap();
@@ -258,6 +252,7 @@ fn spawn_planeai_pty_buffer_snapshot_works() {
 
 #[test]
 fn local_pty_core_selection_independent_from_daemon() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Setting PLANEAI_LOCAL_PTY_CORE should not affect daemon selection
     std::env::set_var("PLANEAI_LOCAL_PTY_CORE", "planeai-pty");
     std::env::remove_var("PLANEAI_DAEMON_PTY_CORE");
@@ -267,6 +262,7 @@ fn local_pty_core_selection_independent_from_daemon() {
 
 #[test]
 fn spawn_planeai_pty_durable_log_written() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::TempDir::new().unwrap();
     std::env::set_var("PLANEAI_SESSION_LOG_DIR", tmp.path());
 

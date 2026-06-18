@@ -101,27 +101,27 @@ Features: deterministic colored lines, carriage-return progress updates every 50
 
 ## CLI Flags
 
-| Flag | Description |
-|------|-------------|
-| `--replay <path>` | Raw ANSI fixture file for replay mode |
-| `--shell` | Launch interactive shell |
-| `--command <cmd>` | Run specific command in PTY |
-| `--flood-command <cmd>` | Command to run in PTY for input benchmark (with --shell) |
-| `--cols <n>` | Terminal columns (default: 120) |
-| `--rows <n>` | Terminal rows (default: 40) |
-| `--chunk-size <bytes>` | Bytes per replay tick (default: 16384) |
-| `--chunk-interval-ms <ms>` | Delay between chunks, 0=maxspeed (default: 4) |
-| `--metrics <path>` | JSONL output path |
-| `--backend <name>` | Backend identifier (default: iced-alacritty) |
-| `--exit-when-done` | Exit after replay/benchmark completes |
-| `--snapshot <path>` | Write visible text after replay |
-| `--font-size <n>` | Font size |
-| `--scrollback-lines <n>` | Scrollback buffer size |
-| `--max-runtime-ms <ms>` | Safety timeout |
-| `--warmup-ms <ms>` | Frames before this threshold are excluded from p95/p99 (default: 500) |
-| `--input-benchmark` | Enable synthetic input injection |
-| `--input-interval-ms <ms>` | Interval between synthetic inputs (default: 50) |
-| `--input-events <n>` | Number of synthetic inputs (default: 100) |
+| Flag                        | Description                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------- |
+| `--replay <path>`           | Raw ANSI fixture file for replay mode                                                   |
+| `--shell`                   | Launch interactive shell                                                                |
+| `--command <cmd>`           | Run specific command in PTY                                                             |
+| `--flood-command <cmd>`     | Command to run in PTY for input benchmark (with --shell)                                |
+| `--cols <n>`                | Terminal columns (default: 120)                                                         |
+| `--rows <n>`                | Terminal rows (default: 40)                                                             |
+| `--chunk-size <bytes>`      | Bytes per replay tick (default: 16384)                                                  |
+| `--chunk-interval-ms <ms>`  | Delay between chunks, 0=maxspeed (default: 4)                                           |
+| `--metrics <path>`          | JSONL output path                                                                       |
+| `--backend <name>`          | Backend identifier (default: iced-alacritty)                                            |
+| `--exit-when-done`          | Exit after replay/benchmark completes                                                   |
+| `--snapshot <path>`         | Write visible text after replay                                                         |
+| `--font-size <n>`           | Font size                                                                               |
+| `--scrollback-lines <n>`    | Scrollback buffer size                                                                  |
+| `--max-runtime-ms <ms>`     | Safety timeout                                                                          |
+| `--warmup-ms <ms>`          | Frames before this threshold are excluded from p95/p99 (default: 500)                   |
+| `--input-benchmark`         | Enable synthetic input injection                                                        |
+| `--input-interval-ms <ms>`  | Interval between synthetic inputs (default: 50)                                         |
+| `--input-events <n>`        | Number of synthetic inputs (default: 100)                                               |
 | `--output-queue-policy <p>` | Queue policy: `block` (default, lossless) or `drop_oldest` (lossy, stress testing only) |
 
 ## Input Support
@@ -156,6 +156,7 @@ Features: deterministic colored lines, carriage-return progress updates every 50
 Frame delta metrics (p95, p99) are computed only from samples collected **after** the warmup period (default 500ms from boot). This prevents the first-frame startup spike from polluting percentile metrics.
 
 Summary fields:
+
 - `warmup_ms` — threshold used
 - `frame_samples_total` — all frame deltas recorded
 - `frame_samples_after_warmup` — samples used for p95/p99 computation
@@ -168,14 +169,14 @@ PTY output is read on a background thread into a **bounded 512KB buffer**.
 
 The PTY reader thread blocks (via Condvar) when the buffer is full, waiting for the UI poll to drain it. This guarantees zero bytes are ever dropped, preserving terminal ANSI state integrity.
 
-| Property | Value |
-|----------|-------|
-| `output_queue_capacity_bytes` | 524288 (512KB) |
-| `output_queue_policy` (default) | `block` |
-| Behavior when full | PTY reader blocks until UI drains |
-| `output_bytes_dropped` | Always 0 in block mode |
-| `producer_block_count` | Number of times the reader thread blocked |
-| `producer_block_duration_ms` | Total time spent blocked |
+| Property                        | Value                                     |
+| ------------------------------- | ----------------------------------------- |
+| `output_queue_capacity_bytes`   | 524288 (512KB)                            |
+| `output_queue_policy` (default) | `block`                                   |
+| Behavior when full              | PTY reader blocks until UI drains         |
+| `output_bytes_dropped`          | Always 0 in block mode                    |
+| `producer_block_count`          | Number of times the reader thread blocked |
+| `producer_block_duration_ms`    | Total time spent blocked                  |
 
 **Alternative policy: `drop_oldest` (stress testing only)**
 

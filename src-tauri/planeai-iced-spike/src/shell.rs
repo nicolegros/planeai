@@ -22,6 +22,7 @@ impl QueuePolicy {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "drop_oldest" => Self::DropOldest,
@@ -49,10 +50,21 @@ impl Shell {
         Self::spawn_with_policy(id, cols, rows, None, QueuePolicy::Block)
     }
 
-    pub fn spawn_with_policy(id: usize, cols: u16, rows: u16, command: Option<&str>, policy: QueuePolicy) -> Self {
+    pub fn spawn_with_policy(
+        id: usize,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        policy: QueuePolicy,
+    ) -> Self {
         let pty_system = native_pty_system();
         let pair = pty_system
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .expect("Failed to open PTY");
 
         let cmd = if let Some(cmd_str) = command {
@@ -67,7 +79,9 @@ impl Shell {
             cmd
         };
 
-        pair.slave.spawn_command(cmd).expect("Failed to spawn shell");
+        pair.slave
+            .spawn_command(cmd)
+            .expect("Failed to spawn shell");
 
         let writer: Box<dyn Write + Send> = pair.master.take_writer().unwrap();
         let writer = Arc::new(Mutex::new(writer));
@@ -100,9 +114,9 @@ impl Shell {
                                 if buf.len() + n > MAX_BUFFER {
                                     *block_count_clone.lock().unwrap() += 1;
                                     let block_start = Instant::now();
-                                    buf = condvar_clone.wait_while(buf, |b| {
-                                        b.len() + n > MAX_BUFFER
-                                    }).unwrap();
+                                    buf = condvar_clone
+                                        .wait_while(buf, |b| b.len() + n > MAX_BUFFER)
+                                        .unwrap();
                                     let elapsed = block_start.elapsed().as_secs_f64() * 1000.0;
                                     *block_duration_clone.lock().unwrap() += elapsed;
                                 }
@@ -118,7 +132,9 @@ impl Shell {
                         buf.extend_from_slice(&tmp[..n]);
                         let len = buf.len();
                         let mut max = max_pending_clone.lock().unwrap();
-                        if len > *max { *max = len; }
+                        if len > *max {
+                            *max = len;
+                        }
                     }
                     Err(_) => break,
                 }
@@ -170,7 +186,12 @@ impl Shell {
 
     pub fn resize(&self, cols: u16, rows: u16) {
         if let Ok(m) = self.master.lock() {
-            let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            let _ = m.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
         }
     }
 
@@ -184,7 +205,9 @@ impl Shell {
 }
 
 impl PlaneAiTerminalSession for Shell {
-    fn id(&self) -> usize { self.id }
+    fn id(&self) -> usize {
+        self.id
+    }
 
     fn write(&self, data: &[u8]) -> anyhow::Result<()> {
         let mut w = self.writer.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -195,8 +218,13 @@ impl PlaneAiTerminalSession for Shell {
 
     fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         let m = self.master.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|e| anyhow::anyhow!("{e}"))
+        m.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn try_read_batch(&self) -> anyhow::Result<Option<Vec<u8>>> {

@@ -29,7 +29,8 @@ impl PtyEventSink for ChannelSink {
         match event {
             PtyEvent::Output { bytes, .. } => {
                 self.send_calls.fetch_add(1, Ordering::Relaxed);
-                self.send_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                self.send_bytes
+                    .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 let mut buf = self.buf.lock().unwrap();
                 // Wait only if buffer already has data and adding would exceed cap.
                 // Always accept into an empty buffer to avoid deadlock on large batches.
@@ -39,7 +40,8 @@ impl PtyEventSink for ChannelSink {
                     while !buf.is_empty() && buf.len() + bytes.len() > MAX_BUFFER {
                         buf = self.buf_not_full.wait(buf).unwrap();
                     }
-                    self.block_ns.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    self.block_ns
+                        .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 }
                 buf.extend_from_slice(&bytes);
                 let len = buf.len() as u64;
@@ -64,12 +66,7 @@ pub struct PlaneAiLocalSession {
 }
 
 impl PlaneAiLocalSession {
-    pub fn spawn(
-        id: usize,
-        cols: u16,
-        rows: u16,
-        command: Option<&str>,
-    ) -> anyhow::Result<Self> {
+    pub fn spawn(id: usize, cols: u16, rows: u16, command: Option<&str>) -> anyhow::Result<Self> {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let buf_not_full = Arc::new(Condvar::new());
         let sink_exited = Arc::new(AtomicBool::new(false));
@@ -96,12 +93,21 @@ impl PlaneAiLocalSession {
 
         let session = LocalPtySession::spawn(config, sink.clone())?;
 
-        Ok(Self { session, buf, buf_not_full, sink_exited, max_pending, sink })
+        Ok(Self {
+            session,
+            buf,
+            buf_not_full,
+            sink_exited,
+            max_pending,
+            sink,
+        })
     }
 }
 
 impl PlaneAiTerminalSession for PlaneAiLocalSession {
-    fn id(&self) -> usize { self.session.id() }
+    fn id(&self) -> usize {
+        self.session.id()
+    }
 
     fn write(&self, bytes: &[u8]) -> anyhow::Result<()> {
         self.session.write(bytes)
@@ -113,7 +119,9 @@ impl PlaneAiTerminalSession for PlaneAiLocalSession {
 
     fn try_read_batch(&self) -> anyhow::Result<Option<Vec<u8>>> {
         let mut buf = self.buf.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        if buf.is_empty() { return Ok(None); }
+        if buf.is_empty() {
+            return Ok(None);
+        }
         let data = std::mem::take(&mut *buf);
         self.buf_not_full.notify_one();
         Ok(Some(data))
@@ -151,7 +159,8 @@ impl PlaneAiTerminalSession for PlaneAiLocalSession {
             queue_depth_at_end_bytes: self.buf.lock().unwrap().len(),
             output_bytes_dropped: 0,
             producer_block_count: self.sink.block_count.load(Ordering::Relaxed),
-            producer_block_duration_ms: self.sink.block_ns.load(Ordering::Relaxed) as f64 / 1_000_000.0,
+            producer_block_duration_ms: self.sink.block_ns.load(Ordering::Relaxed) as f64
+                / 1_000_000.0,
         }
     }
 }

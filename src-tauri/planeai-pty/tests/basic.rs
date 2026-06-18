@@ -1,6 +1,4 @@
-use planeai_pty::{
-    LocalPtyConfig, PipelineDiagnostics, PtyEvent, PtyEventSink, QueuePolicy,
-};
+use planeai_pty::{LocalPtyConfig, PipelineDiagnostics, PtyEvent, PtyEventSink, QueuePolicy};
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -147,6 +145,12 @@ fn no_tauri_iced_dependency() {
     // this test crate would fail to compile since those aren't in planeai-pty's deps.
     // Explicit assertion for documentation:
     let cargo_toml = include_str!("../Cargo.toml");
-    assert!(!cargo_toml.contains("tauri"), "planeai-pty must not depend on tauri");
-    assert!(!cargo_toml.contains("iced"), "planeai-pty must not depend on iced");
+    assert!(
+        !cargo_toml.contains("tauri"),
+        "planeai-pty must not depend on tauri"
+    );
+    assert!(
+        !cargo_toml.contains("iced"),
+        "planeai-pty must not depend on iced"
+    );
 }

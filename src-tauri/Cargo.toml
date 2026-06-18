@@ -1,5 +1,12 @@
 [workspace]
-members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc", "planeai-iced-spike", "planeai-pty"]
+members = [
+  "planeai-core",
+  "planeai-tasks",
+  "planeai-daemon",
+  "planeai-ipc",
+  "planeai-iced-spike",
+  "planeai-pty",
+]
 resolver = "2"
 
 [workspace.dependencies]

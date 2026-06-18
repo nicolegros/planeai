@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
-use planeai_daemon::protocol::{read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT};
+use planeai_daemon::protocol::{
+    read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT,
+};
 use planeai_ipc::r#async::AsyncIpcStream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::runtime::Runtime;
@@ -75,13 +77,18 @@ pub fn ensure_daemon_running_sync() -> anyhow::Result<()> {
 
 fn spawn_detached_daemon(binary: &std::path::Path, socket: &std::path::Path) -> anyhow::Result<()> {
     let mut cmd = std::process::Command::new(binary);
-    cmd.arg("--socket-path").arg(socket)
-       .arg("--scrollback-bytes").arg("1048576");
+    cmd.arg("--socket-path")
+        .arg(socket)
+        .arg("--scrollback-bytes")
+        .arg("1048576");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
     }
     cmd.spawn()?;
     Ok(())
@@ -115,15 +122,18 @@ pub fn list_daemon_sessions() -> anyhow::Result<Vec<DaemonSessionInfo>> {
         if let Some(err) = resp.get("error") {
             anyhow::bail!("daemon list error: {}", err);
         }
-        let sessions = resp.get("sessions")
+        let sessions = resp
+            .get("sessions")
             .and_then(|s| s.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|v| {
-                    Some(DaemonSessionInfo {
-                        session_id: v.get("session_id")?.as_str()?.to_string(),
-                        alive: v.get("alive")?.as_bool().unwrap_or(false),
+                arr.iter()
+                    .filter_map(|v| {
+                        Some(DaemonSessionInfo {
+                            session_id: v.get("session_id")?.as_str()?.to_string(),
+                            alive: v.get("alive")?.as_bool().unwrap_or(false),
+                        })
                     })
-                }).collect()
+                    .collect()
             })
             .unwrap_or_default();
         Ok(sessions)
@@ -138,20 +148,28 @@ pub fn attach(id: usize, session_id: &str, cols: u16, rows: u16) -> anyhow::Resu
 
     // Send attach command
     rt.block_on(async {
-        send_control_command(&socket, &serde_json::json!({
-            "cmd": "attach",
-            "session_id": session_id,
-        })).await
+        send_control_command(
+            &socket,
+            &serde_json::json!({
+                "cmd": "attach",
+                "session_id": session_id,
+            }),
+        )
+        .await
     })?;
 
     // Resize to current terminal size
     rt.block_on(async {
-        send_control_command(&socket, &serde_json::json!({
-            "cmd": "resize",
-            "session_id": session_id,
-            "cols": cols,
-            "rows": rows,
-        })).await
+        send_control_command(
+            &socket,
+            &serde_json::json!({
+                "cmd": "resize",
+                "session_id": session_id,
+                "cols": cols,
+                "rows": rows,
+            }),
+        )
+        .await
     })?;
 
     // Open data connection (same as spawn path)
@@ -181,11 +199,19 @@ pub fn attach(id: usize, session_id: &str, cols: u16, rows: u16) -> anyhow::Resu
 
     rt.spawn(async move {
         if let Err(e) = data_loop(
-            &socket_clone, &sid, input_rx,
-            buf_clone, buf_not_full_clone, exited_clone,
-            max_pending_clone, recv_bytes_clone,
-            block_count_clone, block_ns_clone,
-        ).await {
+            &socket_clone,
+            &sid,
+            input_rx,
+            buf_clone,
+            buf_not_full_clone,
+            exited_clone,
+            max_pending_clone,
+            recv_bytes_clone,
+            block_count_clone,
+            block_ns_clone,
+        )
+        .await
+        {
             tracing::debug!("daemon data loop ended: {e}");
         }
     });
@@ -222,10 +248,14 @@ pub fn kill_daemon_session(session_id: &str) -> anyhow::Result<()> {
     let rt = daemon_runtime();
     let socket = daemon_socket_path();
     rt.block_on(async {
-        send_control_command(&socket, &serde_json::json!({
-            "cmd": "kill",
-            "session_id": session_id,
-        })).await
+        send_control_command(
+            &socket,
+            &serde_json::json!({
+                "cmd": "kill",
+                "session_id": session_id,
+            }),
+        )
+        .await
     })
 }
 
@@ -234,10 +264,14 @@ pub fn detach_daemon_session(session_id: &str) -> anyhow::Result<()> {
     let rt = daemon_runtime();
     let socket = daemon_socket_path();
     rt.block_on(async {
-        send_control_command(&socket, &serde_json::json!({
-            "cmd": "detach",
-            "session_id": session_id,
-        })).await
+        send_control_command(
+            &socket,
+            &serde_json::json!({
+                "cmd": "detach",
+                "session_id": session_id,
+            }),
+        )
+        .await
     })
 }
 
@@ -245,9 +279,7 @@ pub fn detach_daemon_session(session_id: &str) -> anyhow::Result<()> {
 pub fn daemon_is_connected() -> bool {
     let rt = daemon_runtime();
     let socket = daemon_socket_path();
-    rt.block_on(async {
-        AsyncIpcStream::connect(&socket).await.is_ok()
-    })
+    rt.block_on(async { AsyncIpcStream::connect(&socket).await.is_ok() })
 }
 
 // ─── DaemonSession struct ────────────────────────────────────────────────────
@@ -273,12 +305,7 @@ pub struct DaemonSession {
 
 impl DaemonSession {
     /// Spawn a new session via the daemon and attach to it.
-    pub fn spawn(
-        id: usize,
-        cols: u16,
-        rows: u16,
-        command: Option<&str>,
-    ) -> anyhow::Result<Self> {
+    pub fn spawn(id: usize, cols: u16, rows: u16, command: Option<&str>) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
         let session_id = format!("iced-{}-{}", id, std::process::id());
@@ -317,12 +344,16 @@ impl DaemonSession {
 
         // Resize immediately
         rt.block_on(async {
-            send_control_command(&socket, &serde_json::json!({
-                "cmd": "resize",
-                "session_id": &session_id,
-                "cols": cols,
-                "rows": rows,
-            })).await
+            send_control_command(
+                &socket,
+                &serde_json::json!({
+                    "cmd": "resize",
+                    "session_id": &session_id,
+                    "cols": cols,
+                    "rows": rows,
+                }),
+            )
+            .await
         })?;
 
         // Open data connection
@@ -352,11 +383,19 @@ impl DaemonSession {
 
         rt.spawn(async move {
             if let Err(e) = data_loop(
-                &socket_clone, &sid, input_rx,
-                buf_clone, buf_not_full_clone, exited_clone,
-                max_pending_clone, recv_bytes_clone,
-                block_count_clone, block_ns_clone,
-            ).await {
+                &socket_clone,
+                &sid,
+                input_rx,
+                buf_clone,
+                buf_not_full_clone,
+                exited_clone,
+                max_pending_clone,
+                recv_bytes_clone,
+                block_count_clone,
+                block_ns_clone,
+            )
+            .await
+            {
                 tracing::debug!("daemon data loop ended: {e}");
             }
         });
@@ -388,29 +427,42 @@ impl DaemonSession {
         })
     }
 
-    pub fn spawn_latency_ms(&self) -> f64 { self.spawn_latency_ms }
-    pub fn attach_latency_ms(&self) -> f64 { self.attach_latency_ms }
-    pub fn session_id(&self) -> &str { &self.session_id }
+    pub fn spawn_latency_ms(&self) -> f64 {
+        self.spawn_latency_ms
+    }
+    pub fn attach_latency_ms(&self) -> f64 {
+        self.attach_latency_ms
+    }
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
 }
 
 impl PlaneAiTerminalSession for DaemonSession {
-    fn id(&self) -> usize { self.id }
+    fn id(&self) -> usize {
+        self.id
+    }
 
     fn write(&self, bytes: &[u8]) -> anyhow::Result<()> {
         self.send_calls.fetch_add(1, Ordering::Relaxed);
-        self.send_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        self.input_tx.send(bytes.to_vec())
+        self.send_bytes
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        self.input_tx
+            .send(bytes.to_vec())
             .map_err(|_| anyhow::anyhow!("input channel closed"))
     }
 
     fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.resize_tx.send((cols, rows))
+        self.resize_tx
+            .send((cols, rows))
             .map_err(|_| anyhow::anyhow!("resize channel closed"))
     }
 
     fn try_read_batch(&self) -> anyhow::Result<Option<Vec<u8>>> {
         let mut buf = self.buf.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        if buf.is_empty() { return Ok(None); }
+        if buf.is_empty() {
+            return Ok(None);
+        }
         let data = std::mem::take(&mut *buf);
         self.buf_not_full.notify_one();
         Ok(Some(data))
@@ -428,7 +480,9 @@ impl PlaneAiTerminalSession for DaemonSession {
         self.max_pending.load(Ordering::Relaxed) as usize
     }
 
-    fn bytes_dropped(&self) -> u64 { 0 }
+    fn bytes_dropped(&self) -> u64 {
+        0
+    }
 
     fn pipeline_diag(&self) -> PipelineDiag {
         PipelineDiag {
@@ -453,6 +507,7 @@ impl PlaneAiTerminalSession for DaemonSession {
 // ─── Async internals ─────────────────────────────────────────────────────────
 
 /// Async data loop: reads output frames from daemon, writes to bounded buffer.
+#[allow(clippy::too_many_arguments)]
 async fn data_loop(
     socket: &std::path::Path,
     session_id: &str,
@@ -516,16 +571,23 @@ async fn resize_loop(
     mut resize_rx: mpsc::UnboundedReceiver<(u16, u16)>,
 ) {
     while let Some((cols, rows)) = resize_rx.recv().await {
-        let _ = send_control_command(socket, &serde_json::json!({
-            "cmd": "resize",
-            "session_id": session_id,
-            "cols": cols,
-            "rows": rows,
-        })).await;
+        let _ = send_control_command(
+            socket,
+            &serde_json::json!({
+                "cmd": "resize",
+                "session_id": session_id,
+                "cols": cols,
+                "rows": rows,
+            }),
+        )
+        .await;
     }
 }
 
-async fn send_control_command(socket: &std::path::Path, req: &serde_json::Value) -> anyhow::Result<()> {
+async fn send_control_command(
+    socket: &std::path::Path,
+    req: &serde_json::Value,
+) -> anyhow::Result<()> {
     let mut stream = AsyncIpcStream::connect(socket).await?;
     stream.write_all(&[CONN_CONTROL]).await?;
     let mut line = serde_json::to_string(req)?;

@@ -32,5 +32,7 @@ pub trait PlaneAiTerminalSession: Send {
     fn pending_bytes(&self) -> usize;
     fn max_pending_bytes(&self) -> usize;
     fn bytes_dropped(&self) -> u64;
-    fn pipeline_diag(&self) -> PipelineDiag { PipelineDiag::default() }
+    fn pipeline_diag(&self) -> PipelineDiag {
+        PipelineDiag::default()
+    }
 }

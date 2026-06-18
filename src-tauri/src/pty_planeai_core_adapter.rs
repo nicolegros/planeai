@@ -35,7 +35,13 @@ impl TauriPtySink {
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
     ) -> Self {
-        Self { session_id, on_data, app, cancelled, observer }
+        Self {
+            session_id,
+            on_data,
+            app,
+            cancelled,
+            observer,
+        }
     }
 }
 
@@ -71,6 +77,7 @@ pub struct PlaneaiPtyBackend {
 
 impl PlaneaiPtyBackend {
     /// Spawn a new local PTY session via planeai-pty and return a SessionBackend.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         session_id: &str,
         command: &str,
@@ -314,7 +321,9 @@ impl LogSink {
             let _ = fs::create_dir_all(parent);
         }
         match OpenOptions::new().create(true).append(true).open(path) {
-            Ok(f) => Some(Self { file: Mutex::new(f) }),
+            Ok(f) => Some(Self {
+                file: Mutex::new(f),
+            }),
             Err(e) => {
                 tracing::warn!("failed to open session log {}: {e}", path.display());
                 None
@@ -339,5 +348,7 @@ impl PtyEventSink for LogSink {
 
 /// Returns the session log directory if PLANEAI_SESSION_LOG_DIR is set.
 pub fn session_log_dir() -> Option<PathBuf> {
-    std::env::var("PLANEAI_SESSION_LOG_DIR").ok().map(PathBuf::from)
+    std::env::var("PLANEAI_SESSION_LOG_DIR")
+        .ok()
+        .map(PathBuf::from)
 }

@@ -25,8 +25,11 @@ use iced::keyboard::{key::Named, Key, Modifiers};
 /// | PageDown      | `\x1b[6~`          | CSI 6~                   |
 /// | Delete        | `\x1b[3~`          | CSI 3~                   |
 /// | Insert        | `\x1b[2~`          | CSI 2~                   |
-
-pub fn encode_key_event(key: &Key, modifiers: &Modifiers, text: &Option<smol_str::SmolStr>) -> Option<Vec<u8>> {
+pub fn encode_key_event(
+    key: &Key,
+    modifiers: &Modifiers,
+    text: &Option<smol_str::SmolStr>,
+) -> Option<Vec<u8>> {
     if modifiers.control() {
         if let Key::Character(c) = key {
             let b = c.as_str().bytes().next()?;
@@ -88,8 +91,12 @@ mod tests {
     use super::*;
     use smol_str::SmolStr;
 
-    fn no_mods() -> Modifiers { Modifiers::empty() }
-    fn ctrl() -> Modifiers { Modifiers::CTRL }
+    fn no_mods() -> Modifiers {
+        Modifiers::empty()
+    }
+    fn ctrl() -> Modifiers {
+        Modifiers::CTRL
+    }
 
     fn named(n: Named) -> (Key, Modifiers, Option<SmolStr>) {
         (Key::Named(n), no_mods(), None)

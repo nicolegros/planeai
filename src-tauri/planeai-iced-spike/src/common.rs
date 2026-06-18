@@ -17,9 +17,15 @@ pub struct TermSize {
     pub rows: usize,
 }
 impl Dimensions for TermSize {
-    fn columns(&self) -> usize { self.cols }
-    fn screen_lines(&self) -> usize { self.rows }
-    fn total_lines(&self) -> usize { self.rows }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
 }
 
 #[derive(Clone)]
@@ -58,7 +64,9 @@ pub fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color
             NamedColor::BrightBlue => Color::from_rgb8(59, 142, 234),
             NamedColor::BrightMagenta => Color::from_rgb8(214, 112, 214),
             NamedColor::BrightCyan => Color::from_rgb8(41, 184, 219),
-            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => Color::from_rgb8(229, 229, 229),
+            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => {
+                Color::from_rgb8(229, 229, 229)
+            }
             NamedColor::Background => Color::from_rgb8(0, 0, 0),
             _ => Color::from_rgb8(229, 229, 229),
         },
@@ -67,16 +75,30 @@ pub fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color
             let i = *idx;
             if i < 16 {
                 let table: [(u8, u8, u8); 16] = [
-                    (0,0,0),(205,49,49),(13,188,121),(229,229,16),
-                    (36,114,200),(188,63,188),(17,168,205),(229,229,229),
-                    (102,102,102),(241,76,76),(35,209,139),(245,245,67),
-                    (59,142,234),(214,112,214),(41,184,219),(255,255,255),
+                    (0, 0, 0),
+                    (205, 49, 49),
+                    (13, 188, 121),
+                    (229, 229, 16),
+                    (36, 114, 200),
+                    (188, 63, 188),
+                    (17, 168, 205),
+                    (229, 229, 229),
+                    (102, 102, 102),
+                    (241, 76, 76),
+                    (35, 209, 139),
+                    (245, 245, 67),
+                    (59, 142, 234),
+                    (214, 112, 214),
+                    (41, 184, 219),
+                    (255, 255, 255),
                 ];
                 let (r, g, b) = table[i as usize];
                 Color::from_rgb8(r, g, b)
             } else if i < 232 {
                 let j = i - 16;
-                let r = (j / 36) % 6; let g = (j / 6) % 6; let b = j % 6;
+                let r = (j / 36) % 6;
+                let g = (j / 6) % 6;
+                let b = j % 6;
                 let v = |c: u8| if c == 0 { 0u8 } else { 55 + 40 * c };
                 Color::from_rgb8(v(r), v(g), v(b))
             } else {
@@ -97,11 +119,21 @@ pub fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapsho
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             let cell: &Cell = &grid[Line(i as i32)][Column(j)];
-            row.push(GridCell { c: cell.c, fg: ansi_color_to_iced(&cell.fg), bg: ansi_color_to_iced(&cell.bg) });
+            row.push(GridCell {
+                c: cell.c,
+                fg: ansi_color_to_iced(&cell.fg),
+                bg: ansi_color_to_iced(&cell.bg),
+            });
         }
         cells.push(row);
     }
-    GridSnapshot { cells, cursor_line: cursor.line.0 as usize, cursor_col: cursor.column.0, cols, rows }
+    GridSnapshot {
+        cells,
+        cursor_line: cursor.line.0 as usize,
+        cursor_col: cursor.column.0,
+        cols,
+        rows,
+    }
 }
 
 pub fn snapshot_text(term: &alacritty_terminal::Term<EventProxy>) -> String {
@@ -122,7 +154,9 @@ pub fn snapshot_text(term: &alacritty_terminal::Term<EventProxy>) -> String {
 }
 
 pub fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     let idx = ((p / 100.0) * (sorted.len() as f64 - 1.0)).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
 }
@@ -163,8 +197,12 @@ impl<'a> Program<()> for TermRenderer<'a> {
     type State = ();
 
     fn draw(
-        &self, _state: &Self::State, renderer: &Renderer, _theme: &Theme,
-        bounds: Rectangle, _cursor: mouse::Cursor,
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
             let cw = bounds.width / self.snapshot.cols as f32;
@@ -181,7 +219,11 @@ impl<'a> Program<()> for TermRenderer<'a> {
                         frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), cell.bg);
                     }
                     if ri == self.snapshot.cursor_line && ci == self.snapshot.cursor_col {
-                        frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), Color::from_rgba8(200, 200, 200, 0.4));
+                        frame.fill_rectangle(
+                            Point::new(x, y),
+                            Size::new(cw, ch),
+                            Color::from_rgba8(200, 200, 200, 0.4),
+                        );
                     }
                     if cell.c != ' ' && cell.c != '\0' {
                         frame.fill_text(Text {

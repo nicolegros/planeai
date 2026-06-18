@@ -14,6 +14,7 @@ pnpm tauri dev
 ```
 
 Or via config (`~/.config/planeai/config.json`):
+
 ```json
 {
   "local_pty_core": "planeai-pty",
@@ -23,11 +24,11 @@ Or via config (`~/.config/planeai/config.json`):
 
 ## Environment Variables
 
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `PLANEAI_LOCAL_PTY_CORE` | `legacy`, `planeai-pty` | `legacy` | Which PTY backend to use for local sessions |
-| `PLANEAI_SESSION_LOG_DIR` | absolute path | unset | Enable durable raw `.ansi` logs |
-| `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true` | unset | Enable the in-app session log viewer |
+| Variable                     | Values                  | Default  | Description                                 |
+| ---------------------------- | ----------------------- | -------- | ------------------------------------------- |
+| `PLANEAI_LOCAL_PTY_CORE`     | `legacy`, `planeai-pty` | `legacy` | Which PTY backend to use for local sessions |
+| `PLANEAI_SESSION_LOG_DIR`    | absolute path           | unset    | Enable durable raw `.ansi` logs             |
+| `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true`             | unset    | Enable the in-app session log viewer        |
 
 ## Config Options
 
@@ -133,47 +134,48 @@ $PLANEAI_SESSION_LOG_DIR/
 **Date:** 2026-06-17  
 **Mode:** `PLANEAI_LOCAL_PTY_CORE=planeai-pty`
 
-| # | Check | Result |
-|---|-------|--------|
-| 1 | App starts without crash | ✅ Verified — startup log confirms `local PTY core: planeai-pty` |
-| 2 | Startup log shows PTY core mode | ✅ `INFO planeai: local PTY core: planeai-pty` |
-| 3 | Startup log shows session log directory | ✅ Configured via env/config |
-| 4 | Create local terminal/session | ✅ Verified via PTY spawn tests (7 tests pass) |
-| 5 | `echo hello` — output appears | ✅ `sink_receives_output_from_spawned_session` test confirms |
-| 6 | Paste a multi-line command | ✅ write() accepts arbitrary byte sequences |
-| 7 | Run noisy command | ✅ `large_output_does_not_deadlock_sink` — 1MB flood, 0 drops |
-| 8 | Ctrl-C interrupts running command | ✅ write(b"\x03") → sent to PTY child |
-| 9 | Resize terminal window | ✅ resize() tested, PtySize propagated |
-| 10 | Close session cleanly | ✅ kill() → child dies → Exit event → metadata finalized |
-| 11 | `.ansi` log exists | ✅ LogSink creates file in append mode |
-| 12 | `meta.json` exists | ✅ Written at session start |
-| 13 | `meta.json` updates after exit/close | ✅ TrackingLogSink.finalize() on PtyEvent::Exit |
-| 14 | Dogfood log viewer lists the session | ✅ list_session_logs() tested (14 tests) |
-| 15 | Replay opens in read-only terminal | ✅ read_session_log_chunk() streams bytes |
-| 16 | Replay output matches original | ✅ Immutability test confirms no mutation |
-| 17 | App restarts cleanly | ✅ Startup log shows clean init |
-| 18 | Legacy mode works after unsetting env vars | ✅ `use_planeai_pty_core()` returns false when var unset |
-| 19 | No backend panic in logs | ✅ No panic in startup logs |
-| 20 | No frontend error overlay | ✅ svelte-check passes (1 pre-existing unrelated error) |
+| #   | Check                                      | Result                                                           |
+| --- | ------------------------------------------ | ---------------------------------------------------------------- |
+| 1   | App starts without crash                   | ✅ Verified — startup log confirms `local PTY core: planeai-pty` |
+| 2   | Startup log shows PTY core mode            | ✅ `INFO planeai: local PTY core: planeai-pty`                   |
+| 3   | Startup log shows session log directory    | ✅ Configured via env/config                                     |
+| 4   | Create local terminal/session              | ✅ Verified via PTY spawn tests (7 tests pass)                   |
+| 5   | `echo hello` — output appears              | ✅ `sink_receives_output_from_spawned_session` test confirms     |
+| 6   | Paste a multi-line command                 | ✅ write() accepts arbitrary byte sequences                      |
+| 7   | Run noisy command                          | ✅ `large_output_does_not_deadlock_sink` — 1MB flood, 0 drops    |
+| 8   | Ctrl-C interrupts running command          | ✅ write(b"\x03") → sent to PTY child                            |
+| 9   | Resize terminal window                     | ✅ resize() tested, PtySize propagated                           |
+| 10  | Close session cleanly                      | ✅ kill() → child dies → Exit event → metadata finalized         |
+| 11  | `.ansi` log exists                         | ✅ LogSink creates file in append mode                           |
+| 12  | `meta.json` exists                         | ✅ Written at session start                                      |
+| 13  | `meta.json` updates after exit/close       | ✅ TrackingLogSink.finalize() on PtyEvent::Exit                  |
+| 14  | Dogfood log viewer lists the session       | ✅ list_session_logs() tested (14 tests)                         |
+| 15  | Replay opens in read-only terminal         | ✅ read_session_log_chunk() streams bytes                        |
+| 16  | Replay output matches original             | ✅ Immutability test confirms no mutation                        |
+| 17  | App restarts cleanly                       | ✅ Startup log shows clean init                                  |
+| 18  | Legacy mode works after unsetting env vars | ✅ `use_planeai_pty_core()` returns false when var unset         |
+| 19  | No backend panic in logs                   | ✅ No panic in startup logs                                      |
+| 20  | No frontend error overlay                  | ✅ svelte-check passes (1 pre-existing unrelated error)          |
 
 **Note:** Full interactive GUI testing (manual typing, visual terminal rendering) requires a human running `pnpm tauri dev` with a display. The backend and data layer are fully verified by the test suite.
 
 ## Dogfood Session Matrix
 
 **Date:** 2026-06-17  
-**Mode:** planeai-pty with durable logging  
+**Mode:** planeai-pty with durable logging
 
-| # | Scenario | Command | Duration | Volume | Input | Paste | Ctrl-C | Resize | Log | Meta | Replay | Errors |
-|---|----------|---------|----------|--------|-------|-------|--------|--------|-----|------|--------|--------|
-| 1 | Short shell task | `echo hello` | <1s | 6 bytes | ✅ | N/A | N/A | N/A | ✅ | ✅ finalized | ✅ | None |
-| 2 | Noisy command | `dd if=/dev/zero bs=1024 count=1024` | <1s | 1 MB | ✅ | N/A | N/A | N/A | ✅ | ✅ finalized | ✅ | None |
-| 3 | Multi-line paste | write() with `\n`-separated commands | <1s | varies | ✅ | ✅ | N/A | N/A | ✅ | ✅ | ✅ | None |
-| 4 | Ctrl-C interrupted | long-running → write(0x03) | <1s | varies | ✅ | N/A | ✅ | N/A | ✅ | ✅ | ✅ | None |
-| 5 | Full lifecycle test | spawn → write → resize → kill → Exit | <1s | varies | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | None |
+| #   | Scenario            | Command                              | Duration | Volume  | Input | Paste | Ctrl-C | Resize | Log | Meta         | Replay | Errors |
+| --- | ------------------- | ------------------------------------ | -------- | ------- | ----- | ----- | ------ | ------ | --- | ------------ | ------ | ------ |
+| 1   | Short shell task    | `echo hello`                         | <1s      | 6 bytes | ✅    | N/A   | N/A    | N/A    | ✅  | ✅ finalized | ✅     | None   |
+| 2   | Noisy command       | `dd if=/dev/zero bs=1024 count=1024` | <1s      | 1 MB    | ✅    | N/A   | N/A    | N/A    | ✅  | ✅ finalized | ✅     | None   |
+| 3   | Multi-line paste    | write() with `\n`-separated commands | <1s      | varies  | ✅    | ✅    | N/A    | N/A    | ✅  | ✅           | ✅     | None   |
+| 4   | Ctrl-C interrupted  | long-running → write(0x03)           | <1s      | varies  | ✅    | N/A   | ✅     | N/A    | ✅  | ✅           | ✅     | None   |
+| 5   | Full lifecycle test | spawn → write → resize → kill → Exit | <1s      | varies  | ✅    | ✅    | ✅     | ✅     | ✅  | ✅           | ✅     | None   |
 
 **Summary:** All 5 sessions completed successfully. 0 bytes dropped across all sessions. All metadata finalized. PTY operations (write, resize, pause, resume, kill) all work correctly.
 
 **Evidence:**
+
 - `cargo test -p planeai-pty` — 7/7 pass (covers sessions 1-5 functionally)
 - `cargo test -p planeai -- session_logs --test-threads=1` — 14/14 pass (covers log creation, reading, deletion, safety)
 - App startup confirms `planeai-pty` mode active
@@ -183,16 +185,16 @@ $PLANEAI_SESSION_LOG_DIR/
 
 **Date:** 2026-06-17
 
-| Step | Action | Result |
-|------|--------|--------|
-| 1 | Run with `PLANEAI_LOCAL_PTY_CORE=planeai-pty` | ✅ App starts, logs show `planeai-pty` |
-| 2 | Create session | ✅ PTY spawns via planeai-pty adapter |
-| 3 | Verify logs | ✅ Session log infrastructure active |
-| 4 | Quit app | ✅ Clean exit, metadata would finalize |
-| 5 | Run with `PLANEAI_LOCAL_PTY_CORE=legacy` | ✅ App starts, `use_planeai_pty_core()` returns false |
-| 6 | Create session | ✅ Legacy LocalBackend path taken |
-| 7 | Verify legacy behavior | ✅ Standard PTY via production pty.rs code |
-| 8 | Prior logs readable | ✅ Log viewer reads any valid meta.json regardless of current mode |
+| Step | Action                                        | Result                                                             |
+| ---- | --------------------------------------------- | ------------------------------------------------------------------ |
+| 1    | Run with `PLANEAI_LOCAL_PTY_CORE=planeai-pty` | ✅ App starts, logs show `planeai-pty`                             |
+| 2    | Create session                                | ✅ PTY spawns via planeai-pty adapter                              |
+| 3    | Verify logs                                   | ✅ Session log infrastructure active                               |
+| 4    | Quit app                                      | ✅ Clean exit, metadata would finalize                             |
+| 5    | Run with `PLANEAI_LOCAL_PTY_CORE=legacy`      | ✅ App starts, `use_planeai_pty_core()` returns false              |
+| 6    | Create session                                | ✅ Legacy LocalBackend path taken                                  |
+| 7    | Verify legacy behavior                        | ✅ Standard PTY via production pty.rs code                         |
+| 8    | Prior logs readable                           | ✅ Log viewer reads any valid meta.json regardless of current mode |
 
 **Conclusion:** Rollback is instant and safe. Switching between modes requires only changing the env var or config. No data loss, no migration needed.
 
@@ -251,18 +253,18 @@ npx svelte-check
 
 ### Evidence
 
-| Criterion | Status |
-|-----------|--------|
-| Production app builds | ✅ |
-| Legacy remains available | ✅ via env var or config |
+| Criterion                      | Status                                                 |
+| ------------------------------ | ------------------------------------------------------ |
+| Production app builds          | ✅                                                     |
+| Legacy remains available       | ✅ via env var or config                               |
 | planeai-pty works in Tauri GUI | ✅ Backend verified, same Channel/Event path as legacy |
-| Durable logs created | ✅ when SESSION_LOG_DIR configured |
-| Metadata finalizes on exit | ✅ TrackingLogSink handles PtyEvent::Exit |
-| 0 bytes dropped | ✅ All tests, benchmarks confirm |
-| Replay works | ✅ 14 catalog tests pass |
-| Rollback tested | ✅ Instant, no data loss |
-| Lifecycle documented | ✅ kill/Drop/detach behavior explicit |
-| Performance at parity | ✅ ~23 MB/s vs ~21 MB/s legacy |
+| Durable logs created           | ✅ when SESSION_LOG_DIR configured                     |
+| Metadata finalizes on exit     | ✅ TrackingLogSink handles PtyEvent::Exit              |
+| 0 bytes dropped                | ✅ All tests, benchmarks confirm                       |
+| Replay works                   | ✅ 14 catalog tests pass                               |
+| Rollback tested                | ✅ Instant, no data loss                               |
+| Lifecycle documented           | ✅ kill/Drop/detach behavior explicit                  |
+| Performance at parity          | ✅ ~23 MB/s vs ~21 MB/s legacy                         |
 
 ### Known Blockers
 
@@ -280,11 +282,11 @@ None critical. Minor items:
 
 ### Target Scope if Defaulted
 
-| Backend | Affected | Notes |
-|---------|----------|-------|
+| Backend                          | Affected                 | Notes                                  |
+| -------------------------------- | ------------------------ | -------------------------------------- |
 | Local shell (`PtyTarget::Shell`) | ✅ Would use planeai-pty | Same behavior, adds logging capability |
-| tmux | ❌ Unchanged | Still uses tmux attach |
-| Daemon | ❌ Unchanged | Still uses daemon backend |
+| tmux                             | ❌ Unchanged             | Still uses tmux attach                 |
+| Daemon                           | ❌ Unchanged             | Still uses daemon backend              |
 
 ### Decision
 
@@ -319,14 +321,14 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 
 ### Daemon Lifecycle Semantics
 
-| Action | Behavior |
-|--------|----------|
-| Cmd+W | Detach — session keeps running in daemon |
-| Cmd+Shift+W | Kill — daemon terminates the session |
-| Close window | Detach all daemon sessions (default) |
-| Cmd+R | Refresh daemon session list |
-| Cmd+A | Attach to first unattached daemon session |
-| Cmd+N | Spawn new daemon session |
+| Action       | Behavior                                  |
+| ------------ | ----------------------------------------- |
+| Cmd+W        | Detach — session keeps running in daemon  |
+| Cmd+Shift+W  | Kill — daemon terminates the session      |
+| Close window | Detach all daemon sessions (default)      |
+| Cmd+R        | Refresh daemon session list               |
+| Cmd+A        | Attach to first unattached daemon session |
+| Cmd+N        | Spawn new daemon session                  |
 
 ### Reconnect Flow
 
@@ -338,6 +340,7 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 ### Dogfood Readiness: Ready for limited daily use
 
 **Ready for:**
+
 - Developer testing
 - Performance evaluation
 - Daemon persistence validation
@@ -346,6 +349,7 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 - Reconnect after restart
 
 **Not ready for:**
+
 - Config-based daemon startup (requires env vars)
 - Daemon crash recovery (sessions lost if daemon dies)
 - Polished UI (basic prototype only)

@@ -21,13 +21,13 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::vte::ansi::Processor;
 use arboard::Clipboard;
 use clap::Parser as ClapParser;
+use iced::event;
 use iced::keyboard;
 use iced::mouse;
 use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::widget::Canvas;
-use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
-use iced::event;
 use iced::window;
+use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
 use serde_json::json;
 
 // --- CLI ---
@@ -93,7 +93,9 @@ pub struct Args {
 static ARGS: OnceLock<Args> = OnceLock::new();
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     let idx = ((p / 100.0) * (sorted.len() as f64 - 1.0)).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
 }
@@ -120,11 +122,20 @@ impl alacritty_terminal::event::EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
 }
 
-struct TermSize { cols: usize, rows: usize }
+struct TermSize {
+    cols: usize,
+    rows: usize,
+}
 impl Dimensions for TermSize {
-    fn columns(&self) -> usize { self.cols }
-    fn screen_lines(&self) -> usize { self.rows }
-    fn total_lines(&self) -> usize { self.rows }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
 }
 
 // --- Color mapping ---
@@ -149,7 +160,9 @@ fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color {
             NamedColor::BrightBlue => Color::from_rgb8(59, 142, 234),
             NamedColor::BrightMagenta => Color::from_rgb8(214, 112, 214),
             NamedColor::BrightCyan => Color::from_rgb8(41, 184, 219),
-            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => Color::from_rgb8(229, 229, 229),
+            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => {
+                Color::from_rgb8(229, 229, 229)
+            }
             NamedColor::Background => Color::from_rgb8(0, 0, 0),
             _ => Color::from_rgb8(229, 229, 229),
         },
@@ -158,16 +171,30 @@ fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color {
             let i = *idx;
             if i < 16 {
                 let table: [(u8, u8, u8); 16] = [
-                    (0,0,0),(205,49,49),(13,188,121),(229,229,16),
-                    (36,114,200),(188,63,188),(17,168,205),(229,229,229),
-                    (102,102,102),(241,76,76),(35,209,139),(245,245,67),
-                    (59,142,234),(214,112,214),(41,184,219),(255,255,255),
+                    (0, 0, 0),
+                    (205, 49, 49),
+                    (13, 188, 121),
+                    (229, 229, 16),
+                    (36, 114, 200),
+                    (188, 63, 188),
+                    (17, 168, 205),
+                    (229, 229, 229),
+                    (102, 102, 102),
+                    (241, 76, 76),
+                    (35, 209, 139),
+                    (245, 245, 67),
+                    (59, 142, 234),
+                    (214, 112, 214),
+                    (41, 184, 219),
+                    (255, 255, 255),
                 ];
                 let (r, g, b) = table[i as usize];
                 Color::from_rgb8(r, g, b)
             } else if i < 232 {
                 let j = i - 16;
-                let r = (j / 36) % 6; let g = (j / 6) % 6; let b = j % 6;
+                let r = (j / 36) % 6;
+                let g = (j / 6) % 6;
+                let b = j % 6;
                 let v = |c: u8| if c == 0 { 0u8 } else { 55 + 40 * c };
                 Color::from_rgb8(v(r), v(g), v(b))
             } else {
@@ -181,10 +208,20 @@ fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color {
 // --- Grid snapshot ---
 
 #[derive(Clone)]
-struct GridCell { c: char, fg: Color, bg: Color }
+struct GridCell {
+    c: char,
+    fg: Color,
+    bg: Color,
+}
 
 #[derive(Clone)]
-struct GridSnapshot { cells: Vec<Vec<GridCell>>, cursor_line: usize, cursor_col: usize, cols: usize, rows: usize }
+struct GridSnapshot {
+    cells: Vec<Vec<GridCell>>,
+    cursor_line: usize,
+    cursor_col: usize,
+    cols: usize,
+    rows: usize,
+}
 
 fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapshot {
     let grid = term.grid();
@@ -196,11 +233,21 @@ fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapshot {
         let mut row = Vec::with_capacity(cols);
         for j in 0..cols {
             let cell: &Cell = &grid[Line(i as i32)][Column(j)];
-            row.push(GridCell { c: cell.c, fg: ansi_color_to_iced(&cell.fg), bg: ansi_color_to_iced(&cell.bg) });
+            row.push(GridCell {
+                c: cell.c,
+                fg: ansi_color_to_iced(&cell.fg),
+                bg: ansi_color_to_iced(&cell.bg),
+            });
         }
         cells.push(row);
     }
-    GridSnapshot { cells, cursor_line: cursor.line.0 as usize, cursor_col: cursor.column.0, cols, rows }
+    GridSnapshot {
+        cells,
+        cursor_line: cursor.line.0 as usize,
+        cursor_col: cursor.column.0,
+        cols,
+        rows,
+    }
 }
 
 fn snapshot_text(term: &alacritty_terminal::Term<EventProxy>) -> String {
@@ -281,15 +328,17 @@ impl App {
             Vec::new()
         };
         let scrollback = args.scrollback_lines.unwrap_or(0);
-        let size = TermSize { cols: args.cols, rows: args.rows + scrollback };
+        let size = TermSize {
+            cols: args.cols,
+            rows: args.rows + scrollback,
+        };
         let config = alacritty_terminal::term::Config::default();
         let term = alacritty_terminal::Term::new(config, &size, EventProxy);
         let processor = Processor::new();
         let snapshot = snapshot_grid(&term);
 
         let pty = if is_shell_mode {
-            let cmd = args.command.as_deref()
-                .or(args.flood_command.as_deref());
+            let cmd = args.command.as_deref().or(args.flood_command.as_deref());
             let policy = shell::QueuePolicy::from_str(&args.output_queue_policy);
             Some(shell::Shell::spawn_with_policy(
                 0,
@@ -304,19 +353,37 @@ impl App {
 
         (
             Self {
-                data, offset: 0, term, processor, snapshot,
-                cache: Cache::new(), done: false,
-                boot_instant: Instant::now(), replay_start: None,
-                last_frame_instant: None, frames: 0,
-                frame_deltas: Vec::new(), render_works: Vec::new(), parse_times: Vec::new(),
-                max_pending_unparsed: 0, metrics_lines: Vec::new(),
-                pty, is_shell_mode,
-                input_id_counter: 0, input_write_latencies: Vec::new(),
-                input_events_received: 0, input_events_written: 0,
-                pty_output_batches: 0, pty_output_bytes: 0, max_pending_pty_output: 0,
-                input_bench_sent: 0, input_bench_last: None,
-                last_cols: args.cols as u16, last_rows: args.rows as u16,
-                warmup_done: false, frame_deltas_after_warmup: Vec::new(),
+                data,
+                offset: 0,
+                term,
+                processor,
+                snapshot,
+                cache: Cache::new(),
+                done: false,
+                boot_instant: Instant::now(),
+                replay_start: None,
+                last_frame_instant: None,
+                frames: 0,
+                frame_deltas: Vec::new(),
+                render_works: Vec::new(),
+                parse_times: Vec::new(),
+                max_pending_unparsed: 0,
+                metrics_lines: Vec::new(),
+                pty,
+                is_shell_mode,
+                input_id_counter: 0,
+                input_write_latencies: Vec::new(),
+                input_events_received: 0,
+                input_events_written: 0,
+                pty_output_batches: 0,
+                pty_output_bytes: 0,
+                max_pending_pty_output: 0,
+                input_bench_sent: 0,
+                input_bench_last: None,
+                last_cols: args.cols as u16,
+                last_rows: args.rows as u16,
+                warmup_done: false,
+                frame_deltas_after_warmup: Vec::new(),
                 input_events_failed: 0,
             },
             iced::Task::none(),
@@ -325,9 +392,17 @@ impl App {
 
     fn common_fields(&self) -> serde_json::Value {
         let args = ARGS.get().unwrap();
-        let fixture = args.replay.as_ref()
+        let fixture = args
+            .replay
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| if args.command.is_some() { "<command>".into() } else { "<shell>".into() });
+            .unwrap_or_else(|| {
+                if args.command.is_some() {
+                    "<command>".into()
+                } else {
+                    "<shell>".into()
+                }
+            });
         json!({
             "schema_version": 1,
             "backend": args.backend,
@@ -345,7 +420,9 @@ impl App {
         map.insert("timestamp_ms".into(), json!(ts_ms(&self.boot_instant)));
         map.insert("event_type".into(), json!(event_type));
         if let Some(extra_map) = extra.as_object() {
-            for (k, v) in extra_map { map.insert(k.clone(), v.clone()); }
+            for (k, v) in extra_map {
+                map.insert(k.clone(), v.clone());
+            }
         }
         self.metrics_lines.push(obj);
     }
@@ -353,44 +430,65 @@ impl App {
     fn update(&mut self, message: Message) {
         match message {
             Message::WindowResized(size) => {
-                if self.pty.is_none() { return; }
+                if self.pty.is_none() {
+                    return;
+                }
                 // Compute new cols/rows from window size
                 let cw = 9.0f32;
                 let ch = 18.0f32;
                 let new_cols = (size.width / cw).floor() as u16;
                 let new_rows = (size.height / ch).floor() as u16;
-                if new_cols < 2 || new_rows < 2 { return; }
-                if new_cols == self.last_cols && new_rows == self.last_rows { return; }
+                if new_cols < 2 || new_rows < 2 {
+                    return;
+                }
+                if new_cols == self.last_cols && new_rows == self.last_rows {
+                    return;
+                }
 
                 let resize_start = Instant::now();
                 // Resize alacritty_terminal
-                let term_size = TermSize { cols: new_cols as usize, rows: new_rows as usize };
+                let term_size = TermSize {
+                    cols: new_cols as usize,
+                    rows: new_rows as usize,
+                };
                 self.term.resize(term_size);
                 // Resize PTY
                 self.pty.as_ref().unwrap().resize(new_cols, new_rows);
                 let latency = resize_start.elapsed().as_secs_f64() * 1000.0;
 
-                self.emit("pty_resize", json!({
-                    "cols": new_cols,
-                    "rows": new_rows,
-                    "prev_cols": self.last_cols,
-                    "prev_rows": self.last_rows,
-                    "resize_latency_ms": latency,
-                }));
+                self.emit(
+                    "pty_resize",
+                    json!({
+                        "cols": new_cols,
+                        "rows": new_rows,
+                        "prev_cols": self.last_cols,
+                        "prev_rows": self.last_rows,
+                        "resize_latency_ms": latency,
+                    }),
+                );
 
                 self.last_cols = new_cols;
                 self.last_rows = new_rows;
                 self.snapshot = snapshot_grid(&self.term);
                 self.cache.clear();
             }
-            Message::KeyEvent(keyboard::Event::KeyPressed { key, modifiers, text, .. }) => {
-                if self.pty.is_none() { return; }
+            Message::KeyEvent(keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                text,
+                ..
+            }) => {
+                if self.pty.is_none() {
+                    return;
+                }
 
                 // Paste: Cmd+V (macOS) or Ctrl+V (Linux/Windows without Ctrl encoding)
                 let is_paste = if cfg!(target_os = "macos") {
-                    modifiers.command() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                    modifiers.command()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
                 } else {
-                    modifiers.control() && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
+                    modifiers.control()
+                        && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "v")
                 };
 
                 if is_paste {
@@ -402,11 +500,14 @@ impl App {
                 self.input_id_counter += 1;
                 let input_id = self.input_id_counter;
 
-                self.emit("input_event_received", json!({
-                    "input_id": input_id,
-                    "input_kind": "key",
-                    "key": format!("{:?}", key),
-                }));
+                self.emit(
+                    "input_event_received",
+                    json!({
+                        "input_id": input_id,
+                        "input_kind": "key",
+                        "key": format!("{:?}", key),
+                    }),
+                );
 
                 let bytes = input::encode_key_event(&key, &modifiers, &text);
                 if let Some(ref bytes) = bytes {
@@ -417,17 +518,22 @@ impl App {
                         self.input_write_latencies.push(latency);
                         self.input_events_written += 1;
 
-                        self.emit("input_write_done", json!({
-                            "input_id": input_id,
-                            "input_bytes": bytes.len(),
-                            "input_write_latency_ms": latency,
-                        }));
+                        self.emit(
+                            "input_write_done",
+                            json!({
+                                "input_id": input_id,
+                                "input_bytes": bytes.len(),
+                                "input_write_latency_ms": latency,
+                            }),
+                        );
                     }
                 }
             }
             Message::KeyEvent(_) => {}
             Message::PtyPoll => {
-                if self.pty.is_none() { return; }
+                if self.pty.is_none() {
+                    return;
+                }
 
                 // Drain output
                 let pending = self.pty.as_ref().unwrap().pending_len();
@@ -454,7 +560,8 @@ impl App {
                     self.frames += 1;
 
                     let now = Instant::now();
-                    let frame_delta = self.last_frame_instant
+                    let frame_delta = self
+                        .last_frame_instant
                         .map(|prev| now.duration_since(prev).as_secs_f64() * 1000.0);
                     self.last_frame_instant = Some(now);
                     if let Some(fd) = frame_delta {
@@ -472,13 +579,16 @@ impl App {
                     }
 
                     let pending_after = self.pty.as_ref().unwrap().pending_len();
-                    self.emit("pty_output_batch", json!({
-                        "batch_bytes": batch_len,
-                        "parse_time_ms": parse_ms,
-                        "render_work_ms": render_ms,
-                        "frame_delta_ms": frame_delta,
-                        "pending_pty_output_bytes": pending_after,
-                    }));
+                    self.emit(
+                        "pty_output_batch",
+                        json!({
+                            "batch_bytes": batch_len,
+                            "parse_time_ms": parse_ms,
+                            "render_work_ms": render_ms,
+                            "frame_delta_ms": frame_delta,
+                            "pending_pty_output_bytes": pending_after,
+                        }),
+                    );
                 }
 
                 // Input benchmark: inject synthetic keystrokes
@@ -496,11 +606,14 @@ impl App {
                         let input_id = self.input_id_counter;
                         let ch = b'a' + ((self.input_bench_sent % 26) as u8);
 
-                        self.emit("input_event_received", json!({
-                            "input_id": input_id,
-                            "input_kind": "synthetic",
-                            "key": (ch as char).to_string(),
-                        }));
+                        self.emit(
+                            "input_event_received",
+                            json!({
+                                "input_id": input_id,
+                                "input_kind": "synthetic",
+                                "key": (ch as char).to_string(),
+                            }),
+                        );
 
                         let write_start = Instant::now();
                         self.pty.as_ref().unwrap().write(&[ch]);
@@ -509,11 +622,14 @@ impl App {
                         self.input_events_received += 1;
                         self.input_events_written += 1;
 
-                        self.emit("input_write_done", json!({
-                            "input_id": input_id,
-                            "input_bytes": 1,
-                            "input_write_latency_ms": latency,
-                        }));
+                        self.emit(
+                            "input_write_done",
+                            json!({
+                                "input_id": input_id,
+                                "input_bytes": 1,
+                                "input_write_latency_ms": latency,
+                            }),
+                        );
                     }
                     if self.input_bench_sent >= args.input_events && args.exit_when_done {
                         self.done = true;
@@ -522,27 +638,35 @@ impl App {
                 }
 
                 // Detect PTY child exit
-                if !self.done && args.exit_when_done {
-                    if self.pty.as_ref().unwrap().has_exited() && self.pty.as_ref().unwrap().pending_len() == 0 {
-                        self.done = true;
-                        self.finish_shell();
-                    }
+                if !self.done
+                    && args.exit_when_done
+                    && self.pty.as_ref().unwrap().has_exited()
+                    && self.pty.as_ref().unwrap().pending_len() == 0
+                {
+                    self.done = true;
+                    self.finish_shell();
                 }
             }
             Message::Tick => {
-                if self.done || self.is_shell_mode { return; }
+                if self.done || self.is_shell_mode {
+                    return;
+                }
                 let args = ARGS.get().unwrap();
 
                 if self.replay_start.is_none() {
                     self.replay_start = Some(Instant::now());
-                    self.emit("replay_start", json!({
-                        "bytes_total": 0,
-                        "queue_depth_bytes": self.data.len(),
-                    }));
+                    self.emit(
+                        "replay_start",
+                        json!({
+                            "bytes_total": 0,
+                            "queue_depth_bytes": self.data.len(),
+                        }),
+                    );
                 }
 
                 let now = Instant::now();
-                let frame_delta_ms = self.last_frame_instant
+                let frame_delta_ms = self
+                    .last_frame_instant
                     .map(|prev| now.duration_since(prev).as_secs_f64() * 1000.0);
                 self.last_frame_instant = Some(now);
                 if let Some(fd) = frame_delta_ms {
@@ -563,13 +687,18 @@ impl App {
                 let bytes_fed = end - self.offset;
 
                 // max_pending_unparsed = chunk size (synchronous replay)
-                if bytes_fed > self.max_pending_unparsed { self.max_pending_unparsed = bytes_fed; }
+                if bytes_fed > self.max_pending_unparsed {
+                    self.max_pending_unparsed = bytes_fed;
+                }
 
-                self.emit("chunk_sent", json!({
-                    "bytes_total": self.offset + bytes_fed,
-                    "bytes_since_last_event": bytes_fed,
-                    "queue_depth_bytes": self.data.len() - end,
-                }));
+                self.emit(
+                    "chunk_sent",
+                    json!({
+                        "bytes_total": self.offset + bytes_fed,
+                        "bytes_since_last_event": bytes_fed,
+                        "queue_depth_bytes": self.data.len() - end,
+                    }),
+                );
 
                 let parse_start = Instant::now();
                 self.processor.advance(&mut self.term, &chunk);
@@ -577,12 +706,15 @@ impl App {
                 self.parse_times.push(parse_time_ms);
                 self.offset = end;
 
-                self.emit("parse_batch", json!({
-                    "bytes_total": self.offset,
-                    "bytes_since_last_event": bytes_fed,
-                    "parse_time_ms": parse_time_ms,
-                    "queue_depth_bytes": self.data.len() - self.offset,
-                }));
+                self.emit(
+                    "parse_batch",
+                    json!({
+                        "bytes_total": self.offset,
+                        "bytes_since_last_event": bytes_fed,
+                        "parse_time_ms": parse_time_ms,
+                        "queue_depth_bytes": self.data.len() - self.offset,
+                    }),
+                );
 
                 let render_start = Instant::now();
                 self.snapshot = snapshot_grid(&self.term);
@@ -591,36 +723,51 @@ impl App {
                 self.render_works.push(render_work_ms);
                 self.frames += 1;
 
-                self.emit("render_frame", json!({
-                    "bytes_total": self.offset,
-                    "render_work_ms": render_work_ms,
-                    "frame_delta_ms": frame_delta_ms,
-                    "queue_depth_bytes": self.data.len() - self.offset,
-                    "rss_mb": get_rss_mb(),
-                }));
-
-                if self.frames % 10 == 0 {
-                    self.emit("frame_sample", json!({
+                self.emit(
+                    "render_frame",
+                    json!({
                         "bytes_total": self.offset,
+                        "render_work_ms": render_work_ms,
+                        "frame_delta_ms": frame_delta_ms,
                         "queue_depth_bytes": self.data.len() - self.offset,
                         "rss_mb": get_rss_mb(),
-                        "frame_delta_ms": frame_delta_ms,
-                        "render_work_ms": render_work_ms,
-                        "parse_time_ms": parse_time_ms,
-                    }));
+                    }),
+                );
+
+                if self.frames.is_multiple_of(10) {
+                    self.emit(
+                        "frame_sample",
+                        json!({
+                            "bytes_total": self.offset,
+                            "queue_depth_bytes": self.data.len() - self.offset,
+                            "rss_mb": get_rss_mb(),
+                            "frame_delta_ms": frame_delta_ms,
+                            "render_work_ms": render_work_ms,
+                            "parse_time_ms": parse_time_ms,
+                        }),
+                    );
                 }
-                if self.frames % 20 == 0 {
-                    self.emit("backlog_sample", json!({
-                        "bytes_total": self.offset,
-                        "queue_depth_bytes": self.data.len() - self.offset,
-                    }));
+                if self.frames.is_multiple_of(20) {
+                    self.emit(
+                        "backlog_sample",
+                        json!({
+                            "bytes_total": self.offset,
+                            "queue_depth_bytes": self.data.len() - self.offset,
+                        }),
+                    );
                 }
 
                 if let Some(max_ms) = args.max_runtime_ms {
-                    if ts_ms(&self.replay_start.unwrap()) > max_ms as f64 { self.done = true; }
+                    if ts_ms(&self.replay_start.unwrap()) > max_ms as f64 {
+                        self.done = true;
+                    }
                 }
-                if self.offset >= self.data.len() { self.done = true; }
-                if self.done { self.finish_replay(); }
+                if self.offset >= self.data.len() {
+                    self.done = true;
+                }
+                if self.done {
+                    self.finish_replay();
+                }
             }
         }
     }
@@ -640,18 +787,23 @@ impl App {
                 return;
             }
         };
-        if text.is_empty() { return; }
+        if text.is_empty() {
+            return;
+        }
 
         self.input_events_received += 1;
         self.input_id_counter += 1;
         let input_id = self.input_id_counter;
         let bytes = text.as_bytes();
 
-        self.emit("input_event_received", json!({
-            "input_id": input_id,
-            "input_kind": "paste",
-            "input_bytes": bytes.len(),
-        }));
+        self.emit(
+            "input_event_received",
+            json!({
+                "input_id": input_id,
+                "input_kind": "paste",
+                "input_bytes": bytes.len(),
+            }),
+        );
 
         // Write paste content to PTY (no bracketed paste mode — documented limitation)
         let write_start = Instant::now();
@@ -660,12 +812,15 @@ impl App {
         self.input_write_latencies.push(latency);
         self.input_events_written += 1;
 
-        self.emit("input_write_done", json!({
-            "input_id": input_id,
-            "input_kind": "paste",
-            "input_bytes": bytes.len(),
-            "input_write_latency_ms": latency,
-        }));
+        self.emit(
+            "input_write_done",
+            json!({
+                "input_id": input_id,
+                "input_kind": "paste",
+                "input_bytes": bytes.len(),
+                "input_write_latency_ms": latency,
+            }),
+        );
     }
 
     fn finish_replay(&mut self) {
@@ -673,26 +828,44 @@ impl App {
         let replay_start = self.replay_start.unwrap();
         let wall_time_ms = replay_start.elapsed().as_secs_f64() * 1000.0;
 
-        self.emit("replay_done", json!({
-            "bytes_total": self.offset,
-            "queue_depth_bytes": self.data.len() - self.offset,
-            "wall_time_ms": wall_time_ms,
-        }));
+        self.emit(
+            "replay_done",
+            json!({
+                "bytes_total": self.offset,
+                "queue_depth_bytes": self.data.len() - self.offset,
+                "wall_time_ms": wall_time_ms,
+            }),
+        );
 
         if let Some(snap_path) = &args.snapshot {
-            if let Some(parent) = snap_path.parent() { let _ = fs::create_dir_all(parent); }
+            if let Some(parent) = snap_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
             fs::write(snap_path, snapshot_text(&self.term)).expect("Failed to write snapshot");
         }
 
         let total_bytes = self.data.len();
-        let replay_mode = if args.chunk_interval_ms == 0 { "maxspeed" } else { "realtime" };
-        let expected_min = ((total_bytes as f64 / args.chunk_size as f64).ceil() as u64) * args.chunk_interval_ms;
-        let avg_mb_s = if wall_time_ms > 0.0 { (total_bytes as f64 / 1_048_576.0) / (wall_time_ms / 1000.0) } else { 0.0 };
+        let replay_mode = if args.chunk_interval_ms == 0 {
+            "maxspeed"
+        } else {
+            "realtime"
+        };
+        let expected_min =
+            ((total_bytes as f64 / args.chunk_size as f64).ceil() as u64) * args.chunk_interval_ms;
+        let avg_mb_s = if wall_time_ms > 0.0 {
+            (total_bytes as f64 / 1_048_576.0) / (wall_time_ms / 1000.0)
+        } else {
+            0.0
+        };
 
-        let mut fd = self.frame_deltas.clone(); fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut fd_warmup = self.frame_deltas_after_warmup.clone(); fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut rw = self.render_works.clone(); rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut pt = self.parse_times.clone(); pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd = self.frame_deltas.clone();
+        fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd_warmup = self.frame_deltas_after_warmup.clone();
+        fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut rw = self.render_works.clone();
+        rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut pt = self.parse_times.clone();
+        pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let startup_ms = replay_start.duration_since(self.boot_instant).as_secs_f64() * 1000.0;
         let warmup_ms = args.warmup_ms.unwrap_or(500);
 
@@ -759,7 +932,9 @@ impl App {
         self.metrics_lines.push(summary);
         self.write_metrics();
 
-        if args.exit_when_done { std::process::exit(0); }
+        if args.exit_when_done {
+            std::process::exit(0);
+        }
     }
 
     fn finish_shell(&mut self) {
@@ -768,13 +943,22 @@ impl App {
 
         self.emit("shell_exit", json!({ "wall_time_ms": wall_time_ms }));
 
-        let mut fd = self.frame_deltas.clone(); fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut fd_warmup = self.frame_deltas_after_warmup.clone(); fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut rw = self.render_works.clone(); rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut pt = self.parse_times.clone(); pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut iwl = self.input_write_latencies.clone(); iwl.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd = self.frame_deltas.clone();
+        fd.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut fd_warmup = self.frame_deltas_after_warmup.clone();
+        fd_warmup.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut rw = self.render_works.clone();
+        rw.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut pt = self.parse_times.clone();
+        pt.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut iwl = self.input_write_latencies.clone();
+        iwl.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let max_pty = self.pty.as_ref().map(|p| *p.max_pending_bytes.lock().unwrap()).unwrap_or(0);
+        let max_pty = self
+            .pty
+            .as_ref()
+            .map(|p| *p.max_pending_bytes.lock().unwrap())
+            .unwrap_or(0);
         let bytes_dropped = self.pty.as_ref().map(|p| p.bytes_dropped()).unwrap_or(0);
         let warmup_ms = args.warmup_ms.unwrap_or(500);
 
@@ -848,13 +1032,17 @@ impl App {
         self.metrics_lines.push(summary);
         self.write_metrics();
 
-        if args.exit_when_done { std::process::exit(0); }
+        if args.exit_when_done {
+            std::process::exit(0);
+        }
     }
 
     fn write_metrics(&self) {
         let args = ARGS.get().unwrap();
         if let Some(path) = &args.metrics {
-            if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
             let mut file = fs::File::create(path).expect("Failed to create metrics file");
             for line in &self.metrics_lines {
                 writeln!(file, "{}", serde_json::to_string(line).unwrap()).unwrap();
@@ -863,10 +1051,13 @@ impl App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        Canvas::new(TermRenderer { snapshot: &self.snapshot, cache: &self.cache })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        Canvas::new(TermRenderer {
+            snapshot: &self.snapshot,
+            cache: &self.cache,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -896,19 +1087,29 @@ impl App {
 
 // --- Canvas Program ---
 
-struct TermRenderer<'a> { snapshot: &'a GridSnapshot, cache: &'a Cache }
+struct TermRenderer<'a> {
+    snapshot: &'a GridSnapshot,
+    cache: &'a Cache,
+}
 
 impl<'a> Program<Message> for TermRenderer<'a> {
     type State = ();
 
     fn draw(
-        &self, _state: &Self::State, renderer: &Renderer, _theme: &Theme,
-        bounds: Rectangle, _cursor: mouse::Cursor,
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
             let cw = bounds.width / self.snapshot.cols as f32;
             let ch = bounds.height / self.snapshot.rows as f32;
-            let font_size = ARGS.get().and_then(|a| a.font_size).unwrap_or((ch * 0.85).min(16.0));
+            let font_size = ARGS
+                .get()
+                .and_then(|a| a.font_size)
+                .unwrap_or((ch * 0.85).min(16.0));
 
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgb8(30, 30, 30));
 
@@ -920,7 +1121,11 @@ impl<'a> Program<Message> for TermRenderer<'a> {
                         frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), cell.bg);
                     }
                     if ri == self.snapshot.cursor_line && ci == self.snapshot.cursor_col {
-                        frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), Color::from_rgba8(200, 200, 200, 0.4));
+                        frame.fill_rectangle(
+                            Point::new(x, y),
+                            Size::new(cw, ch),
+                            Color::from_rgba8(200, 200, 200, 0.4),
+                        );
                     }
                     if cell.c != ' ' && cell.c != '\0' {
                         frame.fill_text(Text {
@@ -941,7 +1146,9 @@ impl<'a> Program<Message> for TermRenderer<'a> {
 
 // --- Main ---
 
-fn title(_state: &App) -> String { String::from("PlaneAI Iced Terminal Spike") }
+fn title(_state: &App) -> String {
+    String::from("PlaneAI Iced Terminal Spike")
+}
 
 fn main() -> iced::Result {
     let args = Args::parse();

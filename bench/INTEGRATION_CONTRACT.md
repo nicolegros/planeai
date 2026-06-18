@@ -45,27 +45,27 @@ planeai-iced-spike \
 
 ### Required flags
 
-| Flag | Type | Description |
-|------|------|-------------|
-| `--replay` | path | Input .ansi fixture file |
-| `--cols` | int | Terminal columns |
-| `--rows` | int | Terminal rows |
-| `--chunk-size` | int | Bytes per chunk |
-| `--chunk-interval-ms` | int | Delay between chunks (0 = maxspeed) |
-| `--metrics` | path | Output JSONL metrics file |
-| `--backend` | string | Must be `iced-alacritty` |
-| `--exit-when-done` | flag | Exit process after replay completes |
+| Flag                  | Type   | Description                         |
+| --------------------- | ------ | ----------------------------------- |
+| `--replay`            | path   | Input .ansi fixture file            |
+| `--cols`              | int    | Terminal columns                    |
+| `--rows`              | int    | Terminal rows                       |
+| `--chunk-size`        | int    | Bytes per chunk                     |
+| `--chunk-interval-ms` | int    | Delay between chunks (0 = maxspeed) |
+| `--metrics`           | path   | Output JSONL metrics file           |
+| `--backend`           | string | Must be `iced-alacritty`            |
+| `--exit-when-done`    | flag   | Exit process after replay completes |
 
 ### Optional flags
 
-| Flag | Type | Description |
-|------|------|-------------|
-| `--snapshot` | path | Write final visible terminal text |
-| `--font-size` | int | Font size for rendering |
-| `--scrollback-lines` | int | Scrollback buffer size |
-| `--max-runtime-ms` | int | Safety timeout |
-| `--headless` | flag | Run without window if supported |
-| `--warmup-ms` | int | Warmup period before measuring |
+| Flag                 | Type | Description                       |
+| -------------------- | ---- | --------------------------------- |
+| `--snapshot`         | path | Write final visible terminal text |
+| `--font-size`        | int  | Font size for rendering           |
+| `--scrollback-lines` | int  | Scrollback buffer size            |
+| `--max-runtime-ms`   | int  | Safety timeout                    |
+| `--headless`         | flag | Run without window if supported   |
+| `--warmup-ms`        | int  | Warmup period before measuring    |
 
 The spike must create the metrics parent directory if it doesn't exist.
 
@@ -98,16 +98,16 @@ The spike must create the metrics parent directory if it doesn't exist.
 
 ### Backend-specific per-event fields
 
-| Field | tauri-xterm | iced-alacritty | Description |
-|-------|-------------|----------------|-------------|
-| `write_latency_ms` | ✓ | null | xterm term.write callback latency |
-| `parse_time_ms` | null | ✓ | ANSI parsing / grid update time |
-| `frame_delta_ms` | ✓ | ✓ | Time between visual frames |
-| `render_work_ms` | null | ✓ | Time spent doing GPU/rendering work |
-| `rss_mb` | null | ✓ | Process RSS memory |
-| `js_heap_mb` | ✓ | null | JavaScript heap usage |
-| `queue_depth_bytes` | ✓ | ✓ | Bytes waiting to be processed |
-| `bytes_since_last_event` | ✓ | ✓ | Bytes in this chunk |
+| Field                    | tauri-xterm | iced-alacritty | Description                         |
+| ------------------------ | ----------- | -------------- | ----------------------------------- |
+| `write_latency_ms`       | ✓           | null           | xterm term.write callback latency   |
+| `parse_time_ms`          | null        | ✓              | ANSI parsing / grid update time     |
+| `frame_delta_ms`         | ✓           | ✓              | Time between visual frames          |
+| `render_work_ms`         | null        | ✓              | Time spent doing GPU/rendering work |
+| `rss_mb`                 | null        | ✓              | Process RSS memory                  |
+| `js_heap_mb`             | ✓           | null           | JavaScript heap usage               |
+| `queue_depth_bytes`      | ✓           | ✓              | Bytes waiting to be processed       |
+| `bytes_since_last_event` | ✓           | ✓              | Bytes in this chunk                 |
 
 ### Required event types
 
@@ -152,12 +152,12 @@ The **last line** of the JSONL file must be the summary event.
   "p99_frame_delta_ms": 18.2,
 
   "p50_render_work_ms": 0.12,
-  "p95_render_work_ms": 0.50,
+  "p95_render_work_ms": 0.5,
   "p99_render_work_ms": 0.75,
 
-  "p50_parse_time_ms": 0.10,
+  "p50_parse_time_ms": 0.1,
   "p95_parse_time_ms": 0.42,
-  "p99_parse_time_ms": 0.70,
+  "p99_parse_time_ms": 0.7,
 
   "p50_write_latency_ms": null,
   "p95_write_latency_ms": null,
@@ -215,12 +215,14 @@ bench/results/{backend}_{fixture_stem}_{cols}x{rows}_{chunk_kb}k_{interval_ms}ms
 ```
 
 Examples:
+
 ```
 bench/results/tauri-xterm_mixed-agent-like_120x40_16k_4ms_run1.jsonl
 bench/results/iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.jsonl
 ```
 
 Snapshots use `.txt` extension at the same path:
+
 ```
 bench/results/iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.txt
 ```
@@ -230,6 +232,7 @@ bench/results/iced-alacritty_mixed-agent-like_120x40_16k_4ms_run1.txt
 ## Correctness Snapshots
 
 If `--snapshot <path>` is provided:
+
 - Write the final visible terminal text (rows × cols) to that path.
 - Plain text, no color codes.
 - One line per terminal row.
@@ -239,12 +242,12 @@ If `--snapshot <path>` is provided:
 
 ## Metric Naming Rules
 
-| Metric | Meaning | Backend |
-|--------|---------|---------|
-| `write_latency_ms` | xterm `term.write` call → callback | tauri-xterm only |
-| `parse_time_ms` | ANSI bytes → terminal state update | iced-alacritty only |
-| `frame_delta_ms` | Time between visual frames | both |
-| `render_work_ms` | Time spent in render pass | iced-alacritty only |
+| Metric             | Meaning                            | Backend             |
+| ------------------ | ---------------------------------- | ------------------- |
+| `write_latency_ms` | xterm `term.write` call → callback | tauri-xterm only    |
+| `parse_time_ms`    | ANSI bytes → terminal state update | iced-alacritty only |
+| `frame_delta_ms`   | Time between visual frames         | both                |
+| `render_work_ms`   | Time spent in render pass          | iced-alacritty only |
 
 **Do not** compare `write_latency_ms` directly against `parse_time_ms` — they measure different things.
 

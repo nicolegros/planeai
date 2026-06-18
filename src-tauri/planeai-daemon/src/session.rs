@@ -122,7 +122,10 @@ impl DaemonSession {
                 alive: Arc::clone(&alive),
             });
             if let Some(log_sink) = DurableLogSink::open(&session_id, command, cwd) {
-                Arc::new(TeeEventSink { primary, log: log_sink })
+                Arc::new(TeeEventSink {
+                    primary,
+                    log: log_sink,
+                })
             } else {
                 primary
             }
@@ -134,9 +137,8 @@ impl DaemonSession {
             format!("{} {}", command, args.join(" "))
         };
 
-        let mut env_vec: Vec<(String, String)> = vec![
-            ("TERM".to_string(), "xterm-256color".to_string()),
-        ];
+        let mut env_vec: Vec<(String, String)> =
+            vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(env_map) = env {
             for (k, v) in env_map {
                 env_vec.push((k.clone(), v.clone()));
@@ -323,7 +325,11 @@ impl DurableLogSink {
         let log_path = session_dir.join(&log_filename);
         let meta_path = session_dir.join("meta.json");
 
-        let file = OpenOptions::new().create(true).append(true).open(&log_path).ok()?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()?;
 
         let meta = DaemonSessionMeta {
             schema_version: 1,
@@ -342,7 +348,10 @@ impl DurableLogSink {
             exit_status: None,
             status: "running".to_string(),
         };
-        let _ = fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap_or_default());
+        let _ = fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&meta).unwrap_or_default(),
+        );
 
         tracing::info!(session_id, path = %log_path.display(), "daemon durable log enabled");
 
@@ -360,9 +369,11 @@ impl DurableLogSink {
             PtyEvent::Output { bytes, .. } => {
                 if let Ok(mut f) = self.file.lock() {
                     if f.write_all(bytes).is_ok() {
-                        self.bytes_written.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        self.bytes_written
+                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                     } else {
-                        self.bytes_dropped.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                        self.bytes_dropped
+                            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
                     }
                 }
             }
@@ -373,7 +384,10 @@ impl DurableLogSink {
                     meta.status = "exited".to_string();
                     meta.bytes_written = self.bytes_written.load(Ordering::Relaxed);
                     meta.bytes_dropped = self.bytes_dropped.load(Ordering::Relaxed);
-                    let _ = fs::write(&self.meta_path, serde_json::to_string_pretty(&*meta).unwrap_or_default());
+                    let _ = fs::write(
+                        &self.meta_path,
+                        serde_json::to_string_pretty(&*meta).unwrap_or_default(),
+                    );
                 }
             }
             PtyEvent::Error { .. } => {}

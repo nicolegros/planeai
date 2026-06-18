@@ -8,7 +8,9 @@ pub enum QueuePolicy {
 }
 
 impl Default for QueuePolicy {
-    fn default() -> Self { Self::Block }
+    fn default() -> Self {
+        Self::Block
+    }
 }
 
 pub struct LocalPtyConfig {

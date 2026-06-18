@@ -59,25 +59,26 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 
 ### Definitions
 
-| Action | Behavior |
-|--------|----------|
-| **detach** | UI stops displaying the session. Daemon keeps it running. User can reattach later. |
-| **kill** | UI sends explicit kill command. Daemon terminates the PTY process. Logs finalize. |
-| **close tab** (Cmd+W) | For daemon sessions: detach. Does NOT kill. |
-| **close window** | Detaches all daemon sessions by default. Does NOT kill. |
-| **exit-when-done** | For benchmarks: may kill/cleanup after completion (--kill-sessions-on-exit). |
+| Action                | Behavior                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| **detach**            | UI stops displaying the session. Daemon keeps it running. User can reattach later. |
+| **kill**              | UI sends explicit kill command. Daemon terminates the PTY process. Logs finalize.  |
+| **close tab** (Cmd+W) | For daemon sessions: detach. Does NOT kill.                                        |
+| **close window**      | Detaches all daemon sessions by default. Does NOT kill.                            |
+| **exit-when-done**    | For benchmarks: may kill/cleanup after completion (--kill-sessions-on-exit).       |
 
 ### CLI Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--detach-on-close` | true | Detach daemon sessions when UI closes (don't kill) |
-| `--kill-on-close` | false | Kill daemon sessions when UI closes (benchmark cleanup) |
-| `--kill-sessions-on-exit` | false | Kill all sessions on exit (explicit opt-in) |
+| Flag                      | Default | Description                                             |
+| ------------------------- | ------- | ------------------------------------------------------- |
+| `--detach-on-close`       | true    | Detach daemon sessions when UI closes (don't kill)      |
+| `--kill-on-close`         | false   | Kill daemon sessions when UI closes (benchmark cleanup) |
+| `--kill-sessions-on-exit` | false   | Kill all sessions on exit (explicit opt-in)             |
 
 ### Close-Window Behavior
 
 When the Iced window closes:
+
 1. For daemon sessions with `--detach-on-close` (default): sends detach, drops data connection. Daemon keeps PTY alive.
 2. For daemon sessions with `--kill-on-close`: sends kill command. Daemon terminates PTY.
 3. For non-daemon sessions (spike-local, planeai-local): process terminates with the app (no persistence).
@@ -88,24 +89,24 @@ The daemon's `remove_dead` only removes sessions whose PTY process has exited (`
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| Cmd+N | Spawn new daemon session |
-| Cmd+W | Detach active daemon session (don't kill) |
-| Cmd+Shift+W | Kill active daemon session |
-| Cmd+R | Refresh daemon session list |
-| Cmd+A | Attach to first unattached daemon session |
-| Cmd+1..9 | Switch between attached sessions |
-| Cmd+Tab | Cycle sessions |
+| Shortcut    | Action                                    |
+| ----------- | ----------------------------------------- |
+| Cmd+N       | Spawn new daemon session                  |
+| Cmd+W       | Detach active daemon session (don't kill) |
+| Cmd+Shift+W | Kill active daemon session                |
+| Cmd+R       | Refresh daemon session list               |
+| Cmd+A       | Attach to first unattached daemon session |
+| Cmd+1..9    | Switch between attached sessions          |
+| Cmd+Tab     | Cycle sessions                            |
 
 ## Session Status
 
-| Status | Icon | Meaning |
-|--------|------|---------|
-| Running | ● | Session is alive and attached |
-| Attached | ◉ | Explicitly attached to existing session |
-| Exited | ○ | PTY process terminated |
-| Detached | ◌ | Session alive in daemon, not displayed in UI |
+| Status   | Icon | Meaning                                      |
+| -------- | ---- | -------------------------------------------- |
+| Running  | ●    | Session is alive and attached                |
+| Attached | ◉    | Explicitly attached to existing session      |
+| Exited   | ○    | PTY process terminated                       |
+| Detached | ◌    | Session alive in daemon, not displayed in UI |
 
 ## Reconnect After Restart
 
@@ -142,6 +143,7 @@ The daemon's `remove_dead` only removes sessions whose PTY process has exited (`
 ## Durable Logs
 
 When `PLANEAI_SESSION_LOG_DIR` is set:
+
 - Daemon writes raw `.ansi` output log per session
 - `meta.json` tracks session_id, command, cwd, status, bytes
 - On kill/exit: meta.json finalized with ended_at, exit_status
@@ -162,53 +164,53 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 
 ### Lifecycle Events
 
-| event_type | When |
-|-----------|------|
-| daemon_connected | Daemon becomes reachable |
-| daemon_disconnected | Daemon becomes unreachable |
-| daemon_session_listed | Session list refreshed |
-| daemon_session_attached | Session attached |
-| daemon_session_detached | Session detached |
-| daemon_session_killed | Session killed |
+| event_type              | When                       |
+| ----------------------- | -------------------------- |
+| daemon_connected        | Daemon becomes reachable   |
+| daemon_disconnected     | Daemon becomes unreachable |
+| daemon_session_listed   | Session list refreshed     |
+| daemon_session_attached | Session attached           |
+| daemon_session_detached | Session detached           |
+| daemon_session_killed   | Session killed             |
 
 ### Summary Fields
 
-| Field | Description |
-|-------|-------------|
-| sessions_listed | Number of list operations |
-| sessions_attached | Number of attach operations |
-| sessions_detached | Number of detach operations |
-| sessions_killed | Number of kill operations |
-| daemon_connected | Whether daemon was connected at summary time |
+| Field             | Description                                  |
+| ----------------- | -------------------------------------------- |
+| sessions_listed   | Number of list operations                    |
+| sessions_attached | Number of attach operations                  |
+| sessions_detached | Number of detach operations                  |
+| sessions_killed   | Number of kill operations                    |
+| daemon_connected  | Whether daemon was connected at summary time |
 
 ## Session Sources
 
-| Source | Flag | Description |
-|--------|------|-------------|
-| spike-local | `--session-source spike-local` | Legacy portable-pty (test fallback) |
-| planeai-local | `--session-source planeai-local` | planeai-pty crate, in-process |
-| planeai-daemon | `--session-source planeai-daemon` | Daemon-backed persistent sessions |
+| Source         | Flag                              | Description                         |
+| -------------- | --------------------------------- | ----------------------------------- |
+| spike-local    | `--session-source spike-local`    | Legacy portable-pty (test fallback) |
+| planeai-local  | `--session-source planeai-local`  | planeai-pty crate, in-process       |
+| planeai-daemon | `--session-source planeai-daemon` | Daemon-backed persistent sessions   |
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PLANEAI_DAEMON_PTY_CORE` | (unset=legacy) | Set to `planeai-pty` for new PTY backend |
-| `PLANEAI_SESSION_LOG_DIR` | (unset=no logs) | Directory for durable session logs |
+| Variable                  | Default         | Description                              |
+| ------------------------- | --------------- | ---------------------------------------- |
+| `PLANEAI_DAEMON_PTY_CORE` | (unset=legacy)  | Set to `planeai-pty` for new PTY backend |
+| `PLANEAI_SESSION_LOG_DIR` | (unset=no logs) | Directory for durable session logs       |
 
 ## Benchmark Results (10s flood, 3 sessions)
 
-| Metric | planeai-local | planeai-daemon |
-|--------|--------------|----------------|
-| Throughput | 20.17 MB/s | 45.50 MB/s |
-| Total bytes | 211 MB | 477 MB |
-| p95 frame delta | 16.9 ms | 18.0 ms |
-| p99 frame delta | 23.3 ms | 22.0 ms |
-| p95 parse time | 1.03 ms | 2.32 ms |
-| p99 parse time | 1.35 ms | 3.34 ms |
-| p95 render work | 0.11 ms | 0.12 ms |
-| Bytes dropped | 0 | 0 |
-| RSS | 280 MB | 277 MB |
+| Metric          | planeai-local | planeai-daemon |
+| --------------- | ------------- | -------------- |
+| Throughput      | 20.17 MB/s    | 45.50 MB/s     |
+| Total bytes     | 211 MB        | 477 MB         |
+| p95 frame delta | 16.9 ms       | 18.0 ms        |
+| p99 frame delta | 23.3 ms       | 22.0 ms        |
+| p95 parse time  | 1.03 ms       | 2.32 ms        |
+| p99 parse time  | 1.35 ms       | 3.34 ms        |
+| p95 render work | 0.11 ms       | 0.12 ms        |
+| Bytes dropped   | 0             | 0              |
+| RSS             | 280 MB        | 277 MB         |
 
 Daemon achieves 2.26x higher throughput due to efficient batching in the daemon's broadcast channel.
 
@@ -240,6 +242,7 @@ To revert to local-only mode, use `--session-source planeai-local`. No daemon re
 ## Protocol
 
 No protocol changes were made. Uses the existing daemon protocol:
+
 - Control: `CONN_CONTROL` (0x00) + JSON-line requests
 - Data: `CONN_DATA` (0x01) + binary frame handshake + bidirectional FRAME_OUTPUT/FRAME_INPUT
 - Commands used: spawn, kill, resize, list, attach, detach

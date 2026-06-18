@@ -52,15 +52,15 @@ done
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| Cmd+1..9 | Switch to session N |
-| Cmd+Tab | Next session |
-| Cmd+Shift+Tab | Previous session |
-| Cmd+N | New session |
-| Cmd+W | Close active session |
-| Cmd+V | Paste to active session |
-| Ctrl+C | Sent to terminal (0x03), not intercepted |
+| Shortcut      | Action                                   |
+| ------------- | ---------------------------------------- |
+| Cmd+1..9      | Switch to session N                      |
+| Cmd+Tab       | Next session                             |
+| Cmd+Shift+Tab | Previous session                         |
+| Cmd+N         | New session                              |
+| Cmd+W         | Close active session                     |
+| Cmd+V         | Paste to active session                  |
+| Ctrl+C        | Sent to terminal (0x03), not intercepted |
 
 (On Linux/Windows: use Ctrl instead of Cmd)
 
@@ -90,12 +90,12 @@ done
 
 ### Event types
 
-| Event | Fields |
-|-------|--------|
-| `session_created` | session_id, session_name, command, timestamp_ms |
-| `session_closed` | session_id, timestamp_ms |
+| Event              | Fields                                                                       |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `session_created`  | session_id, session_name, command, timestamp_ms                              |
+| `session_closed`   | session_id, timestamp_ms                                                     |
 | `session_switched` | from_session_id, to_session_id, switch_latency_ms, active_session_dirty_rows |
-| `summary` | All aggregate metrics (see below) |
+| `summary`          | All aggregate metrics (see below)                                            |
 
 ### Summary fields
 
@@ -119,15 +119,15 @@ python3 bench/summarize-metrics.py bench/results/multi-*.jsonl
 
 ## CLI Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--multi-session` | false | Enable multi-session mode |
-| `--sessions N` | 3 | Number of sessions to start |
-| `--session-command CMD` | (shell) | Command to run in each session |
-| `--session-source` | spike-local | Backend source (spike-local or planeai-local) |
-| `--max-runtime-ms MS` | (none) | Auto-exit after N ms |
-| `--exit-when-done` | false | Exit when all commands finish |
-| `--output-queue-policy` | block | Queue policy: block or drop_oldest |
+| Flag                    | Default     | Description                                   |
+| ----------------------- | ----------- | --------------------------------------------- |
+| `--multi-session`       | false       | Enable multi-session mode                     |
+| `--sessions N`          | 3           | Number of sessions to start                   |
+| `--session-command CMD` | (shell)     | Command to run in each session                |
+| `--session-source`      | spike-local | Backend source (spike-local or planeai-local) |
+| `--max-runtime-ms MS`   | (none)      | Auto-exit after N ms                          |
+| `--exit-when-done`      | false       | Exit when all commands finish                 |
+| `--output-queue-policy` | block       | Queue policy: block or drop_oldest            |
 
 ## Backend Integration Audit
 
@@ -145,15 +145,15 @@ Iced UI
 
 ### Existing PlaneAI backend (files inspected)
 
-| File | Purpose |
-|------|---------|
-| `src-tauri/src/session_backend.rs` | SessionBackend trait: write, resize, pause, resume, detach |
-| `src-tauri/src/pty.rs` | PtyManager, LocalBackend, DaemonBackend, reader/flusher threads |
-| `src-tauri/src/commands/sessions/attach.rs` | Tauri commands: attach, write_to_pty, resize_pty, pause_pty |
-| `src-tauri/src/commands/sessions/tabs.rs` | Tab spawn via Shell PtyTarget |
-| `src-tauri/src/commands/sessions/launch.rs` | Session creation (tmux/daemon backends) |
-| `src-tauri/src/output_observer.rs` | Output observation trait |
-| `src-tauri/src/daemon_client.rs` | Async daemon IPC client |
+| File                                        | Purpose                                                         |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| `src-tauri/src/session_backend.rs`          | SessionBackend trait: write, resize, pause, resume, detach      |
+| `src-tauri/src/pty.rs`                      | PtyManager, LocalBackend, DaemonBackend, reader/flusher threads |
+| `src-tauri/src/commands/sessions/attach.rs` | Tauri commands: attach, write_to_pty, resize_pty, pause_pty     |
+| `src-tauri/src/commands/sessions/tabs.rs`   | Tab spawn via Shell PtyTarget                                   |
+| `src-tauri/src/commands/sessions/launch.rs` | Session creation (tmux/daemon backends)                         |
+| `src-tauri/src/output_observer.rs`          | Output observation trait                                        |
+| `src-tauri/src/daemon_client.rs`            | Async daemon IPC client                                         |
 
 ### Reusable as-is
 
@@ -186,6 +186,7 @@ Iced UI
 ### Recommended first backend to integrate
 
 `planeai-local` (LocalBackend) — requires:
+
 1. Add a pull-based output buffer to LocalBackend (shared Vec<u8> + Condvar, like shell.rs)
 2. Make the flusher optional (or replace with direct buffer fill)
 3. Extract PTY spawn logic from `PtyManager::attach()` into a standalone function
@@ -270,13 +271,13 @@ planeai-local:
 
 ### Performance Comparison (3 sessions, flood-output.py, 5s)
 
-| Metric | spike-local | planeai-local | tauri-xterm (baseline) |
-|--------|-------------|---------------|------------------------|
-| Throughput (MB/s) | 46.4 | 45.9 | ~2.6 |
-| Total bytes (5s) | 244 MB | 241 MB | ~13 MB |
-| p99 frame delta | 25.7 ms | 34.6 ms | several ms (many >16.7) |
-| Bytes dropped | 0 | 0 | 0 |
-| Max pending | 512 KB | 512 KB | N/A |
+| Metric            | spike-local | planeai-local | tauri-xterm (baseline)  |
+| ----------------- | ----------- | ------------- | ----------------------- |
+| Throughput (MB/s) | 46.4        | 45.9          | ~2.6                    |
+| Total bytes (5s)  | 244 MB      | 241 MB        | ~13 MB                  |
+| p99 frame delta   | 25.7 ms     | 34.6 ms       | several ms (many >16.7) |
+| Bytes dropped     | 0           | 0             | 0                       |
+| Max pending       | 512 KB      | 512 KB        | N/A                     |
 
 planeai-local is now at parity with spike-local and **17x faster** than the old Tauri/xterm baseline.
 
@@ -341,6 +342,7 @@ planeai-pty is shared PTY/session I/O infrastructure. It is not a terminal emula
 ### How the Iced spike uses the crate
 
 The spike's `planeai_local.rs` implements `PtyEventSink` with a `ChannelSink` that:
+
 1. Receives `PtyEvent::Output` pushes from the crate's flusher thread
 2. Stores bytes in a bounded buffer (512KB, blocking backpressure)
 3. Exposes `try_read_batch()` for the spike's poll-based UI loop
@@ -358,16 +360,17 @@ No Tauri, Iced, alacritty_terminal, xterm, serde, or tokio dependencies.
 
 ### Current performance (post-extraction, 3-session flood, 5s)
 
-| Source | MB/s | p99 frame delta | output_bytes_dropped |
-|--------|------|-----------------|---------------------|
-| spike-local | 25.24 | 23.1 ms | 0 |
-| planeai-local | 24.97 | 22.9 ms | 0 |
+| Source        | MB/s  | p99 frame delta | output_bytes_dropped |
+| ------------- | ----- | --------------- | -------------------- |
+| spike-local   | 25.24 | 23.1 ms         | 0                    |
+| planeai-local | 24.97 | 22.9 ms         | 0                    |
 
 (At parity. Absolute throughput lower than previous 46 MB/s baseline due to larger terminal window 191×88 in this test environment.)
 
 ### Next step: Tauri adapter
 
 To integrate into production:
+
 1. Implement `PtyEventSink` for `Channel<Response>` + `AppHandle` in `src-tauri/src/pty.rs`
 2. Replace the production reader/flusher with `LocalPtySession::spawn(config, tauri_sink)`
 3. Remove duplicated reader/flusher logic from `pty.rs`
@@ -417,16 +420,17 @@ Rendering (snapshot_grid) happens once per poll after all batches are parsed.
 
 #### Batch sizes before/after
 
-| Metric | Before | After |
-|--------|--------|-------|
-| Avg batch to UI | ~100 KB (rare) | ~160-500 KB (frequent) |
-| Batches per poll | 1 | 3-5 |
-| Flusher batches/sec | 2-6 | 100-500 |
-| Flusher sleep total (5s) | ~3000 ms | ~50 ms (flood only) |
+| Metric                   | Before         | After                  |
+| ------------------------ | -------------- | ---------------------- |
+| Avg batch to UI          | ~100 KB (rare) | ~160-500 KB (frequent) |
+| Batches per poll         | 1              | 3-5                    |
+| Flusher batches/sec      | 2-6            | 100-500                |
+| Flusher sleep total (5s) | ~3000 ms       | ~50 ms (flood only)    |
 
 #### 4ms coalescing status
 
 Still present but conditional:
+
 - Under low load (< 4096 bytes pending): sleeps 4ms to batch small writes
 - Under flood (≥ 4096 bytes pending): no sleep, flushes immediately
 - FLUSH_MAX_IDLE (50ms) timeout still prevents indefinite waits on empty buffer
@@ -434,6 +438,7 @@ Still present but conditional:
 #### Output lossless?
 
 Yes — 0 bytes dropped in all configurations tested:
+
 - 1/3/5 sessions × flood workload × 5 seconds
 - ChannelSink uses blocking backpressure (condvar wait)
 - `--output-queue-policy block` is enforced for planeai-local

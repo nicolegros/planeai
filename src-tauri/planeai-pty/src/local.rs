@@ -65,8 +65,10 @@ impl LocalPtySession {
         let coalesce_threshold = config.coalesce_threshold_bytes;
         let flush_max_idle = Duration::from_millis(50);
 
-        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
-            Arc::new((Mutex::new(Vec::with_capacity(read_buf_size)), Condvar::new()));
+        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((
+            Mutex::new(Vec::with_capacity(read_buf_size)),
+            Condvar::new(),
+        ));
         let done = Arc::new(AtomicBool::new(false));
 
         // Reader thread
@@ -100,7 +102,6 @@ impl LocalPtySession {
         // Flusher thread
         {
             let pending = pending.clone();
-            let done = done;
             let exited = exited.clone();
             let flow = flow.clone();
             let diag = diag.clone();
@@ -114,14 +115,17 @@ impl LocalPtySession {
                                 if !g.is_empty() {
                                     let chunk = std::mem::take(&mut *g);
                                     diag.flusher_batches.fetch_add(1, Ordering::Relaxed);
-                                    diag.flusher_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                                    diag.flusher_bytes
+                                        .fetch_add(chunk.len() as u64, Ordering::Relaxed);
                                     let _ = sink.send(PtyEvent::Output {
-                                        session_id: id, bytes: chunk,
+                                        session_id: id,
+                                        bytes: chunk,
                                     });
                                 }
                                 exited.store(true, Ordering::Release);
                                 let _ = sink.send(PtyEvent::Exit {
-                                    session_id: id, status: None,
+                                    session_id: id,
+                                    status: None,
                                 });
                                 return;
                             }
@@ -135,7 +139,8 @@ impl LocalPtySession {
                             flow.wait_if_paused();
                             let t = std::time::Instant::now();
                             thread::sleep(coalesce);
-                            diag.flusher_sleep_ns.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                            diag.flusher_sleep_ns
+                                .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                         } else {
                             drop(g);
                             flow.wait_if_paused();
@@ -143,12 +148,19 @@ impl LocalPtySession {
                     }
 
                     let chunk = std::mem::take(&mut *lock.lock().unwrap());
-                    if chunk.is_empty() { continue; }
+                    if chunk.is_empty() {
+                        continue;
+                    }
                     diag.flusher_batches.fetch_add(1, Ordering::Relaxed);
-                    diag.flusher_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
-                    if sink.send(PtyEvent::Output {
-                        session_id: id, bytes: chunk,
-                    }).is_err() {
+                    diag.flusher_bytes
+                        .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                    if sink
+                        .send(PtyEvent::Output {
+                            session_id: id,
+                            bytes: chunk,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -156,10 +168,20 @@ impl LocalPtySession {
             });
         }
 
-        Ok(Self { id, writer: Arc::new(Mutex::new(writer)), master: Arc::new(Mutex::new(pair.master)), child: Arc::new(Mutex::new(child)), flow, exited, diag })
+        Ok(Self {
+            id,
+            writer: Arc::new(Mutex::new(writer)),
+            master: Arc::new(Mutex::new(pair.master)),
+            child: Arc::new(Mutex::new(child)),
+            flow,
+            exited,
+            diag,
+        })
     }
 
-    pub fn id(&self) -> SessionId { self.id }
+    pub fn id(&self) -> SessionId {
+        self.id
+    }
 
     pub fn write(&self, bytes: &[u8]) -> anyhow::Result<()> {
         let mut w = self.writer.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -170,20 +192,33 @@ impl LocalPtySession {
 
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         let m = self.master.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
-        m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        m.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         Ok(())
     }
 
-    pub fn pause(&self) { self.flow.pause(); }
-    pub fn resume(&self) { self.flow.resume(); }
+    pub fn pause(&self) {
+        self.flow.pause();
+    }
+    pub fn resume(&self) {
+        self.flow.resume();
+    }
     pub fn kill(&self) -> anyhow::Result<()> {
         if let Ok(mut child) = self.child.lock() {
             child.kill()?;
         }
         Ok(())
     }
-    pub fn has_exited(&self) -> bool { self.exited.load(Ordering::Acquire) }
-    pub fn diagnostics(&self) -> &Arc<PipelineDiagnostics> { &self.diag }
+    pub fn has_exited(&self) -> bool {
+        self.exited.load(Ordering::Acquire)
+    }
+    pub fn diagnostics(&self) -> &Arc<PipelineDiagnostics> {
+        &self.diag
+    }
 }
 
 impl Drop for LocalPtySession {

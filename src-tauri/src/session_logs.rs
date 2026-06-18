@@ -109,11 +109,7 @@ pub fn get_session_log_metadata(session_id: String) -> Result<SessionLogEntry, S
 }
 
 #[tauri::command]
-pub fn read_session_log_chunk(
-    path: String,
-    offset: u64,
-    length: u32,
-) -> Result<Vec<u8>, String> {
+pub fn read_session_log_chunk(path: String, offset: u64, length: u32) -> Result<Vec<u8>, String> {
     let base = log_base_dir().ok_or("PLANEAI_SESSION_LOG_DIR not set")?;
     let file_path = PathBuf::from(&path);
     if !is_under(&base, &file_path) {
@@ -125,7 +121,9 @@ pub fn read_session_log_chunk(
     // Cap at 256 KiB per chunk
     let len = (length as usize).min(256 * 1024);
     let mut buf = vec![0u8; len];
-    let n = file.read(&mut buf).map_err(|e| format!("read failed: {e}"))?;
+    let n = file
+        .read(&mut buf)
+        .map_err(|e| format!("read failed: {e}"))?;
     buf.truncate(n);
     Ok(buf)
 }
@@ -157,15 +155,24 @@ pub fn open_session_log_folder(path: String) -> Result<(), String> {
     };
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("xdg-open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer").arg(&dir).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("explorer")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -173,19 +180,24 @@ pub fn open_session_log_folder(path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
-    fn setup_log_dir() -> TempDir {
+    /// Serialize tests that mutate PLANEAI_SESSION_LOG_DIR env var.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn setup_log_dir() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = TempDir::new().unwrap();
         std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir.path());
         let sessions_dir = dir.path().join("sessions");
         fs::create_dir_all(&sessions_dir).unwrap();
-        dir
+        (dir, guard)
     }
 
     #[test]
     fn list_handles_empty_dir() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let result = list_session_logs().unwrap();
         assert!(result.is_empty());
         drop(dir);
@@ -202,7 +214,7 @@ mod tests {
 
     #[test]
     fn list_parses_valid_meta() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("test-session-1");
         fs::create_dir_all(&session_dir).unwrap();
         let meta = SessionMeta {
@@ -239,7 +251,7 @@ mod tests {
 
     #[test]
     fn list_ignores_corrupt_meta() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("corrupt");
         fs::create_dir_all(&session_dir).unwrap();
         fs::write(session_dir.join("meta.json"), "not valid json{{{").unwrap();
@@ -250,7 +262,7 @@ mod tests {
 
     #[test]
     fn chunk_read_returns_expected_bytes() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("chunk-test");
         fs::create_dir_all(&session_dir).unwrap();
         let ansi_path = session_dir.join("output.ansi");
@@ -266,7 +278,7 @@ mod tests {
 
     #[test]
     fn chunk_read_rejects_path_traversal() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let result = read_session_log_chunk("/etc/passwd".to_string(), 0, 100);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("path traversal denied"));
@@ -275,7 +287,7 @@ mod tests {
 
     #[test]
     fn metadata_get_rejects_traversal() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let result = get_session_log_metadata("../../etc".to_string());
         assert!(result.is_err());
         drop(dir);
@@ -283,26 +295,22 @@ mod tests {
 
     #[test]
     fn chunk_read_caps_at_256kib() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("big-chunk");
         fs::create_dir_all(&session_dir).unwrap();
         let ansi_path = session_dir.join("output.ansi");
         let data = vec![0xABu8; 512 * 1024];
         fs::write(&ansi_path, &data).unwrap();
 
-        let chunk = read_session_log_chunk(
-            ansi_path.to_string_lossy().to_string(),
-            0,
-            512 * 1024,
-        )
-        .unwrap();
+        let chunk =
+            read_session_log_chunk(ansi_path.to_string_lossy().to_string(), 0, 512 * 1024).unwrap();
         assert_eq!(chunk.len(), 256 * 1024);
         drop(dir);
     }
 
     #[test]
     fn list_handles_missing_ansi_file_gracefully() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("missing-ansi");
         fs::create_dir_all(&session_dir).unwrap();
         let meta = SessionMeta {
@@ -325,7 +333,8 @@ mod tests {
         fs::write(
             session_dir.join("meta.json"),
             serde_json::to_string_pretty(&meta).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
         // Should still list the entry (metadata is valid even if .ansi is missing)
         let result = list_session_logs().unwrap();
         assert_eq!(result.len(), 1);
@@ -335,7 +344,7 @@ mod tests {
 
     #[test]
     fn chunk_read_missing_file_returns_error() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("no-file");
         fs::create_dir_all(&session_dir).unwrap();
         let path = session_dir.join("missing.ansi");
@@ -348,7 +357,7 @@ mod tests {
 
     #[test]
     fn replay_does_not_mutate_metadata() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("replay-safe");
         fs::create_dir_all(&session_dir).unwrap();
         let meta = SessionMeta {
@@ -374,7 +383,8 @@ mod tests {
 
         // Read chunk (simulates replay)
         let ansi_path = session_dir.join("output.ansi");
-        let _chunk = read_session_log_chunk(ansi_path.to_string_lossy().to_string(), 0, 100).unwrap();
+        let _chunk =
+            read_session_log_chunk(ansi_path.to_string_lossy().to_string(), 0, 100).unwrap();
 
         // Metadata should be unchanged
         let after = fs::read_to_string(session_dir.join("meta.json")).unwrap();
@@ -384,10 +394,13 @@ mod tests {
 
     #[test]
     fn list_sorted_newest_first() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let base = dir.path().join("sessions");
         // Create two sessions with different timestamps
-        for (id, ts) in [("old", "2026-06-17T10:00:00+00:00"), ("new", "2026-06-17T20:00:00+00:00")] {
+        for (id, ts) in [
+            ("old", "2026-06-17T10:00:00+00:00"),
+            ("new", "2026-06-17T20:00:00+00:00"),
+        ] {
             let session_dir = base.join(id);
             fs::create_dir_all(&session_dir).unwrap();
             let meta = SessionMeta {
@@ -407,7 +420,11 @@ mod tests {
                 exit_status: None,
                 status: "running".to_string(),
             };
-            fs::write(session_dir.join("meta.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+            fs::write(
+                session_dir.join("meta.json"),
+                serde_json::to_string_pretty(&meta).unwrap(),
+            )
+            .unwrap();
         }
         let result = list_session_logs().unwrap();
         assert_eq!(result.len(), 2);
@@ -418,7 +435,7 @@ mod tests {
 
     #[test]
     fn delete_removes_session_dir() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let session_dir = dir.path().join("sessions").join("to-delete");
         fs::create_dir_all(&session_dir).unwrap();
         fs::write(session_dir.join("meta.json"), "{}").unwrap();
@@ -432,7 +449,7 @@ mod tests {
 
     #[test]
     fn delete_rejects_path_traversal() {
-        let dir = setup_log_dir();
+        let (dir, _guard) = setup_log_dir();
         let result = delete_session_log("../../etc".to_string());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("path traversal"));

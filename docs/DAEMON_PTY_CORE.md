@@ -11,6 +11,7 @@
 ### Where daemon PTYs are spawned today
 
 `DaemonSession::spawn()` in `planeai-daemon/src/session.rs`:
+
 - Uses `portable_pty::native_pty_system().openpty(PtySize { rows: 24, cols: 80 })`
 - Builds command via `CommandBuilder::new(command)` with args/cwd/env
 - Spawns via `pair.slave.spawn_command(cmd)`
@@ -18,6 +19,7 @@
 ### How daemon output is read
 
 Std reader thread spawned in `DaemonSession::spawn()`:
+
 - Reads 16KB chunks in a loop
 - On data: writes to `Arc<Mutex<RingBuffer>>` + sends via `broadcast::Sender<Vec<u8>>`
 - On EOF/error: sets `alive` AtomicBool to false
@@ -25,6 +27,7 @@ Std reader thread spawned in `DaemonSession::spawn()`:
 ### How daemon output is framed/sent to clients
 
 `data.rs::handle_data_connection()`:
+
 1. Handshake: reads FRAME_OUTPUT frame containing session_id
 2. Replay: sends buffer snapshot in 64KB chunks as FRAME_OUTPUT frames
 3. Live: `forward_output()` receives from broadcast channel, writes FRAME_OUTPUT frames
@@ -33,12 +36,14 @@ Std reader thread spawned in `DaemonSession::spawn()`:
 ### How input bytes are written
 
 `data.rs::forward_input()`:
+
 - Reads FRAME_INPUT frames from data connection
 - Calls `session.write(&payload)` which does `writer.write_all(data)`
 
 ### How resize is handled
 
 `Request::Resize { session_id, cols, rows }` on control connection:
+
 - Server calls `session.resize(cols, rows)`
 - `DaemonSession::resize()` calls `master.resize(PtySize { rows, cols, ... })`
 
@@ -75,6 +80,7 @@ Client-assigned: UUID string passed in the `spawn` request from the desktop app.
 ### Where command/cwd/env are configured
 
 Passed in the `Request::Spawn` JSON payload from the client:
+
 ```json
 { "cmd": "spawn", "session_id": "...", "command": "...", "args": [...], "cwd": "...", "env": {...} }
 ```
@@ -152,6 +158,7 @@ pnpm tauri dev
 ```
 
 To roll back:
+
 ```bash
 PLANEAI_DAEMON_PTY_CORE=legacy pnpm tauri dev
 ```
@@ -208,22 +215,22 @@ See `bench/ICED_DAEMON_SPIKE.md` for full documentation.
 
 ## Legacy vs planeai-pty Daemon Comparison
 
-| Behavior | Legacy | planeai-pty |
-|----------|--------|-------------|
-| Session creation | ✅ works | ✅ works |
-| Output streaming | ✅ via broadcast | ✅ via DaemonPtySink → broadcast |
-| Input/write | ✅ | ✅ |
-| Ctrl-C | ✅ | ✅ |
-| Resize | ✅ | ✅ |
-| Exit detection | ✅ alive flag | ✅ alive flag (via PtyEvent::Exit) |
-| Buffer snapshot/replay | ✅ | ✅ |
-| Multiple clients | ✅ broadcast | ✅ broadcast |
-| Protocol | unchanged | unchanged |
-| Frontend behavior | unchanged | unchanged |
-| Durable logs | ❌ not available | ✅ when PLANEAI_SESSION_LOG_DIR set |
-| Diagnostics | ❌ none | ✅ PipelineDiagnostics |
-| Coalescing | ❌ raw 16KB reads | ✅ 4ms coalesce + threshold |
-| Bytes dropped | 0 | 0 |
+| Behavior               | Legacy            | planeai-pty                         |
+| ---------------------- | ----------------- | ----------------------------------- |
+| Session creation       | ✅ works          | ✅ works                            |
+| Output streaming       | ✅ via broadcast  | ✅ via DaemonPtySink → broadcast    |
+| Input/write            | ✅                | ✅                                  |
+| Ctrl-C                 | ✅                | ✅                                  |
+| Resize                 | ✅                | ✅                                  |
+| Exit detection         | ✅ alive flag     | ✅ alive flag (via PtyEvent::Exit)  |
+| Buffer snapshot/replay | ✅                | ✅                                  |
+| Multiple clients       | ✅ broadcast      | ✅ broadcast                        |
+| Protocol               | unchanged         | unchanged                           |
+| Frontend behavior      | unchanged         | unchanged                           |
+| Durable logs           | ❌ not available  | ✅ when PLANEAI_SESSION_LOG_DIR set |
+| Diagnostics            | ❌ none           | ✅ PipelineDiagnostics              |
+| Coalescing             | ❌ raw 16KB reads | ✅ 4ms coalesce + threshold         |
+| Bytes dropped          | 0                 | 0                                   |
 
 ---
 
@@ -231,24 +238,26 @@ See `bench/ICED_DAEMON_SPIKE.md` for full documentation.
 
 ### Automated Tests
 
-| Suite | Tests | Result |
-|-------|-------|--------|
-| `cargo test -p planeai-pty` | 7 | ✅ all pass |
-| `cargo test -p planeai-daemon` | 41 | ✅ all pass |
-| `cargo test -p planeai` | 223 | ✅ 222 pass, 1 pre-existing macOS failure |
-| `cargo test -p planeai-iced-spike` | 14 | ✅ all pass |
-| `npx svelte-check` | — | 1 pre-existing BenchmarkRunner error |
-| `cargo build --release -p planeai` | — | ✅ builds |
-| `cargo build --release -p planeai-iced-spike` | — | ✅ builds |
+| Suite                                         | Tests | Result                                    |
+| --------------------------------------------- | ----- | ----------------------------------------- |
+| `cargo test -p planeai-pty`                   | 7     | ✅ all pass                               |
+| `cargo test -p planeai-daemon`                | 41    | ✅ all pass                               |
+| `cargo test -p planeai`                       | 223   | ✅ 222 pass, 1 pre-existing macOS failure |
+| `cargo test -p planeai-iced-spike`            | 14    | ✅ all pass                               |
+| `npx svelte-check`                            | —     | 1 pre-existing BenchmarkRunner error      |
+| `cargo build --release -p planeai`            | —     | ✅ builds                                 |
+| `cargo build --release -p planeai-iced-spike` | —     | ✅ builds                                 |
 
 ### Manual Smoke Test Commands
 
 Legacy daemon:
+
 ```bash
 PLANEAI_DAEMON_PTY_CORE=legacy pnpm tauri dev
 ```
 
 PlaneAI PTY daemon:
+
 ```bash
 PLANEAI_DAEMON_PTY_CORE=planeai-pty \
 PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
@@ -264,18 +273,19 @@ pnpm tauri dev
 
 The daemon protocol supports these lifecycle commands (all pre-existing, no changes needed):
 
-| Command | Purpose |
-|---------|---------|
-| `spawn` | Create new session |
-| `kill` | Terminate session process |
-| `resize` | Change terminal dimensions |
-| `list` | List all sessions with alive status |
+| Command  | Purpose                                       |
+| -------- | --------------------------------------------- |
+| `spawn`  | Create new session                            |
+| `kill`   | Terminate session process                     |
+| `resize` | Change terminal dimensions                    |
+| `list`   | List all sessions with alive status           |
 | `attach` | Informational — note that client is attaching |
 | `detach` | Informational — note that client is detaching |
 
 ### Persistence Guarantee
 
 Daemon sessions persist after client disconnect because:
+
 1. `remove_dead()` only removes sessions where `is_alive() == false` (PTY process exited)
 2. Client disconnection does NOT affect `is_alive()` status
 3. Only explicit `kill` command or PTY process exit marks session dead
