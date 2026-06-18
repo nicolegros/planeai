@@ -3,6 +3,7 @@ use planeai_core::orchestrator::{
 };
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
 use planeai_core::task::{Task, TaskSource};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -83,6 +84,9 @@ impl Backend for TestBackend {
     }
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
         Ok(vec![])
+    }
+    fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+        Ok(HashSet::new())
     }
     fn fetch_base(&self, _: &str, base: &str) -> Result<String, String> {
         Ok(format!("origin/{base}"))
@@ -215,6 +219,9 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
         }
         fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
             Ok(vec![])
+        }
+        fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+            Ok(HashSet::new())
         }
         fn fetch_base(&self, _: &str, base: &str) -> Result<String, String> {
             Ok(format!("origin/{base}"))
@@ -368,6 +375,9 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 },
             ])
         }
+        fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+            Ok(HashSet::new())
+        }
         fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
             None
         }
@@ -407,4 +417,102 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
     let dispatched = backend.dispatched.lock().unwrap();
     assert_eq!(dispatched.len(), 1);
     assert_eq!(dispatched[0].task_key, "KAN-3");
+}
+
+#[tokio::test]
+async fn orchestrator_does_not_redispatch_task_with_exited_session() {
+    // Regression test: if list_active_sessions returns an exited session for a task,
+    // the orchestrator must NOT dispatch a new session for that task.
+    let source = Arc::new(MockTaskSource::new(
+        vec![Task {
+            key: "PLA-83".into(),
+            title: "Settings UI".into(),
+            status: "in_progress".into(),
+            priority: 1,
+            blocked_by: vec![],
+            subtasks: vec![],
+            ..Default::default()
+        }],
+        vec!["done".into()],
+    ));
+
+    /// Backend that reports an exited session's task key via list_claimed_task_keys.
+    #[derive(Default)]
+    struct ExitedSessionBackend {
+        dispatched: Mutex<Vec<NewSession>>,
+    }
+
+    impl Backend for ExitedSessionBackend {
+        fn create_worktree(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn create_tmux_session(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn create_daemon_session(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn insert_session(&self, session: &NewSession) -> Result<(), String> {
+            self.dispatched.lock().unwrap().push(session.clone());
+            Ok(())
+        }
+        fn notify_gui(&self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn kill_session(&self, _: &NewSession) -> Result<(), String> {
+            Ok(())
+        }
+        fn fetch_base(&self, _: &str, base: &str) -> Result<String, String> {
+            Ok(format!("origin/{base}"))
+        }
+        fn list_active_sessions(&self) -> Result<Vec<NewSession>, String> {
+            // No active sessions (the session already exited)
+            Ok(vec![])
+        }
+        fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String> {
+            // PLA-83 has an exited session — should prevent re-dispatch
+            Ok(HashSet::from(["PLA-83".to_string()]))
+        }
+        fn reload_dispatch_config(&self, _: &str) -> Option<DispatchConfig> {
+            None
+        }
+    }
+
+    let backend = Arc::new(ExitedSessionBackend::default());
+
+    let config = OrchestratorConfig {
+        poll_interval_ms: 50,
+        max_concurrent: 3,
+        projects: vec![AutoProject {
+            project_id: "p1".to_string(),
+            project_name: "planeai".to_string(),
+            project_path: "/tmp/planeai".to_string(),
+            task_source: source,
+            on_start: None,
+            dispatch_config: default_dispatch_config("/tmp/wt"),
+        }],
+    };
+
+    let orchestrator = Orchestrator::new(config, backend.clone());
+    let (tx, rx) = mpsc::channel(8);
+
+    let handle = tokio::spawn(async move { orchestrator.run(CancellationToken::new(), rx).await });
+
+    // Wait for multiple poll cycles
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    tx.send(OrchestratorCommand::Stop).await.unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.is_ok());
+
+    // No new sessions should be dispatched — PLA-83 already has an exited session
+    let dispatched = backend.dispatched.lock().unwrap();
+    assert_eq!(
+        dispatched.len(),
+        0,
+        "orchestrator should NOT re-dispatch a task that already has an exited session"
+    );
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::task::{Task, TaskSource};
@@ -26,6 +26,9 @@ pub trait Backend: Send + Sync {
     fn notify_gui(&self, session_id: &str) -> Result<(), String>;
     fn kill_session(&self, session: &NewSession) -> Result<(), String>;
     fn list_active_sessions(&self) -> Result<Vec<NewSession>, String>;
+    /// Return task keys that already have a session (active or exited).
+    /// Used to prevent re-dispatching tasks that were already worked on.
+    fn list_claimed_task_keys(&self) -> Result<HashSet<String>, String>;
     fn fetch_base(&self, repo: &str, base: &str) -> Result<String, String>;
     /// Reload the dispatch config for a provider. Called before each dispatch to pick up config changes.
     fn reload_dispatch_config(&self, provider: &str) -> Option<DispatchConfig>;

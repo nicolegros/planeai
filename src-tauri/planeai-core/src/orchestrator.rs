@@ -142,7 +142,11 @@ impl Orchestrator {
     }
 
     async fn dispatch(&self, running: &mut HashMap<String, RunningSession>) {
-        let claimed: HashSet<String> = running.keys().cloned().collect();
+        let mut claimed: HashSet<String> = running.keys().cloned().collect();
+        // Merge in task keys that have existing sessions in DB (including exited ones)
+        if let Ok(db_claimed) = self.backend.list_claimed_task_keys() {
+            claimed.extend(db_claimed);
+        }
 
         for project in &self.config.projects {
             if running.len() >= self.config.max_concurrent {
