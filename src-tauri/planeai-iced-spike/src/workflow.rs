@@ -1,7 +1,14 @@
 //! PlaneAI Workflow Shell — orchestrates daemon sessions with project context.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use planeai_core::services::{
+    self, CreateSessionParams, ProjectService, SessionRecord, SessionService,
+};
+use rusqlite::Connection;
+use std::sync::Mutex;
 
 use alacritty_terminal::vte::ansi::Processor;
 use arboard::Clipboard;
@@ -130,6 +137,10 @@ struct WorkflowApp {
     launch_prompt_input: String,
     // Kill confirmation (two-press)
     kill_armed: bool,
+    // DB persistence
+    db: Option<Arc<Mutex<Connection>>>,
+    project: Option<services::Project>,
+    persisted_sessions: Vec<SessionRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +192,27 @@ impl WorkflowApp {
         };
 
         let project_cwd = resolved.request.project_cwd.clone();
+
+        // Open shared PlaneAI DB and ensure project record exists
+        let (db, project) = match services::open_db() {
+            Ok(conn) => {
+                let proj =
+                    ProjectService::ensure_project(&conn, &project_cwd.to_string_lossy()).ok();
+                (Some(Arc::new(Mutex::new(conn))), proj)
+            }
+            Err(e) => {
+                boot_warnings.push(format!("DB open failed: {e} — sessions won't persist"));
+                (None, None)
+            }
+        };
+
+        let persisted_sessions = if let (Some(ref db), Some(ref proj)) = (&db, &project) {
+            let conn = db.lock().unwrap();
+            SessionService::list_for_project(&conn, &proj.id).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         let agent_command = resolved.command_label.clone();
         let extra_path_dirs = resolved.request.extra_path_dirs.clone();
         let provider_label = resolved.provider_label.clone().unwrap_or_default();
@@ -231,6 +263,9 @@ impl WorkflowApp {
                 launch_prompt: false,
                 launch_prompt_input: String::new(),
                 kill_armed: false,
+                db,
+                project,
+                persisted_sessions,
             },
             iced::Task::none(),
         );
@@ -271,7 +306,7 @@ impl WorkflowApp {
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
-                    session_id,
+                    session_id: session_id.clone(),
                     command: self.agent_command.clone(),
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Running,
@@ -284,6 +319,23 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                // Persist to shared DB
+                if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+                    if let Ok(conn) = db.lock() {
+                        let params = CreateSessionParams {
+                            id: session_id.clone(),
+                            project_id: project.id.clone(),
+                            name: self.provider_label.clone(),
+                            backend: "daemon".to_string(),
+                            auto_approve: true,
+                            command: Some(self.agent_command.clone()),
+                            cwd: Some(self.project_cwd.to_string_lossy().to_string()),
+                            ..Default::default()
+                        };
+                        let _ = SessionService::create(&conn, &params);
+                    }
+                }
+                self.refresh_persisted_sessions();
             }
             Err(e) => {
                 self.set_error(format!("Launch failed: {}", e));
@@ -319,7 +371,7 @@ impl WorkflowApp {
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
-                    session_id,
+                    session_id: session_id.clone(),
                     command: command.to_string(),
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Running,
@@ -333,6 +385,23 @@ impl WorkflowApp {
                 });
                 self.active = self.sessions.len() - 1;
                 self.clear_error();
+                // Persist to shared DB
+                if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+                    if let Ok(conn) = db.lock() {
+                        let params = CreateSessionParams {
+                            id: session_id.clone(),
+                            project_id: project.id.clone(),
+                            name: command.to_string(),
+                            backend: "daemon".to_string(),
+                            auto_approve: true,
+                            command: Some(command.to_string()),
+                            cwd: Some(self.project_cwd.to_string_lossy().to_string()),
+                            ..Default::default()
+                        };
+                        let _ = SessionService::create(&conn, &params);
+                    }
+                }
+                self.refresh_persisted_sessions();
             }
             Err(e) => {
                 self.set_error(format!("Launch failed: {}", e));
@@ -379,6 +448,12 @@ impl WorkflowApp {
         }
         let session = &self.sessions[self.active];
         let _ = detach_daemon_session(&session.session_id);
+        // Update DB status on detach (session still alive in daemon)
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = SessionService::set_status(&conn, &session.session_id, "active");
+            }
+        }
         self.sessions.remove(self.active);
         if !self.sessions.is_empty() && self.active >= self.sessions.len() {
             self.active = self.sessions.len() - 1;
@@ -399,6 +474,12 @@ impl WorkflowApp {
         let session = &mut self.sessions[self.active];
         let _ = kill_daemon_session(&session.session_id);
         session.status = SessionStatus::Killed;
+        // Update DB status
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = SessionService::set_status(&conn, &session.session_id, "destroyed");
+            }
+        }
         self.sessions.remove(self.active);
         if !self.sessions.is_empty() && self.active >= self.sessions.len() {
             self.active = self.sessions.len() - 1;
@@ -410,6 +491,15 @@ impl WorkflowApp {
         self.daemon_connected = daemon_is_connected();
         if self.daemon_connected {
             self.daemon_sessions_listed = list_daemon_sessions().unwrap_or_default();
+        }
+    }
+
+    fn refresh_persisted_sessions(&mut self) {
+        if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+            if let Ok(conn) = db.lock() {
+                self.persisted_sessions =
+                    SessionService::list_for_project(&conn, &project.id).unwrap_or_default();
+            }
         }
     }
 
@@ -914,14 +1004,37 @@ impl WorkflowApp {
             } else {
                 cmd_short
             };
+            // Enrich from persisted record (branch, task_key, worktree)
+            let persisted = self
+                .persisted_sessions
+                .iter()
+                .find(|r| r.id == s.session_id);
+            let branch_display = persisted
+                .and_then(|r| {
+                    let b = &r.branch;
+                    if b.is_empty() {
+                        None
+                    } else {
+                        Some(b.as_str())
+                    }
+                })
+                .unwrap_or("");
+            let task_display = persisted.and_then(|r| r.task_key.as_deref()).unwrap_or("");
+            let extra_meta = match (branch_display.is_empty(), task_display.is_empty()) {
+                (false, false) => format!(" [{task_display}:{branch_display}]"),
+                (false, true) => format!(" [{branch_display}]"),
+                (true, false) => format!(" [{task_display}]"),
+                (true, true) => String::new(),
+            };
             let label = format!(
-                "{}{} {} {} {} {} daemon{}{}",
+                "{}{} {} {} {} {} daemon{}{}{}",
                 active_marker,
                 status_icon,
                 provider_short,
                 cwd_name,
                 sid_short,
                 status_label,
+                extra_meta,
                 drop_indicator,
                 log_indicator,
             );

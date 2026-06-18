@@ -4383,8 +4383,10 @@ dependencies = [
 name = "planeai-core"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "json_comments",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -4428,11 +4430,14 @@ dependencies = [
  "planeai-ipc",
  "planeai-pty",
  "portable-pty",
+ "rusqlite",
  "serde",
  "serde_json",
  "smol_str",
+ "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

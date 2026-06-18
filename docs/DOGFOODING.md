@@ -797,3 +797,50 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 - No git worktree integration
 - Session cards are text-only (no click actions, keyboard only)
 - No undo for kill
+
+---
+
+## Domain Parity Status (2026-06-18)
+
+The Iced workflow now operates on shared PlaneAI domain state:
+
+### What's shared
+
+| Concern | Shared? | Notes |
+|---------|---------|-------|
+| Project records | ✅ | `ProjectService::ensure_project()` creates/finds in shared DB |
+| Session records | ✅ | `SessionService::create()` persists on launch |
+| Session status | ✅ | Updated on kill (→destroyed), detach (→active) |
+| Session IDs | ✅ | UUID v4, same as Tauri, same as daemon session_id |
+| Config/provider resolution | ✅ | `planeai_core::session_launch` shared path |
+| Durable logs | ✅ | Daemon writes to shared log convention |
+| Launch preparation | ✅ | `prepare_session()` shared |
+| PATH/env construction | ✅ | `augmented_path()` shared |
+
+### What remains Iced-only
+
+| Concern | Notes |
+|---------|-------|
+| Terminal rendering | UI concern (alacritty_terminal) |
+| `recent_projects.json` | Lightweight cache, not authoritative |
+| In-memory session Vec | Ephemeral view state for attached sessions |
+| Daemon connection mgmt | Different async model than Tauri |
+
+### What's deferred (next milestone)
+
+| Concern | Blocker |
+|---------|---------|
+| Git worktree creation | Needs branch picker / task dispatch UI |
+| Task assignment | Needs task picker UI |
+| Lifecycle hooks | Needs task integration |
+| Provider session ID discovery | Lower priority |
+
+### Dogfooding guidance
+
+When dogfooding the Iced workflow:
+1. Sessions you create ARE persisted to the shared PlaneAI DB
+2. Tauri can see sessions created by Iced (same project, same DB)
+3. Session IDs are UUIDs — consistent across both apps
+4. Killing a session updates its status to 'destroyed' in the shared DB
+5. Durable logs are written by the daemon regardless of which frontend spawned the session
+6. The daemon binary must come from this build (`PATH` must include `target/release`)

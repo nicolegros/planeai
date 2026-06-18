@@ -19,6 +19,10 @@ path = "src/bin/daemon_lifecycle_smoke.rs"
 name = "planeai-workflow-smoke"
 path = "src/bin/workflow_smoke.rs"
 
+[[bin]]
+name = "planeai-domain-smoke"
+path = "src/bin/domain_smoke.rs"
+
 [dependencies]
 alacritty_terminal = "0.26"
 anyhow = "1"
@@ -32,7 +36,10 @@ smol_str = "0.2"
 arboard = "3"
 planeai-pty = { path = "../planeai-pty" }
 planeai-core = { path = "../planeai-core" }
+rusqlite = { version = "0.31", features = ["bundled"] }
 planeai-daemon = { path = "../planeai-daemon" }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+tempfile = { workspace = true }

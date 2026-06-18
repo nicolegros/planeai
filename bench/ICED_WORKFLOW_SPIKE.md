@@ -290,3 +290,83 @@ cargo run --release -p planeai-iced-spike --bin planeai-workflow-smoke -- \
   --cwd /tmp/planeai-smoke-project \
   --metrics bench/results/workflow-config-smoke.jsonl
 ```
+
+---
+
+## Domain Parity Audit
+
+**Date:** 2026-06-18
+
+### Production project model
+
+- **Storage:** SQLite table `projects` (id, name, path, status, auto_mode, task_manager)
+- **Identity:** UUID v4
+- **Path selection:** User provides via Tauri file dialog or Iced text input
+- **Recent projects:** Tauri sidebar tracks implicitly; Iced uses `~/.config/planeai/recent_projects.json`
+- **Metadata:** Name derived from directory name; status active/archived
+
+### Production session model
+
+- **Storage:** SQLite table `sessions` (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, command, cwd)
+- **Status:** active → exited → active (restart) | active → archived | active → destroyed
+- **Daemon mapping:** session_id in DB = session_id passed to daemon. No separate mapping.
+- **Durable logs:** Filesystem at `$PLANEAI_SESSION_LOG_DIR/sessions/{session_id}/`
+
+### Production worktree model
+
+- **Path:** `~/.planeai/worktrees/{project_name}/{short_id}`
+- **Branch:** `{task-key}/{short_id}` for task-linked; user-specified for manual
+- **Cleanup:** `destroy` command removes worktree + deletes branch
+- **CWD:** Worktree path becomes session CWD
+
+### Production task model
+
+- **Storage:** `planeai-tasks` crate, SQLite (tasks/task_blockers/task_tags)
+- **Status:** todo → in_progress → in_review → done
+- **Session link:** `sessions.task_key` column
+- **Lifecycle hooks:** on_start, on_restart, on_complete, on_notify, on_pr_open, on_pr_merge
+
+### Current Iced project/session model
+
+- **Projects:** `~/.config/planeai/recent_projects.json` (temporary UI convenience) + shared `planeai_core::services::ProjectService` (durable)
+- **Sessions:** Local `Vec<Session>` for UI + shared `planeai_core::services::SessionService` (durable DB records)
+- **Session IDs:** UUID v4 (same format as Tauri)
+- **Status tracking:** UI-local SessionStatus enum + DB status column updated on kill/detach
+
+### Duplicated state (documented, intentional)
+
+- `recent_projects.json` — lightweight Iced-only cache for UI picker responsiveness. Not authoritative. Shared `ProjectService` is the source of truth.
+
+### Missing semantics (next milestone)
+
+- Iced does not create git worktrees (no branch picker/task dispatch UI yet)
+- Iced does not have task assignment UI
+- Iced does not fire lifecycle hooks (on_start/on_complete)
+- Iced does not track provider_session_id
+
+### Recommended shared boundary
+
+```
+planeai_core::services::{ProjectService, SessionService, WorktreeService, TaskService}
+```
+
+- **ProjectService:** ensure_project, list_active, get_by_path
+- **SessionService:** create, list_for_project, set_status, get, durable_log_dir
+- **WorktreeService:** worktree_root, worktree_path, branch_name
+- **TaskService:** session_task_key
+
+Both Tauri and Iced call into these services for durable state. UI-specific logic (terminal rendering, tmux, daemon connection management, notify hooks) remains in the respective frontend.
+
+### Domain smoke test
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+PLANEAI_SESSION_LOG_DIR=/tmp/planeai-domain-smoke-logs \
+PATH="$(pwd)/target/release:$PATH" \
+cargo run --release -p planeai-iced-spike --bin planeai-domain-smoke -- \
+  --cwd /tmp/planeai-smoke-project \
+  --agent-command "python3 -c 'print(\"agent ready\")'" \
+  --metrics bench/results/domain-smoke.jsonl
+```
+
+Verifies: project resolved, session record, daemon start, output, detach/reattach, status destroyed, durable log linked, bytes_dropped=0.

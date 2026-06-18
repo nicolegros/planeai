@@ -2,6 +2,7 @@ pub mod command;
 pub mod dispatch;
 pub mod git;
 pub mod orchestrator;
+pub mod services;
 pub mod session;
 pub mod session_launch;
 pub mod task;

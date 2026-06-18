@@ -308,7 +308,7 @@ impl DaemonSession {
     pub fn spawn(id: usize, cols: u16, rows: u16, command: Option<&str>) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
-        let session_id = format!("iced-{}-{}", id, std::process::id());
+        let session_id = uuid::Uuid::new_v4().to_string();
         let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
@@ -463,7 +463,7 @@ impl DaemonSession {
     ) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
-        let session_id = format!("iced-{}-{}", id, std::process::id());
+        let session_id = uuid::Uuid::new_v4().to_string();
         let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
