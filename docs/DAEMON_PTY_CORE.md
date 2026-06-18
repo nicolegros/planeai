@@ -299,3 +299,35 @@ Daemon sessions persist after client disconnect because:
 - Close window: detach all by default (`--detach-on-close`)
 - Restart: reconnect to daemon, list sessions, attach via Cmd+A
 - Health check: every 5s, shows ⚡/⚠ indicator
+
+---
+
+## Session Launch Parity (Tauri + Iced)
+
+**Date:** 2026-06-18
+
+Both Tauri and Iced workflow mode now create daemon sessions through:
+
+```rust
+planeai_core::session_launch::prepare_session(&CreateSessionRequest) → CreateSessionResult
+```
+
+This shared service resolves:
+
+- Command → `/bin/sh -c "agent command..."` (via `shell_args`)
+- PATH → `augmented_path` with config dirs + conventional dirs + system PATH (deduped)
+- ENV → TERM=xterm-256color, PLANEAI_SESSION_ID, PATH
+- CWD validation (must exist and be a directory)
+
+The actual daemon connection and spawn command remain caller-specific:
+
+- Tauri uses `DaemonClient::spawn_session` (async, via Tauri state)
+- Iced uses `block_on` with its shared tokio runtime
+
+tmux remains an explicit optional target set by config — never auto-selected.
+
+### Testing parity
+
+```bash
+cargo test -p planeai-core --test session_launch_parity_test
+```

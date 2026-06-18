@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+json_comments = "0.2"
 regex = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

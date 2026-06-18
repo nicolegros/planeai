@@ -97,6 +97,8 @@ pub struct Args {
     pub agent_command: Option<String>,
     #[arg(long)]
     pub extra_path_dirs: Vec<String>,
+    #[arg(long)]
+    pub config: Option<PathBuf>,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();

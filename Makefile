@@ -21,7 +21,6 @@ dogfood: ## Run Iced workflow shell with daemon + durable logs
 	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
 	cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 		--planeai-workflow \
-		--agent-command "kiro-cli chat" \
 		--backend iced-alacritty
 
 dogfood-multi: ## Run Iced multi-session spike (legacy)

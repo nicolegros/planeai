@@ -47,10 +47,24 @@ pub fn augmented_path(config_dirs: &[String]) -> String {
 
     let conventional = conventional_dirs(&home);
 
+    let mut seen = std::collections::HashSet::new();
     let mut parts: Vec<&str> = Vec::new();
-    parts.extend(user_dirs);
-    parts.extend(conventional.iter().map(|s| s.as_str()));
-    parts.push(&system_path);
+    for dir in &user_dirs {
+        if !dir.is_empty() && seen.insert(*dir) {
+            parts.push(dir);
+        }
+    }
+    for dir in &conventional {
+        let s = dir.as_str();
+        if !s.is_empty() && seen.insert(s) {
+            parts.push(s);
+        }
+    }
+    for dir in system_path.split(sep) {
+        if !dir.is_empty() && seen.insert(dir) {
+            parts.push(dir);
+        }
+    }
     parts.join(sep)
 }
 
@@ -158,10 +172,14 @@ mod tests {
     fn inherited_path_is_preserved() {
         let system_path = std::env::var("PATH").unwrap_or_default();
         let path = augmented_path(&[]);
-        assert!(
-            path.contains(&system_path),
-            "inherited PATH must be preserved"
-        );
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        // Every unique entry in system PATH should appear in the result
+        for entry in system_path.split(sep).filter(|s| !s.is_empty()) {
+            assert!(
+                path.contains(entry),
+                "inherited PATH entry '{entry}' must be preserved"
+            );
+        }
     }
 
     #[test]
@@ -236,12 +254,15 @@ mod tests {
     }
 
     #[test]
-    fn system_path_appended_at_end() {
-        let system_path = std::env::var("PATH").unwrap_or_default();
+    fn no_duplicate_entries() {
         let path = augmented_path(&[]);
-        assert!(
-            path.ends_with(&system_path),
-            "system PATH should be at the end"
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let entries: Vec<&str> = path.split(sep).collect();
+        let unique: std::collections::HashSet<&str> = entries.iter().copied().collect();
+        assert_eq!(
+            entries.len(),
+            unique.len(),
+            "PATH should not have duplicate entries"
         );
     }
 }

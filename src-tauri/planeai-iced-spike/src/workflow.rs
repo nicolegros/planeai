@@ -56,6 +56,7 @@ struct WorkflowApp {
     active: usize,
     project_cwd: PathBuf,
     agent_command: String,
+    provider_label: String,
     extra_path_dirs: Vec<String>,
     cols: usize,
     rows: usize,
@@ -90,17 +91,43 @@ impl WorkflowApp {
         // Actually we use a static — set by run() before boot.
         let args = WORKFLOW_ARGS.get().unwrap();
 
-        let project_cwd = args
-            .cwd
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        let agent_command = args
-            .agent_command
-            .clone()
-            .unwrap_or_else(|| "kiro-cli chat".to_string());
-        let extra_path_dirs = args.extra_path_dirs.clone();
-        let cols = args.cols;
-        let rows = args.rows;
+        // Load config: --config flag > default location
+        let config = if let Some(ref path) = args.config {
+            planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+        } else {
+            planeai_core::session_launch::load_default_config()
+        };
+
+        // Resolve launch params via shared resolver (same as Tauri)
+        let overrides = planeai_core::session_launch::SessionLaunchOverrides {
+            cwd: args.cwd.clone(),
+            agent_command: args.agent_command.clone(),
+            extra_path_dirs: args.extra_path_dirs.clone(),
+            cols: Some(args.cols as u16),
+            rows: Some(args.rows as u16),
+            ..Default::default()
+        };
+        let resolved = planeai_core::session_launch::resolve_from_config(&config, &overrides)
+            .unwrap_or_else(|e| {
+                eprintln!("config resolution error: {e}, using defaults");
+                let fallback_config = planeai_core::session_launch::LaunchConfig::default();
+                planeai_core::session_launch::resolve_from_config(&fallback_config, &overrides)
+                    .unwrap()
+            });
+
+        let project_cwd = resolved.request.project_cwd.clone();
+        let agent_command = resolved.command_label.clone();
+        let extra_path_dirs = resolved.request.extra_path_dirs.clone();
+        let provider_label = resolved.provider_label.clone().unwrap_or_default();
+        let cols = resolved.request.cols as usize;
+        let rows = resolved.request.rows as usize;
+
+        // Propagate session_log_dir from config if env var not set
+        if let Some(ref dir) = resolved.session_log_dir {
+            if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
+                std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
+            }
+        }
 
         // Ensure daemon is running
         let daemon_connected = match ensure_daemon_running_sync() {
@@ -115,15 +142,13 @@ impl WorkflowApp {
             Vec::new()
         };
 
-        // Check log dir
-        let _log_dir = std::env::var("PLANEAI_SESSION_LOG_DIR").ok();
-
         (
             Self {
                 sessions: Vec::new(),
                 active: 0,
                 project_cwd,
                 agent_command,
+                provider_label,
                 extra_path_dirs,
                 cols,
                 rows,
@@ -649,7 +674,7 @@ impl WorkflowApp {
             let s = &self.sessions[self.active];
             format!(" | {} | {}B", s.command, s.bytes_processed)
         } else {
-            String::new()
+            format!(" | {} | {}", self.provider_label, self.agent_command)
         };
         let error_display = self.last_error.as_deref().unwrap_or("");
         let status_text = format!(
