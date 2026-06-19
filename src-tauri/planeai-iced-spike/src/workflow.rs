@@ -503,11 +503,13 @@ impl WorkflowApp {
             .find(|r| r.id == session.session_id);
         if let Some(rec) = persisted {
             if let Some(ref wt_path) = rec.worktree_path {
-                // Use the session's original project path from the DB project record
+                // Look up the session's original project path from DB by project_id
                 let project_path = self
-                    .project
+                    .db
                     .as_ref()
-                    .map(|p| p.path.clone())
+                    .and_then(|db| db.lock().ok())
+                    .and_then(|conn| ProjectService::get_by_id(&conn, &rec.project_id).ok()?)
+                    .map(|p| p.path)
                     .unwrap_or_else(|| self.project_cwd.to_string_lossy().to_string());
                 let branch = if rec.branch.is_empty() {
                     None
@@ -812,6 +814,15 @@ impl WorkflowApp {
             self.picking_project = false;
             self.project_input.clear();
             self.recent_projects = add_recent_project(&expanded);
+            // Update project record in DB for new cwd
+            if let Some(ref db) = self.db {
+                if let Ok(conn) = db.lock() {
+                    if let Ok(proj) = ProjectService::ensure_project(&conn, &expanded) {
+                        self.project = Some(proj);
+                    }
+                }
+            }
+            self.refresh_persisted_sessions();
             self.clear_error();
         } else {
             self.set_error(format!("Not a directory: {}", expanded));
