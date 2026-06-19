@@ -496,30 +496,28 @@ impl WorkflowApp {
         let _ = kill_daemon_session(&session.session_id);
         session.status = SessionStatus::Killed;
 
-        // Clean up worktree if this session used one
-        let persisted = self
-            .persisted_sessions
-            .iter()
-            .find(|r| r.id == session.session_id);
-        if let Some(rec) = persisted {
-            if let Some(ref wt_path) = rec.worktree_path {
-                // Look up the session's original project path from DB by project_id
-                let project_path = self
-                    .db
-                    .as_ref()
-                    .and_then(|db| db.lock().ok())
-                    .and_then(|conn| ProjectService::get_by_id(&conn, &rec.project_id).ok()?)
-                    .map(|p| p.path)
-                    .unwrap_or_else(|| self.project_cwd.to_string_lossy().to_string());
-                let branch = if rec.branch.is_empty() {
-                    None
-                } else {
-                    Some(rec.branch.as_str())
-                };
-                let errors =
-                    planeai_core::cleanup::cleanup_worktree(&project_path, wt_path, branch);
-                if !errors.is_empty() {
-                    tracing::warn!(errors = ?errors, "worktree cleanup errors");
+        // Clean up worktree if this session used one — fetch record directly by session_id
+        let session_id_for_cleanup = session.session_id.clone();
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                if let Ok(Some(rec)) = SessionService::get(&conn, &session_id_for_cleanup) {
+                    if let Some(ref wt_path) = rec.worktree_path {
+                        let project_path = ProjectService::get_by_id(&conn, &rec.project_id)
+                            .ok()
+                            .flatten()
+                            .map(|p| p.path)
+                            .unwrap_or_else(|| self.project_cwd.to_string_lossy().to_string());
+                        let branch = if rec.branch.is_empty() {
+                            None
+                        } else {
+                            Some(rec.branch.as_str())
+                        };
+                        let errors =
+                            planeai_core::cleanup::cleanup_worktree(&project_path, wt_path, branch);
+                        if !errors.is_empty() {
+                            tracing::warn!(errors = ?errors, "worktree cleanup errors");
+                        }
+                    }
                 }
             }
         }
@@ -586,6 +584,14 @@ impl WorkflowApp {
             self.set_error("Daemon unavailable.".into());
             return;
         }
+        // Require DB + project record before creating worktree
+        let (db, project_id) = match (&self.db, &self.project) {
+            (Some(db), Some(proj)) => (db.clone(), proj.id.clone()),
+            _ => {
+                self.set_error("DB/project unavailable — cannot persist worktree session.".into());
+                return;
+            }
+        };
         let branch = self.worktree_branch_input.trim().to_string();
         if let Err(e) = WorktreeService::validate_branch_name(&branch) {
             self.worktree_error = Some(e);
@@ -633,38 +639,22 @@ impl WorkflowApp {
             }
         };
 
-        // Persist session record BEFORE spawning
-        let db_clone = self.db.clone();
-        let project_id = self.project.as_ref().map(|p| p.id.clone());
-        if let (Some(db), Some(pid)) = (db_clone, project_id) {
-            match db.lock() {
-                Ok(conn) => {
-                    let params = CreateSessionParams {
-                        id: session_id.clone(),
-                        project_id: pid,
-                        name: self.provider_label.clone(),
-                        backend: "daemon".to_string(),
-                        auto_approve: true,
-                        branch: resolved.branch_name.clone(),
-                        worktree_path: resolved.worktree_path.clone(),
-                        task_key: task_key.clone(),
-                        base_branch: resolved.base_branch.clone(),
-                        ..Default::default()
-                    };
-                    if let Err(e) = SessionService::create(&conn, &params) {
-                        // Rollback: clean up the worktree we just created
-                        if let Some(ref wt) = resolved.worktree_path {
-                            planeai_core::cleanup::cleanup_worktree(
-                                &self.project_cwd.to_string_lossy(),
-                                wt,
-                                Some(&resolved.branch_name),
-                            );
-                        }
-                        self.set_error(format!("DB persist failed: {e}"));
-                        return;
-                    }
-                }
-                Err(e) => {
+        // Persist session record BEFORE spawning (db/project_id validated at top)
+        match db.lock() {
+            Ok(conn) => {
+                let params = CreateSessionParams {
+                    id: session_id.clone(),
+                    project_id,
+                    name: self.provider_label.clone(),
+                    backend: "daemon".to_string(),
+                    auto_approve: true,
+                    branch: resolved.branch_name.clone(),
+                    worktree_path: resolved.worktree_path.clone(),
+                    task_key: task_key.clone(),
+                    base_branch: resolved.base_branch.clone(),
+                    ..Default::default()
+                };
+                if let Err(e) = SessionService::create(&conn, &params) {
                     // Rollback: clean up the worktree we just created
                     if let Some(ref wt) = resolved.worktree_path {
                         planeai_core::cleanup::cleanup_worktree(
@@ -673,9 +663,21 @@ impl WorkflowApp {
                             Some(&resolved.branch_name),
                         );
                     }
-                    self.set_error(format!("DB lock failed: {e}"));
+                    self.set_error(format!("DB persist failed: {e}"));
                     return;
                 }
+            }
+            Err(e) => {
+                // Rollback: clean up the worktree we just created
+                if let Some(ref wt) = resolved.worktree_path {
+                    planeai_core::cleanup::cleanup_worktree(
+                        &self.project_cwd.to_string_lossy(),
+                        wt,
+                        Some(&resolved.branch_name),
+                    );
+                }
+                self.set_error(format!("DB lock failed: {e}"));
+                return;
             }
         }
 
@@ -809,24 +811,34 @@ impl WorkflowApp {
     fn select_project(&mut self, path_str: &str) {
         let expanded = planeai_core::session_launch::expand_tilde(path_str);
         let path = PathBuf::from(&expanded);
-        if path.is_dir() {
-            self.project_cwd = path;
-            self.picking_project = false;
-            self.project_input.clear();
-            self.recent_projects = add_recent_project(&expanded);
-            // Update project record in DB for new cwd
-            if let Some(ref db) = self.db {
-                if let Ok(conn) = db.lock() {
-                    if let Ok(proj) = ProjectService::ensure_project(&conn, &expanded) {
-                        self.project = Some(proj);
+        if !path.is_dir() {
+            self.set_error(format!("Not a directory: {}", expanded));
+            return;
+        }
+        // Ensure DB project record first — abort if DB unavailable
+        let db_clone = self.db.clone();
+        if let Some(db) = db_clone {
+            match db.lock() {
+                Ok(conn) => match ProjectService::ensure_project(&conn, &expanded) {
+                    Ok(proj) => self.project = Some(proj),
+                    Err(e) => {
+                        self.set_error(format!("Project persist failed: {e}"));
+                        return;
                     }
+                },
+                Err(e) => {
+                    self.set_error(format!("DB lock failed: {e}"));
+                    return;
                 }
             }
-            self.refresh_persisted_sessions();
-            self.clear_error();
-        } else {
-            self.set_error(format!("Not a directory: {}", expanded));
         }
+        // DB succeeded — now mutate UI state
+        self.project_cwd = path;
+        self.picking_project = false;
+        self.project_input.clear();
+        self.recent_projects = add_recent_project(&expanded);
+        self.refresh_persisted_sessions();
+        self.clear_error();
     }
 
     fn open_log_replay(&mut self) {
