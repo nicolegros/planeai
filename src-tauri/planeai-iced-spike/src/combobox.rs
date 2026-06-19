@@ -21,7 +21,12 @@ pub struct ComboBoxState {
 
 impl ComboBoxState {
     pub fn new(items: Vec<ComboItem>) -> Self {
-        Self { items, search: String::new(), cursor: 0, selected: None }
+        Self {
+            items,
+            search: String::new(),
+            cursor: 0,
+            selected: None,
+        }
     }
 
     pub fn filtered(&self) -> Vec<&ComboItem> {
@@ -29,7 +34,10 @@ impl ComboBoxState {
             self.items.iter().collect()
         } else {
             let q = self.search.to_lowercase();
-            self.items.iter().filter(|i| i.label.to_lowercase().contains(&q)).collect()
+            self.items
+                .iter()
+                .filter(|i| i.label.to_lowercase().contains(&q))
+                .collect()
         }
     }
 
@@ -88,17 +96,23 @@ impl ComboBoxState {
         let display = if focused && !self.search.is_empty() {
             format!("{}{}▏", self.search, "")
         } else {
-            self.selected.as_ref().map(|s| s.label.clone()).unwrap_or_else(|| "(none)".into())
+            self.selected
+                .as_ref()
+                .map(|s| s.label.clone())
+                .unwrap_or_else(|| "(none)".into())
         };
 
-        let color = if focused { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) };
+        let color = if focused {
+            Color::from_rgb8(100, 220, 255)
+        } else {
+            Color::from_rgb8(160, 160, 160)
+        };
 
-        let mut col = column![
-            text(format!("{}{}: {}", prefix, label, display))
-                .size(11)
-                .color(color)
-                .font(Font::MONOSPACE)
-        ].spacing(1);
+        let mut col = column![text(format!("{}{}: {}", prefix, label, display))
+            .size(11)
+            .color(color)
+            .font(Font::MONOSPACE)]
+        .spacing(1);
 
         // Show filtered dropdown when focused
         if focused {

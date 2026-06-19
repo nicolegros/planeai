@@ -877,7 +877,10 @@ impl WorkflowApp {
                 if let Ok(projects) = ProjectService::list_active(&conn) {
                     project_items = projects
                         .into_iter()
-                        .map(|p| ComboItem { id: p.id, label: p.name })
+                        .map(|p| ComboItem {
+                            id: p.id,
+                            label: p.name,
+                        })
                         .collect();
                 }
             }
@@ -918,9 +921,13 @@ impl WorkflowApp {
                     .current_dir(&self.project_cwd)
                     .output()
                     .ok()
-                    .and_then(|o| if o.status.success() {
-                        String::from_utf8(o.stdout).ok()
-                    } else { None })
+                    .and_then(|o| {
+                        if o.status.success() {
+                            String::from_utf8(o.stdout).ok()
+                        } else {
+                            None
+                        }
+                    })
                     .and_then(|git_dir| {
                         // git_dir is like /path/to/project/.git — parent is project root
                         std::path::Path::new(git_dir.trim())
@@ -932,8 +939,12 @@ impl WorkflowApp {
             })
             .unwrap_or_default();
 
-        let items: Vec<ComboItem> = tasks.iter()
-            .map(|t| ComboItem { id: t.key.clone(), label: format!("{}: {}", t.key, t.title) })
+        let items: Vec<ComboItem> = tasks
+            .iter()
+            .map(|t| ComboItem {
+                id: t.key.clone(),
+                label: format!("{}: {}", t.key, t.title),
+            })
             .collect();
         self.session_form_task_combo = ComboBoxState::new(items);
         self.session_form_task_list = tasks;
@@ -945,7 +956,11 @@ impl WorkflowApp {
             Some(item) => item.id.clone(),
             None => return,
         };
-        if let Some(task) = self.session_form_task_list.iter().find(|t| t.key == selected_key) {
+        if let Some(task) = self
+            .session_form_task_list
+            .iter()
+            .find(|t| t.key == selected_key)
+        {
             self.session_form_name = format!("{}: {}", task.key, task.title);
             let slug = format!(
                 "{}/{}",
@@ -986,14 +1001,21 @@ impl WorkflowApp {
                     return;
                 }
             };
-            let task = match self.session_form_task_list.iter().find(|t| t.key == selected_key) {
+            let task = match self
+                .session_form_task_list
+                .iter()
+                .find(|t| t.key == selected_key)
+            {
                 Some(t) => t.clone(),
                 None => {
                     self.session_form_error = Some("Task not found.".into());
                     return;
                 }
             };
-            let prompt = format!("Implement task {}: {}\n\n{}", task.key, task.title, task.description);
+            let prompt = format!(
+                "Implement task {}: {}\n\n{}",
+                task.key, task.title, task.description
+            );
             (Some(task.key), Some(prompt))
         } else {
             (None, None)
@@ -1001,7 +1023,9 @@ impl WorkflowApp {
 
         // Load config (same as Tauri app)
         let config = planeai_core::session_launch::load_default_config();
-        let provider_id = self.provider_keys.get(self.session_form_provider_idx)
+        let provider_id = self
+            .provider_keys
+            .get(self.session_form_provider_idx)
             .cloned()
             .unwrap_or(config.default_provider.clone());
         let provider = match config.providers.get(&provider_id) {
@@ -1023,7 +1047,10 @@ impl WorkflowApp {
 
         // Resolve branch and worktree
         let branch = if self.session_form_branch.is_empty() {
-            self.session_form_name.to_lowercase().replace(' ', "-").chars()
+            self.session_form_name
+                .to_lowercase()
+                .replace(' ', "-")
+                .chars()
                 .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '/')
                 .collect::<String>()
         } else {
@@ -1031,17 +1058,24 @@ impl WorkflowApp {
         };
 
         let (working_dir, worktree_path) = if self.session_form_use_worktree {
-            let base_branch = planeai_core::git::detect_default_branch(&self.project_cwd.to_string_lossy())
-                .unwrap_or_else(|_| "main".to_string());
+            let base_branch =
+                planeai_core::git::detect_default_branch(&self.project_cwd.to_string_lossy())
+                    .unwrap_or_else(|_| "main".to_string());
             let short_id = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-            let sanitized = project.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+            let sanitized = project
+                .name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric(), "-");
             let home = std::env::var("HOME").unwrap_or_default();
             let wt_path = format!("{home}/.planeai/worktrees/{sanitized}/{short_id}");
             if let Some(parent) = std::path::Path::new(&wt_path).parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Err(e) = planeai_core::git::worktree_add(
-                &self.project_cwd.to_string_lossy(), &wt_path, &branch, &base_branch,
+                &self.project_cwd.to_string_lossy(),
+                &wt_path,
+                &branch,
+                &base_branch,
             ) {
                 self.session_form_error = Some(format!("Worktree: {e}"));
                 return;
@@ -1088,16 +1122,25 @@ impl WorkflowApp {
         let id = self.next_id;
         self.next_id += 1;
         let result = DaemonSession::spawn_with_session_id(
-            id, &session_id,
-            self.cols as u16, self.rows as u16,
-            Some(&cmd), &working_dir, &self.extra_path_dirs,
+            id,
+            &session_id,
+            self.cols as u16,
+            self.rows as u16,
+            Some(&cmd),
+            &working_dir,
+            &self.extra_path_dirs,
         );
         match result {
             Ok(backend) => {
                 // Fire on_start lifecycle hook for task-linked sessions
                 if let Some(ref tk) = task_key {
                     let db_path = planeai_core::app_data_dir().join("planeai.db");
-                    let _ = TaskService::fire_lifecycle_hook(&db_path, &project.name, tk, "in_progress");
+                    let _ = TaskService::fire_lifecycle_hook(
+                        &db_path,
+                        &project.name,
+                        tk,
+                        "in_progress",
+                    );
                 }
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
@@ -1110,7 +1153,9 @@ impl WorkflowApp {
                     cwd: working_dir,
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term, processor, snapshot,
+                    term,
+                    processor,
+                    snapshot,
                     cache: Cache::new(),
                     bytes_processed: 0,
                     log_file_exists,
@@ -1124,7 +1169,9 @@ impl WorkflowApp {
                 // Cleanup worktree on failure
                 if let Some(ref wt) = worktree_path {
                     planeai_core::cleanup::cleanup_worktree(
-                        &self.project_cwd.to_string_lossy(), wt, Some(&branch),
+                        &self.project_cwd.to_string_lossy(),
+                        wt,
+                        Some(&branch),
                     );
                 }
                 if let Ok(conn) = db.lock() {
@@ -1619,8 +1666,13 @@ impl WorkflowApp {
                             }
                             _ => {}
                         }
-                        let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
-                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                        let cmd = if cfg!(target_os = "macos") {
+                            modifiers.command()
+                        } else {
+                            modifiers.control()
+                        };
+                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter))
+                        {
                             self.submit_session_form();
                             return;
                         }
@@ -1634,7 +1686,9 @@ impl WorkflowApp {
                             _ => "",
                         };
                         if !key_str.is_empty() {
-                            if let Some(selected) = self.session_form_project_combo.handle_key(key_str) {
+                            if let Some(selected) =
+                                self.session_form_project_combo.handle_key(key_str)
+                            {
                                 // Project was selected — look up path from DB projects
                                 let path = if let Some(ref db) = self.db {
                                     if let Ok(conn) = db.lock() {
@@ -1642,8 +1696,12 @@ impl WorkflowApp {
                                             .ok()
                                             .flatten()
                                             .map(|p| p.path)
-                                    } else { None }
-                                } else { None };
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
                                 if let Some(path) = path {
                                     self.select_project(&path);
                                 }
@@ -1668,8 +1726,13 @@ impl WorkflowApp {
                             }
                             _ => {}
                         }
-                        let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
-                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                        let cmd = if cfg!(target_os = "macos") {
+                            modifiers.command()
+                        } else {
+                            modifiers.control()
+                        };
+                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter))
+                        {
                             self.submit_session_form();
                             return;
                         }
@@ -1681,11 +1744,10 @@ impl WorkflowApp {
                             keyboard::Key::Character(c) => c.as_str(),
                             _ => "",
                         };
-                        if !key_str.is_empty() {
-                            if self.session_form_task_combo.handle_key(key_str).is_some() {
-                                // Task selected — auto-fill name and branch
-                                self.session_form_apply_task();
-                            }
+                        if !key_str.is_empty()
+                            && self.session_form_task_combo.handle_key(key_str).is_some()
+                        {
+                            self.session_form_apply_task();
                         }
                         return;
                     }
@@ -1696,32 +1758,50 @@ impl WorkflowApp {
                         keyboard::Key::Named(keyboard::key::Named::Tab) => {
                             if modifiers.shift() {
                                 // Reverse cycle
-                                self.session_form_focus = match (&self.session_form_mode, &self.session_form_focus) {
-                                    (_, SessionFormField::Mode) => SessionFormField::Branch,
-                                    (_, SessionFormField::Branch) => SessionFormField::Toggles,
-                                    (_, SessionFormField::Toggles) => SessionFormField::Name,
-                                    (SessionFormMode::FromTask, SessionFormField::Name) => SessionFormField::Task,
-                                    (SessionFormMode::FromTask, SessionFormField::Task) => SessionFormField::Project,
-                                    (SessionFormMode::Manual, SessionFormField::Name) => SessionFormField::Project,
-                                    (_, SessionFormField::Project) => SessionFormField::Mode,
-                                    _ => SessionFormField::Mode,
-                                };
+                                self.session_form_focus =
+                                    match (&self.session_form_mode, &self.session_form_focus) {
+                                        (_, SessionFormField::Mode) => SessionFormField::Branch,
+                                        (_, SessionFormField::Branch) => SessionFormField::Toggles,
+                                        (_, SessionFormField::Toggles) => SessionFormField::Name,
+                                        (SessionFormMode::FromTask, SessionFormField::Name) => {
+                                            SessionFormField::Task
+                                        }
+                                        (SessionFormMode::FromTask, SessionFormField::Task) => {
+                                            SessionFormField::Project
+                                        }
+                                        (SessionFormMode::Manual, SessionFormField::Name) => {
+                                            SessionFormField::Project
+                                        }
+                                        (_, SessionFormField::Project) => SessionFormField::Mode,
+                                        _ => SessionFormField::Mode,
+                                    };
                             } else {
                                 // Forward cycle
-                                self.session_form_focus = match (&self.session_form_mode, &self.session_form_focus) {
-                                    (_, SessionFormField::Mode) => SessionFormField::Project,
-                                    (SessionFormMode::FromTask, SessionFormField::Project) => SessionFormField::Task,
-                                    (SessionFormMode::Manual, SessionFormField::Project) => SessionFormField::Name,
-                                    (SessionFormMode::FromTask, SessionFormField::Task) => SessionFormField::Name,
-                                    (_, SessionFormField::Name) => SessionFormField::Toggles,
-                                    (_, SessionFormField::Toggles) => SessionFormField::Branch,
-                                    (_, SessionFormField::Branch) => SessionFormField::Mode,
-                                    _ => SessionFormField::Mode,
-                                };
+                                self.session_form_focus =
+                                    match (&self.session_form_mode, &self.session_form_focus) {
+                                        (_, SessionFormField::Mode) => SessionFormField::Project,
+                                        (SessionFormMode::FromTask, SessionFormField::Project) => {
+                                            SessionFormField::Task
+                                        }
+                                        (SessionFormMode::Manual, SessionFormField::Project) => {
+                                            SessionFormField::Name
+                                        }
+                                        (SessionFormMode::FromTask, SessionFormField::Task) => {
+                                            SessionFormField::Name
+                                        }
+                                        (_, SessionFormField::Name) => SessionFormField::Toggles,
+                                        (_, SessionFormField::Toggles) => SessionFormField::Branch,
+                                        (_, SessionFormField::Branch) => SessionFormField::Mode,
+                                        _ => SessionFormField::Mode,
+                                    };
                             }
                         }
                         keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                            let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
+                            let cmd = if cfg!(target_os = "macos") {
+                                modifiers.command()
+                            } else {
+                                modifiers.control()
+                            };
                             if cmd {
                                 self.submit_session_form();
                             } else if self.session_form_focus == SessionFormField::Mode {
@@ -1752,8 +1832,12 @@ impl WorkflowApp {
                         }
                         keyboard::Key::Named(keyboard::key::Named::Backspace) => {
                             match self.session_form_focus {
-                                SessionFormField::Name => { self.session_form_name.pop(); }
-                                SessionFormField::Branch => { self.session_form_branch.pop(); }
+                                SessionFormField::Name => {
+                                    self.session_form_name.pop();
+                                }
+                                SessionFormField::Branch => {
+                                    self.session_form_branch.pop();
+                                }
                                 _ => {}
                             }
                         }
@@ -1762,10 +1846,18 @@ impl WorkflowApp {
                             // Toggles: w=worktree, a=auto-approve, p=cycle provider
                             if self.session_form_focus == SessionFormField::Toggles {
                                 match ch {
-                                    "w" => self.session_form_use_worktree = !self.session_form_use_worktree,
-                                    "a" => self.session_form_auto_approve = !self.session_form_auto_approve,
+                                    "w" => {
+                                        self.session_form_use_worktree =
+                                            !self.session_form_use_worktree
+                                    }
+                                    "a" => {
+                                        self.session_form_auto_approve =
+                                            !self.session_form_auto_approve
+                                    }
                                     "p" if !self.provider_keys.is_empty() => {
-                                        self.session_form_provider_idx = (self.session_form_provider_idx + 1) % self.provider_keys.len();
+                                        self.session_form_provider_idx =
+                                            (self.session_form_provider_idx + 1)
+                                                % self.provider_keys.len();
                                     }
                                     _ => {}
                                 }
@@ -2583,24 +2675,42 @@ impl WorkflowApp {
                 text(format!(
                     "{}[{}Manual{}]  [{}From task{}]",
                     mode_prefix,
-                    if self.session_form_mode == SessionFormMode::Manual { "●" } else { " " },
+                    if self.session_form_mode == SessionFormMode::Manual {
+                        "●"
+                    } else {
+                        " "
+                    },
                     " M",
-                    if self.session_form_mode == SessionFormMode::FromTask { "●" } else { " " },
+                    if self.session_form_mode == SessionFormMode::FromTask {
+                        "●"
+                    } else {
+                        " "
+                    },
                     " T",
                 ))
                 .size(11)
-                .color(if mode_highlight { Color::from_rgb8(200, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                .color(if mode_highlight {
+                    Color::from_rgb8(200, 220, 255)
+                } else {
+                    Color::from_rgb8(160, 160, 160)
+                })
                 .font(Font::MONOSPACE),
             );
 
             // Project (custom combobox)
             let proj_focused = self.session_form_focus == SessionFormField::Project;
-            sf_col = sf_col.push(self.session_form_project_combo.view::<Message>("Project", proj_focused));
+            sf_col = sf_col.push(
+                self.session_form_project_combo
+                    .view::<Message>("Project", proj_focused),
+            );
 
             // Task picker (From task mode only)
             if self.session_form_mode == SessionFormMode::FromTask {
                 let task_focused = self.session_form_focus == SessionFormField::Task;
-                sf_col = sf_col.push(self.session_form_task_combo.view::<Message>("Task", task_focused));
+                sf_col = sf_col.push(
+                    self.session_form_task_combo
+                        .view::<Message>("Task", task_focused),
+                );
             }
 
             // Name field
@@ -2612,25 +2722,50 @@ impl WorkflowApp {
                 self.session_form_name.clone()
             };
             sf_col = sf_col.push(
-                text(format!("{}Name: {}{}", name_prefix, name_display, if name_highlight { "▏" } else { "" }))
-                    .size(11)
-                    .color(if name_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
-                    .font(Font::MONOSPACE),
+                text(format!(
+                    "{}Name: {}{}",
+                    name_prefix,
+                    name_display,
+                    if name_highlight { "▏" } else { "" }
+                ))
+                .size(11)
+                .color(if name_highlight {
+                    Color::from_rgb8(100, 220, 255)
+                } else {
+                    Color::from_rgb8(160, 160, 160)
+                })
+                .font(Font::MONOSPACE),
             );
 
             // Toggles
             let toggles_highlight = self.session_form_focus == SessionFormField::Toggles;
             let toggles_prefix = if toggles_highlight { "▶ " } else { "  " };
-            let wt_mark = if self.session_form_use_worktree { "●" } else { "○" };
-            let aa_mark = if self.session_form_auto_approve { "●" } else { "○" };
-            let provider_name = self.provider_keys.get(self.session_form_provider_idx).cloned().unwrap_or_else(|| self.provider_label.clone());
+            let wt_mark = if self.session_form_use_worktree {
+                "●"
+            } else {
+                "○"
+            };
+            let aa_mark = if self.session_form_auto_approve {
+                "●"
+            } else {
+                "○"
+            };
+            let provider_name = self
+                .provider_keys
+                .get(self.session_form_provider_idx)
+                .cloned()
+                .unwrap_or_else(|| self.provider_label.clone());
             sf_col = sf_col.push(
                 text(format!(
                     "{}[{}] Worktree W  [{}] Auto-approve A  Provider: {} P",
                     toggles_prefix, wt_mark, aa_mark, provider_name
                 ))
                 .size(11)
-                .color(if toggles_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                .color(if toggles_highlight {
+                    Color::from_rgb8(100, 220, 255)
+                } else {
+                    Color::from_rgb8(160, 160, 160)
+                })
                 .font(Font::MONOSPACE),
             );
 
@@ -2643,10 +2778,19 @@ impl WorkflowApp {
                 self.session_form_branch.clone()
             };
             sf_col = sf_col.push(
-                text(format!("{}Branch: {}{}", branch_prefix, branch_display, if branch_highlight { "▏" } else { "" }))
-                    .size(11)
-                    .color(if branch_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
-                    .font(Font::MONOSPACE),
+                text(format!(
+                    "{}Branch: {}{}",
+                    branch_prefix,
+                    branch_display,
+                    if branch_highlight { "▏" } else { "" }
+                ))
+                .size(11)
+                .color(if branch_highlight {
+                    Color::from_rgb8(100, 220, 255)
+                } else {
+                    Color::from_rgb8(160, 160, 160)
+                })
+                .font(Font::MONOSPACE),
             );
 
             // Error
