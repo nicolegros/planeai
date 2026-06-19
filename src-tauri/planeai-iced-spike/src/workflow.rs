@@ -396,18 +396,7 @@ impl WorkflowApp {
                 tab_switcher_names: Vec::new(),
                 mru: persisted_sessions.iter().map(|s| s.id.clone()).collect(),
                 persisted_sessions,
-                theme_source: {
-                    let src = ThemeSource::load();
-                    if src.is_empty() {
-                        ThemeSource {
-                            parsed: crate::theme_parser::ParsedThemeCss::default(),
-                            font_family: src.font_family.clone(),
-                            font_size: src.font_size,
-                        }
-                    } else {
-                        src
-                    }
-                },
+                theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
                 current_mode: theme::resolve_mode(),
                 last_mode_check: None,

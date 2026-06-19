@@ -111,7 +111,7 @@ impl PlaneAiTheme {
 
 /// Holds both parsed blocks so we can swap mode at runtime without re-reading the file.
 pub struct ThemeSource {
-    pub parsed: ParsedThemeCss,
+    parsed: ParsedThemeCss,
     pub font_family: String,
     pub font_size: f32,
 }
@@ -146,10 +146,6 @@ impl ThemeSource {
         theme.font_size = self.font_size;
         theme.mode = mode;
         theme
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.parsed.light.is_empty() && self.parsed.dark.is_empty()
     }
 }
 
