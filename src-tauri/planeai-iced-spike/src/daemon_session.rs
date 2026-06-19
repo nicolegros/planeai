@@ -576,24 +576,41 @@ impl DaemonSession {
             let sid = session_id.clone();
             let socket_clone = socket.clone();
 
+            // Use oneshot to gate on data connection handshake before returning Ok
+            let (handshake_tx, handshake_rx) =
+                tokio::sync::oneshot::channel::<Result<(), String>>();
+
             rt.spawn(async move {
-                if let Err(e) = data_loop(
-                    &socket_clone,
-                    &sid,
-                    input_rx,
-                    buf_clone,
-                    buf_not_full_clone,
-                    exited_clone,
-                    max_pending_clone,
-                    recv_bytes_clone,
-                    block_count_clone,
-                    block_ns_clone,
-                )
-                .await
-                {
-                    tracing::debug!("daemon data loop ended: {e}");
+                match data_loop_connect(&socket_clone, &sid).await {
+                    Ok((reader, writer)) => {
+                        let _ = handshake_tx.send(Ok(()));
+                        data_loop_run(
+                            reader,
+                            writer,
+                            input_rx,
+                            buf_clone,
+                            buf_not_full_clone,
+                            exited_clone,
+                            max_pending_clone,
+                            recv_bytes_clone,
+                            block_count_clone,
+                            block_ns_clone,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        let _ = handshake_tx.send(Err(e.to_string()));
+                    }
                 }
             });
+
+            // Wait for handshake result
+            let handshake_result = rt.block_on(handshake_rx);
+            match handshake_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => anyhow::bail!("data connection failed: {e}"),
+                Err(_) => anyhow::bail!("data connection task died before handshake"),
+            }
 
             let sid_resize = session_id.clone();
             let socket_resize = socket.clone();
@@ -722,9 +739,23 @@ impl PlaneAiTerminalSession for DaemonSession {
 
 /// Async data loop: reads output frames from daemon, writes to bounded buffer.
 #[allow(clippy::too_many_arguments)]
-async fn data_loop(
+async fn data_loop_connect(
     socket: &std::path::Path,
     session_id: &str,
+) -> anyhow::Result<(
+    tokio::io::ReadHalf<AsyncIpcStream>,
+    tokio::io::WriteHalf<AsyncIpcStream>,
+)> {
+    let mut stream = AsyncIpcStream::connect(socket).await?;
+    stream.write_all(&[CONN_DATA]).await?;
+    write_frame(&mut stream, FRAME_OUTPUT, session_id.as_bytes()).await?;
+    Ok(tokio::io::split(stream))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn data_loop_run(
+    mut reader: tokio::io::ReadHalf<AsyncIpcStream>,
+    mut writer: tokio::io::WriteHalf<AsyncIpcStream>,
     mut input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     buf: Arc<Mutex<Vec<u8>>>,
     buf_not_full: Arc<Condvar>,
@@ -733,15 +764,7 @@ async fn data_loop(
     recv_bytes: Arc<AtomicU64>,
     block_count: Arc<AtomicU64>,
     block_ns: Arc<AtomicU64>,
-) -> anyhow::Result<()> {
-    let mut stream = AsyncIpcStream::connect(socket).await?;
-    stream.write_all(&[CONN_DATA]).await?;
-
-    // Handshake: send session_id
-    write_frame(&mut stream, FRAME_OUTPUT, session_id.as_bytes()).await?;
-
-    let (mut reader, mut writer) = tokio::io::split(stream);
-
+) {
     let input_task = tokio::spawn(async move {
         while let Some(data) = input_rx.recv().await {
             if write_frame(&mut writer, FRAME_INPUT, &data).await.is_err() {
@@ -775,6 +798,36 @@ async fn data_loop(
 
     exited.store(true, Ordering::Release);
     input_task.abort();
+}
+
+/// Combined connect+run for legacy callers (attach, old spawn).
+#[allow(clippy::too_many_arguments)]
+async fn data_loop(
+    socket: &std::path::Path,
+    session_id: &str,
+    input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    buf: Arc<Mutex<Vec<u8>>>,
+    buf_not_full: Arc<Condvar>,
+    exited: Arc<AtomicBool>,
+    max_pending: Arc<AtomicU64>,
+    recv_bytes: Arc<AtomicU64>,
+    block_count: Arc<AtomicU64>,
+    block_ns: Arc<AtomicU64>,
+) -> anyhow::Result<()> {
+    let (reader, writer) = data_loop_connect(socket, session_id).await?;
+    data_loop_run(
+        reader,
+        writer,
+        input_rx,
+        buf,
+        buf_not_full,
+        exited,
+        max_pending,
+        recv_bytes,
+        block_count,
+        block_ns,
+    )
+    .await;
     Ok(())
 }
 
