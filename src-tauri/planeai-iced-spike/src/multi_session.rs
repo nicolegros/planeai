@@ -17,11 +17,11 @@ use serde_json::json;
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
-use crate::theme::TerminalColors;
 use crate::daemon_session::DaemonSessionInfo;
 use crate::input;
 use crate::shell::{QueuePolicy, Shell};
 use crate::sidebar::{SidebarAction, SidebarState};
+use crate::theme::TerminalColors;
 use crate::Args;
 
 static MULTI_ARGS: OnceLock<Args> = OnceLock::new();
@@ -318,7 +318,8 @@ impl MultiApp {
             self.active = self.sessions.len() - 1;
         }
         let a = self.active;
-        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
+        self.sessions[a].snapshot =
+            snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
         self.sessions[a].cache.clear();
     }
 
@@ -349,7 +350,8 @@ impl MultiApp {
             self.active = self.sessions.len() - 1;
         }
         let a = self.active;
-        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
+        self.sessions[a].snapshot =
+            snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
         self.sessions[a].cache.clear();
     }
 
@@ -651,7 +653,8 @@ impl MultiApp {
                             self.active = self.sessions.len() - 1;
                         }
                         let idx = self.active;
-                        self.sessions[idx].snapshot = snapshot_grid(&self.sessions[idx].term, &TerminalColors::default());
+                        self.sessions[idx].snapshot =
+                            snapshot_grid(&self.sessions[idx].term, &TerminalColors::default());
                         self.sessions[idx].cache.clear();
                     }
                     return;

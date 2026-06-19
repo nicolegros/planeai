@@ -57,10 +57,10 @@ impl Default for TerminalColors {
 
 #[derive(Clone, Debug)]
 pub struct PlaneAiTheme {
-    pub surface: ColorScale,
-    pub primary: ColorScale,
-    pub error: ColorScale,
-    pub warning: ColorScale,
+    surface: ColorScale,
+    primary: ColorScale,
+    error_scale: ColorScale,
+    warning_scale: ColorScale,
     pub terminal: TerminalColors,
     pub font: Font,
     pub font_size: f32,
@@ -98,19 +98,60 @@ impl PlaneAiTheme {
         }
     }
 
+    /// Secondary text (slightly less prominent).
+    pub fn text_secondary(&self) -> Color {
+        match self.mode {
+            Mode::Dark => self.surface.s200,
+            Mode::Light => self.surface.s700,
+        }
+    }
+
     /// Secondary/muted text.
     pub fn text_muted(&self) -> Color {
         match self.mode {
-            Mode::Dark => self.surface.s400,
-            Mode::Light => self.surface.s500,
+            Mode::Dark => self.surface.s300,
+            Mode::Light => self.surface.s600,
         }
     }
 
     /// Dimmed/disabled text.
     pub fn text_dimmed(&self) -> Color {
         match self.mode {
-            Mode::Dark => self.surface.s500,
-            Mode::Light => self.surface.s400,
+            Mode::Dark => self.surface.s400,
+            Mode::Light => self.surface.s500,
+        }
+    }
+
+    /// Accent color for active items, links, highlights.
+    pub fn accent(&self) -> Color {
+        self.primary.s500
+    }
+
+    /// Warning color.
+    pub fn warning(&self) -> Color {
+        self.warning_scale.s400
+    }
+
+    /// Warning background.
+    pub fn warning_bg(&self) -> Color {
+        self.warning_scale.s500
+    }
+
+    /// Warning text (lighter variant for on-dark-bg use).
+    pub fn warning_text(&self) -> Color {
+        self.warning_scale.s300
+    }
+
+    /// Error color.
+    pub fn error(&self) -> Color {
+        self.error_scale.s500
+    }
+
+    /// Border/divider color.
+    pub fn border(&self) -> Color {
+        match self.mode {
+            Mode::Dark => self.surface.s700,
+            Mode::Light => self.surface.s200,
         }
     }
 }
@@ -298,8 +339,8 @@ fn theme_from_map(map: &ColorMap) -> PlaneAiTheme {
     PlaneAiTheme {
         surface: surface_fallback(map),
         primary: primary_fallback(map),
-        error: scale_from_map(map, "color-error", (255, 123, 114)),
-        warning: scale_from_map(map, "color-warning", (210, 153, 34)),
+        error_scale: scale_from_map(map, "color-error", (255, 123, 114)),
+        warning_scale: scale_from_map(map, "color-warning", (210, 153, 34)),
         terminal: terminal_from_map(map),
         font: Font::MONOSPACE,
         font_size: 14.0,

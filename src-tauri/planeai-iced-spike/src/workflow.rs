@@ -400,7 +400,10 @@ impl WorkflowApp {
             iced::Task::none(),
         );
         // Resolve theme from source
-        result.0.theme = result.0.theme_source.resolve(result.0.theme_source.current_mode());
+        result.0.theme = result
+            .0
+            .theme_source
+            .resolve(result.0.theme_source.current_mode());
         // Surface boot warnings visibly
         if !boot_warnings.is_empty() {
             result.0.set_error(boot_warnings.join(" | "));
@@ -2422,8 +2425,7 @@ impl WorkflowApp {
                     }
                     if i == self.active {
                         let session = &mut self.sessions[i];
-                        session.snapshot =
-                            snapshot_grid(&session.term, &self.theme.terminal);
+                        session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
                         session.cache.clear();
                     }
                 }
@@ -2479,9 +2481,9 @@ impl WorkflowApp {
 
         // Daemon status
         let (indicator, color) = if self.daemon_connected {
-            ("⚡ daemon connected", self.theme.primary.s500)
+            ("⚡ daemon connected", self.theme.accent())
         } else {
-            ("⚠ daemon disconnected", self.theme.warning.s400)
+            ("⚠ daemon disconnected", self.theme.warning())
         };
         left_panel_content =
             left_panel_content.push(text(indicator).size(11).color(color).font(Font::MONOSPACE));
@@ -2571,12 +2573,12 @@ impl WorkflowApp {
                 log_indicator,
             );
             let color = match (&s.status, i == self.active) {
-                (_, true) => self.theme.primary.s500,
-                (SessionStatus::Exited, _) | (SessionStatus::Killed, _) => self.theme.surface.s400,
+                (_, true) => self.theme.accent(),
+                (SessionStatus::Exited, _) | (SessionStatus::Killed, _) => self.theme.text_dimmed(),
                 (SessionStatus::Detached, _) | (SessionStatus::Unreachable, _) => {
-                    self.theme.warning.s400
+                    self.theme.warning()
                 }
-                _ => self.theme.surface.s100,
+                _ => self.theme.text_primary(),
             };
             left_panel_content =
                 left_panel_content.push(text(label).size(10).color(color).font(Font::MONOSPACE));
@@ -2599,7 +2601,7 @@ impl WorkflowApp {
                 left_panel_content = left_panel_content.push(
                     text("── detached ──")
                         .size(10)
-                        .color(self.theme.surface.s400)
+                        .color(self.theme.text_dimmed())
                         .font(Font::MONOSPACE),
                 );
                 for info in unattached.iter().take(5) {
@@ -2609,9 +2611,9 @@ impl WorkflowApp {
                         &info.session_id[..info.session_id.len().min(14)]
                     );
                     let color = if info.alive {
-                        self.theme.warning.s400
+                        self.theme.warning()
                     } else {
-                        self.theme.surface.s500
+                        self.theme.text_dimmed()
                     };
                     left_panel_content = left_panel_content
                         .push(text(label).size(11).color(color).font(Font::MONOSPACE));
@@ -2637,13 +2639,13 @@ impl WorkflowApp {
             let banner = container(
                 text("READ-ONLY LOG REPLAY — Escape to exit")
                     .size(12)
-                    .color(self.theme.warning.s300)
+                    .color(self.theme.warning_text())
                     .font(Font::MONOSPACE),
             )
             .width(Length::Fill)
             .padding(2)
             .style(|_: &Theme| container::Style {
-                background: Some(self.theme.warning.s500.into()),
+                background: Some(self.theme.warning_bg().into()),
                 ..Default::default()
             });
             let canvas_view = Canvas::new(WorkflowTermRenderer {
@@ -2661,7 +2663,7 @@ impl WorkflowApp {
             container(
                 text("No sessions. Cmd+N to launch, Cmd+A to attach.")
                     .size(14)
-                    .color(self.theme.surface.s400)
+                    .color(self.theme.text_dimmed())
                     .font(Font::MONOSPACE),
             )
             .width(Length::Fill)
@@ -2725,13 +2727,13 @@ impl WorkflowApp {
         let status_bar = container(
             text(status_text)
                 .size(12)
-                .color(self.theme.surface.s100)
+                .color(self.theme.text_primary())
                 .font(Font::MONOSPACE),
         )
         .width(Length::Fill)
         .padding(2)
         .style(|_: &Theme| container::Style {
-            background: Some(self.theme.surface.s800.into()),
+            background: Some(self.theme.panel_bg().into()),
             ..Default::default()
         });
 
@@ -2756,7 +2758,7 @@ impl WorkflowApp {
                 picker_col = picker_col.push(
                     text("Recent (Cmd+1..9 to select):")
                         .size(11)
-                        .color(self.theme.surface.s300)
+                        .color(self.theme.text_muted())
                         .font(Font::MONOSPACE),
                 );
                 for (i, p) in self.recent_projects.iter().take(9).enumerate() {
@@ -2764,16 +2766,16 @@ impl WorkflowApp {
                     let marker = if !exists { " (missing)" } else { "" };
                     let label = format!(" {}. {}{}", i + 1, p, marker);
                     let color = if exists {
-                        self.theme.surface.s100
+                        self.theme.text_primary()
                     } else {
-                        self.theme.surface.s500
+                        self.theme.text_dimmed()
                     };
                     picker_col =
                         picker_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
                 }
             }
             let picker = container(picker_col).style(|_: &Theme| container::Style {
-                background: Some(self.theme.surface.s800.into()),
+                background: Some(self.theme.panel_bg().into()),
                 ..Default::default()
             });
             column![picker, main_content].into()
@@ -2788,7 +2790,7 @@ impl WorkflowApp {
             .width(Length::Fill)
             .padding(4)
             .style(|_: &Theme| container::Style {
-                background: Some(self.theme.surface.s800.into()),
+                background: Some(self.theme.panel_bg().into()),
                 ..Default::default()
             });
             column![prompt, main_content].into()
@@ -2802,7 +2804,7 @@ impl WorkflowApp {
             wt_col = wt_col.push(
                 text(format!("Worktree Launch — project: {}", project_name))
                     .size(12)
-                    .color(self.theme.primary.s500)
+                    .color(self.theme.accent())
                     .font(Font::MONOSPACE),
             );
             let mode_label = if self.worktree_use_worktree {
@@ -2813,7 +2815,7 @@ impl WorkflowApp {
             wt_col = wt_col.push(
                 text(mode_label)
                     .size(11)
-                    .color(self.theme.surface.s200)
+                    .color(self.theme.text_secondary())
                     .font(Font::MONOSPACE),
             );
             if self.worktree_use_worktree {
@@ -2841,7 +2843,7 @@ impl WorkflowApp {
                     wt_col = wt_col.push(
                         text(format!("→ {}", path))
                             .size(10)
-                            .color(self.theme.surface.s300)
+                            .color(self.theme.text_muted())
                             .font(Font::MONOSPACE),
                     );
                 }
@@ -2849,7 +2851,7 @@ impl WorkflowApp {
                     wt_col = wt_col.push(
                         text(format!("⚠ {}", err))
                             .size(11)
-                            .color(self.theme.error.s500)
+                            .color(self.theme.error())
                             .font(Font::MONOSPACE),
                     );
                 }
@@ -2857,11 +2859,11 @@ impl WorkflowApp {
             wt_col = wt_col.push(
                 text("Enter to launch | Escape to cancel")
                     .size(10)
-                    .color(self.theme.surface.s400)
+                    .color(self.theme.text_dimmed())
                     .font(Font::MONOSPACE),
             );
             let wt_panel = container(wt_col).style(|_: &Theme| container::Style {
-                background: Some(self.theme.surface.s800.into()),
+                background: Some(self.theme.panel_bg().into()),
                 ..Default::default()
             });
             column![wt_panel, main_content].into()
@@ -3098,14 +3100,14 @@ impl WorkflowApp {
             tp_col = tp_col.push(
                 text("Task Picker (↑↓ navigate, Enter select, Escape cancel)")
                     .size(12)
-                    .color(self.theme.primary.s500)
+                    .color(self.theme.accent())
                     .font(Font::MONOSPACE),
             );
             if self.task_list.is_empty() {
                 tp_col = tp_col.push(
                     text("  No tasks found for this project.")
                         .size(11)
-                        .color(self.theme.surface.s300)
+                        .color(self.theme.text_muted())
                         .font(Font::MONOSPACE),
                 );
             } else {
@@ -3123,15 +3125,15 @@ impl WorkflowApp {
                         task.status.as_str()
                     );
                     let color = if i == self.task_picker_index {
-                        self.theme.primary.s500
+                        self.theme.accent()
                     } else {
-                        self.theme.surface.s100
+                        self.theme.text_primary()
                     };
                     tp_col = tp_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
                 }
             }
             let tp_panel = container(tp_col).style(|_: &Theme| container::Style {
-                background: Some(self.theme.surface.s900.into()),
+                background: Some(self.theme.chrome_bg().into()),
                 ..Default::default()
             });
             column![tp_panel, main_content].into()

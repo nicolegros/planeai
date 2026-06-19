@@ -348,26 +348,26 @@ impl SidebarState {
 
             let color = match item {
                 NavItem::ProjectHeader { .. } => theme.text_muted(),
-                _ if is_active => theme.primary.s500,
+                _ if is_active => theme.accent(),
                 NavItem::OrphanSession { status, .. } if status == "active" => theme.text_primary(),
                 NavItem::OrphanSession { .. } => theme.text_dimmed(),
                 NavItem::StatusHeader { status, .. } => status_color(status),
                 NavItem::Task {
                     linked_session_id: Some(_),
                     ..
-                } => theme.primary.s500,
+                } => theme.accent(),
                 NavItem::Task { .. } => theme.text_primary(),
             };
 
             let bg = if is_active {
                 Some(Color {
                     a: 0.1,
-                    ..theme.primary.s500
+                    ..theme.accent()
                 })
             } else if is_selected {
                 Some(Color {
                     a: 0.15,
-                    ..theme.primary.s500
+                    ..theme.accent()
                 })
             } else {
                 None
@@ -390,17 +390,14 @@ impl SidebarState {
         let border_color = if focused {
             Color {
                 a: 0.3,
-                ..theme.primary.s500
+                ..theme.accent()
             }
         } else {
-            theme.surface.s800
+            theme.panel_bg()
         };
 
         let panel_bg = theme.panel_bg();
-        let handle_bg = match theme.mode {
-            crate::theme::Mode::Dark => theme.surface.s700,
-            crate::theme::Mode::Light => theme.surface.s200,
-        };
+        let handle_bg = theme.border();
 
         let sidebar_panel = container(sidebar_content)
             .width(Length::Fill)
