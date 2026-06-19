@@ -184,7 +184,7 @@ struct WorkflowApp {
     session_form_use_worktree: bool,
     session_form_auto_approve: bool,
     session_form_provider_idx: usize,
-    session_form_task_idx: usize,
+    session_form_task_combo: ComboBoxState,
     session_form_task_list: Vec<planeai_tasks::model::Task>,
     session_form_focus: SessionFormField,
     session_form_error: Option<String>,
@@ -341,7 +341,7 @@ impl WorkflowApp {
                 session_form_use_worktree: false,
                 session_form_auto_approve: true,
                 session_form_provider_idx: 0,
-                session_form_task_idx: 0,
+                session_form_task_combo: ComboBoxState::new(Vec::new()),
                 session_form_task_list: Vec::new(),
                 session_form_focus: SessionFormField::Mode,
                 session_form_error: None,
@@ -894,33 +894,58 @@ impl WorkflowApp {
         self.session_form_branch.clear();
         self.session_form_use_worktree = false;
         self.session_form_auto_approve = true;
-        self.session_form_task_idx = 0;
+        self.session_form_task_combo = ComboBoxState::new(Vec::new());
         self.session_form_task_list.clear();
         self.session_form_focus = SessionFormField::Mode;
         self.session_form_error = None;
     }
 
-    /// Load tasks into the session form task list.
+    /// Load tasks into the session form task combobox.
     fn session_form_load_tasks(&mut self) {
         let project_name = match &self.project {
             Some(p) => p.name.clone(),
             None => return,
         };
         let db_path = planeai_core::app_data_dir().join("planeai.db");
-        match TaskService::list_for_project(&db_path, &project_name) {
-            Ok(tasks) => {
-                self.session_form_task_list = tasks;
-                self.session_form_task_idx = 0;
-            }
-            Err(_) => {
-                self.session_form_task_list.clear();
-            }
-        }
+        // Try project name first, then try main git repo name (for worktrees/subdirs)
+        let tasks = TaskService::list_for_project(&db_path, &project_name)
+            .ok()
+            .filter(|t| !t.is_empty())
+            .or_else(|| {
+                // For worktrees, git-common-dir points to main repo's .git
+                std::process::Command::new("git")
+                    .args(["rev-parse", "--git-common-dir"])
+                    .current_dir(&self.project_cwd)
+                    .output()
+                    .ok()
+                    .and_then(|o| if o.status.success() {
+                        String::from_utf8(o.stdout).ok()
+                    } else { None })
+                    .and_then(|git_dir| {
+                        // git_dir is like /path/to/project/.git — parent is project root
+                        std::path::Path::new(git_dir.trim())
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().to_string())
+                    })
+                    .and_then(|name| TaskService::list_for_project(&db_path, &name).ok())
+            })
+            .unwrap_or_default();
+
+        let items: Vec<ComboItem> = tasks.iter()
+            .map(|t| ComboItem { id: t.key.clone(), label: format!("{}: {}", t.key, t.title) })
+            .collect();
+        self.session_form_task_combo = ComboBoxState::new(items);
+        self.session_form_task_list = tasks;
     }
 
     /// Auto-fill form fields from the selected task.
     fn session_form_apply_task(&mut self) {
-        if let Some(task) = self.session_form_task_list.get(self.session_form_task_idx) {
+        let selected_key = match &self.session_form_task_combo.selected {
+            Some(item) => item.id.clone(),
+            None => return,
+        };
+        if let Some(task) = self.session_form_task_list.iter().find(|t| t.key == selected_key) {
             self.session_form_name = format!("{}: {}", task.key, task.title);
             let slug = format!(
                 "{}/{}",
@@ -941,14 +966,22 @@ impl WorkflowApp {
     /// Submit the session creation form.
     fn submit_session_form(&mut self) {
         if self.session_form_mode == SessionFormMode::FromTask {
-            if self.session_form_task_list.is_empty() {
-                self.session_form_error = Some("No task selected.".into());
-                return;
-            }
-            let task = self.session_form_task_list[self.session_form_task_idx].clone();
+            let selected_key = match &self.session_form_task_combo.selected {
+                Some(item) => item.id.clone(),
+                None => {
+                    self.session_form_error = Some("No task selected.".into());
+                    return;
+                }
+            };
+            let task = match self.session_form_task_list.iter().find(|t| t.key == selected_key) {
+                Some(t) => t.clone(),
+                None => {
+                    self.session_form_error = Some("Task not found.".into());
+                    return;
+                }
+            };
             self.selected_task = Some(task);
             self.session_form = false;
-            // Use worktree launch path
             if self.session_form_use_worktree {
                 self.worktree_branch_input = self.session_form_branch.clone();
                 self.worktree_task_key_input = self
@@ -960,6 +993,7 @@ impl WorkflowApp {
             } else {
                 self.launch_from_task();
             }
+            self.selected_task = None;
         } else {
             // Manual mode
             self.session_form = false;
@@ -1000,7 +1034,7 @@ impl WorkflowApp {
             planeai_core::session_launch::load_default_config()
         };
 
-        let auto_approve = WORKFLOW_ARGS.get().map(|a| a.yolo).unwrap_or(false);
+        let auto_approve = self.session_form_auto_approve;
         let request = TaskLaunchRequest {
             project_id: project.id.clone(),
             project_name: project.name.clone(),
@@ -1489,6 +1523,44 @@ impl WorkflowApp {
                         }
                         return;
                     }
+                    // When Task field is focused — custom combobox
+                    if self.session_form_focus == SessionFormField::Task {
+                        match &key {
+                            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                                self.session_form = false;
+                                return;
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                                if modifiers.shift() {
+                                    self.session_form_focus = SessionFormField::Project;
+                                } else {
+                                    self.session_form_focus = SessionFormField::Name;
+                                }
+                                return;
+                            }
+                            _ => {}
+                        }
+                        let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
+                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                            self.submit_session_form();
+                            return;
+                        }
+                        let key_str = match &key {
+                            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+                            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+                            keyboard::Key::Named(keyboard::key::Named::Backspace) => "Backspace",
+                            keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+                            keyboard::Key::Character(c) => c.as_str(),
+                            _ => "",
+                        };
+                        if !key_str.is_empty() {
+                            if self.session_form_task_combo.handle_key(key_str).is_some() {
+                                // Task selected — auto-fill name and branch
+                                self.session_form_apply_task();
+                            }
+                        }
+                        return;
+                    }
                     match &key {
                         keyboard::Key::Named(keyboard::key::Named::Escape) => {
                             self.session_form = false;
@@ -1534,21 +1606,11 @@ impl WorkflowApp {
                                     SessionFormMode::FromTask => SessionFormMode::Manual,
                                 };
                             } else if self.session_form_focus == SessionFormField::Task {
-                                // Select task and auto-fill
-                                self.session_form_apply_task();
-                                self.session_form_focus = SessionFormField::Name;
+                                // Handled by task combobox above
                             }
                         }
-                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
-                            if self.session_form_focus == SessionFormField::Task && !self.session_form_task_list.is_empty() {
-                                self.session_form_task_idx = (self.session_form_task_idx + 1).min(self.session_form_task_list.len() - 1);
-                            }
-                        }
-                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
-                            if self.session_form_focus == SessionFormField::Task {
-                                self.session_form_task_idx = self.session_form_task_idx.saturating_sub(1);
-                            }
-                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {}
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {}
                         keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
                             if self.session_form_focus == SessionFormField::Mode {
                                 self.session_form_mode = SessionFormMode::Manual;
@@ -2409,37 +2471,8 @@ impl WorkflowApp {
 
             // Task picker (From task mode only)
             if self.session_form_mode == SessionFormMode::FromTask {
-                let task_highlight = self.session_form_focus == SessionFormField::Task;
-                let task_prefix = if task_highlight { "▶ " } else { "  " };
-                sf_col = sf_col.push(
-                    text(format!("{}Task:", task_prefix))
-                        .size(11)
-                        .color(if task_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(150, 150, 150) })
-                        .font(Font::MONOSPACE),
-                );
-                if self.session_form_task_list.is_empty() {
-                    sf_col = sf_col.push(
-                        text("    (no tasks)")
-                            .size(10)
-                            .color(Color::from_rgb8(100, 100, 100))
-                            .font(Font::MONOSPACE),
-                    );
-                } else {
-                    for (i, task) in self.session_form_task_list.iter().take(8).enumerate() {
-                        let marker = if i == self.session_form_task_idx && task_highlight { "▸" } else { " " };
-                        let color = if i == self.session_form_task_idx && task_highlight {
-                            Color::from_rgb8(100, 220, 255)
-                        } else {
-                            Color::from_rgb8(160, 160, 160)
-                        };
-                        sf_col = sf_col.push(
-                            text(format!("   {} [{}] {}", marker, task.key, task.title))
-                                .size(10)
-                                .color(color)
-                                .font(Font::MONOSPACE),
-                        );
-                    }
-                }
+                let task_focused = self.session_form_focus == SessionFormField::Task;
+                sf_col = sf_col.push(self.session_form_task_combo.view::<Message>("Task", task_focused));
             }
 
             // Name field
