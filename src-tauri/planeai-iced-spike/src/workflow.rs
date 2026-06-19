@@ -463,7 +463,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -544,7 +544,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -585,7 +585,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -853,7 +853,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -1211,7 +1211,7 @@ impl WorkflowApp {
                 }
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid(&term);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -1378,7 +1378,7 @@ impl WorkflowApp {
 
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+                let snapshot = snapshot_grid(&term, &self.theme.terminal);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -1465,7 +1465,7 @@ impl WorkflowApp {
         if idx < self.sessions.len() && idx != self.active {
             self.active = idx;
             let session = &mut self.sessions[idx];
-            session.snapshot = snapshot_grid_themed(&session.term, &self.theme.terminal);
+            session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
             session.cache.clear();
             if let Some(ref mut sidebar) = self.sidebar {
                 sidebar.set_active_session(Some(self.sessions[idx].session_id.clone()));
@@ -1608,7 +1608,7 @@ impl WorkflowApp {
         let mut term = new_term(self.cols, self.rows);
         let mut processor = new_processor();
         processor.advance(&mut term, &data);
-        let snapshot = snapshot_grid_themed(&term, &self.theme.terminal);
+        let snapshot = snapshot_grid(&term, &self.theme.terminal);
         self.log_replay = Some(LogReplayState {
             term,
             snapshot,
@@ -1704,7 +1704,7 @@ impl WorkflowApp {
                 };
                 session.term.resize(term_size);
                 let _ = session.backend.resize(new_cols, new_rows);
-                session.snapshot = snapshot_grid_themed(&session.term, &self.theme.terminal);
+                session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
                 session.cache.clear();
             }
             Message::KeyEvent(keyboard::Event::KeyPressed {
@@ -2393,7 +2393,7 @@ impl WorkflowApp {
                         self.theme = self.theme_source.resolve(new_mode);
                         // Force re-render all sessions with new colors
                         for s in &mut self.sessions {
-                            s.snapshot = snapshot_grid_themed(&s.term, &self.theme.terminal);
+                            s.snapshot = snapshot_grid(&s.term, &self.theme.terminal);
                             s.cache.clear();
                         }
                     }
@@ -2437,7 +2437,7 @@ impl WorkflowApp {
                     if i == self.active {
                         let session = &mut self.sessions[i];
                         session.snapshot =
-                            snapshot_grid_themed(&session.term, &self.theme.terminal);
+                            snapshot_grid(&session.term, &self.theme.terminal);
                         session.cache.clear();
                     }
                 }

@@ -49,6 +49,12 @@ pub struct TerminalColors {
     pub bright_white: Color,
 }
 
+impl Default for TerminalColors {
+    fn default() -> Self {
+        terminal_from_map(&crate::theme_parser::ColorMap::new())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaneAiTheme {
     pub surface: ColorScale,
@@ -236,7 +242,7 @@ fn scale_from_map(map: &ColorMap, prefix: &str, fallback: (u8, u8, u8)) -> Color
     }
 }
 
-fn terminal_from_map(map: &ColorMap) -> TerminalColors {
+pub(crate) fn terminal_from_map(map: &ColorMap) -> TerminalColors {
     TerminalColors {
         background: get_color(map, "terminal-background", (13, 13, 13)),
         foreground: get_color(map, "terminal-foreground", (242, 242, 242)),

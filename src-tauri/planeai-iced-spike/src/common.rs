@@ -46,100 +46,8 @@ pub struct GridSnapshot {
     pub rows: usize,
 }
 
-pub fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color {
-    use alacritty_terminal::vte::ansi::Color as AC;
-    use alacritty_terminal::vte::ansi::NamedColor;
-    match color {
-        AC::Named(n) => match n {
-            NamedColor::Black => Color::from_rgb8(0, 0, 0),
-            NamedColor::Red => Color::from_rgb8(205, 49, 49),
-            NamedColor::Green => Color::from_rgb8(13, 188, 121),
-            NamedColor::Yellow => Color::from_rgb8(229, 229, 16),
-            NamedColor::Blue => Color::from_rgb8(36, 114, 200),
-            NamedColor::Magenta => Color::from_rgb8(188, 63, 188),
-            NamedColor::Cyan => Color::from_rgb8(17, 168, 205),
-            NamedColor::White => Color::from_rgb8(229, 229, 229),
-            NamedColor::BrightBlack => Color::from_rgb8(102, 102, 102),
-            NamedColor::BrightRed => Color::from_rgb8(241, 76, 76),
-            NamedColor::BrightGreen => Color::from_rgb8(35, 209, 139),
-            NamedColor::BrightYellow => Color::from_rgb8(245, 245, 67),
-            NamedColor::BrightBlue => Color::from_rgb8(59, 142, 234),
-            NamedColor::BrightMagenta => Color::from_rgb8(214, 112, 214),
-            NamedColor::BrightCyan => Color::from_rgb8(41, 184, 219),
-            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => {
-                Color::from_rgb8(229, 229, 229)
-            }
-            NamedColor::Background => Color::from_rgb8(0, 0, 0),
-            _ => Color::from_rgb8(229, 229, 229),
-        },
-        AC::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
-        AC::Indexed(idx) => {
-            let i = *idx;
-            if i < 16 {
-                let table: [(u8, u8, u8); 16] = [
-                    (0, 0, 0),
-                    (205, 49, 49),
-                    (13, 188, 121),
-                    (229, 229, 16),
-                    (36, 114, 200),
-                    (188, 63, 188),
-                    (17, 168, 205),
-                    (229, 229, 229),
-                    (102, 102, 102),
-                    (241, 76, 76),
-                    (35, 209, 139),
-                    (245, 245, 67),
-                    (59, 142, 234),
-                    (214, 112, 214),
-                    (41, 184, 219),
-                    (255, 255, 255),
-                ];
-                let (r, g, b) = table[i as usize];
-                Color::from_rgb8(r, g, b)
-            } else if i < 232 {
-                let j = i - 16;
-                let r = (j / 36) % 6;
-                let g = (j / 6) % 6;
-                let b = j % 6;
-                let v = |c: u8| if c == 0 { 0u8 } else { 55 + 40 * c };
-                Color::from_rgb8(v(r), v(g), v(b))
-            } else {
-                let v = 8 + 10 * (i - 232);
-                Color::from_rgb8(v, v, v)
-            }
-        }
-    }
-}
-
-pub fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapshot {
-    let grid = term.grid();
-    let rows = grid.screen_lines();
-    let cols = grid.columns();
-    let cursor = grid.cursor.point;
-    let mut cells = Vec::with_capacity(rows);
-    for i in 0..rows {
-        let mut row = Vec::with_capacity(cols);
-        for j in 0..cols {
-            let cell: &Cell = &grid[Line(i as i32)][Column(j)];
-            row.push(GridCell {
-                c: cell.c,
-                fg: ansi_color_to_iced(&cell.fg),
-                bg: ansi_color_to_iced(&cell.bg),
-            });
-        }
-        cells.push(row);
-    }
-    GridSnapshot {
-        cells,
-        cursor_line: cursor.line.0 as usize,
-        cursor_col: cursor.column.0,
-        cols,
-        rows,
-    }
-}
-
-/// Themed variant: resolves ANSI colors using the loaded terminal theme.
-pub fn ansi_color_to_iced_themed(
+/// Resolves ANSI colors using the loaded terminal theme.
+pub fn ansi_color_to_iced(
     color: &alacritty_terminal::vte::ansi::Color,
     tc: &TerminalColors,
 ) -> Color {
@@ -206,7 +114,7 @@ pub fn ansi_color_to_iced_themed(
 }
 
 /// Themed grid snapshot — uses terminal colors from theme.
-pub fn snapshot_grid_themed(
+pub fn snapshot_grid(
     term: &alacritty_terminal::Term<EventProxy>,
     tc: &TerminalColors,
 ) -> GridSnapshot {
@@ -221,8 +129,8 @@ pub fn snapshot_grid_themed(
             let cell: &Cell = &grid[Line(i as i32)][Column(j)];
             row.push(GridCell {
                 c: cell.c,
-                fg: ansi_color_to_iced_themed(&cell.fg, tc),
-                bg: ansi_color_to_iced_themed(&cell.bg, tc),
+                fg: ansi_color_to_iced(&cell.fg, tc),
+                bg: ansi_color_to_iced(&cell.bg, tc),
             });
         }
         cells.push(row);
