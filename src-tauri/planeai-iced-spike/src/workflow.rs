@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use planeai_core::services::{
-    self, CreateSessionParams, ProjectService, SessionRecord, SessionService, WorktreeMode,
-    WorktreeService,
+    self, CreateSessionParams, ProjectService, SessionRecord, SessionService, TaskLaunchRequest,
+    TaskService, WorktreeMode, WorktreeService,
 };
 use rusqlite::Connection;
 use std::sync::Mutex;
@@ -149,6 +149,11 @@ struct WorkflowApp {
     worktree_use_worktree: bool,
     worktree_computed_path: Option<String>,
     worktree_error: Option<String>,
+    // Task picker (Cmd+T)
+    task_picker: bool,
+    task_list: Vec<planeai_tasks::model::Task>,
+    task_picker_index: usize,
+    selected_task: Option<planeai_tasks::model::Task>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +170,8 @@ enum Message {
     WorktreeTaskKeyChanged(String),
     WorktreeToggle,
     WorktreeLaunchSubmit,
+    TaskPickerSelect(usize),
+    TaskLaunchSelected,
 }
 
 impl WorkflowApp {
@@ -285,6 +292,10 @@ impl WorkflowApp {
                 worktree_use_worktree: false,
                 worktree_computed_path: None,
                 worktree_error: None,
+                task_picker: false,
+                task_list: Vec::new(),
+                task_picker_index: 0,
+                selected_task: None,
             },
             iced::Task::none(),
         );
@@ -501,6 +512,17 @@ impl WorkflowApp {
         if let Some(ref db) = self.db {
             if let Ok(conn) = db.lock() {
                 if let Ok(Some(rec)) = SessionService::get(&conn, &session_id_for_cleanup) {
+                    // Fire lifecycle hook for task-linked sessions on kill
+                    if let Some(ref tk) = rec.task_key {
+                        if let Ok(Some(proj)) = ProjectService::get_by_id(&conn, &rec.project_id) {
+                            let db_path = planeai_core::app_data_dir().join("planeai.db");
+                            if let Err(e) =
+                                TaskService::fire_lifecycle_hook(&db_path, &proj.name, tk, "todo")
+                            {
+                                tracing::warn!(task_key = %tk, error = %e, "lifecycle hook (todo) failed");
+                            }
+                        }
+                    }
                     if let Some(ref wt_path) = rec.worktree_path {
                         if let Ok(Some(proj)) = ProjectService::get_by_id(&conn, &rec.project_id) {
                             let branch = if rec.branch.is_empty() {
@@ -759,6 +781,211 @@ impl WorkflowApp {
         self.worktree_computed_path = Some(path.to_string_lossy().to_string());
     }
 
+    /// Open task picker — loads tasks for the current project.
+    fn open_task_picker(&mut self) {
+        let project_name = match &self.project {
+            Some(p) => p.name.clone(),
+            None => {
+                self.set_error("No project selected.".into());
+                return;
+            }
+        };
+        let db_path = planeai_core::app_data_dir().join("planeai.db");
+        match TaskService::list_for_project(&db_path, &project_name) {
+            Ok(tasks) => {
+                self.task_list = tasks;
+                self.task_picker_index = 0;
+                self.task_picker = true;
+            }
+            Err(e) => {
+                self.set_error(format!("Task list: {e}"));
+            }
+        }
+    }
+
+    /// Launch session from selected task with full shared task/worktree integration.
+    fn launch_from_task(&mut self) {
+        let task = match &self.selected_task {
+            Some(t) => t.clone(),
+            None => {
+                self.set_error("No task selected.".into());
+                return;
+            }
+        };
+        if !self.daemon_connected {
+            self.set_error("Daemon unavailable.".into());
+            return;
+        }
+        let (db, project) = match (&self.db, &self.project) {
+            (Some(db), Some(proj)) => (db.clone(), proj.clone()),
+            _ => {
+                self.set_error("DB/project unavailable.".into());
+                return;
+            }
+        };
+
+        let config = if let Some(path) = WORKFLOW_ARGS.get().and_then(|a| a.config.as_ref()) {
+            planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+        } else {
+            planeai_core::session_launch::load_default_config()
+        };
+
+        let auto_approve = WORKFLOW_ARGS.get().map(|a| a.yolo).unwrap_or(false);
+        let request = TaskLaunchRequest {
+            project_id: project.id.clone(),
+            project_name: project.name.clone(),
+            project_path: self.project_cwd.clone(),
+            task_key: task.key.clone(),
+            task_title: task.title.clone(),
+            task_description: task.description.clone(),
+            task_base_branch: task.base_branch.clone(),
+            provider_id: None,
+            auto_approve,
+            autonomous: false, // manual task launch
+            cols: self.cols as u16,
+            rows: self.rows as u16,
+        };
+
+        let (resolved, worktree_mode) =
+            match TaskService::resolve_task_launch(&request, &config, None) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.set_error(format!("Task resolve: {e}"));
+                    return;
+                }
+            };
+
+        let session_id = resolved.request.session_id.clone();
+
+        // Detect base branch
+        let base_branch =
+            match planeai_core::git::detect_default_branch(&self.project_cwd.to_string_lossy()) {
+                Ok(b) => b,
+                Err(_) => task.base_branch.clone(),
+            };
+
+        // Resolve worktree (creates it on disk)
+        let wt_resolved = match WorktreeService::resolve_worktree(
+            &worktree_mode,
+            &project.name,
+            &self.project_cwd,
+            &session_id,
+            &base_branch,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                self.set_error(format!("Worktree: {e}"));
+                return;
+            }
+        };
+
+        // Persist session record BEFORE spawning
+        match db.lock() {
+            Ok(conn) => {
+                let params = CreateSessionParams {
+                    id: session_id.clone(),
+                    project_id: project.id.clone(),
+                    name: format!("{}: {}", task.key, task.title),
+                    backend: "daemon".to_string(),
+                    auto_approve,
+                    branch: wt_resolved.branch_name.clone(),
+                    worktree_path: wt_resolved.worktree_path.clone(),
+                    task_key: Some(task.key.clone()),
+                    base_branch: wt_resolved.base_branch.clone(),
+                    provider: Some(self.provider_label.clone()),
+                    ..Default::default()
+                };
+                if let Err(e) = SessionService::create(&conn, &params) {
+                    if let Some(ref wt) = wt_resolved.worktree_path {
+                        planeai_core::cleanup::cleanup_worktree(
+                            &self.project_cwd.to_string_lossy(),
+                            wt,
+                            Some(&wt_resolved.branch_name),
+                        );
+                    }
+                    self.set_error(format!("DB persist: {e}"));
+                    return;
+                }
+            }
+            Err(e) => {
+                if let Some(ref wt) = wt_resolved.worktree_path {
+                    planeai_core::cleanup::cleanup_worktree(
+                        &self.project_cwd.to_string_lossy(),
+                        wt,
+                        Some(&wt_resolved.branch_name),
+                    );
+                }
+                self.set_error(format!("DB lock: {e}"));
+                return;
+            }
+        }
+
+        // Spawn daemon session in worktree cwd
+        let id = self.next_id;
+        self.next_id += 1;
+        let result = DaemonSession::spawn_with_session_id(
+            id,
+            &session_id,
+            self.cols as u16,
+            self.rows as u16,
+            Some(&resolved.command_label),
+            &wt_resolved.cwd,
+            &self.extra_path_dirs,
+        );
+        match result {
+            Ok(backend) => {
+                // Fire on_start lifecycle hook only after successful spawn
+                let db_path = planeai_core::app_data_dir().join("planeai.db");
+                if let Err(e) = TaskService::fire_lifecycle_hook(
+                    &db_path,
+                    &project.name,
+                    &task.key,
+                    "in_progress",
+                ) {
+                    tracing::warn!(task_key = %task.key, error = %e, "lifecycle hook (in_progress) failed");
+                }
+
+                let term = new_term(self.cols, self.rows);
+                let processor = new_processor();
+                let snapshot = snapshot_grid(&term);
+                let log_file_exists = self.check_log_exists(&session_id);
+                self.sessions.push(Session {
+                    id,
+                    session_id: session_id.clone(),
+                    command: resolved.command_label.clone(),
+                    cwd: wt_resolved.cwd,
+                    status: SessionStatus::Running,
+                    backend: Box::new(backend),
+                    term,
+                    processor,
+                    snapshot,
+                    cache: Cache::new(),
+                    bytes_processed: 0,
+                    log_file_exists,
+                });
+                self.active = self.sessions.len() - 1;
+                self.clear_error();
+                self.refresh_persisted_sessions();
+            }
+            Err(e) => {
+                if let Some(ref wt) = wt_resolved.worktree_path {
+                    planeai_core::cleanup::cleanup_worktree(
+                        &self.project_cwd.to_string_lossy(),
+                        wt,
+                        Some(&wt_resolved.branch_name),
+                    );
+                }
+                if let Some(ref db) = self.db {
+                    if let Ok(conn) = db.lock() {
+                        let _ = SessionService::set_status(&conn, &session_id, "destroyed");
+                    }
+                }
+                self.set_error(format!("Launch failed: {e}"));
+                self.refresh_persisted_sessions();
+            }
+        }
+    }
+
     fn check_daemon_health(&mut self) {
         let now = Instant::now();
         let should_check = self
@@ -956,6 +1183,15 @@ impl WorkflowApp {
                     self.launch_session();
                 }
             }
+            Message::TaskPickerSelect(idx) => {
+                if idx < self.task_list.len() {
+                    self.selected_task = Some(self.task_list[idx].clone());
+                    self.task_picker = false;
+                }
+            }
+            Message::TaskLaunchSelected => {
+                self.launch_from_task();
+            }
             Message::WindowResized(size) => {
                 let cw = 9.0f32;
                 let ch = 18.0f32;
@@ -998,6 +1234,33 @@ impl WorkflowApp {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.launch_prompt = false;
                         self.launch_prompt_input.clear();
+                    }
+                    return;
+                }
+
+                // Task picker mode
+                if self.task_picker {
+                    match &key {
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            self.task_picker = false;
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                            if !self.task_list.is_empty() {
+                                self.task_picker_index =
+                                    (self.task_picker_index + 1).min(self.task_list.len() - 1);
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                            self.task_picker_index = self.task_picker_index.saturating_sub(1);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                            if self.task_picker_index < self.task_list.len() {
+                                self.selected_task =
+                                    Some(self.task_list[self.task_picker_index].clone());
+                                self.task_picker = false;
+                            }
+                        }
+                        _ => {}
                     }
                     return;
                 }
@@ -1090,6 +1353,33 @@ impl WorkflowApp {
                         self.update_worktree_preview();
                     }
                     self.kill_armed = false;
+                    return;
+                }
+
+                // Cmd+T — task picker
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "t")
+                {
+                    self.open_task_picker();
+                    self.kill_armed = false;
+                    return;
+                }
+
+                // Cmd+Enter — launch selected task
+                if cmd && matches!(key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                    if self.selected_task.is_some() {
+                        self.launch_from_task();
+                    }
+                    return;
+                }
+
+                // Cmd+Shift+T — clear selected task
+                if cmd
+                    && modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "t" || c.as_str() == "T")
+                {
+                    self.selected_task = None;
                     return;
                 }
 
@@ -1256,6 +1546,28 @@ impl WorkflowApp {
                         && s.backend.has_exited()
                     {
                         s.status = SessionStatus::Exited;
+                        // Mark exited in DB and fire lifecycle hook
+                        if let Some(ref db) = self.db {
+                            if let Ok(conn) = db.lock() {
+                                let _ = SessionService::mark_exited(&conn, &s.session_id);
+                                // Fire on_complete for task-linked sessions
+                                if let Ok(Some(rec)) = SessionService::get(&conn, &s.session_id) {
+                                    if let Some(ref tk) = rec.task_key {
+                                        if let Ok(Some(proj)) =
+                                            ProjectService::get_by_id(&conn, &rec.project_id)
+                                        {
+                                            let db_path =
+                                                planeai_core::app_data_dir().join("planeai.db");
+                                            if let Err(e) = TaskService::fire_lifecycle_hook(
+                                                &db_path, &proj.name, tk, "done",
+                                            ) {
+                                                tracing::warn!(task_key = %tk, error = %e, "lifecycle hook (done) failed");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     if !s.log_file_exists {
                         if let Ok(dir) = std::env::var("PLANEAI_SESSION_LOG_DIR") {
@@ -1475,6 +1787,11 @@ impl WorkflowApp {
 
         // Status bar (Part 9)
         let project_display = self.project_cwd.to_string_lossy();
+        let task_display = self
+            .selected_task
+            .as_ref()
+            .map(|t| format!(" | 📋 {}: {}", t.key, t.title))
+            .unwrap_or_default();
         let active_info = if !self.sessions.is_empty() {
             let s = &self.sessions[self.active];
             format!(
@@ -1495,9 +1812,10 @@ impl WorkflowApp {
         };
         let error_display = self.last_error.as_deref().unwrap_or("");
         let status_text = format!(
-            " {} {}{}{}",
+            " {} {}{}{}{}",
             if self.daemon_connected { "⚡" } else { "⚠" },
             project_display,
+            task_display,
             active_info,
             if error_display.is_empty() {
                 String::new()
@@ -1648,6 +1966,48 @@ impl WorkflowApp {
                 ..Default::default()
             });
             column![wt_panel, main_content].into()
+        } else if self.task_picker {
+            let mut tp_col = column![].spacing(2).width(Length::Fill).padding(6);
+            tp_col = tp_col.push(
+                text("Task Picker (↑↓ navigate, Enter select, Escape cancel)")
+                    .size(12)
+                    .color(Color::from_rgb8(180, 220, 255))
+                    .font(Font::MONOSPACE),
+            );
+            if self.task_list.is_empty() {
+                tp_col = tp_col.push(
+                    text("  No tasks found for this project.")
+                        .size(11)
+                        .color(Color::from_rgb8(150, 150, 150))
+                        .font(Font::MONOSPACE),
+                );
+            } else {
+                for (i, task) in self.task_list.iter().take(15).enumerate() {
+                    let marker = if i == self.task_picker_index {
+                        "▶"
+                    } else {
+                        " "
+                    };
+                    let label = format!(
+                        "{} [{}] {} — {}",
+                        marker,
+                        task.key,
+                        task.title,
+                        task.status.as_str()
+                    );
+                    let color = if i == self.task_picker_index {
+                        Color::from_rgb8(100, 220, 255)
+                    } else {
+                        Color::from_rgb8(180, 180, 180)
+                    };
+                    tp_col = tp_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                }
+            }
+            let tp_panel = container(tp_col).style(|_: &Theme| container::Style {
+                background: Some(Color::from_rgb8(30, 40, 55).into()),
+                ..Default::default()
+            });
+            column![tp_panel, main_content].into()
         } else {
             main_content.into()
         };

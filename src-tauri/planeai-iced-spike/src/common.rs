@@ -295,6 +295,11 @@ pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
     shortcut!(col, format!("{}R", mod_key), "Refresh daemon list");
     shortcut!(col, format!("{}L", mod_key), "Replay session log");
 
+    header!(col, "Tasks");
+    shortcut!(col, format!("{}T", mod_key), "Task picker");
+    shortcut!(col, format!("{}⇧T", mod_key), "Clear selected task");
+    shortcut!(col, format!("{}↵", mod_key), "Launch selected task");
+
     header!(col, "Terminal");
     shortcut!(col, format!("{}V", mod_key), "Paste");
 

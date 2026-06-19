@@ -781,4 +781,156 @@ impl TaskService {
             .query_row(params![session_id], |row| row.get::<_, Option<String>>(0))
             .or(Ok(None))
     }
+
+    /// List tasks for a project prefix (non-done tasks). Uses planeai_tasks SqliteRepository.
+    pub fn list_for_project(
+        db_path: &Path,
+        project_name: &str,
+    ) -> Result<Vec<planeai_tasks::model::Task>, String> {
+        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
+        let repo =
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+                .map_err(|e| e.to_string())?;
+        use planeai_tasks::provider::TaskProvider;
+        repo.list(planeai_tasks::model::ListFilter {
+            exclude_status: Some(planeai_tasks::model::Status::Done),
+            ..Default::default()
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    /// Get a single task by key.
+    pub fn get_task(
+        db_path: &Path,
+        project_name: &str,
+        key: &str,
+    ) -> Result<planeai_tasks::model::Task, String> {
+        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
+        let repo =
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+                .map_err(|e| e.to_string())?;
+        use planeai_tasks::provider::TaskProvider;
+        repo.get(key).map_err(|e| e.to_string())
+    }
+
+    /// Resolve the task prompt from task title + description using a template.
+    /// Template uses {key}, {title}, {description} placeholders.
+    pub fn resolve_task_prompt(
+        task: &planeai_tasks::model::Task,
+        template: Option<&str>,
+    ) -> String {
+        let tmpl = template.unwrap_or("{title}\n\n{description}");
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("key", task.key.as_str());
+        vars.insert("title", task.title.as_str());
+        vars.insert("description", task.description.as_str());
+        crate::template::render(tmpl, &vars)
+    }
+
+    /// Link a session to a task and optionally move task to a new status (on_start hook).
+    pub fn fire_lifecycle_hook(
+        db_path: &Path,
+        project_name: &str,
+        task_key: &str,
+        move_to: &str,
+    ) -> Result<(), String> {
+        let status = planeai_tasks::model::Status::parse(move_to)
+            .ok_or_else(|| format!("invalid status: {move_to}"))?;
+        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
+        let repo =
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+                .map_err(|e| e.to_string())?;
+        use planeai_tasks::provider::TaskProvider;
+        repo.update(
+            task_key,
+            planeai_tasks::model::UpdateParams {
+                status: Some(status),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Resolve a task launch request into everything needed to spawn the session.
+    /// Does NOT spawn — only resolves config, worktree mode, prompt, and command.
+    pub fn resolve_task_launch(
+        request: &TaskLaunchRequest,
+        config: &crate::session_launch::LaunchConfig,
+        prompt_template: Option<&str>,
+    ) -> Result<(crate::session_launch::ResolvedLaunchConfig, WorktreeMode), String> {
+        let task = planeai_tasks::model::Task {
+            key: request.task_key.clone(),
+            title: request.task_title.clone(),
+            description: request.task_description.clone(),
+            status: planeai_tasks::model::Status::Todo,
+            priority: 0,
+            parent_key: None,
+            blocked_by: Vec::new(),
+            tags: Vec::new(),
+            base_branch: request.task_base_branch.clone(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let prompt = Self::resolve_task_prompt(&task, prompt_template);
+
+        let overrides = crate::session_launch::SessionLaunchOverrides {
+            cwd: Some(request.project_path.clone()),
+            provider_id: request.provider_id.clone(),
+            auto_approve: request.auto_approve,
+            task_prompt: Some(prompt),
+            autonomous: request.autonomous,
+            cols: Some(request.cols),
+            rows: Some(request.rows),
+            ..Default::default()
+        };
+
+        let resolved = crate::session_launch::resolve_from_config(config, &overrides)
+            .map_err(|e| e.to_string())?;
+
+        let short_id = WorktreeService::short_id(&resolved.request.session_id);
+        let branch_name = WorktreeService::branch_name(&request.task_key, &short_id);
+
+        let worktree_mode = WorktreeMode::Create {
+            base_project_path: request.project_path.clone(),
+            branch_name,
+            task_key: Some(request.task_key.clone()),
+        };
+
+        Ok((resolved, worktree_mode))
+    }
+}
+
+// ─── Task-driven launch types ────────────────────────────────────────────────
+
+/// Request to launch a session from a task.
+#[derive(Debug, Clone)]
+pub struct TaskLaunchRequest {
+    pub project_id: String,
+    pub project_name: String,
+    pub project_path: PathBuf,
+    pub task_key: String,
+    pub task_title: String,
+    pub task_description: String,
+    pub task_base_branch: String,
+    pub provider_id: Option<String>,
+    pub auto_approve: bool,
+    pub autonomous: bool,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Result of a task-driven session launch.
+#[derive(Debug, Clone)]
+pub struct TaskLaunchResult {
+    pub task_key: String,
+    pub session_id: String,
+    pub project_id: String,
+    pub worktree_path: Option<String>,
+    pub branch_name: String,
+    pub command_label: String,
+    pub log_path: Option<PathBuf>,
+    pub prompt_was_injected: bool,
+    pub auto_approve_was_applied: bool,
 }

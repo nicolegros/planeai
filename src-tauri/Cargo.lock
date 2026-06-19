@@ -4385,6 +4385,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "json_comments",
+ "planeai-tasks",
  "regex",
  "rusqlite",
  "serde",
@@ -4429,6 +4430,7 @@ dependencies = [
  "planeai-daemon",
  "planeai-ipc",
  "planeai-pty",
+ "planeai-tasks",
  "portable-pty",
  "rusqlite",
  "serde",

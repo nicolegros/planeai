@@ -97,7 +97,7 @@ archived → active (restore)
 
 **Lifecycle hooks:** Configured in `config.json` under `task_management`. Hooks fire on session state transitions (start, restart, complete, notify, pr_open, pr_merge).
 
-**Status:** Iced can read task_key from session records. Full task dispatch/assignment UI is deferred.
+**Status:** Both Tauri and Iced can launch sessions from tasks, persist task_key on session records, create task-driven worktrees, and fire lifecycle hooks. Full task dispatch/assignment UI remains Tauri-only.
 
 ## What Iced Reuses
 
@@ -107,6 +107,9 @@ archived → active (restore)
 | Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()` |
 | Project persistence                      | `planeai_core::services::ProjectService`          |
 | Session persistence                      | `planeai_core::services::SessionService`          |
+| Worktree logic                           | `planeai_core::services::WorktreeService`         |
+| Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
+| Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
 | Daemon protocol                          | `planeai_daemon::protocol`                        |
 | IPC transport                            | `planeai_ipc`                                     |
 | Durable logging                          | Daemon-side (transparent)                         |
