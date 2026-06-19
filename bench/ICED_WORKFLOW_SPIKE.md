@@ -380,17 +380,16 @@ cargo run --release -p planeai-iced-spike --bin planeai-domain-smoke -- \
 
 Verifies: project resolved, session record, daemon start, output, detach/reattach, status destroyed, durable log linked, bytes_dropped=0.
 
-
 ## Worktree Audit Findings (PLA-123)
 
 ### Where worktrees are created
 
-| Path | Role |
-|------|------|
-| `planeai-core/src/git.rs` → `worktree_add()` | Raw git worktree add command |
+| Path                                                            | Role                                                     |
+| --------------------------------------------------------------- | -------------------------------------------------------- |
+| `planeai-core/src/git.rs` → `worktree_add()`                    | Raw git worktree add command                             |
 | `planeai-core/src/session.rs` → `SessionDispatcher::dispatch()` | Auto-dispatch orchestrator calls backend.create_worktree |
-| `src-tauri/src/session_ops.rs` | Tauri GUI manual launch creates worktree |
-| `src-tauri/src/cli.rs` | CLI `build_session_plan()` creates worktree |
+| `src-tauri/src/session_ops.rs`                                  | Tauri GUI manual launch creates worktree                 |
+| `src-tauri/src/cli.rs`                                          | CLI `build_session_plan()` creates worktree              |
 
 ### Worktree root
 
@@ -430,6 +429,7 @@ No explicit detection. System relies on fresh UUID-based short_id per session (c
 ### Cleanup
 
 Three-step in `cleanup.rs` on session destroy:
+
 1. `git worktree remove --force {worktree_path}` (from project repo path)
 2. `fs::remove_dir_all(worktree_path)` (fallback)
 3. `git branch -D {branch}` (from project repo path)
@@ -445,6 +445,7 @@ Only runs if `session.worktree_path` is `Some(...)`.
 ### Session record worktree fields
 
 Schema columns:
+
 - `worktree_path TEXT` — NULL for checkout mode
 - `branch TEXT NOT NULL` — feature branch name
 - `base_branch TEXT` — resolved base branch
@@ -464,20 +465,20 @@ Worktree vs checkout is implicit via `worktree_path IS NULL`. The shared domain 
 
 ### Task parity audit
 
-| Concern | Production (Tauri) | Iced Workflow |
-| --- | --- | --- |
-| Task storage | `planeai-tasks` SQLite crate | Same — shared via `TaskService` |
-| Task listing | `list_task_items` command | `TaskService::list_for_project` |
-| Task prompt | `build_provider_launch_command` | Same — shared via `resolve_task_launch` |
-| Task/session link | `sessions.task_key` column | Same — `CreateSessionParams.task_key` |
-| Worktree naming | `{task-key-lower}/{short_id}` | Same — `WorktreeService::branch_name` |
-| Lifecycle hooks | `fire_task_hook` in `session_ops.rs` | `TaskService::fire_lifecycle_hook` |
-| on_start | Move to `in_progress` | Same |
-| on_complete | Move to `done` | Same (on natural exit) |
-| Kill behavior | Destroy + cleanup | Same + reset task to `todo` |
-| Auto-dispatch | Orchestrator polls tasks, autonomous=true | Not in Iced (deferred) |
-| Autonomous template | Applied only when autonomous=true | Same |
-| Task picker | Frontend task panel | Cmd+T picker overlay |
+| Concern             | Production (Tauri)                        | Iced Workflow                           |
+| ------------------- | ----------------------------------------- | --------------------------------------- |
+| Task storage        | `planeai-tasks` SQLite crate              | Same — shared via `TaskService`         |
+| Task listing        | `list_task_items` command                 | `TaskService::list_for_project`         |
+| Task prompt         | `build_provider_launch_command`           | Same — shared via `resolve_task_launch` |
+| Task/session link   | `sessions.task_key` column                | Same — `CreateSessionParams.task_key`   |
+| Worktree naming     | `{task-key-lower}/{short_id}`             | Same — `WorktreeService::branch_name`   |
+| Lifecycle hooks     | `fire_task_hook` in `session_ops.rs`      | `TaskService::fire_lifecycle_hook`      |
+| on_start            | Move to `in_progress`                     | Same                                    |
+| on_complete         | Move to `done`                            | Same (on natural exit)                  |
+| Kill behavior       | Destroy + cleanup                         | Same + reset task to `todo`             |
+| Auto-dispatch       | Orchestrator polls tasks, autonomous=true | Not in Iced (deferred)                  |
+| Autonomous template | Applied only when autonomous=true         | Same                                    |
+| Task picker         | Frontend task panel                       | Cmd+T picker overlay                    |
 
 ### Task picker behavior
 
@@ -490,6 +491,7 @@ Worktree vs checkout is implicit via `worktree_path IS NULL`. The shared domain 
 ### Task launch behavior
 
 When launching from a selected task:
+
 1. Resolve task prompt: `{title}\n\n{description}` (or custom template)
 2. Build provider command via `build_provider_launch_command` with `autonomous=false`
 3. Apply yolo/auto-approve flag if configured
@@ -508,12 +510,12 @@ When launching from a selected task:
 
 ### Lifecycle/status behavior
 
-| Event | Session status | Task status |
-| --- | --- | --- |
-| Launch from task | `active` | `in_progress` |
-| Natural exit | `exited` | `done` |
-| Kill | `destroyed` | `todo` (reset) |
-| Detach | `active` (stays) | unchanged |
+| Event            | Session status   | Task status    |
+| ---------------- | ---------------- | -------------- |
+| Launch from task | `active`         | `in_progress`  |
+| Natural exit     | `exited`         | `done`         |
+| Kill             | `destroyed`      | `todo` (reset) |
+| Detach           | `active` (stays) | unchanged      |
 
 ### Known limitations
 

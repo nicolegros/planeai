@@ -283,7 +283,7 @@ pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
     }
 
     header!(col, "Sessions");
-    shortcut!(col, format!("{}N", mod_key), "New session");
+    shortcut!(col, format!("{}N", mod_key), "New...");
     shortcut!(col, format!("{}⇧N", mod_key), "New with custom cmd");
     shortcut!(col, format!("{}B", mod_key), "Worktree launch");
     shortcut!(col, format!("{}A", mod_key), "Attach session");
