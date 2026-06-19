@@ -3,7 +3,7 @@
 //! Loads theme CSS from `~/.config/planeai/themes/{name}.css` and config
 //! from `~/.config/planeai/config.json`. Resolves light/dark mode from config.
 
-use iced::Color;
+use iced::{Color, Font};
 use std::fs;
 
 use crate::theme_parser::{parse_theme_css, ColorMap, ParsedThemeCss};
@@ -56,7 +56,7 @@ pub struct PlaneAiTheme {
     pub error: ColorScale,
     pub warning: ColorScale,
     pub terminal: TerminalColors,
-    pub font_family: String,
+    pub font: Font,
     pub font_size: f32,
     pub mode: Mode,
 }
@@ -142,7 +142,7 @@ impl ThemeSource {
             }
         };
         let mut theme = theme_from_map(map);
-        theme.font_family = self.font_family.clone();
+        theme.font = make_font(&self.font_family);
         theme.font_size = self.font_size;
         theme.mode = mode;
         theme
@@ -268,9 +268,19 @@ fn theme_from_map(map: &ColorMap) -> PlaneAiTheme {
         error: scale_from_map(map, "color-error", (255, 123, 114)),
         warning: scale_from_map(map, "color-warning", (210, 153, 34)),
         terminal: terminal_from_map(map),
-        font_family: default_font_family().to_string(),
+        font: Font::MONOSPACE,
         font_size: 14.0,
         mode: Mode::Dark,
+    }
+}
+
+/// Create an iced Font from a family name. The leaked &'static str is intentional —
+/// iced requires 'static lifetime for font family names, and we only call this once
+/// per theme load (not per frame).
+fn make_font(family: &str) -> Font {
+    Font {
+        family: iced::font::Family::Name(Box::leak(family.to_string().into_boxed_str())),
+        ..Font::MONOSPACE
     }
 }
 

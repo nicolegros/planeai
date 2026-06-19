@@ -1461,15 +1461,6 @@ impl WorkflowApp {
         self.error_time = None;
     }
 
-    fn terminal_font(&self) -> Font {
-        Font {
-            family: iced::font::Family::Name(Box::leak(
-                self.theme.font_family.clone().into_boxed_str(),
-            )),
-            ..Font::MONOSPACE
-        }
-    }
-
     fn switch_to(&mut self, idx: usize) {
         if idx < self.sessions.len() && idx != self.active {
             self.active = idx;
@@ -2674,7 +2665,7 @@ impl WorkflowApp {
                 cache: &replay.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
-                font: self.terminal_font(),
+                font: self.theme.font,
                 font_size: self.theme.font_size,
             })
             .width(Length::Fill)
@@ -2699,7 +2690,7 @@ impl WorkflowApp {
                 cache: &session.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
-                font: self.terminal_font(),
+                font: self.theme.font,
                 font_size: self.theme.font_size,
             })
             .width(Length::Fill)
