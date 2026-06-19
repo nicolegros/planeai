@@ -29,6 +29,7 @@ use crate::daemon_session::{
     kill_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
 };
 use crate::input;
+use crate::sidebar::{SidebarAction, SidebarState};
 use crate::Args;
 
 // ─── Recent projects ─────────────────────────────────────────────────────────
@@ -190,6 +191,10 @@ struct WorkflowApp {
     session_form_error: Option<String>,
     session_form_project_combo: ComboBoxState,
     provider_keys: Vec<String>,
+    // Sidebar
+    sidebar: Option<SidebarState>,
+    sidebar_focused: bool,
+    last_sidebar_refresh: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -371,6 +376,9 @@ impl WorkflowApp {
                 session_form_error: None,
                 session_form_project_combo: ComboBoxState::new(Vec::new()),
                 provider_keys: Vec::new(),
+                sidebar: None,
+                sidebar_focused: false,
+                last_sidebar_refresh: None,
             },
             iced::Task::none(),
         );
@@ -2010,6 +2018,15 @@ impl WorkflowApp {
                     return;
                 }
 
+                // Cmd+Shift+S — toggle sidebar focus
+                if cmd
+                    && modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "s" || c.as_str() == "S")
+                {
+                    self.sidebar_focused = !self.sidebar_focused;
+                    return;
+                }
+
                 // Cmd+B — worktree launch prompt
                 if cmd
                     && !modifiers.shift()
@@ -2166,6 +2183,47 @@ impl WorkflowApp {
                     }
                     return;
                 }
+                // Sidebar: Escape from terminal focuses sidebar
+                if !self.sidebar_focused
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                {
+                    self.sidebar_focused = true;
+                    return;
+                }
+                // When sidebar is focused, route keys there
+                if self.sidebar_focused {
+                    let key_str = match &key {
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "ArrowLeft",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "ArrowRight",
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => "Escape",
+                        keyboard::Key::Character(c) => c.as_str(),
+                        _ => "",
+                    };
+                    if !key_str.is_empty() {
+                        if let Some(ref mut sidebar) = self.sidebar {
+                            let action = sidebar.handle_key(key_str);
+                            match action {
+                                SidebarAction::FocusTerminal => {
+                                    self.sidebar_focused = false;
+                                }
+                                SidebarAction::SwitchSession(sid) => {
+                                    if let Some(idx) = self.sessions.iter().position(|s| s.session_id == sid) {
+                                        self.switch_to(idx);
+                                    } else {
+                                        // Session not attached locally — attach it
+                                        self.attach_session(sid);
+                                    }
+                                    self.sidebar_focused = false;
+                                }
+                                SidebarAction::None => {}
+                            }
+                        }
+                    }
+                    return;
+                }
                 // Forward input to active session
                 if !self.sessions.is_empty() {
                     self.kill_armed = false;
@@ -2187,6 +2245,26 @@ impl WorkflowApp {
                 }
 
                 self.check_daemon_health();
+
+                // Sidebar: lazy init and periodic refresh (every 2s)
+                let now_sidebar = Instant::now();
+                let should_refresh_sidebar = self
+                    .last_sidebar_refresh
+                    .map(|t| now_sidebar.duration_since(t) >= Duration::from_secs(2))
+                    .unwrap_or(true);
+                if should_refresh_sidebar {
+                    if let Some(ref db) = self.db {
+                        if let Ok(conn) = db.lock() {
+                            let db_path = planeai_core::app_data_dir().join("planeai.db");
+                            if let Some(ref mut sidebar) = self.sidebar {
+                                sidebar.refresh(&conn);
+                            } else {
+                                self.sidebar = Some(SidebarState::new(&conn, &db_path));
+                            }
+                        }
+                    }
+                    self.last_sidebar_refresh = Some(now_sidebar);
+                }
 
                 // Drain output from all sessions
                 for i in 0..self.sessions.len() {
@@ -2400,13 +2478,17 @@ impl WorkflowApp {
             }
         }
 
-        let left_panel =
+        let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
+            sidebar.view(self.sidebar_focused)
+        } else {
             container(left_panel_content)
                 .padding(8)
                 .style(|_: &Theme| container::Style {
                     background: Some(Color::from_rgb8(20, 20, 20).into()),
                     ..Default::default()
-                });
+                })
+                .into()
+        };
 
         // Terminal area (or log replay)
         let terminal_area: Element<'_, Message> = if let Some(ref replay) = self.log_replay {

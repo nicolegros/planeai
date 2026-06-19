@@ -23,18 +23,6 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--planeai-workflow \
 		--backend iced-alacritty
 
-dogfood-multi: ## Run Iced multi-session spike (legacy)
-	cd src-tauri && \
-	PLANEAI_DAEMON_PTY_CORE=planeai-pty \
-	PLANEAI_SESSION_LOG_DIR=/tmp/planeai-daemon-session-logs \
-	cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
-		--multi-session \
-		--sessions 1 \
-		--session-source planeai-daemon \
-		--cols 120 \
-		--rows 40 \
-		--backend iced-alacritty
-
 build:
 	pnpm tauri build -b app
 

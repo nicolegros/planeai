@@ -4,3 +4,4 @@ pub mod daemon_session;
 pub mod input;
 pub mod planeai_local;
 pub mod shell;
+pub mod sidebar;
