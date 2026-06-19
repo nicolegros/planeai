@@ -82,6 +82,7 @@ export async function editTask(params: {
   priority: number;
   tags: string[] | null;
   blockedBy: string[] | null;
+  parentKey?: string | null;
   baseBranch?: string | null;
 }): Promise<void> {
   await tasksApi.edit(params);

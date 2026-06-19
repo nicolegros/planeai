@@ -135,6 +135,7 @@ pub fn edit_task_item(
     priority: Option<i32>,
     tags: Option<Vec<String>>,
     blocked_by: Option<Vec<String>>,
+    parent_key: Option<Option<String>>,
     base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     let repo = resolve_repo(&db_state, &repo_path)?;
@@ -146,6 +147,7 @@ pub fn edit_task_item(
             priority,
             tags,
             blocked_by,
+            parent_key,
             base_branch,
             ..Default::default()
         },
