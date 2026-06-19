@@ -20,6 +20,10 @@ pub struct ProviderConfig {
     pub command: String,
     #[serde(default)]
     pub yolo_flag: Option<String>,
+    #[serde(default)]
+    pub prompt_command: Option<String>,
+    #[serde(default)]
+    pub autonomous_prompt_template: Option<String>,
 }
 
 /// Minimal app config subset needed for session launch resolution.
@@ -49,6 +53,8 @@ impl Default for LaunchConfig {
             ProviderConfig {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
+                prompt_command: Some("{prompt}".to_string()),
+                autonomous_prompt_template: None,
             },
         );
         providers.insert(
@@ -56,6 +62,8 @@ impl Default for LaunchConfig {
             ProviderConfig {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+                prompt_command: Some("-p {prompt}".to_string()),
+                autonomous_prompt_template: None,
             },
         );
         Self {
@@ -153,6 +161,8 @@ pub struct SessionLaunchOverrides {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
     pub auto_approve: bool,
+    pub task_prompt: Option<String>,
+    pub autonomous: bool,
 }
 
 /// Resolved launch configuration with provenance notes.
@@ -162,6 +172,68 @@ pub struct ResolvedLaunchConfig {
     pub provider_label: Option<String>,
     pub command_label: String,
     pub session_log_dir: Option<String>,
+    pub prompt_was_injected: bool,
+    pub auto_approve_was_applied: bool,
+}
+
+/// Result of building a provider launch command (Layer A: provider/task command assembly).
+#[derive(Debug, Clone)]
+pub struct ProviderLaunchCommand {
+    pub command: String,
+    pub prompt_was_injected: bool,
+    pub auto_approve_was_applied: bool,
+}
+
+/// Build the provider launch command from provider config + launch parameters.
+///
+/// This is Layer A (provider/task command assembly), separate from Layer B
+/// (session preparation: env, PATH, cwd, session id).
+///
+/// `autonomous` controls whether `autonomous_prompt_template` is applied.
+/// Manual task launches should pass `false`; auto-dispatched launches pass `true`.
+pub fn build_provider_launch_command(
+    provider: &ProviderConfig,
+    auto_approve: bool,
+    task_prompt: Option<&str>,
+    autonomous: bool,
+) -> ProviderLaunchCommand {
+    let mut cmd = provider.command.clone();
+    let mut auto_approve_was_applied = false;
+
+    // Append yolo flag if auto-approve is requested
+    if auto_approve {
+        if let Some(ref flag) = provider.yolo_flag {
+            cmd = format!("{cmd} {flag}");
+            auto_approve_was_applied = true;
+        }
+    }
+
+    // Inject task prompt via prompt_command if both are present
+    let mut prompt_was_injected = false;
+    if let (Some(prompt), Some(ref prompt_cmd)) = (task_prompt, &provider.prompt_command) {
+        if !prompt.is_empty() {
+            // Apply autonomous_prompt_template only for autonomous launches
+            let final_prompt = if autonomous {
+                if let Some(ref wrapper) = provider.autonomous_prompt_template {
+                    let mut vars = std::collections::HashMap::new();
+                    vars.insert("prompt", prompt);
+                    crate::template::render(wrapper, &vars)
+                } else {
+                    prompt.to_string()
+                }
+            } else {
+                prompt.to_string()
+            };
+            crate::template::append_prompt(&mut cmd, prompt_cmd, &final_prompt);
+            prompt_was_injected = true;
+        }
+    }
+
+    ProviderLaunchCommand {
+        command: cmd,
+        prompt_was_injected,
+        auto_approve_was_applied,
+    }
 }
 
 /// Resolve a CreateSessionRequest from config + overrides.
@@ -179,21 +251,25 @@ pub fn resolve_from_config(
     let provider = config.providers.get(provider_id);
 
     // Command resolution: CLI > provider config > error
-    let agent_command = if let Some(ref cmd) = overrides.agent_command {
-        cmd.clone()
-    } else if let Some(p) = provider {
-        if overrides.auto_approve {
-            if let Some(ref flag) = p.yolo_flag {
-                format!("{} {flag}", p.command)
-            } else {
-                p.command.clone()
-            }
+    let (agent_command, prompt_was_injected, auto_approve_was_applied) =
+        if let Some(ref cmd) = overrides.agent_command {
+            // Explicit CLI command — no provider assembly
+            (cmd.clone(), false, false)
+        } else if let Some(p) = provider {
+            let result = build_provider_launch_command(
+                p,
+                overrides.auto_approve,
+                overrides.task_prompt.as_deref(),
+                overrides.autonomous,
+            );
+            (
+                result.command,
+                result.prompt_was_injected,
+                result.auto_approve_was_applied,
+            )
         } else {
-            p.command.clone()
-        }
-    } else {
-        return Err(CreateSessionError::CommandEmpty);
-    };
+            return Err(CreateSessionError::CommandEmpty);
+        };
 
     // CWD: CLI > current dir
     let cwd = overrides
@@ -245,6 +321,8 @@ pub fn resolve_from_config(
         provider_label: Some(provider_id.to_string()),
         command_label: agent_command,
         session_log_dir,
+        prompt_was_injected,
+        auto_approve_was_applied,
     })
 }
 

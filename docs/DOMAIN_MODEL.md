@@ -32,34 +32,35 @@ Tauri's `db::create_session_with_id()` delegates to `SessionService::create()`. 
 
 ## Projects
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | UUID | Unique identifier |
-| name | String | Derived from directory name |
-| path | String | Absolute filesystem path |
-| status | String | `active` or `archived` |
+| Field  | Type   | Description                 |
+| ------ | ------ | --------------------------- |
+| id     | UUID   | Unique identifier           |
+| name   | String | Derived from directory name |
+| path   | String | Absolute filesystem path    |
+| status | String | `active` or `archived`      |
 
 **Identity:** A project is uniquely identified by its filesystem path. `ensure_project()` returns existing or creates new.
 
 ## Sessions
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | UUID | Same ID used for daemon session |
-| project_id | UUID | FK to projects |
-| name | String | Display name |
-| branch | String | Git branch (empty if no worktree) |
-| status | String | `active`, `exited`, `archived`, `destroyed` |
-| worktree_path | String? | Absolute path to git worktree |
-| provider | String? | Provider key (e.g., "kiro", "claude") |
-| backend | String | `daemon` or `tmux` |
-| task_key | String? | Link to task (e.g., "PLA-5") |
-| command | String? | Agent launch command |
-| cwd | String? | Working directory |
+| Field         | Type    | Description                                 |
+| ------------- | ------- | ------------------------------------------- |
+| id            | UUID    | Same ID used for daemon session             |
+| project_id    | UUID    | FK to projects                              |
+| name          | String  | Display name                                |
+| branch        | String  | Git branch (empty if no worktree)           |
+| status        | String  | `active`, `exited`, `archived`, `destroyed` |
+| worktree_path | String? | Absolute path to git worktree               |
+| provider      | String? | Provider key (e.g., "kiro", "claude")       |
+| backend       | String  | `daemon` or `tmux`                          |
+| task_key      | String? | Link to task (e.g., "PLA-5")                |
+| command       | String? | Agent launch command                        |
+| cwd           | String? | Working directory                           |
 
 **ID mapping:** The session UUID is passed directly to the daemon as its session_id. No secondary mapping exists — the DB record ID **is** the daemon session ID.
 
 **Status lifecycle:**
+
 ```
 active → exited (agent process ended)
 active → destroyed (user killed)
@@ -69,27 +70,28 @@ archived → active (restore)
 ```
 
 **Durable logs:** Stored at `$PLANEAI_SESSION_LOG_DIR/sessions/{session_id}/` containing:
+
 - `{timestamp}_output.ansi` — raw terminal output
 - `meta.json` — session metadata (command, cwd, timestamps, bytes_written, bytes_dropped)
 
 ## Worktrees
 
-| Concept | Convention |
-|---------|-----------|
-| Root | `~/.planeai/worktrees/{project_name}/` |
-| Path | `~/.planeai/worktrees/{project_name}/{short_id}` |
-| Branch | `{task-key}/{short_id}` |
-| Cleanup | Remove worktree + delete branch on destroy |
+| Concept | Convention                                       |
+| ------- | ------------------------------------------------ |
+| Root    | `~/.planeai/worktrees/{project_name}/`           |
+| Path    | `~/.planeai/worktrees/{project_name}/{short_id}` |
+| Branch  | `{task-key}/{short_id}`                          |
+| Cleanup | Remove worktree + delete branch on destroy       |
 
 **Status:** Iced does not create worktrees yet (no task/branch picker). The shared `WorktreeService` defines the path convention for future use.
 
 ## Tasks
 
-| Field | Type | Description |
-|-------|------|-------------|
-| key | String | Auto-generated (e.g., "PLA-1") |
-| status | Enum | `todo`, `in_progress`, `in_review`, `done` |
-| base_branch | String | Git base for worktree (default: "main") |
+| Field       | Type   | Description                                |
+| ----------- | ------ | ------------------------------------------ |
+| key         | String | Auto-generated (e.g., "PLA-1")             |
+| status      | Enum   | `todo`, `in_progress`, `in_review`, `done` |
+| base_branch | String | Git base for worktree (default: "main")    |
 
 **Session link:** `sessions.task_key` references the task key.
 
@@ -99,37 +101,39 @@ archived → active (restore)
 
 ## What Iced Reuses
 
-| Concern | Source |
-|---------|--------|
-| Config/provider resolution | `planeai_core::session_launch` |
+| Concern                                  | Source                                            |
+| ---------------------------------------- | ------------------------------------------------- |
+| Config/provider resolution               | `planeai_core::session_launch`                    |
 | Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()` |
-| Project persistence | `planeai_core::services::ProjectService` |
-| Session persistence | `planeai_core::services::SessionService` |
-| Daemon protocol | `planeai_daemon::protocol` |
-| IPC transport | `planeai_ipc` |
-| Durable logging | Daemon-side (transparent) |
+| Project persistence                      | `planeai_core::services::ProjectService`          |
+| Session persistence                      | `planeai_core::services::SessionService`          |
+| Daemon protocol                          | `planeai_daemon::protocol`                        |
+| IPC transport                            | `planeai_ipc`                                     |
+| Durable logging                          | Daemon-side (transparent)                         |
 
 ## How Tauri Uses Shared Services
 
 Tauri's `db::create_session_with_id()` delegates to `planeai_core::services::SessionService::create()`. This ensures:
+
 - Single INSERT implementation for sessions
 - Same column set used by both frontends
 - No schema drift between Tauri and Iced session records
 
 Tauri still owns:
+
 - `db::migrate()` (superset: includes settings table, tmux_name NOT NULL migration)
 - Project create/archive/delete (UI-specific flows not yet extracted)
 - MRU ordering, PR state updates, provider_session_id discovery
 
 ## What Remains Prototype-Only (Iced)
 
-| Concern | Reason |
-|---------|--------|
-| Terminal emulation (alacritty_terminal) | UI concern, not domain |
-| Canvas rendering | UI concern |
-| Session Vec + UI state | Ephemeral view state |
-| `recent_projects.json` | Lightweight UI cache, not authoritative |
-| Daemon connection management | Different async model than Tauri |
+| Concern                                 | Reason                                  |
+| --------------------------------------- | --------------------------------------- |
+| Terminal emulation (alacritty_terminal) | UI concern, not domain                  |
+| Canvas rendering                        | UI concern                              |
+| Session Vec + UI state                  | Ephemeral view state                    |
+| `recent_projects.json`                  | Lightweight UI cache, not authoritative |
+| Daemon connection management            | Different async model than Tauri        |
 
 ## Known Gaps
 

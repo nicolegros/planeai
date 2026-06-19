@@ -99,6 +99,7 @@ pub async fn launch_session(
     task_key: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<db::Session, String> {
+    tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
@@ -107,13 +108,21 @@ pub async fn launch_session(
             .providers
             .get(&pk)
             .ok_or_else(|| format!("Unknown provider: {pk}"))?;
-        let mut c = config::launch_command(provider_def, auto_approve);
 
-        if let (Some(prompt), Some(prompt_cmd_template)) =
-            (&task_prompt, &provider_def.prompt_command)
-        {
-            planeai_core::template::append_prompt(&mut c, prompt_cmd_template, prompt);
-        }
+        let core_provider = planeai_core::session_launch::ProviderConfig {
+            command: provider_def.command.clone(),
+            yolo_flag: provider_def.yolo_flag.clone(),
+            prompt_command: provider_def.prompt_command.clone(),
+            autonomous_prompt_template: provider_def.autonomous_prompt_template.clone(),
+        };
+        let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
+            &core_provider,
+            auto_approve,
+            task_prompt.as_deref(),
+            false, // manual launches are not autonomous
+        );
+        let c = launch_cmd.command;
+        tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
 
         let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
