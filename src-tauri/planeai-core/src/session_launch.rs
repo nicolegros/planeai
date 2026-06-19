@@ -162,6 +162,7 @@ pub struct SessionLaunchOverrides {
     pub rows: Option<u16>,
     pub auto_approve: bool,
     pub task_prompt: Option<String>,
+    pub autonomous: bool,
 }
 
 /// Resolved launch configuration with provenance notes.
@@ -187,10 +188,14 @@ pub struct ProviderLaunchCommand {
 ///
 /// This is Layer A (provider/task command assembly), separate from Layer B
 /// (session preparation: env, PATH, cwd, session id).
+///
+/// `autonomous` controls whether `autonomous_prompt_template` is applied.
+/// Manual task launches should pass `false`; auto-dispatched launches pass `true`.
 pub fn build_provider_launch_command(
     provider: &ProviderConfig,
     auto_approve: bool,
     task_prompt: Option<&str>,
+    autonomous: bool,
 ) -> ProviderLaunchCommand {
     let mut cmd = provider.command.clone();
     let mut auto_approve_was_applied = false;
@@ -207,11 +212,15 @@ pub fn build_provider_launch_command(
     let mut prompt_was_injected = false;
     if let (Some(prompt), Some(ref prompt_cmd)) = (task_prompt, &provider.prompt_command) {
         if !prompt.is_empty() {
-            // Apply autonomous_prompt_template wrapper if configured
-            let final_prompt = if let Some(ref wrapper) = provider.autonomous_prompt_template {
-                let mut vars = std::collections::HashMap::new();
-                vars.insert("prompt", prompt);
-                crate::template::render(wrapper, &vars)
+            // Apply autonomous_prompt_template only for autonomous launches
+            let final_prompt = if autonomous {
+                if let Some(ref wrapper) = provider.autonomous_prompt_template {
+                    let mut vars = std::collections::HashMap::new();
+                    vars.insert("prompt", prompt);
+                    crate::template::render(wrapper, &vars)
+                } else {
+                    prompt.to_string()
+                }
             } else {
                 prompt.to_string()
             };
@@ -251,6 +260,7 @@ pub fn resolve_from_config(
                 p,
                 overrides.auto_approve,
                 overrides.task_prompt.as_deref(),
+                overrides.autonomous,
             );
             (
                 result.command,

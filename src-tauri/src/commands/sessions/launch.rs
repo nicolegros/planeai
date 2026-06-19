@@ -118,6 +118,7 @@ pub async fn launch_session(
             &core_provider,
             auto_approve,
             task_prompt.as_deref(),
+            false, // TODO: pass true when wired from auto-dispatch path
         );
         let c = launch_cmd.command;
 
