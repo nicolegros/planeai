@@ -34,6 +34,7 @@ path = "src/bin/task_smoke.rs"
 [dependencies]
 alacritty_terminal = "0.26"
 anyhow = "1"
+dark-light = "2"
 iced = { version = "0.14", features = ["canvas", "tokio"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

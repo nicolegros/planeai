@@ -7,6 +7,8 @@ use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::{mouse, Color, Font, Point, Rectangle, Renderer, Size, Theme};
 use std::time::Instant;
 
+use crate::theme::TerminalColors;
+
 pub struct EventProxy;
 impl alacritty_terminal::event::EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
@@ -123,6 +125,104 @@ pub fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapsho
                 c: cell.c,
                 fg: ansi_color_to_iced(&cell.fg),
                 bg: ansi_color_to_iced(&cell.bg),
+            });
+        }
+        cells.push(row);
+    }
+    GridSnapshot {
+        cells,
+        cursor_line: cursor.line.0 as usize,
+        cursor_col: cursor.column.0,
+        cols,
+        rows,
+    }
+}
+
+/// Themed variant: resolves ANSI colors using the loaded terminal theme.
+pub fn ansi_color_to_iced_themed(
+    color: &alacritty_terminal::vte::ansi::Color,
+    tc: &TerminalColors,
+) -> Color {
+    use alacritty_terminal::vte::ansi::Color as AC;
+    use alacritty_terminal::vte::ansi::NamedColor;
+    match color {
+        AC::Named(n) => match n {
+            NamedColor::Black => tc.black,
+            NamedColor::Red => tc.red,
+            NamedColor::Green => tc.green,
+            NamedColor::Yellow => tc.yellow,
+            NamedColor::Blue => tc.blue,
+            NamedColor::Magenta => tc.magenta,
+            NamedColor::Cyan => tc.cyan,
+            NamedColor::White => tc.white,
+            NamedColor::BrightBlack => tc.bright_black,
+            NamedColor::BrightRed => tc.bright_red,
+            NamedColor::BrightGreen => tc.bright_green,
+            NamedColor::BrightYellow => tc.bright_yellow,
+            NamedColor::BrightBlue => tc.bright_blue,
+            NamedColor::BrightMagenta => tc.bright_magenta,
+            NamedColor::BrightCyan => tc.bright_cyan,
+            NamedColor::BrightWhite => tc.bright_white,
+            NamedColor::Foreground | NamedColor::BrightForeground => tc.foreground,
+            NamedColor::Background => tc.background,
+            _ => tc.foreground,
+        },
+        AC::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
+        AC::Indexed(idx) => {
+            let i = *idx;
+            if i < 16 {
+                match i {
+                    0 => tc.black,
+                    1 => tc.red,
+                    2 => tc.green,
+                    3 => tc.yellow,
+                    4 => tc.blue,
+                    5 => tc.magenta,
+                    6 => tc.cyan,
+                    7 => tc.white,
+                    8 => tc.bright_black,
+                    9 => tc.bright_red,
+                    10 => tc.bright_green,
+                    11 => tc.bright_yellow,
+                    12 => tc.bright_blue,
+                    13 => tc.bright_magenta,
+                    14 => tc.bright_cyan,
+                    15 => tc.bright_white,
+                    _ => tc.foreground,
+                }
+            } else if i < 232 {
+                let j = i - 16;
+                let r = (j / 36) % 6;
+                let g = (j / 6) % 6;
+                let b = j % 6;
+                let v = |c: u8| if c == 0 { 0u8 } else { 55 + 40 * c };
+                Color::from_rgb8(v(r), v(g), v(b))
+            } else {
+                let v = 8 + 10 * (i - 232);
+                Color::from_rgb8(v, v, v)
+            }
+        }
+    }
+}
+
+/// Themed grid snapshot — uses terminal colors from theme.
+pub fn snapshot_grid_themed(
+    term: &alacritty_terminal::Term<EventProxy>,
+    tc: &TerminalColors,
+) -> GridSnapshot {
+    let grid = term.grid();
+    let rows = grid.screen_lines();
+    let cols = grid.columns();
+    let cursor = grid.cursor.point;
+    let mut cells = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let mut row = Vec::with_capacity(cols);
+        for j in 0..cols {
+            let cell: &Cell = &grid[Line(i as i32)][Column(j)];
+            row.push(GridCell {
+                c: cell.c,
+                fg: ansi_color_to_iced_themed(&cell.fg, tc),
+                bg: ansi_color_to_iced_themed(&cell.bg, tc),
             });
         }
         cells.push(row);

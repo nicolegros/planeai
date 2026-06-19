@@ -9,6 +9,8 @@ mod multi_session;
 pub mod planeai_local;
 pub mod shell;
 pub mod sidebar;
+pub mod theme;
+pub mod theme_parser;
 mod workflow;
 
 use std::fs;
