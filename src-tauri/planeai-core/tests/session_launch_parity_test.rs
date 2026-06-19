@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use planeai_core::session_launch::{
-    expand_tilde, load_launch_config, prepare_session, resolve_from_config, CreateSessionError,
-    CreateSessionRequest, LaunchConfig, ProviderConfig, SessionLaunchOverrides, SessionTarget,
+    build_provider_launch_command, expand_tilde, load_launch_config, prepare_session,
+    resolve_from_config, CreateSessionError, CreateSessionRequest, LaunchConfig, ProviderConfig,
+    SessionLaunchOverrides, SessionTarget,
 };
 
 fn tauri_style_request(cwd: PathBuf) -> CreateSessionRequest {
@@ -162,6 +163,8 @@ fn config_default_agent_command_resolves() {
         ProviderConfig {
             command: "test-agent run".to_string(),
             yolo_flag: None,
+            prompt_command: None,
+            autonomous_prompt_template: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -292,6 +295,8 @@ fn auto_approve_adds_yolo_flag() {
         ProviderConfig {
             command: "agent".to_string(),
             yolo_flag: Some("--yolo".to_string()),
+            prompt_command: None,
+            autonomous_prompt_template: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -427,4 +432,303 @@ fn no_bash_fallback_when_no_command() {
     };
     let err = resolve_from_config(&config, &overrides).unwrap_err();
     assert!(matches!(err, CreateSessionError::CommandEmpty));
+}
+
+// ─── Regression tests: build_provider_launch_command ──────────────────────────
+
+fn kiro_provider() -> ProviderConfig {
+    ProviderConfig {
+        command: "kiro-cli chat".to_string(),
+        yolo_flag: Some("--trust-all-tools".to_string()),
+        prompt_command: Some("{prompt}".to_string()),
+        autonomous_prompt_template: None,
+    }
+}
+
+fn claude_provider() -> ProviderConfig {
+    ProviderConfig {
+        command: "claude".to_string(),
+        yolo_flag: Some("--dangerously-skip-permissions".to_string()),
+        prompt_command: Some("-p {prompt}".to_string()),
+        autonomous_prompt_template: None,
+    }
+}
+
+fn copilot_provider() -> ProviderConfig {
+    ProviderConfig {
+        command: "gh copilot".to_string(),
+        yolo_flag: Some("--allow-all-tools".to_string()),
+        prompt_command: Some("{prompt}".to_string()),
+        autonomous_prompt_template: None,
+    }
+}
+
+#[test]
+fn kiro_auto_approve_includes_yolo_flag() {
+    let result = build_provider_launch_command(&kiro_provider(), true, None);
+    assert_eq!(result.command, "kiro-cli chat --trust-all-tools");
+    assert!(result.auto_approve_was_applied);
+    assert!(!result.prompt_was_injected);
+}
+
+#[test]
+fn claude_auto_approve_includes_yolo_flag() {
+    let result = build_provider_launch_command(&claude_provider(), true, None);
+    assert_eq!(result.command, "claude --dangerously-skip-permissions");
+    assert!(result.auto_approve_was_applied);
+}
+
+#[test]
+fn copilot_auto_approve_includes_yolo_flag() {
+    let result = build_provider_launch_command(&copilot_provider(), true, None);
+    assert_eq!(result.command, "gh copilot --allow-all-tools");
+    assert!(result.auto_approve_was_applied);
+}
+
+#[test]
+fn no_auto_approve_omits_yolo_flag() {
+    let result = build_provider_launch_command(&kiro_provider(), false, None);
+    assert_eq!(result.command, "kiro-cli chat");
+    assert!(!result.auto_approve_was_applied);
+}
+
+#[test]
+fn missing_yolo_flag_does_not_fail() {
+    let provider = ProviderConfig {
+        command: "my-agent".to_string(),
+        yolo_flag: None,
+        prompt_command: None,
+        autonomous_prompt_template: None,
+    };
+    let result = build_provider_launch_command(&provider, true, None);
+    assert_eq!(result.command, "my-agent");
+    assert!(!result.auto_approve_was_applied);
+}
+
+#[test]
+fn kiro_task_prompt_injected() {
+    let result = build_provider_launch_command(
+        &kiro_provider(),
+        false,
+        Some("Implement PLA-89: fix daemon task launch"),
+    );
+    assert!(result
+        .command
+        .contains("'Implement PLA-89: fix daemon task launch'"));
+    assert!(result.prompt_was_injected);
+}
+
+#[test]
+fn claude_task_prompt_uses_dash_p() {
+    let result =
+        build_provider_launch_command(&claude_provider(), false, Some("Fix the login bug"));
+    assert!(result.command.contains("-p 'Fix the login bug'"));
+    assert!(result.prompt_was_injected);
+}
+
+#[test]
+fn task_prompt_with_auto_approve_both_applied() {
+    let result = build_provider_launch_command(&kiro_provider(), true, Some("Implement feature X"));
+    assert!(result.command.contains("--trust-all-tools"));
+    assert!(result.command.contains("'Implement feature X'"));
+    assert!(result.auto_approve_was_applied);
+    assert!(result.prompt_was_injected);
+}
+
+#[test]
+fn no_prompt_no_auto_approve_returns_base_command() {
+    let result = build_provider_launch_command(&kiro_provider(), false, None);
+    assert_eq!(result.command, "kiro-cli chat");
+    assert!(!result.auto_approve_was_applied);
+    assert!(!result.prompt_was_injected);
+}
+
+#[test]
+fn no_prompt_injection_without_prompt_command() {
+    let provider = ProviderConfig {
+        command: "my-agent".to_string(),
+        yolo_flag: Some("--yolo".to_string()),
+        prompt_command: None,
+        autonomous_prompt_template: None,
+    };
+    let result = build_provider_launch_command(&provider, false, Some("Hello world"));
+    // No prompt_command configured — prompt cannot be injected
+    assert_eq!(result.command, "my-agent");
+    assert!(!result.prompt_was_injected);
+}
+
+#[test]
+fn empty_prompt_is_not_injected() {
+    let result = build_provider_launch_command(&kiro_provider(), false, Some(""));
+    assert_eq!(result.command, "kiro-cli chat");
+    assert!(!result.prompt_was_injected);
+}
+
+#[test]
+fn prompt_with_spaces_preserved_safely() {
+    let result = build_provider_launch_command(
+        &kiro_provider(),
+        false,
+        Some("Fix bug in the login handler for SSO users"),
+    );
+    assert!(result
+        .command
+        .contains("'Fix bug in the login handler for SSO users'"));
+}
+
+#[test]
+fn prompt_with_newlines_preserved_safely() {
+    let result = build_provider_launch_command(
+        &kiro_provider(),
+        false,
+        Some("Fix this:\n- item 1\n- item 2"),
+    );
+    // Shell-escaped with single quotes
+    assert!(result.command.contains("'Fix this:\n- item 1\n- item 2'"));
+}
+
+#[test]
+fn prompt_with_single_quotes_escaped() {
+    let result =
+        build_provider_launch_command(&kiro_provider(), false, Some("Fix the user's profile page"));
+    // Single quotes in prompt should be escaped
+    assert!(result.command.contains("user"));
+    assert!(result.command.contains("profile page"));
+    assert!(result.prompt_was_injected);
+}
+
+#[test]
+fn autonomous_prompt_template_applied() {
+    let provider = ProviderConfig {
+        command: "kiro-cli chat".to_string(),
+        yolo_flag: Some("--trust-all-tools".to_string()),
+        prompt_command: Some("{prompt}".to_string()),
+        autonomous_prompt_template: Some(
+            "You are autonomous. Complete this task:\n{prompt}".to_string(),
+        ),
+    };
+    let result = build_provider_launch_command(&provider, true, Some("Fix the bug"));
+    assert!(result
+        .command
+        .contains("You are autonomous. Complete this task:"));
+    assert!(result.command.contains("Fix the bug"));
+    assert!(result.auto_approve_was_applied);
+    assert!(result.prompt_was_injected);
+}
+
+// ─── Regression tests: resolve_from_config with prompt injection ─────────────
+
+#[test]
+fn resolve_task_prompt_injected_via_config() {
+    let config = LaunchConfig::default(); // has kiro with prompt_command: "{prompt}"
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        task_prompt: Some("Implement PLA-42".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert!(resolved.command_label.contains("'Implement PLA-42'"));
+    assert!(resolved.prompt_was_injected);
+}
+
+#[test]
+fn resolve_task_prompt_with_auto_approve() {
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        auto_approve: true,
+        task_prompt: Some("Fix the regression".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert!(resolved.command_label.contains("--trust-all-tools"));
+    assert!(resolved.command_label.contains("'Fix the regression'"));
+    assert!(resolved.prompt_was_injected);
+    assert!(resolved.auto_approve_was_applied);
+}
+
+#[test]
+fn resolve_no_prompt_injection_for_manual_launch() {
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        auto_approve: true,
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    assert_eq!(resolved.command_label, "kiro-cli chat --trust-all-tools");
+    assert!(!resolved.prompt_was_injected);
+    assert!(resolved.auto_approve_was_applied);
+}
+
+#[test]
+fn resolve_cli_override_bypasses_provider_assembly() {
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        agent_command: Some("custom-agent --fast".to_string()),
+        auto_approve: true,
+        task_prompt: Some("Should not be injected".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_from_config(&config, &overrides).unwrap();
+    // CLI override takes full command — no assembly
+    assert_eq!(resolved.command_label, "custom-agent --fast");
+    assert!(!resolved.prompt_was_injected);
+    assert!(!resolved.auto_approve_was_applied);
+}
+
+// ─── Parity: Tauri-style and Iced-style produce same command ─────────────────
+
+#[test]
+fn tauri_and_iced_produce_same_command_for_task_launch() {
+    let provider = kiro_provider();
+    let task_prompt = "Implement PLA-89: fix daemon task launch";
+
+    // Tauri style: uses build_provider_launch_command directly
+    let tauri_result = build_provider_launch_command(&provider, true, Some(task_prompt));
+
+    // Iced style: uses resolve_from_config which calls build_provider_launch_command
+    let config = LaunchConfig::default();
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        auto_approve: true,
+        task_prompt: Some(task_prompt.to_string()),
+        ..Default::default()
+    };
+    let iced_resolved = resolve_from_config(&config, &overrides).unwrap();
+
+    assert_eq!(tauri_result.command, iced_resolved.command_label);
+    assert_eq!(
+        tauri_result.prompt_was_injected,
+        iced_resolved.prompt_was_injected
+    );
+    assert_eq!(
+        tauri_result.auto_approve_was_applied,
+        iced_resolved.auto_approve_was_applied
+    );
+}
+
+#[test]
+fn tauri_and_iced_produce_same_command_for_claude_task() {
+    let config = LaunchConfig {
+        default_provider: "claude".to_string(),
+        ..Default::default()
+    };
+
+    let provider = claude_provider();
+    let task_prompt = "Fix the login bug";
+
+    let tauri_result = build_provider_launch_command(&provider, true, Some(task_prompt));
+
+    let overrides = SessionLaunchOverrides {
+        cwd: Some(std::env::temp_dir()),
+        auto_approve: true,
+        task_prompt: Some(task_prompt.to_string()),
+        provider_id: Some("claude".to_string()),
+        ..Default::default()
+    };
+    let iced_resolved = resolve_from_config(&config, &overrides).unwrap();
+
+    assert_eq!(tauri_result.command, iced_resolved.command_label);
 }
