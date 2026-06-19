@@ -98,6 +98,7 @@ pub struct EditParams<'a> {
     pub priority: Option<i32>,
     pub tags: Option<&'a [String]>,
     pub blocked_by: Option<&'a [String]>,
+    pub parent: Option<Option<&'a str>>,
     pub base_branch: Option<&'a str>,
 }
 
@@ -112,6 +113,7 @@ pub fn run_task_edit(repo: &dyn TaskProvider, params: EditParams) -> Result<Stri
                 priority: params.priority,
                 tags: params.tags.map(|t| t.to_vec()),
                 blocked_by: params.blocked_by.map(|b| b.to_vec()),
+                parent_key: params.parent.map(|p| p.map(|s| s.to_string())),
                 base_branch: params.base_branch.map(|s| s.to_string()),
                 ..Default::default()
             },
@@ -264,6 +266,7 @@ mod tests {
                 priority: Some(2),
                 tags: None,
                 blocked_by: None,
+                parent: None,
                 base_branch: None,
             },
         )
@@ -345,11 +348,53 @@ mod tests {
                 priority: None,
                 tags: None,
                 blocked_by: None,
+                parent: None,
                 base_branch: Some("release"),
             },
         )
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["base_branch"], "release");
+    }
+
+    #[test]
+    fn task_edit_parent() {
+        let (_conn, repo) = setup();
+        add(&repo, "parent task");
+        add(&repo, "child task");
+        // Set parent
+        let result = run_task_edit(
+            &repo,
+            EditParams {
+                key: "PLA-2",
+                title: None,
+                description: None,
+                priority: None,
+                tags: None,
+                blocked_by: None,
+                parent: Some(Some("PLA-1")),
+                base_branch: None,
+            },
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["parent_key"], "PLA-1");
+        // Clear parent
+        let result = run_task_edit(
+            &repo,
+            EditParams {
+                key: "PLA-2",
+                title: None,
+                description: None,
+                priority: None,
+                tags: None,
+                blocked_by: None,
+                parent: Some(None),
+                base_branch: None,
+            },
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(v["parent_key"].is_null());
     }
 }

@@ -89,6 +89,7 @@ export const tasks = {
     priority: number;
     tags: string[] | null;
     blockedBy: string[] | null;
+    parentKey?: string | null;
     baseBranch?: string | null;
   }) => invoke("edit_task_item", params),
   move: (key: string, status: string, repoPath: string) =>

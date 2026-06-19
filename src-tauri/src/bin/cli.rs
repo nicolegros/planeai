@@ -158,6 +158,9 @@ enum TaskAction {
         tags: Option<Vec<String>>,
         #[arg(long, value_delimiter = ',')]
         blocked_by: Option<Vec<String>>,
+        /// Set parent task key (use empty string to clear)
+        #[arg(long)]
+        parent: Option<String>,
         #[arg(long)]
         base_branch: Option<String>,
         #[arg(long)]
@@ -511,10 +514,13 @@ fn main() {
                     priority,
                     tags,
                     blocked_by,
+                    parent,
                     base_branch,
                     pretty,
                     ..
                 } => {
+                    let parent_opt = parent.map(|s| if s.is_empty() { None } else { Some(s) });
+                    let parent_ref = parent_opt.as_ref().map(|o| o.as_deref());
                     let r = planeai::task_cli::run_task_edit(
                         &repo,
                         planeai::task_cli::EditParams {
@@ -524,6 +530,7 @@ fn main() {
                             priority,
                             tags: tags.as_deref(),
                             blocked_by: blocked_by.as_deref(),
+                            parent: parent_ref,
                             base_branch: base_branch.as_deref(),
                         },
                     );
