@@ -465,7 +465,7 @@ fn iced_and_tauri_create_equivalent_records() {
     let iced_params = CreateSessionParams {
         id: "iced-uuid-1".to_string(),
         project_id: project.id.clone(),
-        name: "kiro".to_string(),
+        name: String::new(),
         backend: "daemon".to_string(),
         auto_approve: true,
         ..Default::default()
@@ -500,6 +500,41 @@ fn iced_and_tauri_create_equivalent_records() {
     assert_eq!(tauri_record.status, "active");
     assert_eq!(tauri_record.task_key, Some("PLA-5".to_string()));
     assert_eq!(tauri_record.branch, "pla-5/abcd1234");
+}
+
+/// PLA-128: Iced app must store empty name (not the provider name) when no
+/// explicit name is given — same default as the Tauri app.
+#[test]
+fn iced_session_name_empty_when_not_specified() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    // Iced quick-launch: no user-provided name → empty string (not "kiro")
+    let params = CreateSessionParams {
+        id: "iced-no-name".to_string(),
+        project_id: project.id.clone(),
+        name: String::new(),
+        backend: "daemon".to_string(),
+        auto_approve: true,
+        branch: "feat/my-feature".to_string(),
+        ..Default::default()
+    };
+    let record = SessionService::create(&conn, &params).unwrap();
+    assert_eq!(record.name, "");
+    assert_eq!(record.branch, "feat/my-feature");
+
+    // Iced session form with explicit name: preserved as-is
+    let params_named = CreateSessionParams {
+        id: "iced-with-name".to_string(),
+        project_id: project.id.clone(),
+        name: "My Session".to_string(),
+        backend: "daemon".to_string(),
+        auto_approve: true,
+        branch: "my-session".to_string(),
+        ..Default::default()
+    };
+    let record_named = SessionService::create(&conn, &params_named).unwrap();
+    assert_eq!(record_named.name, "My Session");
 }
 
 #[test]

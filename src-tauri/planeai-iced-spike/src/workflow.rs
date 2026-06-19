@@ -397,7 +397,22 @@ impl WorkflowApp {
 
         // Step 1: Reserve session ID and persist DB record BEFORE spawning
         let session_id = uuid::Uuid::new_v4().to_string();
-        let persist_err = self.persist_new_session(&session_id, &self.provider_label.clone());
+        let project_id = match &self.project {
+            Some(p) => p.id.clone(),
+            None => {
+                self.set_error("No project available.".into());
+                return;
+            }
+        };
+        let params = CreateSessionParams {
+            id: session_id.clone(),
+            project_id,
+            name: String::new(),
+            backend: "daemon".to_string(),
+            auto_approve: true,
+            ..Default::default()
+        };
+        let persist_err = self.persist_new_session(params);
         if let Some(msg) = persist_err {
             self.set_error(msg);
             return;
@@ -463,7 +478,22 @@ impl WorkflowApp {
 
         // Step 1: Reserve session ID and persist DB record BEFORE spawning
         let session_id = uuid::Uuid::new_v4().to_string();
-        let persist_err = self.persist_new_session(&session_id, command);
+        let project_id = match &self.project {
+            Some(p) => p.id.clone(),
+            None => {
+                self.set_error("No project available.".into());
+                return;
+            }
+        };
+        let params = CreateSessionParams {
+            id: session_id.clone(),
+            project_id,
+            name: String::new(),
+            backend: "daemon".to_string(),
+            auto_approve: true,
+            ..Default::default()
+        };
+        let persist_err = self.persist_new_session(params);
         if let Some(msg) = persist_err {
             self.set_error(msg);
             return;
@@ -653,18 +683,10 @@ impl WorkflowApp {
     }
 
     /// Persist a new session record to the shared DB. Returns Some(error_msg) on failure.
-    fn persist_new_session(&self, session_id: &str, name: &str) -> Option<String> {
-        if let (Some(ref db), Some(ref project)) = (&self.db, &self.project) {
+    fn persist_new_session(&self, params: CreateSessionParams) -> Option<String> {
+        if let Some(ref db) = self.db {
             match db.lock() {
                 Ok(conn) => {
-                    let params = CreateSessionParams {
-                        id: session_id.to_string(),
-                        project_id: project.id.clone(),
-                        name: name.to_string(),
-                        backend: "daemon".to_string(),
-                        auto_approve: true,
-                        ..Default::default()
-                    };
                     if let Err(e) = SessionService::create(&conn, &params) {
                         return Some(format!("DB persist failed: {e}"));
                     }
@@ -686,8 +708,8 @@ impl WorkflowApp {
             return;
         }
         // Require DB + project record before creating worktree
-        let (db, project_id) = match (&self.db, &self.project) {
-            (Some(db), Some(proj)) => (db.clone(), proj.id.clone()),
+        let project_id = match &self.project {
+            Some(proj) => proj.id.clone(),
             _ => {
                 self.set_error("DB/project unavailable — cannot persist worktree session.".into());
                 return;
@@ -741,45 +763,28 @@ impl WorkflowApp {
         };
 
         // Persist session record BEFORE spawning (db/project_id validated at top)
-        match db.lock() {
-            Ok(conn) => {
-                let params = CreateSessionParams {
-                    id: session_id.clone(),
-                    project_id,
-                    name: self.provider_label.clone(),
-                    backend: "daemon".to_string(),
-                    auto_approve: true,
-                    branch: resolved.branch_name.clone(),
-                    worktree_path: resolved.worktree_path.clone(),
-                    task_key: task_key.clone(),
-                    base_branch: resolved.base_branch.clone(),
-                    ..Default::default()
-                };
-                if let Err(e) = SessionService::create(&conn, &params) {
-                    // Rollback: clean up the worktree we just created
-                    if let Some(ref wt) = resolved.worktree_path {
-                        planeai_core::cleanup::cleanup_worktree(
-                            &self.project_cwd.to_string_lossy(),
-                            wt,
-                            Some(&resolved.branch_name),
-                        );
-                    }
-                    self.set_error(format!("DB persist failed: {e}"));
-                    return;
-                }
+        let params = CreateSessionParams {
+            id: session_id.clone(),
+            project_id,
+            name: String::new(),
+            backend: "daemon".to_string(),
+            auto_approve: true,
+            branch: resolved.branch_name.clone(),
+            worktree_path: resolved.worktree_path.clone(),
+            task_key: task_key.clone(),
+            base_branch: resolved.base_branch.clone(),
+            ..Default::default()
+        };
+        if let Some(msg) = self.persist_new_session(params) {
+            if let Some(ref wt) = resolved.worktree_path {
+                planeai_core::cleanup::cleanup_worktree(
+                    &self.project_cwd.to_string_lossy(),
+                    wt,
+                    Some(&resolved.branch_name),
+                );
             }
-            Err(e) => {
-                // Rollback: clean up the worktree we just created
-                if let Some(ref wt) = resolved.worktree_path {
-                    planeai_core::cleanup::cleanup_worktree(
-                        &self.project_cwd.to_string_lossy(),
-                        wt,
-                        Some(&resolved.branch_name),
-                    );
-                }
-                self.set_error(format!("DB lock failed: {e}"));
-                return;
-            }
+            self.set_error(msg);
+            return;
         }
 
         // Spawn daemon in the worktree cwd
@@ -1111,35 +1116,23 @@ impl WorkflowApp {
 
         // Persist session record
         let session_id = uuid::Uuid::new_v4().to_string();
-        let session_name = if self.session_form_name.is_empty() {
-            provider_id.clone()
-        } else {
-            self.session_form_name.clone()
+        let session_name = self.session_form_name.clone();
+        let params = CreateSessionParams {
+            id: session_id.clone(),
+            project_id: project.id.clone(),
+            name: session_name.clone(),
+            backend: "daemon".to_string(),
+            auto_approve: self.session_form_auto_approve,
+            branch: branch.clone(),
+            worktree_path: worktree_path.clone(),
+            task_key: task_key.clone(),
+            base_branch: None,
+            provider: Some(provider_id.clone()),
+            ..Default::default()
         };
-        match db.lock() {
-            Ok(conn) => {
-                let params = CreateSessionParams {
-                    id: session_id.clone(),
-                    project_id: project.id.clone(),
-                    name: session_name.clone(),
-                    backend: "daemon".to_string(),
-                    auto_approve: self.session_form_auto_approve,
-                    branch: branch.clone(),
-                    worktree_path: worktree_path.clone(),
-                    task_key: task_key.clone(),
-                    base_branch: None,
-                    provider: Some(provider_id.clone()),
-                    ..Default::default()
-                };
-                if let Err(e) = SessionService::create(&conn, &params) {
-                    self.session_form_error = Some(format!("DB: {e}"));
-                    return;
-                }
-            }
-            Err(e) => {
-                self.session_form_error = Some(format!("DB lock: {e}"));
-                return;
-            }
+        if let Some(msg) = self.persist_new_session(params) {
+            self.session_form_error = Some(msg);
+            return;
         }
 
         // Spawn daemon session
@@ -1219,7 +1212,7 @@ impl WorkflowApp {
             self.set_error("Daemon unavailable.".into());
             return;
         }
-        let (db, project) = match (&self.db, &self.project) {
+        let (_db, project) = match (&self.db, &self.project) {
             (Some(db), Some(proj)) => (db.clone(), proj.clone()),
             _ => {
                 self.set_error("DB/project unavailable.".into());
@@ -1283,44 +1276,29 @@ impl WorkflowApp {
         };
 
         // Persist session record BEFORE spawning
-        match db.lock() {
-            Ok(conn) => {
-                let params = CreateSessionParams {
-                    id: session_id.clone(),
-                    project_id: project.id.clone(),
-                    name: format!("{}: {}", task.key, task.title),
-                    backend: "daemon".to_string(),
-                    auto_approve,
-                    branch: wt_resolved.branch_name.clone(),
-                    worktree_path: wt_resolved.worktree_path.clone(),
-                    task_key: Some(task.key.clone()),
-                    base_branch: wt_resolved.base_branch.clone(),
-                    provider: Some(self.provider_label.clone()),
-                    ..Default::default()
-                };
-                if let Err(e) = SessionService::create(&conn, &params) {
-                    if let Some(ref wt) = wt_resolved.worktree_path {
-                        planeai_core::cleanup::cleanup_worktree(
-                            &self.project_cwd.to_string_lossy(),
-                            wt,
-                            Some(&wt_resolved.branch_name),
-                        );
-                    }
-                    self.set_error(format!("DB persist: {e}"));
-                    return;
-                }
+        let params = CreateSessionParams {
+            id: session_id.clone(),
+            project_id: project.id.clone(),
+            name: format!("{}: {}", task.key, task.title),
+            backend: "daemon".to_string(),
+            auto_approve,
+            branch: wt_resolved.branch_name.clone(),
+            worktree_path: wt_resolved.worktree_path.clone(),
+            task_key: Some(task.key.clone()),
+            base_branch: wt_resolved.base_branch.clone(),
+            provider: Some(self.provider_label.clone()),
+            ..Default::default()
+        };
+        if let Some(msg) = self.persist_new_session(params) {
+            if let Some(ref wt) = wt_resolved.worktree_path {
+                planeai_core::cleanup::cleanup_worktree(
+                    &self.project_cwd.to_string_lossy(),
+                    wt,
+                    Some(&wt_resolved.branch_name),
+                );
             }
-            Err(e) => {
-                if let Some(ref wt) = wt_resolved.worktree_path {
-                    planeai_core::cleanup::cleanup_worktree(
-                        &self.project_cwd.to_string_lossy(),
-                        wt,
-                        Some(&wt_resolved.branch_name),
-                    );
-                }
-                self.set_error(format!("DB lock: {e}"));
-                return;
-            }
+            self.set_error(msg);
+            return;
         }
 
         // Spawn daemon session in worktree cwd
