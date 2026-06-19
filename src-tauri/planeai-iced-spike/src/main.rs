@@ -8,6 +8,7 @@ pub mod input;
 mod multi_session;
 pub mod planeai_local;
 pub mod shell;
+pub mod sidebar;
 mod workflow;
 
 use std::fs;

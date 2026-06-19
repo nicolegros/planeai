@@ -302,6 +302,16 @@ pub fn shortcuts_overlay<'a, M: 'a>() -> iced::widget::Column<'a, M> {
 
     header!(col, "Terminal");
     shortcut!(col, format!("{}V", mod_key), "Paste");
+    shortcut!(col, "Escape", "Focus sidebar");
+
+    header!(col, "Sidebar");
+    shortcut!(col, format!("{}⇧S", mod_key), "Toggle sidebar focus");
+    shortcut!(col, "j / ↓", "Move down");
+    shortcut!(col, "k / ↑", "Move up");
+    shortcut!(col, "h / ←", "Collapse section");
+    shortcut!(col, "l / →", "Expand section");
+    shortcut!(col, "Enter", "Select / toggle");
+    shortcut!(col, "Escape", "Focus terminal");
 
     header!(col, "View");
     shortcut!(col, format!("{}O", mod_key), "Open project picker");

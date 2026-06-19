@@ -29,6 +29,7 @@ use crate::daemon_session::{
     kill_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
 };
 use crate::input;
+use crate::sidebar::{SidebarAction, SidebarState};
 use crate::Args;
 
 // ─── Recent projects ─────────────────────────────────────────────────────────
@@ -190,6 +191,10 @@ struct WorkflowApp {
     session_form_error: Option<String>,
     session_form_project_combo: ComboBoxState,
     provider_keys: Vec<String>,
+    // Sidebar
+    sidebar: Option<SidebarState>,
+    sidebar_focused: bool,
+    sidebar_dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +203,9 @@ enum Message {
     Poll,
     KeyEvent(keyboard::Event),
     WindowResized(Size),
+    SidebarDrag(f32),
+    SidebarDragEnd,
+    SidebarMouseDown(f32),
     ProjectInputChanged(String),
     ProjectInputSubmit,
     LaunchPromptChanged(String),
@@ -371,6 +379,9 @@ impl WorkflowApp {
                 session_form_error: None,
                 session_form_project_combo: ComboBoxState::new(Vec::new()),
                 provider_keys: Vec::new(),
+                sidebar: None,
+                sidebar_focused: false,
+                sidebar_dirty: true, // trigger initial load
             },
             iced::Task::none(),
         );
@@ -572,6 +583,7 @@ impl WorkflowApp {
                 });
                 self.active = self.sessions.len() - 1;
                 self.clear_error();
+                self.sidebar_dirty = true;
             }
             Err(e) => {
                 self.set_error(format!("Attach failed: {}", e));
@@ -596,6 +608,7 @@ impl WorkflowApp {
             self.active = self.sessions.len() - 1;
         }
         self.refresh_daemon_list();
+        self.sidebar_dirty = true;
     }
 
     fn kill_active(&mut self) {
@@ -664,6 +677,7 @@ impl WorkflowApp {
             self.active = self.sessions.len() - 1;
         }
         self.refresh_daemon_list();
+        self.sidebar_dirty = true;
     }
 
     fn refresh_daemon_list(&mut self) {
@@ -1417,6 +1431,39 @@ impl WorkflowApp {
             let session = &mut self.sessions[idx];
             session.snapshot = snapshot_grid(&session.term);
             session.cache.clear();
+            if let Some(ref mut sidebar) = self.sidebar {
+                sidebar.set_active_session(Some(self.sessions[idx].session_id.clone()));
+            }
+        }
+    }
+
+    fn handle_sidebar_key(&mut self, key: &keyboard::Key) {
+        let key_str = match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "ArrowLeft",
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "ArrowRight",
+            keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+            keyboard::Key::Named(keyboard::key::Named::Escape) => "Escape",
+            keyboard::Key::Character(c) => c.as_str(),
+            _ => return,
+        };
+        if let Some(ref mut sidebar) = self.sidebar {
+            if let Some(action) = sidebar.handle_key(key_str) {
+                match action {
+                    SidebarAction::FocusTerminal => {
+                        self.sidebar_focused = false;
+                    }
+                    SidebarAction::SwitchSession(sid) => {
+                        if let Some(idx) = self.sessions.iter().position(|s| s.session_id == sid) {
+                            self.switch_to(idx);
+                        } else {
+                            self.attach_session(sid);
+                        }
+                        self.sidebar_focused = false;
+                    }
+                }
+            }
         }
     }
 
@@ -1451,6 +1498,7 @@ impl WorkflowApp {
         self.recent_projects = add_recent_project(&expanded);
         self.refresh_persisted_sessions();
         self.clear_error();
+        self.sidebar_dirty = true;
     }
 
     fn open_log_replay(&mut self) {
@@ -1526,6 +1574,22 @@ impl WorkflowApp {
 impl WorkflowApp {
     fn update(&mut self, message: Message) {
         match message {
+            Message::SidebarMouseDown(_) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_down();
+                }
+            }
+            Message::SidebarDrag(x) => {
+                // Only track cursor position if sidebar exists; resize check is O(1)
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_move(x);
+                }
+            }
+            Message::SidebarDragEnd => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_up();
+                }
+            }
             Message::ProjectInputChanged(val) => {
                 self.project_input = val;
             }
@@ -1988,6 +2052,15 @@ impl WorkflowApp {
                     return;
                 }
 
+                // Cmd+Shift+S — toggle sidebar focus
+                if cmd
+                    && modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "s" || c.as_str() == "S")
+                {
+                    self.sidebar_focused = !self.sidebar_focused;
+                    return;
+                }
+
                 // Cmd+B — worktree launch prompt
                 if cmd
                     && !modifiers.shift()
@@ -2144,6 +2217,18 @@ impl WorkflowApp {
                     }
                     return;
                 }
+                // Sidebar: Escape from terminal focuses sidebar
+                if !self.sidebar_focused
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                {
+                    self.sidebar_focused = true;
+                    return;
+                }
+                // When sidebar is focused, route keys there
+                if self.sidebar_focused {
+                    self.handle_sidebar_key(&key);
+                    return;
+                }
                 // Forward input to active session
                 if !self.sessions.is_empty() {
                     self.kill_armed = false;
@@ -2165,6 +2250,26 @@ impl WorkflowApp {
                 }
 
                 self.check_daemon_health();
+
+                // Sidebar: refresh only when data changed (dirty flag)
+                if self.sidebar_dirty {
+                    self.sidebar_dirty = false;
+                    if let Some(ref db) = self.db {
+                        if let Ok(conn) = db.lock() {
+                            let db_path = planeai_core::app_data_dir().join("planeai.db");
+                            if let Some(ref mut sidebar) = self.sidebar {
+                                sidebar.refresh(&conn);
+                            } else {
+                                self.sidebar = Some(SidebarState::new(&conn, &db_path));
+                            }
+                        }
+                    }
+                    if let Some(ref mut sidebar) = self.sidebar {
+                        sidebar.set_active_session(
+                            self.sessions.get(self.active).map(|s| s.session_id.clone()),
+                        );
+                    }
+                }
 
                 // Drain output from all sessions
                 for i in 0..self.sessions.len() {
@@ -2192,6 +2297,7 @@ impl WorkflowApp {
                         && s.backend.has_exited()
                     {
                         s.status = SessionStatus::Exited;
+                        self.sidebar_dirty = true;
                         // Mark exited in DB and fire lifecycle hook
                         if let Some(ref db) = self.db {
                             if let Ok(conn) = db.lock() {
@@ -2378,13 +2484,17 @@ impl WorkflowApp {
             }
         }
 
-        let left_panel =
+        let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
+            sidebar.view(self.sidebar_focused)
+        } else {
             container(left_panel_content)
                 .padding(8)
                 .style(|_: &Theme| container::Style {
                     background: Some(Color::from_rgb8(20, 20, 20).into()),
                     ..Default::default()
-                });
+                })
+                .into()
+        };
 
         // Terminal area (or log replay)
         let terminal_area: Element<'_, Message> = if let Some(ref replay) = self.log_replay {
@@ -2907,12 +3017,20 @@ impl WorkflowApp {
         Subscription::batch(vec![
             keyboard::listen().map(Message::KeyEvent),
             iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
-            event::listen_with(|ev, _status, _id| {
-                if let iced::Event::Window(window::Event::Resized(size)) = ev {
+            event::listen_with(|ev, _status, _id| match ev {
+                iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))
-                } else {
-                    None
                 }
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::SidebarMouseDown(0.0)),
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::SidebarDragEnd),
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::SidebarDrag(position.x))
+                }
+                _ => None,
             }),
         ])
     }
