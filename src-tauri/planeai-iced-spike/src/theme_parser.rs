@@ -18,7 +18,14 @@ pub struct ParsedThemeCss {
 /// Parse a theme CSS string into light (`:root`) and dark (`.dark`) color maps.
 pub fn parse_theme_css(css: &str) -> ParsedThemeCss {
     let mut result = ParsedThemeCss::default();
-    let mut target: Option<&mut ColorMap> = None;
+
+    #[derive(Clone, Copy)]
+    enum Block {
+        Light,
+        Dark,
+    }
+
+    let mut active: Option<Block> = None;
     let mut depth = 0u32;
 
     for line in css.lines() {
@@ -28,59 +35,54 @@ pub fn parse_theme_css(css: &str) -> ParsedThemeCss {
             continue;
         }
 
-        if trimmed.starts_with(":root") {
-            target = Some(&mut result.light);
-            if trimmed.contains('{') {
-                depth += 1;
-            }
-            // Handle inline content after `{`
-            if let Some(after) = trimmed.split('{').nth(1) {
-                let after = after.trim().trim_end_matches('}');
-                if let Some(ref mut map) = target {
-                    if let Some((name, rgb)) = parse_variable_line(after) {
-                        map.insert(name, rgb);
-                    }
-                }
-                if trimmed.contains('}') {
-                    depth = 0;
-                    target = None;
-                }
-            }
-            continue;
-        }
-        if trimmed.starts_with(".dark") {
-            target = Some(&mut result.dark);
+        // Detect block entry
+        let entering = if trimmed.starts_with(":root") {
+            Some(Block::Light)
+        } else if trimmed.starts_with(".dark") {
+            Some(Block::Dark)
+        } else {
+            None
+        };
+
+        if let Some(block) = entering {
+            active = Some(block);
             if trimmed.contains('{') {
                 depth += 1;
             }
             if let Some(after) = trimmed.split('{').nth(1) {
                 let after = after.trim().trim_end_matches('}');
-                if let Some(ref mut map) = target {
-                    if let Some((name, rgb)) = parse_variable_line(after) {
-                        map.insert(name, rgb);
-                    }
+                let map = match block {
+                    Block::Light => &mut result.light,
+                    Block::Dark => &mut result.dark,
+                };
+                if let Some((name, rgb)) = parse_variable_line(after) {
+                    map.insert(name, rgb);
                 }
                 if trimmed.contains('}') {
                     depth = 0;
-                    target = None;
+                    active = None;
                 }
             }
             continue;
         }
 
-        if trimmed.contains('{') && target.is_some() {
+        if trimmed.contains('{') && active.is_some() {
             depth += 1;
             continue;
         }
         if trimmed.contains('}') {
             depth = depth.saturating_sub(1);
             if depth == 0 {
-                target = None;
+                active = None;
             }
             continue;
         }
 
-        if let Some(ref mut map) = target {
+        if let Some(block) = active {
+            let map = match block {
+                Block::Light => &mut result.light,
+                Block::Dark => &mut result.dark,
+            };
             if let Some((name, rgb)) = parse_variable_line(trimmed) {
                 map.insert(name, rgb);
             }
