@@ -371,17 +371,16 @@ cargo run --release -p planeai-iced-spike --bin planeai-domain-smoke -- \
 
 Verifies: project resolved, session record, daemon start, output, detach/reattach, status destroyed, durable log linked, bytes_dropped=0.
 
-
 ## Worktree Audit Findings (PLA-123)
 
 ### Where worktrees are created
 
-| Path | Role |
-|------|------|
-| `planeai-core/src/git.rs` → `worktree_add()` | Raw git worktree add command |
+| Path                                                            | Role                                                     |
+| --------------------------------------------------------------- | -------------------------------------------------------- |
+| `planeai-core/src/git.rs` → `worktree_add()`                    | Raw git worktree add command                             |
 | `planeai-core/src/session.rs` → `SessionDispatcher::dispatch()` | Auto-dispatch orchestrator calls backend.create_worktree |
-| `src-tauri/src/session_ops.rs` | Tauri GUI manual launch creates worktree |
-| `src-tauri/src/cli.rs` | CLI `build_session_plan()` creates worktree |
+| `src-tauri/src/session_ops.rs`                                  | Tauri GUI manual launch creates worktree                 |
+| `src-tauri/src/cli.rs`                                          | CLI `build_session_plan()` creates worktree              |
 
 ### Worktree root
 
@@ -421,6 +420,7 @@ No explicit detection. System relies on fresh UUID-based short_id per session (c
 ### Cleanup
 
 Three-step in `cleanup.rs` on session destroy:
+
 1. `git worktree remove --force {worktree_path}` (from project repo path)
 2. `fs::remove_dir_all(worktree_path)` (fallback)
 3. `git branch -D {branch}` (from project repo path)
@@ -436,6 +436,7 @@ Only runs if `session.worktree_path` is `Some(...)`.
 ### Session record worktree fields
 
 Schema columns:
+
 - `worktree_path TEXT` — NULL for checkout mode
 - `branch TEXT NOT NULL` — feature branch name
 - `base_branch TEXT` — resolved base branch

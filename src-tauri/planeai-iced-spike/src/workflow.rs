@@ -226,6 +226,30 @@ impl WorkflowApp {
             Vec::new()
         };
 
+        // Stale worktree cleanup (fire-and-forget background thread)
+        if let Some(ref db) = db {
+            let db_clone = db.clone();
+            std::thread::spawn(move || {
+                let conn = db_clone.lock().unwrap();
+                let errors = planeai_core::cleanup::cleanup_stale_worktrees(
+                    &conn,
+                    |project_path, wt_path| {
+                        if !std::path::Path::new(wt_path).exists() {
+                            return Ok(());
+                        }
+                        let _ = planeai_core::git::worktree_remove(project_path, wt_path);
+                        if std::path::Path::new(wt_path).exists() {
+                            std::fs::remove_dir_all(wt_path).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    },
+                );
+                for e in &errors {
+                    eprintln!("[stale worktree cleanup] {e}");
+                }
+            });
+        }
+
         let agent_command = resolved.command_label.clone();
         let extra_path_dirs = resolved.request.extra_path_dirs.clone();
         let provider_label = resolved.provider_label.clone().unwrap_or_default();
