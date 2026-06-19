@@ -48,7 +48,6 @@ pub enum NavItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SidebarAction {
-    None,
     SwitchSession(String),
     FocusTerminal,
 }
@@ -183,38 +182,38 @@ impl SidebarState {
     }
 
     /// Handle a key press. Returns a SidebarAction if the key triggered one.
-    pub fn handle_key(&mut self, key: &str) -> SidebarAction {
+    pub fn handle_key(&mut self, key: &str) -> Option<SidebarAction> {
         match key {
             "j" | "ArrowDown" => {
                 if !self.flat_nav.is_empty() {
                     self.selected_index = (self.selected_index + 1).min(self.flat_nav.len() - 1);
                 }
-                SidebarAction::None
+                None
             }
             "k" | "ArrowUp" => {
                 self.selected_index = self.selected_index.saturating_sub(1);
-                SidebarAction::None
+                None
             }
             "h" | "ArrowLeft" => {
                 self.collapse_current();
-                SidebarAction::None
+                None
             }
             "l" | "ArrowRight" => {
                 self.expand_current();
-                SidebarAction::None
+                None
             }
             "Enter" => self.select_current(),
-            "Escape" => SidebarAction::FocusTerminal,
-            _ => SidebarAction::None,
+            "Escape" => Some(SidebarAction::FocusTerminal),
+            _ => None,
         }
     }
 
-    fn select_current(&mut self) -> SidebarAction {
+    fn select_current(&mut self) -> Option<SidebarAction> {
         match self.flat_nav.get(self.selected_index).cloned() {
             Some(NavItem::ProjectHeader { project_id, .. }) => {
                 self.toggle_section(&format!("project:{}", project_id));
                 self.rebuild_flat_nav();
-                SidebarAction::None
+                None
             }
             Some(NavItem::StatusHeader {
                 project_path,
@@ -223,20 +222,16 @@ impl SidebarState {
             }) => {
                 self.toggle_section(&format!("{}:{}", project_path, status));
                 self.rebuild_flat_nav();
-                SidebarAction::None
+                None
             }
             Some(NavItem::OrphanSession { session_id, .. }) => {
-                SidebarAction::SwitchSession(session_id)
+                Some(SidebarAction::SwitchSession(session_id))
             }
             Some(NavItem::Task {
                 linked_session_id: Some(sid),
                 ..
-            }) => SidebarAction::SwitchSession(sid),
-            Some(NavItem::Task {
-                linked_session_id: None,
-                ..
-            }) => SidebarAction::None,
-            None => SidebarAction::None,
+            }) => Some(SidebarAction::SwitchSession(sid)),
+            _ => None,
         }
     }
 
@@ -759,7 +754,7 @@ mod tests {
         // nav[0] = ProjectHeader, nav[1] = OrphanSession
         sidebar.handle_key("j"); // move to orphan
         let action = sidebar.handle_key("Enter");
-        assert_eq!(action, SidebarAction::SwitchSession("sess-abc".to_string()));
+        assert_eq!(action, Some(SidebarAction::SwitchSession("sess-abc".to_string())));
     }
 
     #[test]
@@ -801,7 +796,7 @@ mod tests {
         let action = sidebar.handle_key("Enter");
         assert_eq!(
             action,
-            SidebarAction::SwitchSession("sess-linked".to_string())
+            Some(SidebarAction::SwitchSession("sess-linked".to_string()))
         );
     }
 
@@ -812,6 +807,6 @@ mod tests {
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
         let action = sidebar.handle_key("Escape");
-        assert_eq!(action, SidebarAction::FocusTerminal);
+        assert_eq!(action, Some(SidebarAction::FocusTerminal));
     }
 }

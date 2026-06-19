@@ -2225,23 +2225,22 @@ impl WorkflowApp {
                     };
                     if !key_str.is_empty() {
                         if let Some(ref mut sidebar) = self.sidebar {
-                            let action = sidebar.handle_key(key_str);
-                            match action {
-                                SidebarAction::FocusTerminal => {
-                                    self.sidebar_focused = false;
-                                }
-                                SidebarAction::SwitchSession(sid) => {
-                                    if let Some(idx) =
-                                        self.sessions.iter().position(|s| s.session_id == sid)
-                                    {
-                                        self.switch_to(idx);
-                                    } else {
-                                        // Session not attached locally — attach it
-                                        self.attach_session(sid);
+                            if let Some(action) = sidebar.handle_key(key_str) {
+                                match action {
+                                    SidebarAction::FocusTerminal => {
+                                        self.sidebar_focused = false;
                                     }
-                                    self.sidebar_focused = false;
+                                    SidebarAction::SwitchSession(sid) => {
+                                        if let Some(idx) =
+                                            self.sessions.iter().position(|s| s.session_id == sid)
+                                        {
+                                            self.switch_to(idx);
+                                        } else {
+                                            self.attach_session(sid);
+                                        }
+                                        self.sidebar_focused = false;
+                                    }
                                 }
-                                SidebarAction::None => {}
                             }
                         }
                     }
