@@ -1451,7 +1451,7 @@ impl WorkflowApp {
             session.snapshot = snapshot_grid(&session.term);
             session.cache.clear();
             if let Some(ref mut sidebar) = self.sidebar {
-                sidebar.active_session_id = Some(self.sessions[idx].session_id.clone());
+                sidebar.set_active_session(Some(self.sessions[idx].session_id.clone()));
             }
         }
     }
@@ -2287,8 +2287,9 @@ impl WorkflowApp {
                     }
                     // Update active session indicator
                     if let Some(ref mut sidebar) = self.sidebar {
-                        sidebar.active_session_id =
-                            self.sessions.get(self.active).map(|s| s.session_id.clone());
+                        sidebar.set_active_session(
+                            self.sessions.get(self.active).map(|s| s.session_id.clone()),
+                        );
                     }
                     self.last_sidebar_refresh = Some(now_sidebar);
                 }

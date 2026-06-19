@@ -84,7 +84,7 @@ pub struct SidebarState {
     pub width: f32,
     resizing: bool,
     last_cursor_x: f32,
-    pub active_session_id: Option<String>,
+    active_session_id: Option<String>,
     // Cached data from last refresh
     cached_projects: Vec<services::Project>,
     cached_sessions: Vec<SessionRecord>,
@@ -179,6 +179,10 @@ impl SidebarState {
 
     pub fn is_resizing(&self) -> bool {
         self.resizing
+    }
+
+    pub fn set_active_session(&mut self, id: Option<String>) {
+        self.active_session_id = id;
     }
 
     /// Handle a key press. Returns a SidebarAction if the key triggered one.
