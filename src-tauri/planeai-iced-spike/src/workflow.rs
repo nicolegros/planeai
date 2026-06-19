@@ -194,7 +194,7 @@ struct WorkflowApp {
     // Sidebar
     sidebar: Option<SidebarState>,
     sidebar_focused: bool,
-    last_sidebar_refresh: Option<Instant>,
+    sidebar_dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -381,7 +381,7 @@ impl WorkflowApp {
                 provider_keys: Vec::new(),
                 sidebar: None,
                 sidebar_focused: false,
-                last_sidebar_refresh: None,
+                sidebar_dirty: true, // trigger initial load
             },
             iced::Task::none(),
         );
@@ -553,6 +553,7 @@ impl WorkflowApp {
                 });
                 self.active = self.sessions.len() - 1;
                 self.clear_error();
+                self.sidebar_dirty = true;
             }
             Err(e) => {
                 self.set_error(format!("Attach failed: {}", e));
@@ -577,6 +578,7 @@ impl WorkflowApp {
             self.active = self.sessions.len() - 1;
         }
         self.refresh_daemon_list();
+        self.sidebar_dirty = true;
     }
 
     fn kill_active(&mut self) {
@@ -645,6 +647,7 @@ impl WorkflowApp {
             self.active = self.sessions.len() - 1;
         }
         self.refresh_daemon_list();
+        self.sidebar_dirty = true;
     }
 
     fn refresh_daemon_list(&mut self) {
@@ -1474,9 +1477,7 @@ impl WorkflowApp {
                         self.sidebar_focused = false;
                     }
                     SidebarAction::SwitchSession(sid) => {
-                        if let Some(idx) =
-                            self.sessions.iter().position(|s| s.session_id == sid)
-                        {
+                        if let Some(idx) = self.sessions.iter().position(|s| s.session_id == sid) {
                             self.switch_to(idx);
                         } else {
                             self.attach_session(sid);
@@ -1519,6 +1520,7 @@ impl WorkflowApp {
         self.recent_projects = add_recent_project(&expanded);
         self.refresh_persisted_sessions();
         self.clear_error();
+        self.sidebar_dirty = true;
     }
 
     fn open_log_replay(&mut self) {
@@ -2271,13 +2273,9 @@ impl WorkflowApp {
 
                 self.check_daemon_health();
 
-                // Sidebar: lazy init and periodic refresh (every 2s)
-                let now_sidebar = Instant::now();
-                let should_refresh_sidebar = self
-                    .last_sidebar_refresh
-                    .map(|t| now_sidebar.duration_since(t) >= Duration::from_secs(2))
-                    .unwrap_or(true);
-                if should_refresh_sidebar {
+                // Sidebar: refresh only when data changed (dirty flag)
+                if self.sidebar_dirty {
+                    self.sidebar_dirty = false;
                     if let Some(ref db) = self.db {
                         if let Ok(conn) = db.lock() {
                             let db_path = planeai_core::app_data_dir().join("planeai.db");
@@ -2288,13 +2286,11 @@ impl WorkflowApp {
                             }
                         }
                     }
-                    // Update active session indicator
                     if let Some(ref mut sidebar) = self.sidebar {
                         sidebar.set_active_session(
                             self.sessions.get(self.active).map(|s| s.session_id.clone()),
                         );
                     }
-                    self.last_sidebar_refresh = Some(now_sidebar);
                 }
 
                 // Drain output from all sessions
@@ -2323,6 +2319,7 @@ impl WorkflowApp {
                         && s.backend.has_exited()
                     {
                         s.status = SessionStatus::Exited;
+                        self.sidebar_dirty = true;
                         // Mark exited in DB and fire lifecycle hook
                         if let Some(ref db) = self.db {
                             if let Ok(conn) = db.lock() {

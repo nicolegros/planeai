@@ -304,7 +304,11 @@ impl SidebarState {
             };
             let label = match item {
                 NavItem::ProjectHeader { name, .. } => {
-                    let arrow = if self.is_collapsed(item) { "▶" } else { "▼" };
+                    let arrow = if self.is_collapsed(item) {
+                        "▶"
+                    } else {
+                        "▼"
+                    };
                     format!("{} {}", arrow, name.to_uppercase())
                 }
                 NavItem::OrphanSession { name, status, .. } => {
@@ -318,7 +322,11 @@ impl SidebarState {
                     format!("  {} {}", icon, name)
                 }
                 NavItem::StatusHeader { status, count, .. } => {
-                    let arrow = if self.is_collapsed(item) { "▶" } else { "▼" };
+                    let arrow = if self.is_collapsed(item) {
+                        "▶"
+                    } else {
+                        "▼"
+                    };
                     format!("  {} {} ({})", arrow, status_label(status), count)
                 }
                 NavItem::Task {
@@ -756,7 +764,10 @@ mod tests {
         // nav[0] = ProjectHeader, nav[1] = OrphanSession
         sidebar.handle_key("j"); // move to orphan
         let action = sidebar.handle_key("Enter");
-        assert_eq!(action, Some(SidebarAction::SwitchSession("sess-abc".to_string())));
+        assert_eq!(
+            action,
+            Some(SidebarAction::SwitchSession("sess-abc".to_string()))
+        );
     }
 
     #[test]
