@@ -1,3 +1,4 @@
+pub mod cleanup;
 pub mod command;
 pub mod dispatch;
 pub mod git;
