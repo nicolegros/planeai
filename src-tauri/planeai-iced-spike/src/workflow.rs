@@ -502,20 +502,24 @@ impl WorkflowApp {
             if let Ok(conn) = db.lock() {
                 if let Ok(Some(rec)) = SessionService::get(&conn, &session_id_for_cleanup) {
                     if let Some(ref wt_path) = rec.worktree_path {
-                        let project_path = ProjectService::get_by_id(&conn, &rec.project_id)
-                            .ok()
-                            .flatten()
-                            .map(|p| p.path)
-                            .unwrap_or_else(|| self.project_cwd.to_string_lossy().to_string());
-                        let branch = if rec.branch.is_empty() {
-                            None
+                        if let Ok(Some(proj)) = ProjectService::get_by_id(&conn, &rec.project_id) {
+                            let branch = if rec.branch.is_empty() {
+                                None
+                            } else {
+                                Some(rec.branch.as_str())
+                            };
+                            let errors = planeai_core::cleanup::cleanup_worktree(
+                                &proj.path, wt_path, branch,
+                            );
+                            if !errors.is_empty() {
+                                tracing::warn!(errors = ?errors, "worktree cleanup errors");
+                            }
                         } else {
-                            Some(rec.branch.as_str())
-                        };
-                        let errors =
-                            planeai_core::cleanup::cleanup_worktree(&project_path, wt_path, branch);
-                        if !errors.is_empty() {
-                            tracing::warn!(errors = ?errors, "worktree cleanup errors");
+                            tracing::error!(
+                                session_id = %session_id_for_cleanup,
+                                project_id = %rec.project_id,
+                                "cannot resolve project for worktree cleanup — skipping"
+                            );
                         }
                     }
                 }
