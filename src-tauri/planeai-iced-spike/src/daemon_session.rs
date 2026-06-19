@@ -308,7 +308,7 @@ impl DaemonSession {
     pub fn spawn(id: usize, cols: u16, rows: u16, command: Option<&str>) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
-        let session_id = format!("iced-{}-{}", id, std::process::id());
+        let session_id = uuid::Uuid::new_v4().to_string();
         let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
@@ -461,9 +461,25 @@ impl DaemonSession {
         cwd: &std::path::Path,
         extra_path_dirs: &[String],
     ) -> anyhow::Result<Self> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        Self::spawn_with_session_id(id, &session_id, cols, rows, command, cwd, extra_path_dirs)
+    }
+
+    /// Spawn a daemon session using a preallocated session ID.
+    /// This allows the caller to create the DB record first, then spawn the daemon
+    /// using the same ID — preventing orphan daemon sessions.
+    pub fn spawn_with_session_id(
+        id: usize,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        cwd: &std::path::Path,
+        extra_path_dirs: &[String],
+    ) -> anyhow::Result<Self> {
         ensure_daemon_running_sync()?;
 
-        let session_id = format!("iced-{}-{}", id, std::process::id());
+        let session_id = session_id.to_string();
         let cmd = command.ok_or_else(|| anyhow::anyhow!("no command specified"))?;
 
         let launch_req = planeai_core::session_launch::CreateSessionRequest {
@@ -521,87 +537,125 @@ impl DaemonSession {
         })?;
         let spawn_latency_ms = spawn_start.elapsed().as_secs_f64() * 1000.0;
 
-        rt.block_on(async {
-            send_control_command(
-                &socket,
-                &serde_json::json!({
-                    "cmd": "resize",
-                    "session_id": &session_id,
-                    "cols": cols,
-                    "rows": rows,
-                }),
-            )
-            .await
-        })?;
+        // Post-spawn setup: if any step fails, kill the daemon session to avoid orphan.
+        let post_spawn_result: anyhow::Result<Self> = (|| {
+            rt.block_on(async {
+                send_control_command(
+                    &socket,
+                    &serde_json::json!({
+                        "cmd": "resize",
+                        "session_id": &session_id,
+                        "cols": cols,
+                        "rows": rows,
+                    }),
+                )
+                .await
+            })?;
 
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let buf_not_full = Arc::new(Condvar::new());
-        let exited = Arc::new(AtomicBool::new(false));
-        let max_pending = Arc::new(AtomicU64::new(0));
-        let recv_bytes = Arc::new(AtomicU64::new(0));
-        let send_calls = Arc::new(AtomicU64::new(0));
-        let send_bytes_counter = Arc::new(AtomicU64::new(0));
-        let block_count = Arc::new(AtomicU64::new(0));
-        let block_ns = Arc::new(AtomicU64::new(0));
+            let buf = Arc::new(Mutex::new(Vec::new()));
+            let buf_not_full = Arc::new(Condvar::new());
+            let exited = Arc::new(AtomicBool::new(false));
+            let max_pending = Arc::new(AtomicU64::new(0));
+            let recv_bytes = Arc::new(AtomicU64::new(0));
+            let send_calls = Arc::new(AtomicU64::new(0));
+            let send_bytes_counter = Arc::new(AtomicU64::new(0));
+            let block_count = Arc::new(AtomicU64::new(0));
+            let block_ns = Arc::new(AtomicU64::new(0));
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
+            let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
 
-        let attach_start = Instant::now();
-        let buf_clone = buf.clone();
-        let buf_not_full_clone = buf_not_full.clone();
-        let exited_clone = exited.clone();
-        let max_pending_clone = max_pending.clone();
-        let recv_bytes_clone = recv_bytes.clone();
-        let block_count_clone = block_count.clone();
-        let block_ns_clone = block_ns.clone();
-        let sid = session_id.clone();
-        let socket_clone = socket.clone();
+            let attach_start = Instant::now();
+            let buf_clone = buf.clone();
+            let buf_not_full_clone = buf_not_full.clone();
+            let exited_clone = exited.clone();
+            let max_pending_clone = max_pending.clone();
+            let recv_bytes_clone = recv_bytes.clone();
+            let block_count_clone = block_count.clone();
+            let block_ns_clone = block_ns.clone();
+            let sid = session_id.clone();
+            let socket_clone = socket.clone();
 
-        rt.spawn(async move {
-            if let Err(e) = data_loop(
-                &socket_clone,
-                &sid,
-                input_rx,
-                buf_clone,
-                buf_not_full_clone,
-                exited_clone,
-                max_pending_clone,
-                recv_bytes_clone,
-                block_count_clone,
-                block_ns_clone,
-            )
-            .await
-            {
-                tracing::debug!("daemon data loop ended: {e}");
+            // Use oneshot to gate on data connection handshake before returning Ok
+            let (handshake_tx, handshake_rx) =
+                tokio::sync::oneshot::channel::<Result<(), String>>();
+
+            rt.spawn(async move {
+                match data_loop_connect(&socket_clone, &sid).await {
+                    Ok((reader, writer)) => {
+                        let _ = handshake_tx.send(Ok(()));
+                        data_loop_run(
+                            reader,
+                            writer,
+                            input_rx,
+                            buf_clone,
+                            buf_not_full_clone,
+                            exited_clone,
+                            max_pending_clone,
+                            recv_bytes_clone,
+                            block_count_clone,
+                            block_ns_clone,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        let _ = handshake_tx.send(Err(e.to_string()));
+                    }
+                }
+            });
+
+            // Wait for handshake result
+            let handshake_result = rt.block_on(handshake_rx);
+            match handshake_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => anyhow::bail!("data connection failed: {e}"),
+                Err(_) => anyhow::bail!("data connection task died before handshake"),
             }
-        });
 
-        let sid_resize = session_id.clone();
-        let socket_resize = socket.clone();
-        rt.spawn(async move {
-            resize_loop(&socket_resize, &sid_resize, resize_rx).await;
-        });
+            let sid_resize = session_id.clone();
+            let socket_resize = socket.clone();
+            rt.spawn(async move {
+                resize_loop(&socket_resize, &sid_resize, resize_rx).await;
+            });
 
-        let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
+            let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
 
-        Ok(Self {
-            id,
-            session_id,
-            buf,
-            buf_not_full,
-            exited,
-            max_pending,
-            input_tx,
-            resize_tx,
-            recv_bytes,
-            send_calls,
-            send_bytes: send_bytes_counter,
-            block_count,
-            block_ns,
-            spawn_latency_ms,
-            attach_latency_ms,
-        })
+            Ok(Self {
+                id,
+                session_id: session_id.clone(),
+                buf,
+                buf_not_full,
+                exited,
+                max_pending,
+                input_tx,
+                resize_tx,
+                recv_bytes,
+                send_calls,
+                send_bytes: send_bytes_counter,
+                block_count,
+                block_ns,
+                spawn_latency_ms,
+                attach_latency_ms,
+            })
+        })();
+
+        match post_spawn_result {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                // Kill the daemon session to prevent orphan
+                let _ = rt.block_on(async {
+                    send_control_command(
+                        &socket,
+                        &serde_json::json!({
+                            "cmd": "kill",
+                            "session_id": &session_id,
+                        }),
+                    )
+                    .await
+                });
+                Err(e)
+            }
+        }
     }
 
     pub fn spawn_latency_ms(&self) -> f64 {
@@ -685,9 +739,23 @@ impl PlaneAiTerminalSession for DaemonSession {
 
 /// Async data loop: reads output frames from daemon, writes to bounded buffer.
 #[allow(clippy::too_many_arguments)]
-async fn data_loop(
+async fn data_loop_connect(
     socket: &std::path::Path,
     session_id: &str,
+) -> anyhow::Result<(
+    tokio::io::ReadHalf<AsyncIpcStream>,
+    tokio::io::WriteHalf<AsyncIpcStream>,
+)> {
+    let mut stream = AsyncIpcStream::connect(socket).await?;
+    stream.write_all(&[CONN_DATA]).await?;
+    write_frame(&mut stream, FRAME_OUTPUT, session_id.as_bytes()).await?;
+    Ok(tokio::io::split(stream))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn data_loop_run(
+    mut reader: tokio::io::ReadHalf<AsyncIpcStream>,
+    mut writer: tokio::io::WriteHalf<AsyncIpcStream>,
     mut input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     buf: Arc<Mutex<Vec<u8>>>,
     buf_not_full: Arc<Condvar>,
@@ -696,15 +764,7 @@ async fn data_loop(
     recv_bytes: Arc<AtomicU64>,
     block_count: Arc<AtomicU64>,
     block_ns: Arc<AtomicU64>,
-) -> anyhow::Result<()> {
-    let mut stream = AsyncIpcStream::connect(socket).await?;
-    stream.write_all(&[CONN_DATA]).await?;
-
-    // Handshake: send session_id
-    write_frame(&mut stream, FRAME_OUTPUT, session_id.as_bytes()).await?;
-
-    let (mut reader, mut writer) = tokio::io::split(stream);
-
+) {
     let input_task = tokio::spawn(async move {
         while let Some(data) = input_rx.recv().await {
             if write_frame(&mut writer, FRAME_INPUT, &data).await.is_err() {
@@ -738,6 +798,36 @@ async fn data_loop(
 
     exited.store(true, Ordering::Release);
     input_task.abort();
+}
+
+/// Combined connect+run for legacy callers (attach, old spawn).
+#[allow(clippy::too_many_arguments)]
+async fn data_loop(
+    socket: &std::path::Path,
+    session_id: &str,
+    input_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    buf: Arc<Mutex<Vec<u8>>>,
+    buf_not_full: Arc<Condvar>,
+    exited: Arc<AtomicBool>,
+    max_pending: Arc<AtomicU64>,
+    recv_bytes: Arc<AtomicU64>,
+    block_count: Arc<AtomicU64>,
+    block_ns: Arc<AtomicU64>,
+) -> anyhow::Result<()> {
+    let (reader, writer) = data_loop_connect(socket, session_id).await?;
+    data_loop_run(
+        reader,
+        writer,
+        input_rx,
+        buf,
+        buf_not_full,
+        exited,
+        max_pending,
+        recv_bytes,
+        block_count,
+        block_ns,
+    )
+    .await;
     Ok(())
 }
 
