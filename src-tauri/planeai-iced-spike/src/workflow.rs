@@ -503,7 +503,12 @@ impl WorkflowApp {
             .find(|r| r.id == session.session_id);
         if let Some(rec) = persisted {
             if let Some(ref wt_path) = rec.worktree_path {
-                let project_path = self.project_cwd.to_string_lossy().to_string();
+                // Use the session's original project path from the DB project record
+                let project_path = self
+                    .project
+                    .as_ref()
+                    .map(|p| p.path.clone())
+                    .unwrap_or_else(|| self.project_cwd.to_string_lossy().to_string());
                 let branch = if rec.branch.is_empty() {
                     None
                 } else {
@@ -713,7 +718,14 @@ impl WorkflowApp {
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
-                // Spawn failed — mark DB record as destroyed
+                // Spawn failed — clean up worktree and mark DB record as destroyed
+                if let Some(ref wt) = resolved.worktree_path {
+                    planeai_core::cleanup::cleanup_worktree(
+                        &self.project_cwd.to_string_lossy(),
+                        wt,
+                        Some(&resolved.branch_name),
+                    );
+                }
                 if let Some(ref db) = self.db {
                     if let Ok(conn) = db.lock() {
                         let _ = SessionService::set_status(&conn, &session_id, "destroyed");
