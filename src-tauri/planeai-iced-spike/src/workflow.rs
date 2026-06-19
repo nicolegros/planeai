@@ -1568,6 +1568,7 @@ impl WorkflowApp {
                 }
             }
             Message::SidebarDrag(x) => {
+                // Only track cursor position if sidebar exists; resize check is O(1)
                 if let Some(ref mut sidebar) = self.sidebar {
                     sidebar.handle_mouse_move(x);
                 }

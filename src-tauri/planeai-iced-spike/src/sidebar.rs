@@ -166,10 +166,11 @@ impl SidebarState {
 
     /// Call on mouse move with cursor x position.
     pub fn handle_mouse_move(&mut self, x: f32) {
-        self.last_cursor_x = x;
         if self.resizing {
             self.set_width(x);
         }
+        // Always track for edge detection on next mouse_down
+        self.last_cursor_x = x;
     }
 
     /// Call on mouse button release.
