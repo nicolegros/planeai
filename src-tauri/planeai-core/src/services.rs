@@ -621,6 +621,35 @@ impl SessionService {
     }
 }
 
+// ─── WorktreeMode ────────────────────────────────────────────────────────────
+
+/// Explicit worktree launch mode — shared by Tauri, Iced, and CLI.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorktreeMode {
+    /// Launch in the project root directory (no worktree).
+    None,
+    /// Use an existing worktree at a known path.
+    Existing {
+        path: PathBuf,
+        branch_name: Option<String>,
+    },
+    /// Create a new worktree off a base branch.
+    Create {
+        base_project_path: PathBuf,
+        branch_name: String,
+        task_key: Option<String>,
+    },
+}
+
+/// Result of resolving a WorktreeMode for session launch.
+#[derive(Debug, Clone)]
+pub struct ResolvedWorktree {
+    pub cwd: PathBuf,
+    pub worktree_path: Option<String>,
+    pub branch_name: String,
+    pub base_branch: Option<String>,
+}
+
 // ─── WorktreeService ─────────────────────────────────────────────────────────
 
 pub struct WorktreeService;
@@ -643,6 +672,102 @@ impl WorktreeService {
     /// Generate a branch name from task key and short id.
     pub fn branch_name(task_key: &str, short_id: &str) -> String {
         format!("{}/{}", task_key.to_lowercase().replace(' ', "-"), short_id)
+    }
+
+    /// Compute the short_id from a session UUID (first 8 hex chars, dashes removed).
+    pub fn short_id(session_id: &str) -> String {
+        session_id.replace('-', "")[..8].to_string()
+    }
+
+    /// Validate a branch name (no spaces, no .., no control chars, non-empty).
+    pub fn validate_branch_name(branch: &str) -> Result<(), String> {
+        if branch.is_empty() {
+            return Err("branch name cannot be empty".to_string());
+        }
+        if branch.contains("..") {
+            return Err("branch name cannot contain '..'".to_string());
+        }
+        if branch.contains(' ') {
+            return Err("branch name cannot contain spaces".to_string());
+        }
+        if branch.chars().any(|c| c.is_control()) {
+            return Err("branch name cannot contain control characters".to_string());
+        }
+        if branch.starts_with('-') {
+            return Err("branch name cannot start with '-'".to_string());
+        }
+        if branch.ends_with('.') || branch.ends_with('/') {
+            return Err("branch name cannot end with '.' or '/'".to_string());
+        }
+        Ok(())
+    }
+
+    /// Check if a worktree path already exists on disk.
+    pub fn worktree_exists(project_name: &str, short_id: &str) -> bool {
+        Self::worktree_path(project_name, short_id).exists()
+    }
+
+    /// Resolve a WorktreeMode into a concrete cwd and metadata for session creation.
+    ///
+    /// For `WorktreeMode::Create`, this calls `git worktree add` and returns
+    /// the resolved worktree path as the session cwd.
+    pub fn resolve_worktree(
+        mode: &WorktreeMode,
+        project_name: &str,
+        project_path: &Path,
+        session_id: &str,
+        base_branch: &str,
+    ) -> Result<ResolvedWorktree, String> {
+        match mode {
+            WorktreeMode::None => Ok(ResolvedWorktree {
+                cwd: project_path.to_path_buf(),
+                worktree_path: None,
+                branch_name: String::new(),
+                base_branch: None,
+            }),
+            WorktreeMode::Existing { path, branch_name } => {
+                if !path.is_dir() {
+                    return Err(format!(
+                        "existing worktree path does not exist: {}",
+                        path.display()
+                    ));
+                }
+                Ok(ResolvedWorktree {
+                    cwd: path.clone(),
+                    worktree_path: Some(path.to_string_lossy().to_string()),
+                    branch_name: branch_name.clone().unwrap_or_default(),
+                    base_branch: None,
+                })
+            }
+            WorktreeMode::Create {
+                base_project_path,
+                branch_name,
+                task_key,
+            } => {
+                Self::validate_branch_name(branch_name)?;
+                let short_id = Self::short_id(session_id);
+                let wt_path = Self::worktree_path(project_name, &short_id);
+                let wt_path_str = wt_path.to_string_lossy().to_string();
+
+                // Determine the actual branch name — if task_key is provided and
+                // branch follows the convention, use it; otherwise use as-is.
+                let final_branch = if task_key.is_some() && !branch_name.contains('/') {
+                    Self::branch_name(branch_name, &short_id)
+                } else {
+                    branch_name.clone()
+                };
+
+                let repo_path = base_project_path.to_string_lossy();
+                crate::git::worktree_add(&repo_path, &wt_path_str, &final_branch, base_branch)?;
+
+                Ok(ResolvedWorktree {
+                    cwd: wt_path,
+                    worktree_path: Some(wt_path_str),
+                    branch_name: final_branch,
+                    base_branch: Some(base_branch.to_string()),
+                })
+            }
+        }
     }
 }
 

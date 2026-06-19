@@ -23,6 +23,10 @@ path = "src/bin/workflow_smoke.rs"
 name = "planeai-domain-smoke"
 path = "src/bin/domain_smoke.rs"
 
+[[bin]]
+name = "planeai-worktree-smoke"
+path = "src/bin/worktree_smoke.rs"
+
 [dependencies]
 alacritty_terminal = "0.26"
 anyhow = "1"

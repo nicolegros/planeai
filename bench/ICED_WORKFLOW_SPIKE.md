@@ -370,3 +370,79 @@ cargo run --release -p planeai-iced-spike --bin planeai-domain-smoke -- \
 ```
 
 Verifies: project resolved, session record, daemon start, output, detach/reattach, status destroyed, durable log linked, bytes_dropped=0.
+
+
+## Worktree Audit Findings (PLA-123)
+
+### Where worktrees are created
+
+| Path | Role |
+|------|------|
+| `planeai-core/src/git.rs` → `worktree_add()` | Raw git worktree add command |
+| `planeai-core/src/session.rs` → `SessionDispatcher::dispatch()` | Auto-dispatch orchestrator calls backend.create_worktree |
+| `src-tauri/src/session_ops.rs` | Tauri GUI manual launch creates worktree |
+| `src-tauri/src/cli.rs` | CLI `build_session_plan()` creates worktree |
+
+### Worktree root
+
+Convention: `~/.planeai/worktrees/{project_name}/{short_id}`
+
+- `WorktreeService::worktree_root(project_name)` → `$HOME/.planeai/worktrees/{project_name}`
+- Auto-dispatch uses `dispatch_config.worktree_root` (configurable) + project_name + short_id
+
+### Worktree/path naming
+
+- `short_id` = first 8 hex chars of UUID with dashes removed: `&session_id.replace('-', "")[..8]`
+- Full path: `{worktree_root}/{project_name}/{short_id}`
+
+### Branch naming
+
+- Auto-dispatch: `{task_key_lower}/{short_id}` (spaces→dashes)
+- Manual: user-provided branch name
+- `WorktreeService::branch_name(task_key, short_id)` → `{task_key_lower}/{short_id}`
+
+### How git worktree add is called
+
+```rust
+// planeai-core/src/git.rs
+pub fn worktree_add(repo_path, worktree_path, new_branch, base_branch) {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
+    Command::new("git").args(["worktree", "add", "-b", new_branch, worktree_path, &resolved])
+        .current_dir(repo_path)
+}
+```
+
+Base branch resolution: fetches `origin/{name}` first, falls back to local `{name}`.
+
+### Existing worktree detection
+
+No explicit detection. System relies on fresh UUID-based short_id per session (collision astronomically unlikely). `git worktree add` will fail if branch already exists.
+
+### Cleanup
+
+Three-step in `cleanup.rs` on session destroy:
+1. `git worktree remove --force {worktree_path}` (from project repo path)
+2. `fs::remove_dir_all(worktree_path)` (fallback)
+3. `git branch -D {branch}` (from project repo path)
+
+Only runs if `session.worktree_path` is `Some(...)`.
+
+### Session CWD after worktree creation
+
+- Worktree mode: `cwd = worktree_path`
+- Checkout mode: `cwd = project.path`
+- `session_cwd()` helper returns `session.worktree_path.unwrap_or(project.path)`
+
+### Session record worktree fields
+
+Schema columns:
+- `worktree_path TEXT` — NULL for checkout mode
+- `branch TEXT NOT NULL` — feature branch name
+- `base_branch TEXT` — resolved base branch
+- `task_key TEXT` — optional task association
+
+`has_active_checkout()` checks for sessions WHERE `worktree_path IS NULL`.
+
+### Design: no explicit WorktreeMode enum yet
+
+Worktree vs checkout is implicit via `worktree_path IS NULL`. The shared domain model will make this explicit.

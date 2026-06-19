@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use planeai_core::services::{
-    self, CreateSessionParams, ProjectService, SessionRecord, SessionService,
+    self, CreateSessionParams, ProjectService, SessionRecord, SessionService, WorktreeMode,
+    WorktreeService,
 };
 use rusqlite::Connection;
 use std::sync::Mutex;
@@ -141,9 +142,17 @@ struct WorkflowApp {
     db: Option<Arc<Mutex<Connection>>>,
     project: Option<services::Project>,
     persisted_sessions: Vec<SessionRecord>,
+    // Worktree launch mode
+    worktree_prompt: bool,
+    worktree_branch_input: String,
+    worktree_task_key_input: String,
+    worktree_use_worktree: bool,
+    worktree_computed_path: Option<String>,
+    worktree_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum Message {
     Poll,
     KeyEvent(keyboard::Event),
@@ -152,6 +161,10 @@ enum Message {
     ProjectInputSubmit,
     LaunchPromptChanged(String),
     LaunchPromptSubmit,
+    WorktreeBranchChanged(String),
+    WorktreeTaskKeyChanged(String),
+    WorktreeToggle,
+    WorktreeLaunchSubmit,
 }
 
 impl WorkflowApp {
@@ -266,6 +279,12 @@ impl WorkflowApp {
                 db,
                 project,
                 persisted_sessions,
+                worktree_prompt: false,
+                worktree_branch_input: String::new(),
+                worktree_task_key_input: String::new(),
+                worktree_use_worktree: false,
+                worktree_computed_path: None,
+                worktree_error: None,
             },
             iced::Task::none(),
         );
@@ -528,6 +547,160 @@ impl WorkflowApp {
         None
     }
 
+    /// Launch a session in worktree mode: create worktree, persist record, spawn daemon.
+    fn launch_session_in_worktree(&mut self) {
+        if self.agent_command.is_empty() {
+            self.set_error("No provider command configured.".into());
+            return;
+        }
+        if !self.daemon_connected {
+            self.set_error("Daemon unavailable.".into());
+            return;
+        }
+        let branch = self.worktree_branch_input.trim().to_string();
+        if let Err(e) = WorktreeService::validate_branch_name(&branch) {
+            self.worktree_error = Some(e);
+            return;
+        }
+
+        let project_name = self
+            .project_cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+
+        let task_key = if self.worktree_task_key_input.trim().is_empty() {
+            None
+        } else {
+            Some(self.worktree_task_key_input.trim().to_string())
+        };
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mode = WorktreeMode::Create {
+            base_project_path: self.project_cwd.clone(),
+            branch_name: branch.clone(),
+            task_key: task_key.clone(),
+        };
+
+        // Detect base branch
+        let base_branch =
+            match planeai_core::git::detect_default_branch(&self.project_cwd.to_string_lossy()) {
+                Ok(b) => b,
+                Err(_) => "main".to_string(),
+            };
+
+        // Resolve worktree (creates it on disk)
+        let resolved = match WorktreeService::resolve_worktree(
+            &mode,
+            &project_name,
+            &self.project_cwd,
+            &session_id,
+            &base_branch,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                self.worktree_error = Some(format!("Worktree creation failed: {e}"));
+                return;
+            }
+        };
+
+        // Persist session record BEFORE spawning
+        let db_clone = self.db.clone();
+        let project_id = self.project.as_ref().map(|p| p.id.clone());
+        if let (Some(db), Some(pid)) = (db_clone, project_id) {
+            match db.lock() {
+                Ok(conn) => {
+                    let params = CreateSessionParams {
+                        id: session_id.clone(),
+                        project_id: pid,
+                        name: self.provider_label.clone(),
+                        backend: "daemon".to_string(),
+                        auto_approve: true,
+                        branch: resolved.branch_name.clone(),
+                        worktree_path: resolved.worktree_path.clone(),
+                        task_key: task_key.clone(),
+                        base_branch: resolved.base_branch.clone(),
+                        ..Default::default()
+                    };
+                    if let Err(e) = SessionService::create(&conn, &params) {
+                        self.set_error(format!("DB persist failed: {e}"));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    self.set_error(format!("DB lock failed: {e}"));
+                    return;
+                }
+            }
+        }
+
+        // Spawn daemon in the worktree cwd
+        let id = self.next_id;
+        self.next_id += 1;
+        let result = DaemonSession::spawn_with_session_id(
+            id,
+            &session_id,
+            self.cols as u16,
+            self.rows as u16,
+            Some(&self.agent_command),
+            &resolved.cwd,
+            &self.extra_path_dirs,
+        );
+        match result {
+            Ok(backend) => {
+                let term = new_term(self.cols, self.rows);
+                let processor = new_processor();
+                let snapshot = snapshot_grid(&term);
+                let log_file_exists = self.check_log_exists(&session_id);
+                self.sessions.push(Session {
+                    id,
+                    session_id: session_id.clone(),
+                    command: self.agent_command.clone(),
+                    cwd: resolved.cwd,
+                    status: SessionStatus::Running,
+                    backend: Box::new(backend),
+                    term,
+                    processor,
+                    snapshot,
+                    cache: Cache::new(),
+                    bytes_processed: 0,
+                    log_file_exists,
+                });
+                self.active = self.sessions.len() - 1;
+                self.worktree_prompt = false;
+                self.worktree_branch_input.clear();
+                self.worktree_task_key_input.clear();
+                self.worktree_error = None;
+                self.clear_error();
+                self.refresh_persisted_sessions();
+            }
+            Err(e) => {
+                // Spawn failed — mark DB record as destroyed
+                if let Some(ref db) = self.db {
+                    if let Ok(conn) = db.lock() {
+                        let _ = SessionService::set_status(&conn, &session_id, "destroyed");
+                    }
+                }
+                self.set_error(format!("Launch failed: {e}"));
+                self.refresh_persisted_sessions();
+            }
+        }
+    }
+
+    /// Recompute the worktree preview path for the current inputs.
+    fn update_worktree_preview(&mut self) {
+        let project_name = self
+            .project_cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+        // Use a dummy session_id for preview
+        let preview_id = "00000000-0000-0000-0000-000000000000";
+        let short = WorktreeService::short_id(preview_id);
+        let path = WorktreeService::worktree_path(&project_name, &short);
+        self.worktree_computed_path = Some(path.to_string_lossy().to_string());
+    }
+
     fn check_daemon_health(&mut self) {
         let now = Instant::now();
         let should_check = self
@@ -684,6 +857,28 @@ impl WorkflowApp {
                 self.launch_prompt_input.clear();
                 self.launch_session_with_command(&cmd);
             }
+            Message::WorktreeBranchChanged(val) => {
+                self.worktree_branch_input = val;
+                self.worktree_error = None;
+                self.update_worktree_preview();
+            }
+            Message::WorktreeTaskKeyChanged(val) => {
+                self.worktree_task_key_input = val;
+            }
+            Message::WorktreeToggle => {
+                self.worktree_use_worktree = !self.worktree_use_worktree;
+                if self.worktree_use_worktree {
+                    self.update_worktree_preview();
+                }
+            }
+            Message::WorktreeLaunchSubmit => {
+                if self.worktree_use_worktree {
+                    self.launch_session_in_worktree();
+                } else {
+                    self.worktree_prompt = false;
+                    self.launch_session();
+                }
+            }
             Message::WindowResized(size) => {
                 let cw = 9.0f32;
                 let ch = 18.0f32;
@@ -726,6 +921,15 @@ impl WorkflowApp {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.launch_prompt = false;
                         self.launch_prompt_input.clear();
+                    }
+                    return;
+                }
+
+                // Worktree prompt mode
+                if self.worktree_prompt {
+                    if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
+                        self.worktree_prompt = false;
+                        self.worktree_error = None;
                     }
                     return;
                 }
@@ -794,6 +998,20 @@ impl WorkflowApp {
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n")
                 {
                     self.launch_session();
+                    self.kill_armed = false;
+                    return;
+                }
+
+                // Cmd+B — worktree launch prompt
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "b")
+                {
+                    self.worktree_prompt = !self.worktree_prompt;
+                    if self.worktree_prompt {
+                        self.worktree_use_worktree = true;
+                        self.update_worktree_preview();
+                    }
                     self.kill_armed = false;
                     return;
                 }
@@ -1045,11 +1263,22 @@ impl WorkflowApp {
                 })
                 .unwrap_or("");
             let task_display = persisted.and_then(|r| r.task_key.as_deref()).unwrap_or("");
+            let wt_indicator = if persisted.and_then(|r| r.worktree_path.as_ref()).is_some() {
+                "🌿"
+            } else {
+                ""
+            };
             let extra_meta = match (branch_display.is_empty(), task_display.is_empty()) {
-                (false, false) => format!(" [{task_display}:{branch_display}]"),
-                (false, true) => format!(" [{branch_display}]"),
-                (true, false) => format!(" [{task_display}]"),
-                (true, true) => String::new(),
+                (false, false) => format!(" {wt_indicator}[{task_display}:{branch_display}]"),
+                (false, true) => format!(" {wt_indicator}[{branch_display}]"),
+                (true, false) => format!(" {wt_indicator}[{task_display}]"),
+                (true, true) => {
+                    if !wt_indicator.is_empty() {
+                        format!(" {wt_indicator}")
+                    } else {
+                        String::new()
+                    }
+                }
             };
             let label = format!(
                 "{}{} {} {} {} {} daemon{}{}{}",
@@ -1269,6 +1498,79 @@ impl WorkflowApp {
                 ..Default::default()
             });
             column![prompt, main_content].into()
+        } else if self.worktree_prompt {
+            let mut wt_col = column![].spacing(4).width(Length::Fill).padding(6);
+            let project_name = self
+                .project_cwd
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "project".to_string());
+            wt_col = wt_col.push(
+                text(format!("Worktree Launch — project: {}", project_name))
+                    .size(12)
+                    .color(Color::from_rgb8(180, 220, 255))
+                    .font(Font::MONOSPACE),
+            );
+            let mode_label = if self.worktree_use_worktree {
+                "● Worktree mode (Cmd+B to toggle)"
+            } else {
+                "○ Direct cwd mode (Cmd+B to toggle)"
+            };
+            wt_col = wt_col.push(
+                text(mode_label)
+                    .size(11)
+                    .color(Color::from_rgb8(150, 200, 150))
+                    .font(Font::MONOSPACE),
+            );
+            if self.worktree_use_worktree {
+                wt_col = wt_col.push(
+                    text_input(
+                        "Branch name (e.g. feat/my-feature)...",
+                        &self.worktree_branch_input,
+                    )
+                    .on_input(Message::WorktreeBranchChanged)
+                    .on_submit(Message::WorktreeLaunchSubmit)
+                    .size(13)
+                    .width(Length::Fill),
+                );
+                wt_col = wt_col.push(
+                    text_input(
+                        "Task key (optional, e.g. PLA-42)...",
+                        &self.worktree_task_key_input,
+                    )
+                    .on_input(Message::WorktreeTaskKeyChanged)
+                    .on_submit(Message::WorktreeLaunchSubmit)
+                    .size(13)
+                    .width(Length::Fill),
+                );
+                if let Some(ref path) = self.worktree_computed_path {
+                    wt_col = wt_col.push(
+                        text(format!("→ {}", path))
+                            .size(10)
+                            .color(Color::from_rgb8(120, 150, 180))
+                            .font(Font::MONOSPACE),
+                    );
+                }
+                if let Some(ref err) = self.worktree_error {
+                    wt_col = wt_col.push(
+                        text(format!("⚠ {}", err))
+                            .size(11)
+                            .color(Color::from_rgb8(255, 100, 100))
+                            .font(Font::MONOSPACE),
+                    );
+                }
+            }
+            wt_col = wt_col.push(
+                text("Enter to launch | Escape to cancel")
+                    .size(10)
+                    .color(Color::from_rgb8(100, 100, 100))
+                    .font(Font::MONOSPACE),
+            );
+            let wt_panel = container(wt_col).style(|_: &Theme| container::Style {
+                background: Some(Color::from_rgb8(40, 50, 60).into()),
+                ..Default::default()
+            });
+            column![wt_panel, main_content].into()
         } else {
             main_content.into()
         };
