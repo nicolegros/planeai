@@ -656,7 +656,11 @@ pub struct WorktreeService;
 
 impl WorktreeService {
     /// Returns the worktree root for a project.
+    /// Uses `PLANEAI_WORKTREE_ROOT` env if set (for testing), else `$HOME/.planeai/worktrees`.
     pub fn worktree_root(project_name: &str) -> PathBuf {
+        if let Ok(root) = std::env::var("PLANEAI_WORKTREE_ROOT") {
+            return PathBuf::from(root).join(project_name);
+        }
         let home = std::env::var("HOME").unwrap_or_default();
         PathBuf::from(home)
             .join(".planeai")
@@ -742,20 +746,15 @@ impl WorktreeService {
             WorktreeMode::Create {
                 base_project_path,
                 branch_name,
-                task_key,
+                task_key: _,
             } => {
                 Self::validate_branch_name(branch_name)?;
                 let short_id = Self::short_id(session_id);
                 let wt_path = Self::worktree_path(project_name, &short_id);
                 let wt_path_str = wt_path.to_string_lossy().to_string();
 
-                // Determine the actual branch name — if task_key is provided and
-                // branch follows the convention, use it; otherwise use as-is.
-                let final_branch = if task_key.is_some() && !branch_name.contains('/') {
-                    Self::branch_name(branch_name, &short_id)
-                } else {
-                    branch_name.clone()
-                };
+                // Manual branch input is used exactly. task_key is metadata only.
+                let final_branch = branch_name.clone();
 
                 let repo_path = base_project_path.to_string_lossy();
                 crate::git::worktree_add(&repo_path, &wt_path_str, &final_branch, base_branch)?;

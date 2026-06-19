@@ -495,6 +495,28 @@ impl WorkflowApp {
         let session = &mut self.sessions[self.active];
         let _ = kill_daemon_session(&session.session_id);
         session.status = SessionStatus::Killed;
+
+        // Clean up worktree if this session used one
+        let persisted = self
+            .persisted_sessions
+            .iter()
+            .find(|r| r.id == session.session_id);
+        if let Some(rec) = persisted {
+            if let Some(ref wt_path) = rec.worktree_path {
+                let project_path = self.project_cwd.to_string_lossy().to_string();
+                let branch = if rec.branch.is_empty() {
+                    None
+                } else {
+                    Some(rec.branch.as_str())
+                };
+                let errors =
+                    planeai_core::cleanup::cleanup_worktree(&project_path, wt_path, branch);
+                if !errors.is_empty() {
+                    tracing::warn!(errors = ?errors, "worktree cleanup errors");
+                }
+            }
+        }
+
         // Update DB status
         if let Some(ref db) = self.db {
             if let Ok(conn) = db.lock() {
@@ -623,11 +645,27 @@ impl WorkflowApp {
                         ..Default::default()
                     };
                     if let Err(e) = SessionService::create(&conn, &params) {
+                        // Rollback: clean up the worktree we just created
+                        if let Some(ref wt) = resolved.worktree_path {
+                            planeai_core::cleanup::cleanup_worktree(
+                                &self.project_cwd.to_string_lossy(),
+                                wt,
+                                Some(&resolved.branch_name),
+                            );
+                        }
                         self.set_error(format!("DB persist failed: {e}"));
                         return;
                     }
                 }
                 Err(e) => {
+                    // Rollback: clean up the worktree we just created
+                    if let Some(ref wt) = resolved.worktree_path {
+                        planeai_core::cleanup::cleanup_worktree(
+                            &self.project_cwd.to_string_lossy(),
+                            wt,
+                            Some(&resolved.branch_name),
+                        );
+                    }
                     self.set_error(format!("DB lock failed: {e}"));
                     return;
                 }

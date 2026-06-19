@@ -2,8 +2,12 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 
 use planeai_core::services::*;
+
+/// Serialize tests that mutate PLANEAI_WORKTREE_ROOT env var.
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 fn test_db() -> rusqlite::Connection {
     let dir = tempfile::tempdir().unwrap();
@@ -46,6 +50,9 @@ fn init_repo() -> tempfile::TempDir {
 
 #[test]
 fn worktree_root_uses_home_dir() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // Ensure env override is not set
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
     let root = WorktreeService::worktree_root("myproject");
     let home = std::env::var("HOME").unwrap();
     assert_eq!(
@@ -55,7 +62,18 @@ fn worktree_root_uses_home_dir() {
 }
 
 #[test]
+fn worktree_root_respects_env_override() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::set_var("PLANEAI_WORKTREE_ROOT", "/tmp/custom-root") };
+    let root = WorktreeService::worktree_root("myproject");
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
+    assert_eq!(root, PathBuf::from("/tmp/custom-root/myproject"));
+}
+
+#[test]
 fn worktree_root_sanitizes_with_project_name() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
     let root = WorktreeService::worktree_root("my-project");
     assert!(root.to_string_lossy().contains("my-project"));
 }
@@ -64,6 +82,8 @@ fn worktree_root_sanitizes_with_project_name() {
 
 #[test]
 fn worktree_path_is_root_plus_short_id() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
     let path = WorktreeService::worktree_path("proj", "abcd1234");
     let root = WorktreeService::worktree_root("proj");
     assert_eq!(path, root.join("abcd1234"));
@@ -264,36 +284,33 @@ fn resolve_worktree_existing_fails_for_missing_path() {
 
 #[test]
 fn resolve_worktree_create_makes_worktree_on_disk() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    let tmp_root = tempfile::tempdir().unwrap();
+    unsafe { std::env::set_var("PLANEAI_WORKTREE_ROOT", tmp_root.path()) };
+
     let repo = init_repo();
-    // Use a unique project name to avoid path collisions between test runs
-    let unique = format!(
-        "{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos()
-    );
-    let session_id = format!("{unique}12-3456-7890-abcd-ef1234567890");
-    let project_name = format!("test-wt-{}", &unique);
+    let session_id = "aabb1122-3456-7890-abcd-ef1234567890";
     let result = WorktreeService::resolve_worktree(
         &WorktreeMode::Create {
             base_project_path: repo.path().to_path_buf(),
             branch_name: "feat/test-wt".to_string(),
             task_key: None,
         },
-        &project_name,
+        "testproj",
         repo.path(),
-        &session_id,
+        session_id,
         "main",
     )
     .unwrap();
-    // Should have created the worktree directory
+
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
+
+    // Should have created the worktree directory under tmp_root
     assert!(result.cwd.is_dir());
+    assert!(result.cwd.starts_with(tmp_root.path()));
     assert!(result.worktree_path.is_some());
     assert_eq!(result.branch_name, "feat/test-wt");
     assert_eq!(result.base_branch, Some("main".to_string()));
-    // Cleanup
-    let _ = std::fs::remove_dir_all(&result.cwd);
 }
 
 #[test]
@@ -318,6 +335,9 @@ fn resolve_worktree_create_rejects_invalid_branch() {
 
 #[test]
 fn tauri_and_iced_worktree_paths_match() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var("PLANEAI_WORKTREE_ROOT") };
+
     let session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     let project_name = "myproject";
 

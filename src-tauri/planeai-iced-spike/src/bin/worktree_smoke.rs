@@ -90,6 +90,11 @@ fn main() {
     // Step 0: Init a temporary git repo at --project
     fs::create_dir_all(&args.project).expect("create project dir");
     let project_str = args.project.to_string_lossy().to_string();
+
+    // Use a temp worktree root to avoid writing under real $HOME/.planeai/worktrees
+    let wt_root = tempfile::tempdir().expect("tempdir for worktree root");
+    unsafe { std::env::set_var("PLANEAI_WORKTREE_ROOT", wt_root.path()) };
+
     Command::new("git")
         .args(["init", "-b", "main"])
         .current_dir(&args.project)
