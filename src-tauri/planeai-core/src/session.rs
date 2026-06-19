@@ -128,6 +128,15 @@ impl SessionDispatcher {
             true, // autonomous: auto-dispatched sessions always use autonomous template
         );
         let cmd = launch_result.command;
+        tracing::info!(
+            command = %cmd,
+            prompt_injected = launch_result.prompt_was_injected,
+            approve_applied = launch_result.auto_approve_was_applied,
+            prompt_template = ?self.dispatch_config.prompt_template,
+            prompt_command = ?self.dispatch_config.prompt_command,
+            rendered_prompt = ?rendered_prompt,
+            "dispatch command built"
+        );
 
         // Create tmux session
         let tmux_name = format!("planeai-{}-{}", self.project_name, short_id);

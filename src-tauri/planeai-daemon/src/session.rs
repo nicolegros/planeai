@@ -131,7 +131,14 @@ impl DaemonSession {
             }
         };
 
-        let full_cmd = if args.is_empty() {
+        // If the caller already wrapped in a shell (e.g. /bin/sh -c "real command"),
+        // extract the real command to avoid double-wrapping since LocalPty adds bash -c.
+        let full_cmd = if (command == "/bin/sh" || command == "sh" || command == "bash")
+            && args.len() == 2
+            && args[0] == "-c"
+        {
+            args[1].to_string()
+        } else if args.is_empty() {
             command.to_string()
         } else {
             format!("{} {}", command, args.join(" "))

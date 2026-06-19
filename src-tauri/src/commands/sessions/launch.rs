@@ -99,6 +99,7 @@ pub async fn launch_session(
     task_key: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<db::Session, String> {
+    tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
@@ -121,6 +122,7 @@ pub async fn launch_session(
             false, // TODO: pass true when wired from auto-dispatch path
         );
         let c = launch_cmd.command;
+        tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");
 
         let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
