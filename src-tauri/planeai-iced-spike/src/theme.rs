@@ -119,7 +119,7 @@ pub struct ThemeSource {
 impl ThemeSource {
     pub fn load() -> Self {
         let config_dir = planeai_core::session_launch::config_dir();
-        let (theme_name, font_family, font_size) = read_config(&config_dir);
+        let (theme_name, font_family, font_size, _) = read_config(&config_dir);
         let css_path = config_dir.join("themes").join(format!("{theme_name}.css"));
         let css = fs::read_to_string(&css_path).unwrap_or_default();
         let parsed = parse_theme_css(&css);
@@ -152,18 +152,13 @@ impl ThemeSource {
 /// Read the configured mode preference from config.json.
 pub fn read_mode_preference() -> Option<String> {
     let config_dir = planeai_core::session_launch::config_dir();
-    let path = config_dir.join("config.json");
-    let content = fs::read_to_string(path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    json.get("appearance")?
-        .get("mode")?
-        .as_str()
-        .map(|s| s.to_string())
+    read_config(&config_dir).3
 }
 
 // ─── Private helpers ─────────────────────────────────────────────────────────
 
-fn read_config(config_dir: &std::path::Path) -> (String, String, f32) {
+/// Returns (theme_name, font_family, font_size, mode_preference).
+fn read_config(config_dir: &std::path::Path) -> (String, String, f32, Option<String>) {
     let path = config_dir.join("config.json");
     let json = fs::read_to_string(path)
         .ok()
@@ -199,7 +194,14 @@ fn read_config(config_dir: &std::path::Path) -> (String, String, f32) {
         })
         .unwrap_or(14.0);
 
-    (theme_name, font_family, font_size)
+    let mode_pref = json.as_ref().and_then(|j| {
+        j.get("appearance")?
+            .get("mode")?
+            .as_str()
+            .map(|s| s.to_string())
+    });
+
+    (theme_name, font_family, font_size, mode_pref)
 }
 
 fn default_font_family() -> &'static str {
