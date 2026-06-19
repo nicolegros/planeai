@@ -67,13 +67,20 @@ target/release/planeai-iced -- \
 | Shortcut    | Action                             |
 | ----------- | ---------------------------------- |
 | Cmd+N       | Launch new agent session           |
+| Cmd+Shift+N | Launch with custom command         |
+| Cmd+B       | Worktree launch prompt             |
+| Cmd+T       | Task picker                        |
+| Cmd+Shift+T | Clear selected task                |
+| Cmd+Enter   | Launch selected task               |
 | Cmd+O       | Open project picker (path input)   |
 | Cmd+R       | Refresh daemon session list        |
 | Cmd+W       | Detach active session              |
 | Cmd+Shift+W | Kill active session                |
 | Cmd+A       | Attach to first unattached session |
+| Cmd+L       | Replay session log                 |
 | Cmd+1..9    | Switch to session N                |
 | Cmd+V       | Paste                              |
+| Cmd+/       | Show keyboard shortcuts            |
 
 ## Session Lifecycle
 
@@ -147,10 +154,12 @@ Verifies: daemon start, spawn with cwd, output, list, input, detach, reattach, k
 - Daemon crash = sessions lost (no crash recovery)
 - Scrollback limited to daemon 1MB ring buffer
 - No multi-project support (one project per window)
-- No task management integration
-- No git worktree integration
+- ~~No task management integration~~ → Task picker (Cmd+T), task launch (Cmd+Enter), lifecycle hooks
+- ~~No git worktree integration~~ → Worktree launch (Cmd+B), task-driven worktrees
 - Session card UI is keyboard-only (no click actions)
 - Log replay loads full file at once (no time-scrubbing)
+- No full task board/editing — only pick and launch
+- No auto-dispatch in Iced (production Orchestrator only)
 
 ## Relationship to Production Tauri App
 
@@ -446,3 +455,84 @@ Schema columns:
 ### Design: no explicit WorktreeMode enum yet
 
 Worktree vs checkout is implicit via `worktree_path IS NULL`. The shared domain model will make this explicit.
+
+---
+
+## Task Integration Parity
+
+**Date:** 2026-06-19
+
+### Task parity audit
+
+| Concern | Production (Tauri) | Iced Workflow |
+| --- | --- | --- |
+| Task storage | `planeai-tasks` SQLite crate | Same — shared via `TaskService` |
+| Task listing | `list_task_items` command | `TaskService::list_for_project` |
+| Task prompt | `build_provider_launch_command` | Same — shared via `resolve_task_launch` |
+| Task/session link | `sessions.task_key` column | Same — `CreateSessionParams.task_key` |
+| Worktree naming | `{task-key-lower}/{short_id}` | Same — `WorktreeService::branch_name` |
+| Lifecycle hooks | `fire_task_hook` in `session_ops.rs` | `TaskService::fire_lifecycle_hook` |
+| on_start | Move to `in_progress` | Same |
+| on_complete | Move to `done` | Same (on natural exit) |
+| Kill behavior | Destroy + cleanup | Same + reset task to `todo` |
+| Auto-dispatch | Orchestrator polls tasks, autonomous=true | Not in Iced (deferred) |
+| Autonomous template | Applied only when autonomous=true | Same |
+| Task picker | Frontend task panel | Cmd+T picker overlay |
+
+### Task picker behavior
+
+- **Cmd+T**: Opens task picker for the current project
+- **↑/↓**: Navigate tasks
+- **Enter**: Select task (stored as `selected_task`)
+- **Cmd+Shift+T**: Clear selected task
+- **Cmd+Enter**: Launch session from selected task
+
+### Task launch behavior
+
+When launching from a selected task:
+1. Resolve task prompt: `{title}\n\n{description}` (or custom template)
+2. Build provider command via `build_provider_launch_command` with `autonomous=false`
+3. Apply yolo/auto-approve flag if configured
+4. Inject prompt via `provider.prompt_command`
+5. Create worktree: branch = `{task-key-lower}/{short_id}`
+6. Persist session record with `task_key`, `worktree_path`, `branch_name`, `base_branch`
+7. Fire `on_start` lifecycle hook (move task to `in_progress`)
+8. Spawn daemon session in worktree cwd
+
+### Task/worktree/session linkage
+
+- `session.task_key` → task key (e.g., "PLA-5")
+- `session.worktree_path` → absolute path to worktree
+- `session.branch` → `pla-5/{short_id}`
+- `session.base_branch` → base branch for worktree
+
+### Lifecycle/status behavior
+
+| Event | Session status | Task status |
+| --- | --- | --- |
+| Launch from task | `active` | `in_progress` |
+| Natural exit | `exited` | `done` |
+| Kill | `destroyed` | `todo` (reset) |
+| Detach | `active` (stays) | unchanged |
+
+### Known limitations
+
+- No auto-dispatch in Iced (Orchestrator runs only in production Tauri)
+- No task editing from Iced (read-only task list)
+- No drag/drop task board
+- Task list limited to 15 visible items in picker
+- No filter/search in task picker
+- `on_notify` and `on_restart` hooks not implemented in Iced
+
+### Task smoke test
+
+```bash
+PLANEAI_DAEMON_PTY_CORE=planeai-pty \
+cargo run --release -p planeai-iced-spike --bin planeai-task-smoke -- \
+  --project /tmp/planeai-task-smoke/project \
+  --task-key PLA-123 \
+  --agent-command "python3 -c 'print(\"agent ready\")'" \
+  --metrics bench/results/task-smoke.jsonl
+```
+
+Verifies: task creation → prompt resolution → prompt injection → worktree creation → session with task_key → output → detach/reattach → kill → bytes_dropped=0.
