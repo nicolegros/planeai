@@ -516,8 +516,11 @@ impl WorkflowApp {
                     if let Some(ref tk) = rec.task_key {
                         if let Ok(Some(proj)) = ProjectService::get_by_id(&conn, &rec.project_id) {
                             let db_path = planeai_core::app_data_dir().join("planeai.db");
-                            let _ =
-                                TaskService::fire_lifecycle_hook(&db_path, &proj.name, tk, "todo");
+                            if let Err(e) =
+                                TaskService::fire_lifecycle_hook(&db_path, &proj.name, tk, "todo")
+                            {
+                                tracing::warn!(task_key = %tk, error = %e, "lifecycle hook (todo) failed");
+                            }
                         }
                     }
                     if let Some(ref wt_path) = rec.worktree_path {
@@ -827,6 +830,7 @@ impl WorkflowApp {
             planeai_core::session_launch::load_default_config()
         };
 
+        let auto_approve = WORKFLOW_ARGS.get().map(|a| a.yolo).unwrap_or(false);
         let request = TaskLaunchRequest {
             project_id: project.id.clone(),
             project_name: project.name.clone(),
@@ -836,7 +840,7 @@ impl WorkflowApp {
             task_description: task.description.clone(),
             task_base_branch: task.base_branch.clone(),
             provider_id: None,
-            auto_approve: true,
+            auto_approve,
             autonomous: false, // manual task launch
             cols: self.cols as u16,
             rows: self.rows as u16,
@@ -883,7 +887,7 @@ impl WorkflowApp {
                     project_id: project.id.clone(),
                     name: format!("{}: {}", task.key, task.title),
                     backend: "daemon".to_string(),
-                    auto_approve: true,
+                    auto_approve,
                     branch: wt_resolved.branch_name.clone(),
                     worktree_path: wt_resolved.worktree_path.clone(),
                     task_key: Some(task.key.clone()),
@@ -932,12 +936,14 @@ impl WorkflowApp {
             Ok(backend) => {
                 // Fire on_start lifecycle hook only after successful spawn
                 let db_path = planeai_core::app_data_dir().join("planeai.db");
-                let _ = TaskService::fire_lifecycle_hook(
+                if let Err(e) = TaskService::fire_lifecycle_hook(
                     &db_path,
                     &project.name,
                     &task.key,
                     "in_progress",
-                );
+                ) {
+                    tracing::warn!(task_key = %task.key, error = %e, "lifecycle hook (in_progress) failed");
+                }
 
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
@@ -1552,9 +1558,11 @@ impl WorkflowApp {
                                         {
                                             let db_path =
                                                 planeai_core::app_data_dir().join("planeai.db");
-                                            let _ = TaskService::fire_lifecycle_hook(
+                                            if let Err(e) = TaskService::fire_lifecycle_hook(
                                                 &db_path, &proj.name, tk, "done",
-                                            );
+                                            ) {
+                                                tracing::warn!(task_key = %tk, error = %e, "lifecycle hook (done) failed");
+                                            }
                                         }
                                     }
                                 }

@@ -99,6 +99,9 @@ pub struct Args {
     pub extra_path_dirs: Vec<String>,
     #[arg(long)]
     pub config: Option<PathBuf>,
+    /// Enable auto-approve/yolo mode for task launches
+    #[arg(long)]
+    pub yolo: bool,
 }
 
 static ARGS: OnceLock<Args> = OnceLock::new();
