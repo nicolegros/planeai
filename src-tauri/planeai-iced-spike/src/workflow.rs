@@ -8,6 +8,7 @@ use planeai_core::services::{
     self, CreateSessionParams, ProjectService, SessionRecord, SessionService, TaskLaunchRequest,
     TaskService, WorktreeMode, WorktreeService,
 };
+use planeai_core::tab_switcher::TabSwitcher;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
@@ -195,6 +196,10 @@ struct WorkflowApp {
     sidebar: Option<SidebarState>,
     sidebar_focused: bool,
     sidebar_dirty: bool,
+    // Tab switcher (MRU-based Ctrl+Tab cycling)
+    tab_switcher: TabSwitcher,
+    tab_switcher_names: Vec<String>,
+    mru: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -353,7 +358,6 @@ impl WorkflowApp {
                 kill_armed: false,
                 db,
                 project,
-                persisted_sessions,
                 worktree_prompt: false,
                 worktree_branch_input: String::new(),
                 worktree_task_key_input: String::new(),
@@ -382,6 +386,10 @@ impl WorkflowApp {
                 sidebar: None,
                 sidebar_focused: false,
                 sidebar_dirty: true, // trigger initial load
+                tab_switcher: TabSwitcher::new(),
+                tab_switcher_names: Vec::new(),
+                mru: persisted_sessions.iter().map(|s| s.id.clone()).collect(),
+                persisted_sessions,
             },
             iced::Task::none(),
         );
@@ -569,7 +577,7 @@ impl WorkflowApp {
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
-                    session_id,
+                    session_id: session_id.clone(),
                     command: "attached".to_string(),
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Attached,
@@ -582,8 +590,12 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                // Touch MRU for newly attached session
+                self.mru.retain(|id| id != &session_id);
+                self.mru.insert(0, session_id);
                 self.clear_error();
                 self.sidebar_dirty = true;
+                self.refresh_persisted_sessions();
             }
             Err(e) => {
                 self.set_error(format!("Attach failed: {}", e));
@@ -692,6 +704,18 @@ impl WorkflowApp {
             if let Ok(conn) = db.lock() {
                 self.persisted_sessions =
                     SessionService::list_for_project(&conn, &project.id).unwrap_or_default();
+                // Merge DB order with existing MRU (keep entries not in DB)
+                let db_ids: Vec<String> = self
+                    .persisted_sessions
+                    .iter()
+                    .map(|s| s.id.clone())
+                    .collect();
+                // Add any DB entries not already in MRU
+                for id in &db_ids {
+                    if !self.mru.contains(id) {
+                        self.mru.push(id.clone());
+                    }
+                }
             }
         }
     }
@@ -1434,6 +1458,17 @@ impl WorkflowApp {
             if let Some(ref mut sidebar) = self.sidebar {
                 sidebar.set_active_session(Some(self.sessions[idx].session_id.clone()));
             }
+            // Touch MRU
+            let sid = self.sessions[idx].session_id.clone();
+            self.mru.retain(|id| id != &sid);
+            self.mru.insert(0, sid);
+            // Persist MRU to DB
+            if let Some(ref db) = self.db {
+                if let Ok(conn) = db.lock() {
+                    let refs: Vec<&str> = self.mru.iter().map(|s| s.as_str()).collect();
+                    let _ = SessionService::save_mru_order(&conn, &refs);
+                }
+            }
         }
     }
 
@@ -1705,6 +1740,76 @@ impl WorkflowApp {
                             }
                         }
                         _ => {}
+                    }
+                    return;
+                }
+
+                // Tab switcher: Ctrl+Tab / Ctrl+Shift+Tab
+                if modifiers.control()
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Tab))
+                {
+                    if !self.tab_switcher.is_cycling() {
+                        let valid_ids: std::collections::HashSet<String> =
+                            self.sessions.iter().map(|s| s.session_id.clone()).collect();
+                        let current = self.sessions.get(self.active).map(|s| s.session_id.clone());
+                        let current_ref = current.as_deref();
+                        if !self
+                            .tab_switcher
+                            .start_cycle(&self.mru, current_ref, Some(&valid_ids))
+                        {
+                            return;
+                        }
+                        // Cache names for the overlay
+                        self.tab_switcher_names = self
+                            .tab_switcher
+                            .cycle_list()
+                            .iter()
+                            .map(|sid| {
+                                self.persisted_sessions
+                                    .iter()
+                                    .find(|s| s.id == *sid)
+                                    .map(|r| {
+                                        if r.name.is_empty() {
+                                            r.branch.clone()
+                                        } else {
+                                            r.name.clone()
+                                        }
+                                    })
+                                    .or_else(|| {
+                                        self.db.as_ref().and_then(|db| {
+                                            db.lock().ok().and_then(|conn| {
+                                                SessionService::get(&conn, sid).ok().flatten().map(
+                                                    |r| {
+                                                        if r.name.is_empty() {
+                                                            r.branch
+                                                        } else {
+                                                            r.name
+                                                        }
+                                                    },
+                                                )
+                                            })
+                                        })
+                                    })
+                                    .unwrap_or_else(|| sid.clone())
+                            })
+                            .collect();
+                    } else {
+                        let direction = if modifiers.shift() { -1 } else { 1 };
+                        self.tab_switcher.advance(direction);
+                    }
+                    return;
+                }
+
+                // Tab switcher: Escape cancels cycling
+                if self.tab_switcher.is_cycling()
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                {
+                    if let Some(origin_id) = self.tab_switcher.cancel() {
+                        if let Some(idx) =
+                            self.sessions.iter().position(|s| s.session_id == origin_id)
+                        {
+                            self.active = idx;
+                        }
                     }
                     return;
                 }
@@ -2236,6 +2341,20 @@ impl WorkflowApp {
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
                             let _ = self.sessions[self.active].backend.write(b);
+                        }
+                    }
+                }
+            }
+            Message::KeyEvent(keyboard::Event::KeyReleased {
+                key: keyboard::Key::Named(keyboard::key::Named::Control),
+                ..
+            }) => {
+                if self.tab_switcher.is_cycling() {
+                    if let Some(target_id) = self.tab_switcher.commit() {
+                        if let Some(idx) =
+                            self.sessions.iter().position(|s| s.session_id == target_id)
+                        {
+                            self.switch_to(idx);
                         }
                     }
                 }
@@ -3007,6 +3126,32 @@ impl WorkflowApp {
                     background: Some(Color::from_rgba8(0, 0, 0, 0.7).into()),
                     ..Default::default()
                 });
+            stack![base, overlay].into()
+        } else if self.tab_switcher.is_visible() {
+            use iced::widget::stack;
+            let mut items = column![].spacing(2);
+            let selected = self.tab_switcher.index();
+            for (i, name) in self.tab_switcher_names.iter().enumerate() {
+                let is_selected = i == selected;
+                let label = format!("  {}", name);
+                let color = if is_selected {
+                    Color::from_rgb8(100, 220, 255)
+                } else {
+                    Color::from_rgb8(180, 180, 180)
+                };
+                items = items.push(text(label).size(12).color(color).font(Font::MONOSPACE));
+            }
+            let panel = container(items)
+                .padding(8)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(30, 40, 55).into()),
+                    ..Default::default()
+                });
+            let overlay = container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
             stack![base, overlay].into()
         } else {
             base
