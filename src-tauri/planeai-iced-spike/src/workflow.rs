@@ -31,7 +31,7 @@ use crate::daemon_session::{
 };
 use crate::input;
 use crate::sidebar::{SidebarAction, SidebarState};
-use crate::theme::{self, Mode, PlaneAiTheme, ThemeSource};
+use crate::theme::{self, PlaneAiTheme, ThemeSource};
 use crate::Args;
 
 // ─── Recent projects ─────────────────────────────────────────────────────────
@@ -204,8 +204,6 @@ struct WorkflowApp {
     // Theme
     theme_source: ThemeSource,
     theme: PlaneAiTheme,
-    current_mode: Mode,
-    last_mode_check: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -398,13 +396,11 @@ impl WorkflowApp {
                 persisted_sessions,
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
-                current_mode: theme::resolve_mode(),
-                last_mode_check: None,
             },
             iced::Task::none(),
         );
         // Resolve theme from source
-        result.0.theme = result.0.theme_source.resolve(result.0.current_mode);
+        result.0.theme = result.0.theme_source.resolve(result.0.theme_source.current_mode());
         // Surface boot warnings visibly
         if !boot_warnings.is_empty() {
             result.0.set_error(boot_warnings.join(" | "));
@@ -2380,22 +2376,12 @@ impl WorkflowApp {
                     }
                 }
 
-                // Poll system dark/light mode every 2s
-                let should_check_mode = self
-                    .last_mode_check
-                    .map(|t| t.elapsed() >= Duration::from_secs(2))
-                    .unwrap_or(true);
-                if should_check_mode {
-                    self.last_mode_check = Some(Instant::now());
-                    let new_mode = theme::resolve_mode();
-                    if new_mode != self.current_mode {
-                        self.current_mode = new_mode;
-                        self.theme = self.theme_source.resolve(new_mode);
-                        // Force re-render all sessions with new colors
-                        for s in &mut self.sessions {
-                            s.snapshot = snapshot_grid(&s.term, &self.theme.terminal);
-                            s.cache.clear();
-                        }
+                // Poll system dark/light mode
+                if let Some(new_theme) = self.theme_source.poll_mode() {
+                    self.theme = new_theme;
+                    for s in &mut self.sessions {
+                        s.snapshot = snapshot_grid(&s.term, &self.theme.terminal);
+                        s.cache.clear();
                     }
                 }
 

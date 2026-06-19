@@ -120,6 +120,8 @@ pub struct ThemeSource {
     parsed: ParsedThemeCss,
     pub font_family: String,
     pub font_size: f32,
+    current_mode: Mode,
+    last_check: Option<std::time::Instant>,
 }
 
 impl ThemeSource {
@@ -129,10 +131,13 @@ impl ThemeSource {
         let css_path = config_dir.join("themes").join(format!("{theme_name}.css"));
         let css = fs::read_to_string(&css_path).unwrap_or_default();
         let parsed = parse_theme_css(&css);
+        let current_mode = resolve_mode();
         Self {
             parsed,
             font_family,
             font_size,
+            current_mode,
+            last_check: None,
         }
     }
 
@@ -152,6 +157,28 @@ impl ThemeSource {
         theme.font_size = self.font_size;
         theme.mode = mode;
         theme
+    }
+
+    /// Check if system mode changed (polled every 2s). Returns Some(new_theme) if changed.
+    pub fn poll_mode(&mut self) -> Option<PlaneAiTheme> {
+        let should_check = self
+            .last_check
+            .map(|t| t.elapsed() >= std::time::Duration::from_secs(2))
+            .unwrap_or(true);
+        if !should_check {
+            return None;
+        }
+        self.last_check = Some(std::time::Instant::now());
+        let new_mode = resolve_mode();
+        if new_mode == self.current_mode {
+            return None;
+        }
+        self.current_mode = new_mode;
+        Some(self.resolve(new_mode))
+    }
+
+    pub fn current_mode(&self) -> Mode {
+        self.current_mode
     }
 }
 
@@ -328,6 +355,8 @@ pub fn default_dark_theme() -> PlaneAiTheme {
         parsed: ParsedThemeCss::default(),
         font_family: default_font_family().to_string(),
         font_size: 14.0,
+        current_mode: Mode::Dark,
+        last_check: None,
     };
     source.resolve(Mode::Dark)
 }
