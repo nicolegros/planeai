@@ -963,9 +963,22 @@ impl WorkflowApp {
         }
     }
 
-    /// Submit the session creation form.
+    /// Submit the session creation form — unified launch path matching Tauri app.
     fn submit_session_form(&mut self) {
-        if self.session_form_mode == SessionFormMode::FromTask {
+        if !self.daemon_connected {
+            self.session_form_error = Some("Daemon unavailable.".into());
+            return;
+        }
+        let (db, project) = match (&self.db, &self.project) {
+            (Some(db), Some(proj)) => (db.clone(), proj.clone()),
+            _ => {
+                self.session_form_error = Some("DB/project unavailable.".into());
+                return;
+            }
+        };
+
+        // Resolve task prompt (if From Task mode)
+        let (task_key, task_prompt) = if self.session_form_mode == SessionFormMode::FromTask {
             let selected_key = match &self.session_form_task_combo.selected {
                 Some(item) => item.id.clone(),
                 None => {
@@ -980,29 +993,144 @@ impl WorkflowApp {
                     return;
                 }
             };
-            self.selected_task = Some(task);
-            self.session_form = false;
-            if self.session_form_use_worktree {
-                self.worktree_branch_input = self.session_form_branch.clone();
-                self.worktree_task_key_input = self
-                    .selected_task
-                    .as_ref()
-                    .map(|t| t.key.clone())
-                    .unwrap_or_default();
-                self.launch_session_in_worktree();
-            } else {
-                self.launch_from_task();
-            }
-            self.selected_task = None;
+            let prompt = format!("Implement task {}: {}\n\n{}", task.key, task.title, task.description);
+            (Some(task.key), Some(prompt))
         } else {
-            // Manual mode
-            self.session_form = false;
-            if self.session_form_use_worktree {
-                self.worktree_branch_input = self.session_form_branch.clone();
-                self.worktree_task_key_input.clear();
-                self.launch_session_in_worktree();
-            } else {
-                self.launch_session();
+            (None, None)
+        };
+
+        // Load config (same as Tauri app)
+        let config = planeai_core::session_launch::load_default_config();
+        let provider_id = self.provider_keys.get(self.session_form_provider_idx)
+            .cloned()
+            .unwrap_or(config.default_provider.clone());
+        let provider = match config.providers.get(&provider_id) {
+            Some(p) => p.clone(),
+            None => {
+                self.session_form_error = Some(format!("Unknown provider: {provider_id}"));
+                return;
+            }
+        };
+
+        // Build command with prompt injection (same as Tauri app)
+        let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
+            &provider,
+            self.session_form_auto_approve,
+            task_prompt.as_deref(),
+            false, // manual launches are not autonomous
+        );
+        let cmd = launch_cmd.command;
+
+        // Resolve branch and worktree
+        let branch = if self.session_form_branch.is_empty() {
+            self.session_form_name.to_lowercase().replace(' ', "-").chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '/')
+                .collect::<String>()
+        } else {
+            self.session_form_branch.clone()
+        };
+
+        let (working_dir, worktree_path) = if self.session_form_use_worktree {
+            let base_branch = planeai_core::git::detect_default_branch(&self.project_cwd.to_string_lossy())
+                .unwrap_or_else(|_| "main".to_string());
+            let short_id = &uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+            let sanitized = project.name.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-");
+            let home = std::env::var("HOME").unwrap_or_default();
+            let wt_path = format!("{home}/.planeai/worktrees/{sanitized}/{short_id}");
+            if let Some(parent) = std::path::Path::new(&wt_path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = planeai_core::git::worktree_add(
+                &self.project_cwd.to_string_lossy(), &wt_path, &branch, &base_branch,
+            ) {
+                self.session_form_error = Some(format!("Worktree: {e}"));
+                return;
+            }
+            (std::path::PathBuf::from(&wt_path), Some(wt_path))
+        } else {
+            (self.project_cwd.clone(), None)
+        };
+
+        // Persist session record
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_name = if self.session_form_name.is_empty() {
+            provider_id.clone()
+        } else {
+            self.session_form_name.clone()
+        };
+        match db.lock() {
+            Ok(conn) => {
+                let params = CreateSessionParams {
+                    id: session_id.clone(),
+                    project_id: project.id.clone(),
+                    name: session_name.clone(),
+                    backend: "daemon".to_string(),
+                    auto_approve: self.session_form_auto_approve,
+                    branch: branch.clone(),
+                    worktree_path: worktree_path.clone(),
+                    task_key: task_key.clone(),
+                    base_branch: None,
+                    provider: Some(provider_id.clone()),
+                    ..Default::default()
+                };
+                if let Err(e) = SessionService::create(&conn, &params) {
+                    self.session_form_error = Some(format!("DB: {e}"));
+                    return;
+                }
+            }
+            Err(e) => {
+                self.session_form_error = Some(format!("DB lock: {e}"));
+                return;
+            }
+        }
+
+        // Spawn daemon session
+        let id = self.next_id;
+        self.next_id += 1;
+        let result = DaemonSession::spawn_with_session_id(
+            id, &session_id,
+            self.cols as u16, self.rows as u16,
+            Some(&cmd), &working_dir, &self.extra_path_dirs,
+        );
+        match result {
+            Ok(backend) => {
+                // Fire on_start lifecycle hook for task-linked sessions
+                if let Some(ref tk) = task_key {
+                    let db_path = planeai_core::app_data_dir().join("planeai.db");
+                    let _ = TaskService::fire_lifecycle_hook(&db_path, &project.name, tk, "in_progress");
+                }
+                let term = new_term(self.cols, self.rows);
+                let processor = new_processor();
+                let snapshot = snapshot_grid(&term);
+                let log_file_exists = self.check_log_exists(&session_id);
+                self.sessions.push(Session {
+                    id,
+                    session_id,
+                    command: cmd,
+                    cwd: working_dir,
+                    status: SessionStatus::Running,
+                    backend: Box::new(backend),
+                    term, processor, snapshot,
+                    cache: Cache::new(),
+                    bytes_processed: 0,
+                    log_file_exists,
+                });
+                self.active = self.sessions.len() - 1;
+                self.session_form = false;
+                self.clear_error();
+                self.refresh_persisted_sessions();
+            }
+            Err(e) => {
+                // Cleanup worktree on failure
+                if let Some(ref wt) = worktree_path {
+                    planeai_core::cleanup::cleanup_worktree(
+                        &self.project_cwd.to_string_lossy(), wt, Some(&branch),
+                    );
+                }
+                if let Ok(conn) = db.lock() {
+                    let _ = SessionService::set_status(&conn, &session_id, "destroyed");
+                }
+                self.session_form_error = Some(format!("Launch failed: {e}"));
             }
         }
     }
@@ -2709,6 +2837,20 @@ fn title(_state: &WorkflowApp) -> String {
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 pub fn run(args: Args) -> iced::Result {
+    // Initialize logging to same location as Tauri app
+    let log_dir = planeai_core::app_data_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "planeai.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
+    tracing::info!("planeai-iced starting");
+
     let cols = args.cols;
     let rows = args.rows;
     WORKFLOW_ARGS.set(args).unwrap();

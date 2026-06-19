@@ -50,5 +50,7 @@ planeai-daemon = { path = "../planeai-daemon" }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 tempfile = { workspace = true }
