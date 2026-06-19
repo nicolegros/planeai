@@ -263,6 +263,24 @@ impl SidebarState {
         }
     }
 
+    fn section_key_for(item: &NavItem) -> Option<String> {
+        match item {
+            NavItem::ProjectHeader { project_id, .. } => Some(format!("project:{}", project_id)),
+            NavItem::StatusHeader {
+                project_path,
+                status,
+                ..
+            } => Some(format!("{}:{}", project_path, status)),
+            _ => None,
+        }
+    }
+
+    fn is_collapsed(&self, item: &NavItem) -> bool {
+        Self::section_key_for(item)
+            .map(|k| self.collapsed.contains(&k))
+            .unwrap_or(false)
+    }
+
     /// Render the sidebar as an iced Element.
     pub fn view<'a, M: Clone + 'a>(&self, focused: bool) -> Element<'a, M> {
         let mut items = column![].spacing(1);
@@ -281,17 +299,7 @@ impl SidebarState {
             };
             let label = match item {
                 NavItem::ProjectHeader { name, .. } => {
-                    let arrow = if self.collapsed.contains(&format!(
-                        "project:{}",
-                        match item {
-                            NavItem::ProjectHeader { project_id, .. } => project_id,
-                            _ => unreachable!(),
-                        }
-                    )) {
-                        "▶"
-                    } else {
-                        "▼"
-                    };
+                    let arrow = if self.is_collapsed(item) { "▶" } else { "▼" };
                     format!("{} {}", arrow, name.to_uppercase())
                 }
                 NavItem::OrphanSession { name, status, .. } => {
@@ -305,18 +313,7 @@ impl SidebarState {
                     format!("  {} {}", icon, name)
                 }
                 NavItem::StatusHeader { status, count, .. } => {
-                    let arrow = if self.collapsed.contains(&match item {
-                        NavItem::StatusHeader {
-                            project_path,
-                            status,
-                            ..
-                        } => format!("{}:{}", project_path, status),
-                        _ => unreachable!(),
-                    }) {
-                        "▶"
-                    } else {
-                        "▼"
-                    };
+                    let arrow = if self.is_collapsed(item) { "▶" } else { "▼" };
                     format!("  {} {} ({})", arrow, status_label(status), count)
                 }
                 NavItem::Task {
