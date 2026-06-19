@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{column, container, scrollable, text};
+use iced::widget::{column, container, mouse_area, row, scrollable, text};
 use iced::{Color, Element, Font, Length, Theme};
 use rusqlite::Connection;
 
@@ -22,10 +22,26 @@ use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NavItem {
-    ProjectHeader { project_id: String, name: String },
-    OrphanSession { session_id: String, name: String, status: String },
-    StatusHeader { project_path: String, status: String, count: usize },
-    Task { key: String, title: String, status: String, linked_session_id: Option<String> },
+    ProjectHeader {
+        project_id: String,
+        name: String,
+    },
+    OrphanSession {
+        session_id: String,
+        name: String,
+        status: String,
+    },
+    StatusHeader {
+        project_path: String,
+        status: String,
+        count: usize,
+    },
+    Task {
+        key: String,
+        title: String,
+        status: String,
+        linked_session_id: Option<String>,
+    },
 }
 
 // ─── Actions returned to the parent ─────────────────────────────────────────
@@ -66,11 +82,18 @@ pub struct SidebarState {
     selected_index: usize,
     collapsed: HashSet<String>,
     db_path: PathBuf,
+    pub width: f32,
+    resizing: bool,
+    last_cursor_x: f32,
+    pub active_session_id: Option<String>,
     // Cached data from last refresh
     cached_projects: Vec<services::Project>,
     cached_sessions: Vec<SessionRecord>,
     cached_tasks_by_project: HashMap<String, Vec<planeai_tasks::model::Task>>,
 }
+
+const DEFAULT_SIDEBAR_WIDTH: f32 = 224.0;
+const MIN_SIDEBAR_WIDTH: f32 = 160.0;
 
 impl SidebarState {
     pub fn new(conn: &Connection, db_path: &Path) -> Self {
@@ -79,6 +102,10 @@ impl SidebarState {
             selected_index: 0,
             collapsed: HashSet::new(),
             db_path: db_path.to_path_buf(),
+            width: DEFAULT_SIDEBAR_WIDTH,
+            resizing: false,
+            last_cursor_x: 0.0,
+            active_session_id: None,
             cached_projects: Vec::new(),
             cached_sessions: Vec::new(),
             cached_tasks_by_project: HashMap::new(),
@@ -99,7 +126,8 @@ impl SidebarState {
             let prefix = derive_prefix(&project.name);
             if let Ok(repo) = SqliteRepository::open(self.db_path.to_str().unwrap_or(""), &prefix) {
                 if let Ok(tasks) = repo.list(ListFilter::default()) {
-                    self.cached_tasks_by_project.insert(project.path.clone(), tasks);
+                    self.cached_tasks_by_project
+                        .insert(project.path.clone(), tasks);
                 }
             }
         }
@@ -121,6 +149,37 @@ impl SidebarState {
         } else {
             self.collapsed.insert(key.to_string());
         }
+    }
+
+    pub fn set_width(&mut self, width: f32) {
+        self.width = width.max(MIN_SIDEBAR_WIDTH);
+    }
+
+    /// Call on mouse button press. Returns true if resize started (caller should not forward click).
+    pub fn handle_mouse_down(&mut self) -> bool {
+        if (self.last_cursor_x - self.width).abs() < 6.0 {
+            self.resizing = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Call on mouse move with cursor x position.
+    pub fn handle_mouse_move(&mut self, x: f32) {
+        self.last_cursor_x = x;
+        if self.resizing {
+            self.set_width(x);
+        }
+    }
+
+    /// Call on mouse button release.
+    pub fn handle_mouse_up(&mut self) {
+        self.resizing = false;
+    }
+
+    pub fn is_resizing(&self) -> bool {
+        self.resizing
     }
 
     /// Handle a key press. Returns a SidebarAction if the key triggered one.
@@ -157,7 +216,11 @@ impl SidebarState {
                 self.rebuild_flat_nav();
                 SidebarAction::None
             }
-            Some(NavItem::StatusHeader { project_path, status, .. }) => {
+            Some(NavItem::StatusHeader {
+                project_path,
+                status,
+                ..
+            }) => {
                 self.toggle_section(&format!("{}:{}", project_path, status));
                 self.rebuild_flat_nav();
                 SidebarAction::None
@@ -165,10 +228,14 @@ impl SidebarState {
             Some(NavItem::OrphanSession { session_id, .. }) => {
                 SidebarAction::SwitchSession(session_id)
             }
-            Some(NavItem::Task { linked_session_id: Some(sid), .. }) => {
-                SidebarAction::SwitchSession(sid)
-            }
-            Some(NavItem::Task { linked_session_id: None, .. }) => SidebarAction::None,
+            Some(NavItem::Task {
+                linked_session_id: Some(sid),
+                ..
+            }) => SidebarAction::SwitchSession(sid),
+            Some(NavItem::Task {
+                linked_session_id: None,
+                ..
+            }) => SidebarAction::None,
             None => SidebarAction::None,
         }
     }
@@ -189,60 +256,122 @@ impl SidebarState {
 
     fn section_key_for_current(&self) -> Option<String> {
         match self.flat_nav.get(self.selected_index) {
-            Some(NavItem::ProjectHeader { project_id, .. }) => Some(format!("project:{}", project_id)),
-            Some(NavItem::StatusHeader { project_path, status, .. }) => Some(format!("{}:{}", project_path, status)),
+            Some(NavItem::ProjectHeader { project_id, .. }) => {
+                Some(format!("project:{}", project_id))
+            }
+            Some(NavItem::StatusHeader {
+                project_path,
+                status,
+                ..
+            }) => Some(format!("{}:{}", project_path, status)),
             _ => None,
         }
     }
 
     /// Render the sidebar as an iced Element.
-    pub fn view<'a, M: 'a>(&self, focused: bool) -> Element<'a, M> {
+    pub fn view<'a, M: Clone + 'a>(&self, focused: bool) -> Element<'a, M> {
         let mut items = column![].spacing(1);
 
         for (i, item) in self.flat_nav.iter().enumerate() {
             let is_selected = focused && i == self.selected_index;
+            let is_active = match item {
+                NavItem::OrphanSession { session_id, .. } => {
+                    self.active_session_id.as_deref() == Some(session_id)
+                }
+                NavItem::Task {
+                    linked_session_id: Some(sid),
+                    ..
+                } => self.active_session_id.as_deref() == Some(sid),
+                _ => false,
+            };
             let label = match item {
                 NavItem::ProjectHeader { name, .. } => {
-                    let arrow = if self.collapsed.contains(&format!("project:{}", match item { NavItem::ProjectHeader { project_id, .. } => project_id, _ => unreachable!() })) { "▶" } else { "▼" };
+                    let arrow = if self.collapsed.contains(&format!(
+                        "project:{}",
+                        match item {
+                            NavItem::ProjectHeader { project_id, .. } => project_id,
+                            _ => unreachable!(),
+                        }
+                    )) {
+                        "▶"
+                    } else {
+                        "▼"
+                    };
                     format!("{} {}", arrow, name.to_uppercase())
                 }
                 NavItem::OrphanSession { name, status, .. } => {
-                    let icon = if status == "active" { "●" } else { "○" };
+                    let icon = if is_active {
+                        "▶"
+                    } else if status == "active" {
+                        "●"
+                    } else {
+                        "○"
+                    };
                     format!("  {} {}", icon, name)
                 }
                 NavItem::StatusHeader { status, count, .. } => {
-                    let arrow = if self.collapsed.contains(&match item { NavItem::StatusHeader { project_path, status, .. } => format!("{}:{}", project_path, status), _ => unreachable!() }) { "▶" } else { "▼" };
+                    let arrow = if self.collapsed.contains(&match item {
+                        NavItem::StatusHeader {
+                            project_path,
+                            status,
+                            ..
+                        } => format!("{}:{}", project_path, status),
+                        _ => unreachable!(),
+                    }) {
+                        "▶"
+                    } else {
+                        "▼"
+                    };
                     format!("  {} {} ({})", arrow, status_label(status), count)
                 }
-                NavItem::Task { title, linked_session_id, .. } => {
-                    let icon = if linked_session_id.is_some() { "●" } else { "○" };
+                NavItem::Task {
+                    title,
+                    linked_session_id,
+                    ..
+                } => {
+                    let icon = if is_active {
+                        "▶"
+                    } else if linked_session_id.is_some() {
+                        "●"
+                    } else {
+                        "○"
+                    };
                     format!("    {} {}", icon, title)
                 }
             };
 
             let color = match item {
                 NavItem::ProjectHeader { .. } => Color::from_rgb8(150, 150, 150),
-                NavItem::OrphanSession { status, .. } if status == "active" => Color::from_rgb8(180, 180, 180),
+                _ if is_active => Color::from_rgb8(100, 200, 255),
+                NavItem::OrphanSession { status, .. } if status == "active" => {
+                    Color::from_rgb8(180, 180, 180)
+                }
                 NavItem::OrphanSession { .. } => Color::from_rgb8(120, 120, 120),
                 NavItem::StatusHeader { status, .. } => status_color(status),
-                NavItem::Task { linked_session_id: Some(_), .. } => Color::from_rgb8(100, 200, 255),
+                NavItem::Task {
+                    linked_session_id: Some(_),
+                    ..
+                } => Color::from_rgb8(100, 200, 255),
                 NavItem::Task { .. } => Color::from_rgb8(180, 180, 180),
             };
 
-            let bg = if is_selected {
+            let bg = if is_active {
+                Some(Color::from_rgba8(100, 200, 255, 0.1))
+            } else if is_selected {
                 Some(Color::from_rgba8(59, 130, 246, 0.15))
             } else {
                 None
             };
 
             let txt = text(label).size(12).color(color).font(Font::MONOSPACE);
-            let item_container = container(txt)
-                .width(Length::Fill)
-                .padding([2, 4])
-                .style(move |_: &Theme| container::Style {
-                    background: bg.map(|c| c.into()),
-                    ..Default::default()
-                });
+            let item_container =
+                container(txt)
+                    .width(Length::Fill)
+                    .padding([2, 4])
+                    .style(move |_: &Theme| container::Style {
+                        background: bg.map(|c| c.into()),
+                        ..Default::default()
+                    });
             items = items.push(item_container);
         }
 
@@ -254,8 +383,8 @@ impl SidebarState {
             Color::from_rgb8(40, 40, 40)
         };
 
-        container(sidebar_content)
-            .width(Length::Fixed(200.0))
+        let sidebar_panel = container(sidebar_content)
+            .width(Length::Fill)
             .height(Length::Fill)
             .padding(4)
             .style(move |_: &Theme| container::Style {
@@ -266,14 +395,31 @@ impl SidebarState {
                     radius: 0.0.into(),
                 },
                 ..Default::default()
-            })
+            });
+
+        // Resize handle on right edge with col-resize cursor
+        let resize_handle = mouse_area(
+            container(text(""))
+                .width(Length::Fixed(4.0))
+                .height(Length::Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(50, 50, 50).into()),
+                    ..Default::default()
+                }),
+        )
+        .interaction(iced::mouse::Interaction::ResizingHorizontally);
+
+        row![sidebar_panel, resize_handle]
+            .width(Length::Fixed(self.width))
+            .height(Length::Fill)
             .into()
     }
 
     fn rebuild_flat_nav(&mut self) {
         self.flat_nav.clear();
 
-        let all_task_keys: HashSet<&str> = self.cached_tasks_by_project
+        let all_task_keys: HashSet<&str> = self
+            .cached_tasks_by_project
             .values()
             .flat_map(|tasks| tasks.iter().map(|t| t.key.as_str()))
             .collect();
@@ -290,24 +436,38 @@ impl SidebarState {
             }
 
             // Orphan sessions
-            let orphans: Vec<_> = self.cached_sessions.iter()
+            let orphans: Vec<_> = self
+                .cached_sessions
+                .iter()
                 .filter(|s| s.project_id == project.id)
-                .filter(|s| s.task_key.is_none() || !all_task_keys.contains(s.task_key.as_deref().unwrap_or("")))
+                .filter(|s| {
+                    s.task_key.is_none()
+                        || !all_task_keys.contains(s.task_key.as_deref().unwrap_or(""))
+                })
                 .collect();
             for s in &orphans {
                 self.flat_nav.push(NavItem::OrphanSession {
                     session_id: s.id.clone(),
-                    name: if s.name.is_empty() { s.branch.clone() } else { s.name.clone() },
+                    name: if s.name.is_empty() {
+                        s.branch.clone()
+                    } else {
+                        s.name.clone()
+                    },
                     status: s.status.clone(),
                 });
             }
 
             // Tasks grouped by status
-            let project_tasks = self.cached_tasks_by_project.get(&project.path).cloned().unwrap_or_default();
+            let project_tasks = self
+                .cached_tasks_by_project
+                .get(&project.path)
+                .cloned()
+                .unwrap_or_default();
             let status_order = ["in_progress", "in_review", "todo", "done"];
 
             for status in status_order {
-                let mut group: Vec<_> = project_tasks.iter()
+                let mut group: Vec<_> = project_tasks
+                    .iter()
                     .filter(|t| t.status.as_str() == status)
                     .collect();
                 if group.is_empty() {
@@ -327,7 +487,9 @@ impl SidebarState {
                 }
 
                 for task in &group {
-                    let linked_session_id = self.cached_sessions.iter()
+                    let linked_session_id = self
+                        .cached_sessions
+                        .iter()
                         .find(|s| s.task_key.as_deref() == Some(&task.key))
                         .map(|s| s.id.clone());
 
@@ -360,7 +522,8 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap();
         let conn = Connection::open(path).unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .unwrap();
         services::migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         (conn, tmp)
@@ -375,7 +538,10 @@ mod tests {
         let sidebar = SidebarState::new(&conn, tmp.path());
         let nav = sidebar.flat_nav();
 
-        let headers: Vec<_> = nav.iter().filter(|item| matches!(item, NavItem::ProjectHeader { .. })).collect();
+        let headers: Vec<_> = nav
+            .iter()
+            .filter(|item| matches!(item, NavItem::ProjectHeader { .. }))
+            .collect();
         assert_eq!(headers.len(), 2);
         assert!(matches!(&headers[0], NavItem::ProjectHeader { name, .. } if name == "myapp"));
         assert!(matches!(&headers[1], NavItem::ProjectHeader { name, .. } if name == "other"));
@@ -387,14 +553,18 @@ mod tests {
         let project = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
 
         // Create an orphan session (no task_key) — same as Tauri db::create_session_with_id
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "sess-1".to_string(),
-            project_id: project.id.clone(),
-            name: "my session".to_string(),
-            backend: "daemon".to_string(),
-            branch: "main".to_string(),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "sess-1".to_string(),
+                project_id: project.id.clone(),
+                name: "my session".to_string(),
+                backend: "daemon".to_string(),
+                branch: "main".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Create tasks via SqliteRepository — same codepath as Tauri commands/tasks.rs
         let prefix = derive_prefix(&project.name);
@@ -403,22 +573,28 @@ mod tests {
             title: "Fix bug".to_string(),
             priority: 0,
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         repo.create(CreateParams {
             title: "Add feature".to_string(),
             priority: 1,
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         drop(repo);
 
         // Move second task to in_progress (same as Tauri move_task_item)
         let repo = SqliteRepository::open(tmp.path().to_str().unwrap(), &prefix).unwrap();
         let tasks = repo.list(ListFilter::default()).unwrap();
         let feat_task = tasks.iter().find(|t| t.title == "Add feature").unwrap();
-        repo.update(&feat_task.key, planeai_tasks::model::UpdateParams {
-            status: Some(planeai_tasks::model::Status::InProgress),
-            ..Default::default()
-        }).unwrap();
+        repo.update(
+            &feat_task.key,
+            planeai_tasks::model::UpdateParams {
+                status: Some(planeai_tasks::model::Status::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         drop(repo);
 
         let sidebar = SidebarState::new(&conn, tmp.path());
@@ -427,9 +603,13 @@ mod tests {
         // Expected: ProjectHeader, OrphanSession, StatusHeader(in_progress), Task, StatusHeader(todo), Task
         assert!(matches!(&nav[0], NavItem::ProjectHeader { name, .. } if name == "myapp"));
         assert!(matches!(&nav[1], NavItem::OrphanSession { name, .. } if name == "my session"));
-        assert!(matches!(&nav[2], NavItem::StatusHeader { status, count, .. } if status == "in_progress" && *count == 1));
+        assert!(
+            matches!(&nav[2], NavItem::StatusHeader { status, count, .. } if status == "in_progress" && *count == 1)
+        );
         assert!(matches!(&nav[3], NavItem::Task { title, .. } if title == "Add feature"));
-        assert!(matches!(&nav[4], NavItem::StatusHeader { status, count, .. } if status == "todo" && *count == 1));
+        assert!(
+            matches!(&nav[4], NavItem::StatusHeader { status, count, .. } if status == "todo" && *count == 1)
+        );
         assert!(matches!(&nav[5], NavItem::Task { title, .. } if title == "Fix bug"));
     }
 
@@ -438,18 +618,26 @@ mod tests {
         let (conn, tmp) = setup_db();
         let project = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
 
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "sess-1".to_string(),
-            project_id: project.id.clone(),
-            name: "orphan".to_string(),
-            backend: "daemon".to_string(),
-            branch: "main".to_string(),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "sess-1".to_string(),
+                project_id: project.id.clone(),
+                name: "orphan".to_string(),
+                backend: "daemon".to_string(),
+                branch: "main".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let prefix = derive_prefix(&project.name);
         let repo = SqliteRepository::open(tmp.path().to_str().unwrap(), &prefix).unwrap();
-        repo.create(CreateParams { title: "Task A".to_string(), ..Default::default() }).unwrap();
+        repo.create(CreateParams {
+            title: "Task A".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
         drop(repo);
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
@@ -461,29 +649,39 @@ mod tests {
 
         // Only the project header should remain
         assert_eq!(sidebar.flat_nav().len(), 1);
-        assert!(matches!(&sidebar.flat_nav()[0], NavItem::ProjectHeader { name, .. } if name == "myapp"));
+        assert!(
+            matches!(&sidebar.flat_nav()[0], NavItem::ProjectHeader { name, .. } if name == "myapp")
+        );
     }
 
     #[test]
     fn j_k_moves_selected_index_within_bounds() {
         let (conn, tmp) = setup_db();
         let project = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "s1".to_string(),
-            project_id: project.id.clone(),
-            name: "sess1".to_string(),
-            backend: "daemon".to_string(),
-            branch: "main".to_string(),
-            ..Default::default()
-        }).unwrap();
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "s2".to_string(),
-            project_id: project.id.clone(),
-            name: "sess2".to_string(),
-            backend: "daemon".to_string(),
-            branch: "feat".to_string(),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "s1".to_string(),
+                project_id: project.id.clone(),
+                name: "sess1".to_string(),
+                backend: "daemon".to_string(),
+                branch: "main".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "s2".to_string(),
+                project_id: project.id.clone(),
+                name: "sess2".to_string(),
+                backend: "daemon".to_string(),
+                branch: "feat".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
         // flat_nav: [ProjectHeader, OrphanSession(s1), OrphanSession(s2)]
@@ -514,14 +712,18 @@ mod tests {
     fn h_collapses_current_project_l_expands() {
         let (conn, tmp) = setup_db();
         let project = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "s1".to_string(),
-            project_id: project.id.clone(),
-            name: "orphan".to_string(),
-            backend: "daemon".to_string(),
-            branch: "main".to_string(),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "s1".to_string(),
+                project_id: project.id.clone(),
+                name: "orphan".to_string(),
+                backend: "daemon".to_string(),
+                branch: "main".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
         let initial_len = sidebar.flat_nav().len();
@@ -540,14 +742,18 @@ mod tests {
     fn enter_on_orphan_session_returns_switch_session() {
         let (conn, tmp) = setup_db();
         let project = ProjectService::create(&conn, "myapp", "/tmp/myapp").unwrap();
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "sess-abc".to_string(),
-            project_id: project.id.clone(),
-            name: "my orphan".to_string(),
-            backend: "daemon".to_string(),
-            branch: "main".to_string(),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "sess-abc".to_string(),
+                project_id: project.id.clone(),
+                name: "my orphan".to_string(),
+                backend: "daemon".to_string(),
+                branch: "main".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
         // nav[0] = ProjectHeader, nav[1] = OrphanSession
@@ -564,22 +770,28 @@ mod tests {
         // Create a task
         let prefix = derive_prefix(&project.name);
         let repo = SqliteRepository::open(tmp.path().to_str().unwrap(), &prefix).unwrap();
-        let task = repo.create(CreateParams {
-            title: "Fix bug".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let task = repo
+            .create(CreateParams {
+                title: "Fix bug".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
         drop(repo);
 
         // Create a session linked to that task
-        SessionService::create(&conn, &services::CreateSessionParams {
-            id: "sess-linked".to_string(),
-            project_id: project.id.clone(),
-            name: "task session".to_string(),
-            backend: "daemon".to_string(),
-            branch: "feat".to_string(),
-            task_key: Some(task.key.clone()),
-            ..Default::default()
-        }).unwrap();
+        SessionService::create(
+            &conn,
+            &services::CreateSessionParams {
+                id: "sess-linked".to_string(),
+                project_id: project.id.clone(),
+                name: "task session".to_string(),
+                backend: "daemon".to_string(),
+                branch: "feat".to_string(),
+                task_key: Some(task.key.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let mut sidebar = SidebarState::new(&conn, tmp.path());
         // nav: [ProjectHeader, StatusHeader(todo), Task(Fix bug)]
@@ -587,7 +799,10 @@ mod tests {
         sidebar.handle_key("j"); // StatusHeader
         sidebar.handle_key("j"); // Task
         let action = sidebar.handle_key("Enter");
-        assert_eq!(action, SidebarAction::SwitchSession("sess-linked".to_string()));
+        assert_eq!(
+            action,
+            SidebarAction::SwitchSession("sess-linked".to_string())
+        );
     }
 
     #[test]

@@ -745,7 +745,11 @@ impl MultiApp {
                                 }
                                 SidebarAction::SwitchSession(sid) => {
                                     // Find matching terminal session by daemon_session_id
-                                    if let Some(idx) = self.sessions.iter().position(|s| s.daemon_session_id.as_deref() == Some(&sid)) {
+                                    if let Some(idx) = self
+                                        .sessions
+                                        .iter()
+                                        .position(|s| s.daemon_session_id.as_deref() == Some(&sid))
+                                    {
                                         self.switch_to(idx);
                                     }
                                     self.zone = Zone::Terminal;

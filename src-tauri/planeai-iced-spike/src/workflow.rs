@@ -203,6 +203,9 @@ enum Message {
     Poll,
     KeyEvent(keyboard::Event),
     WindowResized(Size),
+    SidebarDrag(f32),
+    SidebarDragEnd,
+    SidebarMouseDown(f32),
     ProjectInputChanged(String),
     ProjectInputSubmit,
     LaunchPromptChanged(String),
@@ -1447,6 +1450,9 @@ impl WorkflowApp {
             let session = &mut self.sessions[idx];
             session.snapshot = snapshot_grid(&session.term);
             session.cache.clear();
+            if let Some(ref mut sidebar) = self.sidebar {
+                sidebar.active_session_id = Some(self.sessions[idx].session_id.clone());
+            }
         }
     }
 
@@ -1556,6 +1562,21 @@ impl WorkflowApp {
 impl WorkflowApp {
     fn update(&mut self, message: Message) {
         match message {
+            Message::SidebarMouseDown(_) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_down();
+                }
+            }
+            Message::SidebarDrag(x) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_move(x);
+                }
+            }
+            Message::SidebarDragEnd => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.handle_mouse_up();
+                }
+            }
             Message::ProjectInputChanged(val) => {
                 self.project_input = val;
             }
@@ -2210,7 +2231,9 @@ impl WorkflowApp {
                                     self.sidebar_focused = false;
                                 }
                                 SidebarAction::SwitchSession(sid) => {
-                                    if let Some(idx) = self.sessions.iter().position(|s| s.session_id == sid) {
+                                    if let Some(idx) =
+                                        self.sessions.iter().position(|s| s.session_id == sid)
+                                    {
                                         self.switch_to(idx);
                                     } else {
                                         // Session not attached locally — attach it
@@ -2262,6 +2285,11 @@ impl WorkflowApp {
                                 self.sidebar = Some(SidebarState::new(&conn, &db_path));
                             }
                         }
+                    }
+                    // Update active session indicator
+                    if let Some(ref mut sidebar) = self.sidebar {
+                        sidebar.active_session_id =
+                            self.sessions.get(self.active).map(|s| s.session_id.clone());
                     }
                     self.last_sidebar_refresh = Some(now_sidebar);
                 }
@@ -3011,12 +3039,20 @@ impl WorkflowApp {
         Subscription::batch(vec![
             keyboard::listen().map(Message::KeyEvent),
             iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
-            event::listen_with(|ev, _status, _id| {
-                if let iced::Event::Window(window::Event::Resized(size)) = ev {
+            event::listen_with(|ev, _status, _id| match ev {
+                iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))
-                } else {
-                    None
                 }
+                iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::SidebarMouseDown(0.0)),
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                    iced::mouse::Button::Left,
+                )) => Some(Message::SidebarDragEnd),
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::SidebarDrag(position.x))
+                }
+                _ => None,
             }),
         ])
     }
