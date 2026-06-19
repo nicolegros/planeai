@@ -54,3 +54,50 @@ fn delete_branch(repo_path: &str, branch: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Remove worktrees from sessions that have been exited/destroyed for more than 48 hours.
+/// Returns a list of errors encountered (empty = all good).
+pub fn cleanup_stale_worktrees(
+    conn: &rusqlite::Connection,
+    remove_worktree: impl Fn(&str, &str) -> Result<(), String>,
+) -> Vec<String> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339();
+    let mut errors = vec![];
+
+    let mut stmt = match conn.prepare(
+        "SELECT s.id, s.worktree_path, p.path FROM sessions s
+         JOIN projects p ON p.id = s.project_id
+         WHERE s.status IN ('exited', 'destroyed')
+           AND s.worktree_path IS NOT NULL
+           AND s.updated_at IS NOT NULL
+           AND s.updated_at < ?1",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            errors.push(format!("query: {e}"));
+            return errors;
+        }
+    };
+    let rows: Vec<(String, String, String)> =
+        match stmt.query_map(rusqlite::params![cutoff], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
+            Err(e) => {
+                errors.push(format!("query: {e}"));
+                return errors;
+            }
+        };
+
+    for (_session_id, worktree_path, project_path) in &rows {
+        if let Err(e) = remove_worktree(project_path, worktree_path) {
+            errors.push(format!("session {}: {e}", _session_id));
+        }
+    }
+
+    errors
+}

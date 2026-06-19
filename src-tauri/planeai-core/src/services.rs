@@ -79,6 +79,16 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     let _ =
         conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN updated_at TEXT");
+    let _ =
+        conn.execute_batch("UPDATE sessions SET updated_at = created_at WHERE updated_at IS NULL");
+    let _ = conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS sessions_updated_at
+         AFTER UPDATE ON sessions
+         BEGIN
+           UPDATE sessions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+         END;",
+    );
 
     // Migrate tmux_name from NOT NULL to nullable for DBs created before dual-backend.
     let has_not_null: bool = conn
@@ -108,10 +118,11 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  mru_position INTEGER,
                  pr_url TEXT,
                  pr_state TEXT,
-                 auto_dispatched INTEGER NOT NULL DEFAULT 0
+                 auto_dispatched INTEGER NOT NULL DEFAULT 0,
+                 updated_at TEXT
              );
-             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched)
-                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched FROM sessions_old;
+             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
+                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
              DROP TABLE sessions_old;"
         )?;
     }
