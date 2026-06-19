@@ -537,87 +537,108 @@ impl DaemonSession {
         })?;
         let spawn_latency_ms = spawn_start.elapsed().as_secs_f64() * 1000.0;
 
-        rt.block_on(async {
-            send_control_command(
-                &socket,
-                &serde_json::json!({
-                    "cmd": "resize",
-                    "session_id": &session_id,
-                    "cols": cols,
-                    "rows": rows,
-                }),
-            )
-            .await
-        })?;
+        // Post-spawn setup: if any step fails, kill the daemon session to avoid orphan.
+        let post_spawn_result: anyhow::Result<Self> = (|| {
+            rt.block_on(async {
+                send_control_command(
+                    &socket,
+                    &serde_json::json!({
+                        "cmd": "resize",
+                        "session_id": &session_id,
+                        "cols": cols,
+                        "rows": rows,
+                    }),
+                )
+                .await
+            })?;
 
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let buf_not_full = Arc::new(Condvar::new());
-        let exited = Arc::new(AtomicBool::new(false));
-        let max_pending = Arc::new(AtomicU64::new(0));
-        let recv_bytes = Arc::new(AtomicU64::new(0));
-        let send_calls = Arc::new(AtomicU64::new(0));
-        let send_bytes_counter = Arc::new(AtomicU64::new(0));
-        let block_count = Arc::new(AtomicU64::new(0));
-        let block_ns = Arc::new(AtomicU64::new(0));
+            let buf = Arc::new(Mutex::new(Vec::new()));
+            let buf_not_full = Arc::new(Condvar::new());
+            let exited = Arc::new(AtomicBool::new(false));
+            let max_pending = Arc::new(AtomicU64::new(0));
+            let recv_bytes = Arc::new(AtomicU64::new(0));
+            let send_calls = Arc::new(AtomicU64::new(0));
+            let send_bytes_counter = Arc::new(AtomicU64::new(0));
+            let block_count = Arc::new(AtomicU64::new(0));
+            let block_ns = Arc::new(AtomicU64::new(0));
 
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
+            let (input_tx, input_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let (resize_tx, resize_rx) = mpsc::unbounded_channel::<(u16, u16)>();
 
-        let attach_start = Instant::now();
-        let buf_clone = buf.clone();
-        let buf_not_full_clone = buf_not_full.clone();
-        let exited_clone = exited.clone();
-        let max_pending_clone = max_pending.clone();
-        let recv_bytes_clone = recv_bytes.clone();
-        let block_count_clone = block_count.clone();
-        let block_ns_clone = block_ns.clone();
-        let sid = session_id.clone();
-        let socket_clone = socket.clone();
+            let attach_start = Instant::now();
+            let buf_clone = buf.clone();
+            let buf_not_full_clone = buf_not_full.clone();
+            let exited_clone = exited.clone();
+            let max_pending_clone = max_pending.clone();
+            let recv_bytes_clone = recv_bytes.clone();
+            let block_count_clone = block_count.clone();
+            let block_ns_clone = block_ns.clone();
+            let sid = session_id.clone();
+            let socket_clone = socket.clone();
 
-        rt.spawn(async move {
-            if let Err(e) = data_loop(
-                &socket_clone,
-                &sid,
-                input_rx,
-                buf_clone,
-                buf_not_full_clone,
-                exited_clone,
-                max_pending_clone,
-                recv_bytes_clone,
-                block_count_clone,
-                block_ns_clone,
-            )
-            .await
-            {
-                tracing::debug!("daemon data loop ended: {e}");
+            rt.spawn(async move {
+                if let Err(e) = data_loop(
+                    &socket_clone,
+                    &sid,
+                    input_rx,
+                    buf_clone,
+                    buf_not_full_clone,
+                    exited_clone,
+                    max_pending_clone,
+                    recv_bytes_clone,
+                    block_count_clone,
+                    block_ns_clone,
+                )
+                .await
+                {
+                    tracing::debug!("daemon data loop ended: {e}");
+                }
+            });
+
+            let sid_resize = session_id.clone();
+            let socket_resize = socket.clone();
+            rt.spawn(async move {
+                resize_loop(&socket_resize, &sid_resize, resize_rx).await;
+            });
+
+            let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
+
+            Ok(Self {
+                id,
+                session_id: session_id.clone(),
+                buf,
+                buf_not_full,
+                exited,
+                max_pending,
+                input_tx,
+                resize_tx,
+                recv_bytes,
+                send_calls,
+                send_bytes: send_bytes_counter,
+                block_count,
+                block_ns,
+                spawn_latency_ms,
+                attach_latency_ms,
+            })
+        })();
+
+        match post_spawn_result {
+            Ok(s) => Ok(s),
+            Err(e) => {
+                // Kill the daemon session to prevent orphan
+                let _ = rt.block_on(async {
+                    send_control_command(
+                        &socket,
+                        &serde_json::json!({
+                            "cmd": "kill",
+                            "session_id": &session_id,
+                        }),
+                    )
+                    .await
+                });
+                Err(e)
             }
-        });
-
-        let sid_resize = session_id.clone();
-        let socket_resize = socket.clone();
-        rt.spawn(async move {
-            resize_loop(&socket_resize, &sid_resize, resize_rx).await;
-        });
-
-        let attach_latency_ms = attach_start.elapsed().as_secs_f64() * 1000.0;
-
-        Ok(Self {
-            id,
-            session_id,
-            buf,
-            buf_not_full,
-            exited,
-            max_pending,
-            input_tx,
-            resize_tx,
-            recv_bytes,
-            send_calls,
-            send_bytes: send_bytes_counter,
-            block_count,
-            block_ns,
-            spawn_latency_ms,
-            attach_latency_ms,
-        })
+        }
     }
 
     pub fn spawn_latency_ms(&self) -> f64 {
