@@ -1456,6 +1456,38 @@ impl WorkflowApp {
         }
     }
 
+    fn handle_sidebar_key(&mut self, key: &keyboard::Key) {
+        let key_str = match key {
+            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+            keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "ArrowLeft",
+            keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "ArrowRight",
+            keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+            keyboard::Key::Named(keyboard::key::Named::Escape) => "Escape",
+            keyboard::Key::Character(c) => c.as_str(),
+            _ => return,
+        };
+        if let Some(ref mut sidebar) = self.sidebar {
+            if let Some(action) = sidebar.handle_key(key_str) {
+                match action {
+                    SidebarAction::FocusTerminal => {
+                        self.sidebar_focused = false;
+                    }
+                    SidebarAction::SwitchSession(sid) => {
+                        if let Some(idx) =
+                            self.sessions.iter().position(|s| s.session_id == sid)
+                        {
+                            self.switch_to(idx);
+                        } else {
+                            self.attach_session(sid);
+                        }
+                        self.sidebar_focused = false;
+                    }
+                }
+            }
+        }
+    }
+
     fn select_project(&mut self, path_str: &str) {
         let expanded = planeai_core::session_launch::expand_tilde(path_str);
         let path = PathBuf::from(&expanded);
@@ -2214,37 +2246,7 @@ impl WorkflowApp {
                 }
                 // When sidebar is focused, route keys there
                 if self.sidebar_focused {
-                    let key_str = match &key {
-                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
-                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
-                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "ArrowLeft",
-                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "ArrowRight",
-                        keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
-                        keyboard::Key::Named(keyboard::key::Named::Escape) => "Escape",
-                        keyboard::Key::Character(c) => c.as_str(),
-                        _ => "",
-                    };
-                    if !key_str.is_empty() {
-                        if let Some(ref mut sidebar) = self.sidebar {
-                            if let Some(action) = sidebar.handle_key(key_str) {
-                                match action {
-                                    SidebarAction::FocusTerminal => {
-                                        self.sidebar_focused = false;
-                                    }
-                                    SidebarAction::SwitchSession(sid) => {
-                                        if let Some(idx) =
-                                            self.sessions.iter().position(|s| s.session_id == sid)
-                                        {
-                                            self.switch_to(idx);
-                                        } else {
-                                            self.attach_session(sid);
-                                        }
-                                        self.sidebar_focused = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.handle_sidebar_key(&key);
                     return;
                 }
                 // Forward input to active session
