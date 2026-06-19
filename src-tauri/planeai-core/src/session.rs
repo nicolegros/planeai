@@ -104,36 +104,30 @@ impl SessionDispatcher {
         );
         backend.create_worktree(&self.project_path, &wt_path, &branch, &resolved_base)?;
 
-        // Build agent launch command
-        let mut cmd = self.dispatch_config.provider_command.clone();
-        if self.dispatch_config.yolo {
-            if let Some(flag) = &self.dispatch_config.yolo_flag {
-                cmd = format!("{cmd} {flag}");
-            }
-        }
-
-        // Render prompt template and inject via prompt_command if both are configured
-        if let (Some(tpl), Some(prompt_cmd)) = (
-            &self.dispatch_config.prompt_template,
-            &self.dispatch_config.prompt_command,
-        ) {
+        // Build agent launch command via shared helper (autonomous=true for auto-dispatch)
+        let rendered_prompt = if let Some(tpl) = &self.dispatch_config.prompt_template {
             let mut vars = HashMap::new();
             vars.insert("key", task.key.as_str());
             vars.insert("title", task.title.as_str());
             vars.insert("description", task.description.as_str());
-            let rendered = template::render(tpl, &vars);
+            Some(template::render(tpl, &vars))
+        } else {
+            None
+        };
 
-            // Apply prompt_wrapper if set (wraps content before CLI delivery)
-            let final_prompt = if let Some(wrapper) = &self.dispatch_config.prompt_wrapper {
-                let mut wrap_vars = HashMap::new();
-                wrap_vars.insert("prompt", rendered.as_str());
-                template::render(wrapper, &wrap_vars)
-            } else {
-                rendered
-            };
-
-            template::append_prompt(&mut cmd, prompt_cmd, &final_prompt);
-        }
+        let provider_config = crate::session_launch::ProviderConfig {
+            command: self.dispatch_config.provider_command.clone(),
+            yolo_flag: self.dispatch_config.yolo_flag.clone(),
+            prompt_command: self.dispatch_config.prompt_command.clone(),
+            autonomous_prompt_template: self.dispatch_config.prompt_wrapper.clone(),
+        };
+        let launch_result = crate::session_launch::build_provider_launch_command(
+            &provider_config,
+            self.dispatch_config.yolo,
+            rendered_prompt.as_deref(),
+            true, // autonomous: auto-dispatched sessions always use autonomous template
+        );
+        let cmd = launch_result.command;
 
         // Create tmux session
         let tmux_name = format!("planeai-{}-{}", self.project_name, short_id);
