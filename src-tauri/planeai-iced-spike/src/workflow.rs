@@ -22,6 +22,7 @@ use iced::{
 };
 
 use crate::adapter::PlaneAiTerminalSession;
+use crate::combobox::{ComboBoxState, ComboItem};
 use crate::common::*;
 use crate::daemon_session::{
     attach, daemon_is_connected, detach_daemon_session, ensure_daemon_running_sync,
@@ -65,6 +66,24 @@ fn add_recent_project(path_str: &str) -> Vec<String> {
     projects.truncate(MAX_RECENT_PROJECTS);
     save_recent_projects(&projects);
     projects
+}
+
+// ─── Session form types ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+enum SessionFormMode {
+    Manual,
+    FromTask,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SessionFormField {
+    Mode,
+    Project,
+    Task,
+    Name,
+    Branch,
+    Toggles,
 }
 
 // ─── Session state ───────────────────────────────────────────────────────────
@@ -154,6 +173,23 @@ struct WorkflowApp {
     task_list: Vec<planeai_tasks::model::Task>,
     task_picker_index: usize,
     selected_task: Option<planeai_tasks::model::Task>,
+    // New... menu (Cmd+N)
+    new_menu: bool,
+    new_menu_index: usize,
+    // Session creation form
+    session_form: bool,
+    session_form_mode: SessionFormMode,
+    session_form_name: String,
+    session_form_branch: String,
+    session_form_use_worktree: bool,
+    session_form_auto_approve: bool,
+    session_form_provider_idx: usize,
+    session_form_task_idx: usize,
+    session_form_task_list: Vec<planeai_tasks::model::Task>,
+    session_form_focus: SessionFormField,
+    session_form_error: Option<String>,
+    session_form_project_combo: ComboBoxState,
+    provider_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +332,21 @@ impl WorkflowApp {
                 task_list: Vec::new(),
                 task_picker_index: 0,
                 selected_task: None,
+                new_menu: false,
+                new_menu_index: 0,
+                session_form: false,
+                session_form_mode: SessionFormMode::Manual,
+                session_form_name: String::new(),
+                session_form_branch: String::new(),
+                session_form_use_worktree: false,
+                session_form_auto_approve: true,
+                session_form_provider_idx: 0,
+                session_form_task_idx: 0,
+                session_form_task_list: Vec::new(),
+                session_form_focus: SessionFormField::Mode,
+                session_form_error: None,
+                session_form_project_combo: ComboBoxState::new(Vec::new()),
+                provider_keys: Vec::new(),
             },
             iced::Task::none(),
         );
@@ -803,6 +854,125 @@ impl WorkflowApp {
         }
     }
 
+    /// Open the session creation form.
+    fn open_session_form(&mut self) {
+        // Load provider keys from config
+        let config = if let Some(path) = WORKFLOW_ARGS.get().and_then(|a| a.config.as_ref()) {
+            planeai_core::session_launch::load_launch_config(path).unwrap_or_default()
+        } else {
+            planeai_core::session_launch::load_default_config()
+        };
+        self.provider_keys = config.providers.keys().cloned().collect();
+        self.provider_keys.sort();
+        self.session_form_provider_idx = self
+            .provider_keys
+            .iter()
+            .position(|k| k == &config.default_provider)
+            .unwrap_or(0);
+
+        // Load projects from DB
+        let mut project_items = Vec::new();
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                if let Ok(projects) = ProjectService::list_active(&conn) {
+                    project_items = projects
+                        .into_iter()
+                        .map(|p| ComboItem { id: p.id, label: p.name })
+                        .collect();
+                }
+            }
+        }
+        self.session_form_project_combo = ComboBoxState::new(project_items);
+        // Pre-select current project
+        if let Some(ref p) = self.project {
+            self.session_form_project_combo.select_by_id(&p.id);
+        }
+
+        self.session_form = true;
+        self.session_form_mode = SessionFormMode::Manual;
+        self.session_form_name.clear();
+        self.session_form_branch.clear();
+        self.session_form_use_worktree = false;
+        self.session_form_auto_approve = true;
+        self.session_form_task_idx = 0;
+        self.session_form_task_list.clear();
+        self.session_form_focus = SessionFormField::Mode;
+        self.session_form_error = None;
+    }
+
+    /// Load tasks into the session form task list.
+    fn session_form_load_tasks(&mut self) {
+        let project_name = match &self.project {
+            Some(p) => p.name.clone(),
+            None => return,
+        };
+        let db_path = planeai_core::app_data_dir().join("planeai.db");
+        match TaskService::list_for_project(&db_path, &project_name) {
+            Ok(tasks) => {
+                self.session_form_task_list = tasks;
+                self.session_form_task_idx = 0;
+            }
+            Err(_) => {
+                self.session_form_task_list.clear();
+            }
+        }
+    }
+
+    /// Auto-fill form fields from the selected task.
+    fn session_form_apply_task(&mut self) {
+        if let Some(task) = self.session_form_task_list.get(self.session_form_task_idx) {
+            self.session_form_name = format!("{}: {}", task.key, task.title);
+            let slug = format!(
+                "{}/{}",
+                task.key.to_lowercase(),
+                task.title
+                    .to_lowercase()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join("-")
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '/')
+                    .collect::<String>()
+            );
+            self.session_form_branch = slug;
+        }
+    }
+
+    /// Submit the session creation form.
+    fn submit_session_form(&mut self) {
+        if self.session_form_mode == SessionFormMode::FromTask {
+            if self.session_form_task_list.is_empty() {
+                self.session_form_error = Some("No task selected.".into());
+                return;
+            }
+            let task = self.session_form_task_list[self.session_form_task_idx].clone();
+            self.selected_task = Some(task);
+            self.session_form = false;
+            // Use worktree launch path
+            if self.session_form_use_worktree {
+                self.worktree_branch_input = self.session_form_branch.clone();
+                self.worktree_task_key_input = self
+                    .selected_task
+                    .as_ref()
+                    .map(|t| t.key.clone())
+                    .unwrap_or_default();
+                self.launch_session_in_worktree();
+            } else {
+                self.launch_from_task();
+            }
+        } else {
+            // Manual mode
+            self.session_form = false;
+            if self.session_form_use_worktree {
+                self.worktree_branch_input = self.session_form_branch.clone();
+                self.worktree_task_key_input.clear();
+                self.launch_session_in_worktree();
+            } else {
+                self.launch_session();
+            }
+        }
+    }
+
     /// Launch session from selected task with full shared task/worktree integration.
     fn launch_from_task(&mut self) {
         let task = match &self.selected_task {
@@ -1238,6 +1408,197 @@ impl WorkflowApp {
                     return;
                 }
 
+                // New... menu mode
+                if self.new_menu {
+                    match &key {
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            self.new_menu = false;
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                            self.new_menu_index = (self.new_menu_index + 1).min(1);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                            self.new_menu_index = self.new_menu_index.saturating_sub(1);
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                            self.new_menu = false;
+                            if self.new_menu_index == 0 {
+                                self.open_session_form();
+                            } else {
+                                // TODO: task creation form
+                                self.set_error("Task creation not yet implemented.".into());
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
+                // Session creation form
+                if self.session_form {
+                    // When Project field is focused — custom combobox
+                    if self.session_form_focus == SessionFormField::Project {
+                        // Form-level shortcuts first
+                        match &key {
+                            keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                                self.session_form = false;
+                                return;
+                            }
+                            keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                                if modifiers.shift() {
+                                    self.session_form_focus = SessionFormField::Mode;
+                                } else {
+                                    self.session_form_focus = match self.session_form_mode {
+                                        SessionFormMode::FromTask => SessionFormField::Task,
+                                        SessionFormMode::Manual => SessionFormField::Name,
+                                    };
+                                }
+                                return;
+                            }
+                            _ => {}
+                        }
+                        let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
+                        if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter)) {
+                            self.submit_session_form();
+                            return;
+                        }
+                        // Delegate to combobox
+                        let key_str = match &key {
+                            keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+                            keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+                            keyboard::Key::Named(keyboard::key::Named::Backspace) => "Backspace",
+                            keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+                            keyboard::Key::Character(c) => c.as_str(),
+                            _ => "",
+                        };
+                        if !key_str.is_empty() {
+                            if let Some(selected) = self.session_form_project_combo.handle_key(key_str) {
+                                // Project was selected — look up path from DB projects
+                                let path = if let Some(ref db) = self.db {
+                                    if let Ok(conn) = db.lock() {
+                                        ProjectService::get_by_id(&conn, &selected.id)
+                                            .ok()
+                                            .flatten()
+                                            .map(|p| p.path)
+                                    } else { None }
+                                } else { None };
+                                if let Some(path) = path {
+                                    self.select_project(&path);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    match &key {
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            self.session_form = false;
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                            if modifiers.shift() {
+                                // Reverse cycle
+                                self.session_form_focus = match (&self.session_form_mode, &self.session_form_focus) {
+                                    (_, SessionFormField::Mode) => SessionFormField::Branch,
+                                    (_, SessionFormField::Branch) => SessionFormField::Toggles,
+                                    (_, SessionFormField::Toggles) => SessionFormField::Name,
+                                    (SessionFormMode::FromTask, SessionFormField::Name) => SessionFormField::Task,
+                                    (SessionFormMode::FromTask, SessionFormField::Task) => SessionFormField::Project,
+                                    (SessionFormMode::Manual, SessionFormField::Name) => SessionFormField::Project,
+                                    (_, SessionFormField::Project) => SessionFormField::Mode,
+                                    _ => SessionFormField::Mode,
+                                };
+                            } else {
+                                // Forward cycle
+                                self.session_form_focus = match (&self.session_form_mode, &self.session_form_focus) {
+                                    (_, SessionFormField::Mode) => SessionFormField::Project,
+                                    (SessionFormMode::FromTask, SessionFormField::Project) => SessionFormField::Task,
+                                    (SessionFormMode::Manual, SessionFormField::Project) => SessionFormField::Name,
+                                    (SessionFormMode::FromTask, SessionFormField::Task) => SessionFormField::Name,
+                                    (_, SessionFormField::Name) => SessionFormField::Toggles,
+                                    (_, SessionFormField::Toggles) => SessionFormField::Branch,
+                                    (_, SessionFormField::Branch) => SessionFormField::Mode,
+                                    _ => SessionFormField::Mode,
+                                };
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                            let cmd = if cfg!(target_os = "macos") { modifiers.command() } else { modifiers.control() };
+                            if cmd {
+                                self.submit_session_form();
+                            } else if self.session_form_focus == SessionFormField::Mode {
+                                // Toggle mode on Enter at mode field
+                                self.session_form_mode = match self.session_form_mode {
+                                    SessionFormMode::Manual => {
+                                        self.session_form_load_tasks();
+                                        SessionFormMode::FromTask
+                                    }
+                                    SessionFormMode::FromTask => SessionFormMode::Manual,
+                                };
+                            } else if self.session_form_focus == SessionFormField::Task {
+                                // Select task and auto-fill
+                                self.session_form_apply_task();
+                                self.session_form_focus = SessionFormField::Name;
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                            if self.session_form_focus == SessionFormField::Task && !self.session_form_task_list.is_empty() {
+                                self.session_form_task_idx = (self.session_form_task_idx + 1).min(self.session_form_task_list.len() - 1);
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                            if self.session_form_focus == SessionFormField::Task {
+                                self.session_form_task_idx = self.session_form_task_idx.saturating_sub(1);
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                            if self.session_form_focus == SessionFormField::Mode {
+                                self.session_form_mode = SessionFormMode::Manual;
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                            if self.session_form_focus == SessionFormField::Mode {
+                                self.session_form_mode = SessionFormMode::FromTask;
+                                self.session_form_load_tasks();
+                            }
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Backspace) => {
+                            match self.session_form_focus {
+                                SessionFormField::Name => { self.session_form_name.pop(); }
+                                SessionFormField::Branch => { self.session_form_branch.pop(); }
+                                _ => {}
+                            }
+                        }
+                        keyboard::Key::Character(c) => {
+                            let ch = c.as_str();
+                            // Toggles: w=worktree, a=auto-approve, p=cycle provider
+                            if self.session_form_focus == SessionFormField::Toggles {
+                                match ch {
+                                    "w" => self.session_form_use_worktree = !self.session_form_use_worktree,
+                                    "a" => self.session_form_auto_approve = !self.session_form_auto_approve,
+                                    "p" if !self.provider_keys.is_empty() => {
+                                        self.session_form_provider_idx = (self.session_form_provider_idx + 1) % self.provider_keys.len();
+                                    }
+                                    _ => {}
+                                }
+                            } else if self.session_form_focus == SessionFormField::Name {
+                                self.session_form_name.push_str(ch);
+                            } else if self.session_form_focus == SessionFormField::Branch {
+                                self.session_form_branch.push_str(ch);
+                            } else if self.session_form_focus == SessionFormField::Mode {
+                                match ch {
+                                    "m" => self.session_form_mode = SessionFormMode::Manual,
+                                    "t" => {
+                                        self.session_form_mode = SessionFormMode::FromTask;
+                                        self.session_form_load_tasks();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
                 // Task picker mode
                 if self.task_picker {
                     match &key {
@@ -1332,12 +1693,13 @@ impl WorkflowApp {
                     return;
                 }
 
-                // Cmd+N — launch new session
+                // Cmd+N — open "New..." menu
                 if cmd
                     && !modifiers.shift()
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n")
                 {
-                    self.launch_session();
+                    self.new_menu = true;
+                    self.new_menu_index = 0;
                     self.kill_armed = false;
                     return;
                 }
@@ -1966,6 +2328,211 @@ impl WorkflowApp {
                 ..Default::default()
             });
             column![wt_panel, main_content].into()
+        } else if self.new_menu {
+            let items = ["Session", "Task"];
+            let mut nm_col = column![].spacing(2).width(Length::Fill).padding(6);
+            nm_col = nm_col.push(
+                text("New... (↑↓ navigate, Enter select, Escape cancel)")
+                    .size(12)
+                    .color(Color::from_rgb8(180, 220, 255))
+                    .font(Font::MONOSPACE),
+            );
+            for (i, item) in items.iter().enumerate() {
+                let marker = if i == self.new_menu_index { "▶" } else { " " };
+                let color = if i == self.new_menu_index {
+                    Color::from_rgb8(100, 220, 255)
+                } else {
+                    Color::from_rgb8(180, 180, 180)
+                };
+                nm_col = nm_col.push(
+                    text(format!("{} {}", marker, item))
+                        .size(12)
+                        .color(color)
+                        .font(Font::MONOSPACE),
+                );
+            }
+            let nm_panel = container(nm_col)
+                .width(Length::Fixed(300.0))
+                .padding(12)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(30, 40, 55).into()),
+                    border: iced::Border {
+                        color: Color::from_rgb8(60, 70, 90),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                });
+            let overlay = container(nm_panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgba8(0, 0, 0, 0.6).into()),
+                    ..Default::default()
+                });
+            {
+                use iced::widget::stack;
+                let base_el: Element<'_, Message> = main_content.into();
+                stack![base_el, overlay].into()
+            }
+        } else if self.session_form {
+            let mut sf_col = column![].spacing(3).width(Length::Fill).padding(8);
+            sf_col = sf_col.push(
+                text("New Session")
+                    .size(13)
+                    .color(Color::from_rgb8(255, 255, 255))
+                    .font(Font::MONOSPACE),
+            );
+
+            // Mode toggle
+            let mode_highlight = self.session_form_focus == SessionFormField::Mode;
+            let mode_prefix = if mode_highlight { "▶ " } else { "  " };
+            sf_col = sf_col.push(
+                text(format!(
+                    "{}[{}Manual{}]  [{}From task{}]",
+                    mode_prefix,
+                    if self.session_form_mode == SessionFormMode::Manual { "●" } else { " " },
+                    " M",
+                    if self.session_form_mode == SessionFormMode::FromTask { "●" } else { " " },
+                    " T",
+                ))
+                .size(11)
+                .color(if mode_highlight { Color::from_rgb8(200, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                .font(Font::MONOSPACE),
+            );
+
+            // Project (custom combobox)
+            let proj_focused = self.session_form_focus == SessionFormField::Project;
+            sf_col = sf_col.push(self.session_form_project_combo.view::<Message>("Project", proj_focused));
+
+            // Task picker (From task mode only)
+            if self.session_form_mode == SessionFormMode::FromTask {
+                let task_highlight = self.session_form_focus == SessionFormField::Task;
+                let task_prefix = if task_highlight { "▶ " } else { "  " };
+                sf_col = sf_col.push(
+                    text(format!("{}Task:", task_prefix))
+                        .size(11)
+                        .color(if task_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(150, 150, 150) })
+                        .font(Font::MONOSPACE),
+                );
+                if self.session_form_task_list.is_empty() {
+                    sf_col = sf_col.push(
+                        text("    (no tasks)")
+                            .size(10)
+                            .color(Color::from_rgb8(100, 100, 100))
+                            .font(Font::MONOSPACE),
+                    );
+                } else {
+                    for (i, task) in self.session_form_task_list.iter().take(8).enumerate() {
+                        let marker = if i == self.session_form_task_idx && task_highlight { "▸" } else { " " };
+                        let color = if i == self.session_form_task_idx && task_highlight {
+                            Color::from_rgb8(100, 220, 255)
+                        } else {
+                            Color::from_rgb8(160, 160, 160)
+                        };
+                        sf_col = sf_col.push(
+                            text(format!("   {} [{}] {}", marker, task.key, task.title))
+                                .size(10)
+                                .color(color)
+                                .font(Font::MONOSPACE),
+                        );
+                    }
+                }
+            }
+
+            // Name field
+            let name_highlight = self.session_form_focus == SessionFormField::Name;
+            let name_prefix = if name_highlight { "▶ " } else { "  " };
+            let name_display = if self.session_form_name.is_empty() {
+                "(auto)".to_string()
+            } else {
+                self.session_form_name.clone()
+            };
+            sf_col = sf_col.push(
+                text(format!("{}Name: {}{}", name_prefix, name_display, if name_highlight { "▏" } else { "" }))
+                    .size(11)
+                    .color(if name_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                    .font(Font::MONOSPACE),
+            );
+
+            // Toggles
+            let toggles_highlight = self.session_form_focus == SessionFormField::Toggles;
+            let toggles_prefix = if toggles_highlight { "▶ " } else { "  " };
+            let wt_mark = if self.session_form_use_worktree { "●" } else { "○" };
+            let aa_mark = if self.session_form_auto_approve { "●" } else { "○" };
+            let provider_name = self.provider_keys.get(self.session_form_provider_idx).cloned().unwrap_or_else(|| self.provider_label.clone());
+            sf_col = sf_col.push(
+                text(format!(
+                    "{}[{}] Worktree W  [{}] Auto-approve A  Provider: {} P",
+                    toggles_prefix, wt_mark, aa_mark, provider_name
+                ))
+                .size(11)
+                .color(if toggles_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                .font(Font::MONOSPACE),
+            );
+
+            // Branch field
+            let branch_highlight = self.session_form_focus == SessionFormField::Branch;
+            let branch_prefix = if branch_highlight { "▶ " } else { "  " };
+            let branch_display = if self.session_form_branch.is_empty() {
+                "(auto from name)".to_string()
+            } else {
+                self.session_form_branch.clone()
+            };
+            sf_col = sf_col.push(
+                text(format!("{}Branch: {}{}", branch_prefix, branch_display, if branch_highlight { "▏" } else { "" }))
+                    .size(11)
+                    .color(if branch_highlight { Color::from_rgb8(100, 220, 255) } else { Color::from_rgb8(160, 160, 160) })
+                    .font(Font::MONOSPACE),
+            );
+
+            // Error
+            if let Some(ref err) = self.session_form_error {
+                sf_col = sf_col.push(
+                    text(format!("  ⚠ {}", err))
+                        .size(11)
+                        .color(Color::from_rgb8(255, 100, 100))
+                        .font(Font::MONOSPACE),
+                );
+            }
+
+            // Footer
+            sf_col = sf_col.push(
+                text("  Tab=next field | Cmd+Enter=create | Escape=cancel")
+                    .size(10)
+                    .color(Color::from_rgb8(80, 80, 80))
+                    .font(Font::MONOSPACE),
+            );
+
+            let sf_panel = container(sf_col)
+                .width(Length::Fixed(500.0))
+                .padding(16)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(25, 30, 40).into()),
+                    border: iced::Border {
+                        color: Color::from_rgb8(60, 70, 90),
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                });
+            // Render as modal overlay
+            let overlay = container(sf_panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgba8(0, 0, 0, 0.6).into()),
+                    ..Default::default()
+                });
+            {
+                use iced::widget::stack;
+                let base_el: Element<'_, Message> = main_content.into();
+                stack![base_el, overlay].into()
+            }
         } else if self.task_picker {
             let mut tp_col = column![].spacing(2).width(Length::Fill).padding(6);
             tp_col = tp_col.push(

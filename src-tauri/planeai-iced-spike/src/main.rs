@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod adapter;
+pub mod combobox;
 pub mod common;
 pub mod daemon_session;
 pub mod input;
