@@ -12,6 +12,7 @@ pub mod shell;
 pub mod sidebar;
 pub mod theme;
 pub mod theme_parser;
+pub mod titlebar;
 mod workflow;
 
 use std::fs;
