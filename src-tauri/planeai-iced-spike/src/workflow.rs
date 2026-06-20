@@ -200,6 +200,9 @@ struct WorkflowApp {
     // Theme
     theme_source: ThemeSource,
     theme: PlaneAiTheme,
+    // Notify / agent state
+    notify_state: planeai_core::notify::SharedNotifyState,
+    agent_states: std::collections::HashMap<String, planeai_core::notify::AgentState>,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +230,12 @@ enum Message {
     TerminalScroll(f32),
     SidebarItemClicked(usize),
     SidebarScrolled(iced::widget::scrollable::Viewport),
+    AgentStateChanged {
+        session_id: String,
+        state: planeai_core::notify::AgentState,
+    },
+    CheckSilence,
+    NotifyIpcMessage(planeai_core::notify::NotifyMessage),
 }
 
 impl WorkflowApp {
@@ -403,6 +412,8 @@ impl WorkflowApp {
                 persisted_sessions,
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
+                notify_state: Arc::new(Mutex::new(planeai_core::notify::NotifyState::new())),
+                agent_states: std::collections::HashMap::new(),
             },
             planeai_iced_spike::font::font_load_task().map(|_| Message::FontLoaded),
         );
@@ -1834,6 +1845,67 @@ impl WorkflowApp {
                 self.launch_from_task();
             }
             Message::FontLoaded => {}
+            Message::AgentStateChanged { session_id, state } => {
+                self.agent_states.insert(session_id, state);
+            }
+            Message::CheckSilence => {
+                let mut to_notify: Vec<(String, planeai_core::notify::AgentState)> = Vec::new();
+                {
+                    let mut ns = self.notify_state.lock().unwrap();
+                    let busy = ns.busy_sessions();
+                    for id in busy {
+                        if ns.check_silence(&id) {
+                            to_notify.push((id, planeai_core::notify::AgentState::Idle));
+                        }
+                    }
+                    let debounced = ns.debounced_sessions();
+                    for id in debounced {
+                        if ns.check_debounce(&id) {
+                            to_notify.push((id, planeai_core::notify::AgentState::Idle));
+                        }
+                    }
+                }
+                for (session_id, state) in to_notify {
+                    self.agent_states.insert(session_id, state);
+                }
+            }
+            Message::NotifyIpcMessage(msg) => {
+                use planeai_core::notify::{AgentState as AS, NotifyEvent as NE};
+                match msg.event {
+                    NE::Busy => {
+                        self.notify_state.lock().unwrap().notify_output(&msg.session_id);
+                        self.agent_states.insert(msg.session_id, AS::Busy);
+                    }
+                    NE::Notification => {
+                        let fired = self
+                            .notify_state
+                            .lock()
+                            .unwrap()
+                            .notify_stop_immediate(&msg.session_id);
+                        if fired {
+                            self.agent_states.insert(msg.session_id, AS::Idle);
+                        }
+                    }
+                    NE::Stop => {
+                        let mut ns = self.notify_state.lock().unwrap();
+                        let hook_enabled =
+                            ns.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+                        if hook_enabled {
+                            ns.notify_stop_debounced(&msg.session_id);
+                        } else {
+                            let fired = ns.notify_stop(&msg.session_id);
+                            if fired {
+                                drop(ns);
+                                self.agent_states
+                                    .insert(msg.session_id, AS::Idle);
+                            }
+                        }
+                    }
+                    NE::SessionCreated | NE::SessionChanged => {
+                        self.sidebar_dirty = true;
+                    }
+                }
+            }
             Message::TerminalScroll(delta) => {
                 if !self.sessions.is_empty() {
                     let session = &mut self.sessions[self.active];
@@ -2568,6 +2640,9 @@ impl WorkflowApp {
                             if let Ok(t) = clipboard.get_text() {
                                 if !t.is_empty() {
                                     let _ = self.sessions[self.active].backend.write(t.as_bytes());
+                                    let sid = &self.sessions[self.active].session_id;
+                                    self.notify_state.lock().unwrap().acknowledge(sid);
+                                    self.agent_states.remove(sid);
                                 }
                             }
                         }
@@ -2596,6 +2671,10 @@ impl WorkflowApp {
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
                             let _ = self.sessions[self.active].backend.write(b);
+                            // Clear agent state on user input (acknowledge)
+                            let sid = &self.sessions[self.active].session_id;
+                            self.notify_state.lock().unwrap().acknowledge(sid);
+                            self.agent_states.remove(sid);
                         }
                     }
                 }
@@ -2669,6 +2748,19 @@ impl WorkflowApp {
                                     .advance(&mut session.terminal.term, &data);
                             }
                             None => break,
+                        }
+                    }
+                    if got_data {
+                        // Notify state machine of output activity
+                        let sid = &self.sessions[i].session_id;
+                        let was_idle = {
+                            let mut ns = self.notify_state.lock().unwrap();
+                            let was = ns.get_state(sid) != Some(planeai_core::notify::AgentState::Busy);
+                            ns.notify_output(sid);
+                            was
+                        };
+                        if was_idle {
+                            self.agent_states.insert(sid.clone(), planeai_core::notify::AgentState::Busy);
                         }
                     }
                     if i == self.active && got_data {

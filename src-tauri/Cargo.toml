@@ -80,6 +80,7 @@ tracing-appender = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+planeai-core = { path = "planeai-core", features = ["test-support"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
