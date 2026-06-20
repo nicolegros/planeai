@@ -7,8 +7,13 @@
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
-  import { addComment, removeComment, getComments, getFileCommentCount, getTotalCommentCount, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, X } from "@lucide/svelte";
+  import { addComment, removeComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
+  import { MessageSquare, X, Send } from "@lucide/svelte";
+  import { pty } from "../lib/api";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { serializeComments } from "../lib/review-serializer";
+  import { getActiveSession } from "../lib/session-orchestrator.svelte";
+  import Button from "./ui/Button.svelte";
 
   interface Props {
     repoPath: string;
@@ -42,6 +47,21 @@
 
   // Reactive comment count for badge
   let totalCount = $derived(getTotalCommentCount(sessionId));
+  let sessionExited = $derived(getActiveSession()?.status === "exited");
+
+  async function sendFeedback() {
+    const comments = getComments(sessionId);
+    if (comments.length === 0 || sessionExited) return;
+    const serialized = serializeComments(comments, diffCache);
+    const bytes = Array.from(new TextEncoder().encode(serialized));
+    await pty.write(sessionId, bytes);
+    // Send carriage return to submit the prompt
+    await pty.write(sessionId, [0x0d]);
+    const count = comments.length;
+    clearComments(sessionId);
+    rerenderDiff();
+    showSnackbar(`Feedback sent (${count} comment${count !== 1 ? "s" : ""})`, "success");
+  }
 
   function currentFilePath(): string {
     return files[selectedIndex]?.path ?? "";
@@ -197,6 +217,13 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (!visible || getActiveZone() !== "terminal") return;
+
+    if (e.key === "Enter" && e.metaKey) {
+      e.preventDefault();
+      sendFeedback();
+      return;
+    }
+
     if (showCommentInput) return; // let textarea handle keys
 
     if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {
@@ -321,7 +348,10 @@
         </button>
       {/if}
       {#if totalCount > 0}
-        <span class="text-xs text-surface-500 dark:text-surface-400">{totalCount} comment{totalCount !== 1 ? 's' : ''}</span>
+        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : "Send feedback to agent (⌘Enter)"}>
+          <Send size={12} />
+          <span class="ml-1">Send Feedback ({totalCount})</span>
+        </Button>
       {/if}
     </div>
 
