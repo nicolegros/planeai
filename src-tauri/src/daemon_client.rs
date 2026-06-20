@@ -201,7 +201,8 @@ pub async fn ensure_daemon_running(
         "spawning daemon process"
     );
 
-    // Ensure parent directory exists
+    // Ensure parent directory exists (Unix sockets need a directory; Windows named pipes don't)
+    #[cfg(unix)]
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("failed to create socket dir: {e}"))?;
     }

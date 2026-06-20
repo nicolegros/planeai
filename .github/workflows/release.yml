@@ -179,24 +179,53 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      - name: Bundle CLI binary into app
+      - name: Bundle sidecar binaries into app
         shell: bash
         run: |
-          CLI_BIN="src-tauri/target/${{ matrix.target }}/release/planeai-cli"
+          EXT=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            CLI_BIN="${CLI_BIN}.exe"
+            EXT=".exe"
           fi
+          CLI_BIN="src-tauri/target/${{ matrix.target }}/release/planeai-cli${EXT}"
+          DAEMON_BIN="src-tauri/target/${{ matrix.target }}/release/planeai-daemon${EXT}"
+
           if [[ "${{ runner.os }}" == "macOS" ]]; then
-            # Copy into .app bundle's MacOS directory
             APP_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.app" -type d | head -1)
             if [[ -n "$APP_DIR" ]]; then
               cp "$CLI_BIN" "$APP_DIR/Contents/MacOS/planeai-cli"
+              cp "$DAEMON_BIN" "$APP_DIR/Contents/MacOS/planeai-daemon"
               # Re-create the DMG with the updated .app
               DMG_PATH=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.dmg" | head -1)
               if [[ -n "$DMG_PATH" ]]; then
                 rm -f "$DMG_PATH"
                 hdiutil create -volname "planeai" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_PATH"
               fi
+            fi
+          fi
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # NSIS installer bundles everything from the release dir that Tauri includes,
+            # but sidecar binaries need to be next to the main exe in the bundle output.
+            NSIS_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle/nsis -type d | head -1)
+            if [[ -n "$NSIS_DIR" ]]; then
+              cp "$DAEMON_BIN" "$NSIS_DIR/planeai-daemon.exe"
+              cp "$CLI_BIN" "$NSIS_DIR/planeai-cli.exe"
+            fi
+          fi
+
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            # For .deb, binaries go in /usr/bin alongside the main binary
+            DEB_BIN_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -path "*/usr/bin" -type d | head -1)
+            if [[ -n "$DEB_BIN_DIR" ]]; then
+              cp "$CLI_BIN" "$DEB_BIN_DIR/planeai-cli"
+              cp "$DAEMON_BIN" "$DEB_BIN_DIR/planeai-daemon"
+            fi
+            # For AppImage, copy next to main binary
+            APPIMAGE_BIN=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "planeai" -type f | head -1)
+            if [[ -n "$APPIMAGE_BIN" ]]; then
+              APPIMAGE_DIR=$(dirname "$APPIMAGE_BIN")
+              cp "$CLI_BIN" "$APPIMAGE_DIR/planeai-cli"
+              cp "$DAEMON_BIN" "$APPIMAGE_DIR/planeai-daemon"
             fi
           fi
 
