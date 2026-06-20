@@ -1504,23 +1504,7 @@ impl WorkflowApp {
     }
 
     fn register_notify_session(&self, session_id: &str, name: &str, command: &str) {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let hook_enabled = if command.contains("kiro") {
-            planeai_core::notify::is_kiro_hook_installed_at(
-                &std::path::PathBuf::from(&home).join(".kiro/agents/default.json"),
-            )
-        } else if command.contains("claude") {
-            planeai_core::notify::is_claude_hook_installed_at(
-                &std::path::PathBuf::from(&home).join(".claude/settings.json"),
-            )
-        } else if command.contains("copilot") {
-            let copilot_dir = std::env::var("COPILOT_HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from(&home).join(".copilot"));
-            planeai_core::notify::is_copilot_hook_installed_at(&copilot_dir)
-        } else {
-            false
-        };
+        let hook_enabled = planeai_core::notify::is_hook_installed_for_provider(command);
         let project_name = self
             .project
             .as_ref()
