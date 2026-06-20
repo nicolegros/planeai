@@ -3570,6 +3570,10 @@ impl WorkflowApp {
         Subscription::batch(vec![
             keyboard::listen().map(Message::KeyEvent),
             iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
+            // Silence/debounce checker — tick every 1s
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
+            // IPC notify listener
+            Subscription::run(notify_ipc_stream).map(Message::NotifyIpcMessage),
             event::listen_with(|ev, _status, _id| match ev {
                 iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))
@@ -3601,6 +3605,62 @@ impl WorkflowApp {
 // ─── Static args ─────────────────────────────────────────────────────────────
 
 use std::sync::OnceLock;
+
+/// Returns an async stream that yields NotifyMessages from the IPC socket.
+/// Spawns a background thread on first call; subsequent calls share the same receiver.
+fn notify_ipc_stream() -> impl iced::futures::Stream<Item = planeai_core::notify::NotifyMessage> {
+    use tokio::sync::mpsc;
+    static TX: OnceLock<mpsc::UnboundedSender<planeai_core::notify::NotifyMessage>> =
+        OnceLock::new();
+    static RX: OnceLock<Mutex<Option<mpsc::UnboundedReceiver<planeai_core::notify::NotifyMessage>>>> =
+        OnceLock::new();
+
+    // Initialize once: spawn thread + create channel
+    let _ = TX.get_or_init(|| {
+        let (tx, rx) = mpsc::unbounded_channel();
+        RX.get_or_init(|| Mutex::new(Some(rx)));
+        let tx2 = tx.clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let app_dir = planeai_core::app_data_dir();
+            let Ok(listener) =
+                planeai_ipc::IpcListener::bind(planeai_ipc::Channel::Notify, &app_dir)
+            else {
+                return;
+            };
+            loop {
+                let stream = match listener.accept() {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let tx = tx2.clone();
+                std::thread::spawn(move || {
+                    let reader = BufReader::new(stream);
+                    for line in reader.lines().map_while(Result::ok) {
+                        let line = line.trim().to_string();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let msg = planeai_core::notify::parse_notify_message(&line);
+                        if msg.session_id.is_empty() {
+                            continue;
+                        }
+                        let _ = tx.send(msg);
+                        }
+                });
+            }
+        });
+        tx
+    });
+
+    // Take the receiver (only first subscription gets it)
+    let rx = RX
+        .get()
+        .and_then(|m| m.lock().unwrap().take())
+        .expect("notify IPC receiver already taken");
+
+    tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
+}
 static WORKFLOW_ARGS: OnceLock<Args> = OnceLock::new();
 
 /// Wraps content in a centered modal overlay panel with standard styling.

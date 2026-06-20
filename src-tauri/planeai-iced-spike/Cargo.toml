@@ -51,6 +51,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 planeai-daemon = { path = "../planeai-daemon" }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
 tokio = { workspace = true }
+tokio-stream = "0.1"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
