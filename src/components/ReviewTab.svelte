@@ -37,6 +37,7 @@
   let diffContainer: HTMLElement;
   let renderer: FileDiff<ReviewComment> | null = null;
   let diffCache = new Map<string, string>();
+  let parsedDiffCache = new Map<string, FileDiffMetadata>();
   let cachedLineNumbers: number[] | null = null;
 
   // Comment input state
@@ -119,6 +120,14 @@
     return wrapper;
   }
 
+  function handleLineSelected(range: SelectedLineRange | null) {
+    if (range) {
+      selectedRange = range;
+      diffFocus = "body";
+      cursorLine = range.start;
+    }
+  }
+
   function getThemeConfig(): FileDiffOptions<ReviewComment> {
     return {
       diffStyle,
@@ -129,7 +138,7 @@
       tokenizeMaxLineLength: 1000,
       tokenizeMaxLength: 5000,
       enableLineSelection: true,
-      onLineSelected: (range) => { selectedRange = range; diffFocus = "body"; cursorLine = range.start; },
+      onLineSelected: handleLineSelected,
       renderAnnotation,
     };
   }
@@ -183,15 +192,19 @@
   async function refresh() {
     loading = true;
     diffCache.clear();
+    parsedDiffCache.clear();
     invalidateCache();
     try {
       files = await git.getChangedFiles(repoPath, baseBranch);
       if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
       if (files.length > 0) {
+        // Prefetch all patches in parallel (IPC is fast, git diff is native)
+        const prefetchPromises = files.map((f) => fetchPatch(f));
+        // Load the selected file immediately (don't wait for all)
         await loadFileDiff(files[selectedIndex]);
         onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
-        // Prefetch adjacent files' language grammars
-        prefetchAdjacentFiles(selectedIndex);
+        // Let the rest finish in background
+        Promise.all(prefetchPromises).catch(() => {});
       }
     } catch (e) {
       console.error("Failed to get changed files:", e);
@@ -216,15 +229,18 @@
   async function loadFileDiff(file: ChangedFile) {
     if (!renderer || !diffContainer) return;
     cachedLineNumbers = null;
-    const patch = diffCache.get(file.path) ?? await fetchPatch(file);
-    if (!patch) return;
 
-    const fileDiff = processFile(patch);
-    if (!fileDiff) return;
+    let fileDiff = parsedDiffCache.get(file.path);
+    if (!fileDiff) {
+      const patch = diffCache.get(file.path) ?? await fetchPatch(file);
+      if (!patch) return;
+      fileDiff = processFile(patch) as FileDiffMetadata | undefined;
+      if (!fileDiff) return;
+      parsedDiffCache.set(file.path, fileDiff);
+    }
 
     const annotations = getAnnotationsForFile(file.path);
-    renderer.setOptions(getThemeConfig());
-    renderer.render({ fileDiff: fileDiff as FileDiffMetadata, fileContainer: diffContainer, lineAnnotations: annotations });
+    renderer.render({ fileDiff, fileContainer: diffContainer, lineAnnotations: annotations });
     cachedLineNumbers = null;
   }
 
