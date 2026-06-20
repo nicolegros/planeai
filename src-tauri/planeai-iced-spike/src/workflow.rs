@@ -23,8 +23,8 @@ use iced::{
 };
 
 use crate::adapter::PlaneAiTerminalSession;
-use crate::combobox::{ComboBoxState, ComboItem};
 use crate::common::*;
+use crate::components::{modal_overlay, ComboBoxState, ComboItem};
 use crate::daemon_session::{
     attach, daemon_is_connected, detach_daemon_session, ensure_daemon_running_sync,
     kill_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
@@ -3310,34 +3310,6 @@ use std::sync::OnceLock;
 static WORKFLOW_ARGS: OnceLock<Args> = OnceLock::new();
 
 /// Wraps content in a centered modal overlay panel with standard styling.
-fn modal_overlay<'a>(
-    content: iced::widget::Column<'a, Message>,
-    base: Element<'a, Message>,
-    theme: &PlaneAiTheme,
-) -> Element<'a, Message> {
-    use iced::widget::stack;
-    let bg = theme.panel_bg();
-    let border_color = theme.border();
-    let panel = container(content)
-        .width(Length::Fixed(500.0))
-        .padding(16)
-        .style(move |_: &Theme| container::Style {
-            background: Some(bg.into()),
-            border: iced::Border {
-                color: border_color,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
-        });
-    let overlay = container(panel)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill);
-    stack![base, overlay].into()
-}
-
 fn title(_state: &WorkflowApp) -> String {
     "PlaneAI Workflow Shell".into()
 }
