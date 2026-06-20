@@ -30,6 +30,7 @@ use crate::daemon_session::{
     kill_daemon_session, list_daemon_sessions, DaemonSession, DaemonSessionInfo,
 };
 use crate::input;
+use crate::project_form::{self, ProjectFormState};
 use crate::sidebar::{SidebarAction, SidebarState};
 use crate::theme::{self, PlaneAiTheme, ThemeSource};
 use crate::Args;
@@ -158,6 +159,8 @@ struct WorkflowApp {
     // Launch prompt (Cmd+Shift+N)
     launch_prompt: bool,
     launch_prompt_input: String,
+    // Project creation form (Cmd+Shift+N)
+    project_form: ProjectFormState,
     // Kill confirmation (two-press)
     kill_armed: bool,
     // DB persistence
@@ -219,6 +222,7 @@ enum Message {
     ProjectInputSubmit,
     LaunchPromptChanged(String),
     LaunchPromptSubmit,
+    ProjectForm(project_form::FormMessage),
     WorktreeBranchChanged(String),
     WorktreeTaskKeyChanged(String),
     WorktreeToggle,
@@ -266,18 +270,15 @@ impl WorkflowApp {
 
         let project_cwd = resolved.request.project_cwd.clone();
 
-        // Open shared PlaneAI DB and ensure project record exists
-        let (db, project) = match services::open_db() {
-            Ok(conn) => {
-                let proj =
-                    ProjectService::ensure_project(&conn, &project_cwd.to_string_lossy()).ok();
-                (Some(Arc::new(Mutex::new(conn))), proj)
-            }
+        // Open shared PlaneAI DB (don't create a project — user must add one via Cmd+Shift+N)
+        let db = match services::open_db() {
+            Ok(conn) => Some(Arc::new(Mutex::new(conn))),
             Err(e) => {
                 boot_warnings.push(format!("DB open failed: {e} — sessions won't persist"));
-                (None, None)
+                None
             }
         };
+        let project: Option<services::Project> = None;
 
         let persisted_sessions = if let (Some(ref db), Some(ref proj)) = (&db, &project) {
             let conn = db.lock().unwrap();
@@ -359,6 +360,7 @@ impl WorkflowApp {
                 log_replay: None,
                 launch_prompt: false,
                 launch_prompt_input: String::new(),
+                project_form: ProjectFormState::default(),
                 kill_armed: false,
                 db,
                 project,
@@ -1618,7 +1620,7 @@ impl WorkflowApp {
 }
 
 impl WorkflowApp {
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
             Message::SidebarMouseDown(_) => {
                 if let Some(ref mut sidebar) = self.sidebar {
@@ -1651,6 +1653,22 @@ impl WorkflowApp {
                 self.launch_prompt = false;
                 self.launch_prompt_input.clear();
                 self.launch_session_with_command(&cmd);
+            }
+            Message::ProjectForm(msg) => {
+                if let Some(result) = self.project_form.update(msg, &self.db) {
+                    match result {
+                        project_form::SubmitResult::Created(proj, path) => {
+                            self.project = Some(proj);
+                            self.project_cwd = path.clone();
+                            self.recent_projects =
+                                add_recent_project(&path.to_string_lossy());
+                            self.refresh_persisted_sessions();
+                            self.sidebar_dirty = true;
+                            self.clear_error();
+                        }
+                        project_form::SubmitResult::Error(_) => {}
+                    }
+                }
             }
             Message::WorktreeBranchChanged(val) => {
                 self.worktree_branch_input = val;
@@ -1689,12 +1707,12 @@ impl WorkflowApp {
                 let new_cols = ((size.width - 180.0) / cw).floor().max(2.0) as u16;
                 let new_rows = ((size.height - 40.0) / ch).floor().max(2.0) as u16;
                 if new_cols as usize == self.cols && new_rows as usize == self.rows {
-                    return;
+                    return iced::Task::none();
                 }
                 self.cols = new_cols as usize;
                 self.rows = new_rows as usize;
                 if self.sessions.is_empty() {
-                    return;
+                    return iced::Task::none();
                 }
                 let session = &mut self.sessions[self.active];
                 let term_size = TermSize {
@@ -1717,7 +1735,7 @@ impl WorkflowApp {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.log_replay = None;
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Launch prompt mode
@@ -1726,7 +1744,47 @@ impl WorkflowApp {
                         self.launch_prompt = false;
                         self.launch_prompt_input.clear();
                     }
-                    return;
+                    return iced::Task::none();
+                }
+
+                // Project form mode
+                if self.project_form.visible {
+                    match &key {
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                            self.project_form.close();
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Tab) => {
+                            return if modifiers.shift() {
+                                iced::widget::operation::focus_previous()
+                            } else {
+                                iced::widget::operation::focus_next()
+                            };
+                        }
+                        keyboard::Key::Named(keyboard::key::Named::Enter)
+                            if modifiers.command() =>
+                        {
+                            if let Some(result) = self.project_form.update(
+                                project_form::FormMessage::Submit,
+                                &self.db,
+                            ) {
+                                match result {
+                                    project_form::SubmitResult::Created(proj, path) => {
+                                        self.project = Some(proj);
+                                        self.project_cwd = path.clone();
+                                        self.recent_projects =
+                                            add_recent_project(&path.to_string_lossy());
+                                        self.refresh_persisted_sessions();
+                                        self.sidebar_dirty = true;
+                                        self.clear_error();
+                                    }
+                                    project_form::SubmitResult::Error(_) => {}
+                                }
+                            }
+                        }
+                        // Let character input pass through to text_input widgets
+                        _ => return iced::Task::none(),
+                    }
+                    return iced::Task::none();
                 }
 
                 // New... menu mode
@@ -1752,7 +1810,7 @@ impl WorkflowApp {
                         }
                         _ => {}
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Tab switcher: Ctrl+Tab / Ctrl+Shift+Tab
@@ -1768,7 +1826,7 @@ impl WorkflowApp {
                             .tab_switcher
                             .start_cycle(&self.mru, current_ref, Some(&valid_ids))
                         {
-                            return;
+                            return iced::Task::none();
                         }
                         // Cache names for the overlay
                         self.tab_switcher_names = self
@@ -1808,7 +1866,7 @@ impl WorkflowApp {
                         let direction = if modifiers.shift() { -1 } else { 1 };
                         self.tab_switcher.advance(direction);
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Tab switcher: Escape cancels cycling
@@ -1822,7 +1880,7 @@ impl WorkflowApp {
                             self.active = idx;
                         }
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Session creation form
@@ -1833,7 +1891,7 @@ impl WorkflowApp {
                         match &key {
                             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                                 self.session_form = false;
-                                return;
+                                return iced::Task::none();
                             }
                             keyboard::Key::Named(keyboard::key::Named::Tab) => {
                                 if modifiers.shift() {
@@ -1844,7 +1902,7 @@ impl WorkflowApp {
                                         SessionFormMode::Manual => SessionFormField::Name,
                                     };
                                 }
-                                return;
+                                return iced::Task::none();
                             }
                             _ => {}
                         }
@@ -1856,7 +1914,7 @@ impl WorkflowApp {
                         if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter))
                         {
                             self.submit_session_form();
-                            return;
+                            return iced::Task::none();
                         }
                         // Delegate to combobox
                         let key_str = match &key {
@@ -1889,14 +1947,14 @@ impl WorkflowApp {
                                 }
                             }
                         }
-                        return;
+                        return iced::Task::none();
                     }
                     // When Task field is focused — custom combobox
                     if self.session_form_focus == SessionFormField::Task {
                         match &key {
                             keyboard::Key::Named(keyboard::key::Named::Escape) => {
                                 self.session_form = false;
-                                return;
+                                return iced::Task::none();
                             }
                             keyboard::Key::Named(keyboard::key::Named::Tab) => {
                                 if modifiers.shift() {
@@ -1904,7 +1962,7 @@ impl WorkflowApp {
                                 } else {
                                     self.session_form_focus = SessionFormField::Name;
                                 }
-                                return;
+                                return iced::Task::none();
                             }
                             _ => {}
                         }
@@ -1916,7 +1974,7 @@ impl WorkflowApp {
                         if cmd && matches!(&key, keyboard::Key::Named(keyboard::key::Named::Enter))
                         {
                             self.submit_session_form();
-                            return;
+                            return iced::Task::none();
                         }
                         let key_str = match &key {
                             keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
@@ -1931,7 +1989,7 @@ impl WorkflowApp {
                         {
                             self.session_form_apply_task();
                         }
-                        return;
+                        return iced::Task::none();
                     }
                     match &key {
                         keyboard::Key::Named(keyboard::key::Named::Escape) => {
@@ -2060,7 +2118,7 @@ impl WorkflowApp {
                         }
                         _ => {}
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Task picker mode
@@ -2087,7 +2145,7 @@ impl WorkflowApp {
                         }
                         _ => {}
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Worktree prompt mode
@@ -2096,7 +2154,7 @@ impl WorkflowApp {
                         self.worktree_prompt = false;
                         self.worktree_error = None;
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Project picker mode
@@ -2104,7 +2162,7 @@ impl WorkflowApp {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.picking_project = false;
                         self.project_input.clear();
-                        return;
+                        return iced::Task::none();
                     }
                     // Cmd+1..9 selects from recent projects
                     let cmd = if cfg!(target_os = "macos") {
@@ -2119,13 +2177,13 @@ impl WorkflowApp {
                                     if let Some(path) = self.recent_projects.get(digit - 1).cloned()
                                     {
                                         self.select_project(&path);
-                                        return;
+                                        return iced::Task::none();
                                     }
                                 }
                             }
                         }
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Shortcuts overlay: Escape dismisses
@@ -2133,7 +2191,7 @@ impl WorkflowApp {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.show_shortcuts = false;
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 let cmd = if cfg!(target_os = "macos") {
@@ -2154,7 +2212,7 @@ impl WorkflowApp {
                 if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "/") {
                     self.show_shortcuts = !self.show_shortcuts;
                     self.kill_armed = false;
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+N — open "New..." menu
@@ -2165,7 +2223,7 @@ impl WorkflowApp {
                     self.new_menu = true;
                     self.new_menu_index = 0;
                     self.kill_armed = false;
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+Shift+S — toggle sidebar focus
@@ -2174,7 +2232,7 @@ impl WorkflowApp {
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "s" || c.as_str() == "S")
                 {
                     self.sidebar_focused = !self.sidebar_focused;
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+B — worktree launch prompt
@@ -2188,7 +2246,7 @@ impl WorkflowApp {
                         self.update_worktree_preview();
                     }
                     self.kill_armed = false;
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+T — task picker
@@ -2198,7 +2256,7 @@ impl WorkflowApp {
                 {
                     self.open_task_picker();
                     self.kill_armed = false;
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+Enter — launch selected task
@@ -2206,7 +2264,7 @@ impl WorkflowApp {
                     if self.selected_task.is_some() {
                         self.launch_from_task();
                     }
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+Shift+T — clear selected task
@@ -2215,17 +2273,15 @@ impl WorkflowApp {
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "t" || c.as_str() == "T")
                 {
                     self.selected_task = None;
-                    return;
+                    return iced::Task::none();
                 }
 
-                // Cmd+Shift+N — launch with different command
+                // Cmd+Shift+N — open project creation form
                 if cmd
                     && modifiers.shift()
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "n" || c.as_str() == "N")
                 {
-                    self.launch_prompt = true;
-                    self.launch_prompt_input = self.agent_command.clone();
-                    return;
+                    return self.project_form.open().map(Message::ProjectForm);
                 }
 
                 // Cmd+L (macOS) / Ctrl+Shift+L (other) — log replay
@@ -2233,7 +2289,7 @@ impl WorkflowApp {
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "l" || c.as_str() == "L")
                 {
                     self.open_log_replay();
-                    return;
+                    return iced::Task::none();
                 }
 
                 // Cmd+O — open project picker
@@ -2244,14 +2300,14 @@ impl WorkflowApp {
                     self.picking_project = !self.picking_project;
                     self.project_input = self.project_cwd.to_string_lossy().to_string();
                     self.recent_projects = load_recent_projects();
-                    return;
+                    return iced::Task::none();
                 }
                 // Cmd+R (macOS) / Ctrl+Shift+R (other) — refresh
                 if cmd_safe
                     && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "r" || c.as_str() == "R")
                 {
                     self.refresh_daemon_list();
-                    return;
+                    return iced::Task::none();
                 }
                 // Cmd+W (macOS, no shift) / Ctrl+Shift+W (other, no alt) — detach
                 let is_detach = if cfg!(target_os = "macos") {
@@ -2266,7 +2322,7 @@ impl WorkflowApp {
                 };
                 if is_detach {
                     self.detach_active();
-                    return;
+                    return iced::Task::none();
                 }
                 // Cmd+Shift+W (macOS) / Ctrl+Shift+Alt+W (other) — kill
                 let is_kill = if cfg!(target_os = "macos") {
@@ -2281,7 +2337,7 @@ impl WorkflowApp {
                 };
                 if is_kill {
                     self.kill_active();
-                    return;
+                    return iced::Task::none();
                 }
                 // Cmd+A (macOS) / Ctrl+Shift+A (other) — attach first unattached
                 if cmd_safe
@@ -2300,7 +2356,7 @@ impl WorkflowApp {
                         let sid = info.session_id.clone();
                         self.attach_session(sid);
                     }
-                    return;
+                    return iced::Task::none();
                 }
                 // Cmd+1..9 — switch sessions
                 if cmd && !modifiers.shift() {
@@ -2308,7 +2364,7 @@ impl WorkflowApp {
                         if let Ok(digit) = c.as_str().parse::<usize>() {
                             if (1..=9).contains(&digit) {
                                 self.switch_to(digit - 1);
-                                return;
+                                return iced::Task::none();
                             }
                         }
                     }
@@ -2331,19 +2387,19 @@ impl WorkflowApp {
                             }
                         }
                     }
-                    return;
+                    return iced::Task::none();
                 }
                 // Sidebar: Escape from terminal focuses sidebar
                 if !self.sidebar_focused
                     && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
                 {
                     self.sidebar_focused = true;
-                    return;
+                    return iced::Task::none();
                 }
                 // When sidebar is focused, route keys there
                 if self.sidebar_focused {
                     self.handle_sidebar_key(&key);
-                    return;
+                    return iced::Task::none();
                 }
                 // Forward input to active session
                 if !self.sessions.is_empty() {
@@ -2472,6 +2528,7 @@ impl WorkflowApp {
                 }
             }
         }
+        iced::Task::none()
     }
 }
 
@@ -2794,6 +2851,15 @@ impl WorkflowApp {
                 ..Default::default()
             });
             column![prompt, main_content].into()
+        } else if self.project_form.visible {
+            let form_col = self.project_form.view(
+                &self.theme,
+                |s| Message::ProjectForm(project_form::FormMessage::PathChanged(s)),
+                |s| Message::ProjectForm(project_form::FormMessage::NameChanged(s)),
+                Message::ProjectForm(project_form::FormMessage::Submit),
+                Message::ProjectForm(project_form::FormMessage::Cancel),
+            );
+            modal_overlay(form_col, main_content.into(), &self.theme)
         } else if self.worktree_prompt {
             let mut wt_col = column![].spacing(4).width(Length::Fill).padding(6);
             let project_name = self
@@ -2873,15 +2939,15 @@ impl WorkflowApp {
             nm_col = nm_col.push(
                 text("New... (↑↓ navigate, Enter select, Escape cancel)")
                     .size(12)
-                    .color(Color::from_rgb8(180, 220, 255))
+                    .color(self.theme.text_secondary())
                     .font(Font::MONOSPACE),
             );
             for (i, item) in items.iter().enumerate() {
                 let marker = if i == self.new_menu_index { "▶" } else { " " };
                 let color = if i == self.new_menu_index {
-                    Color::from_rgb8(100, 220, 255)
+                    self.theme.accent()
                 } else {
-                    Color::from_rgb8(180, 180, 180)
+                    self.theme.text_muted()
                 };
                 nm_col = nm_col.push(
                     text(format!("{} {}", marker, item))
@@ -2890,32 +2956,7 @@ impl WorkflowApp {
                         .font(Font::MONOSPACE),
                 );
             }
-            let nm_panel = container(nm_col)
-                .width(Length::Fixed(300.0))
-                .padding(12)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgb8(30, 40, 55).into()),
-                    border: iced::Border {
-                        color: Color::from_rgb8(60, 70, 90),
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..Default::default()
-                });
-            let overlay = container(nm_panel)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgba8(0, 0, 0, 0.6).into()),
-                    ..Default::default()
-                });
-            {
-                use iced::widget::stack;
-                let base_el: Element<'_, Message> = main_content.into();
-                stack![base_el, overlay].into()
-            }
+            modal_overlay(nm_col, main_content.into(), &self.theme)
         } else if self.session_form {
             let mut sf_col = column![].spacing(3).width(Length::Fill).padding(8);
             sf_col = sf_col.push(
@@ -3068,33 +3109,7 @@ impl WorkflowApp {
                     .font(Font::MONOSPACE),
             );
 
-            let sf_panel = container(sf_col)
-                .width(Length::Fixed(500.0))
-                .padding(16)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgb8(25, 30, 40).into()),
-                    border: iced::Border {
-                        color: Color::from_rgb8(60, 70, 90),
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..Default::default()
-                });
-            // Render as modal overlay
-            let overlay = container(sf_panel)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgba8(0, 0, 0, 0.6).into()),
-                    ..Default::default()
-                });
-            {
-                use iced::widget::stack;
-                let base_el: Element<'_, Message> = main_content.into();
-                stack![base_el, overlay].into()
-            }
+            modal_overlay(sf_col, main_content.into(), &self.theme)
         } else if self.task_picker {
             let mut tp_col = column![].spacing(2).width(Length::Fill).padding(6);
             tp_col = tp_col.push(
@@ -3294,6 +3309,35 @@ impl<'a> Program<Message> for WorkflowTermRenderer<'a> {
 
 use std::sync::OnceLock;
 static WORKFLOW_ARGS: OnceLock<Args> = OnceLock::new();
+
+/// Wraps content in a centered modal overlay panel with standard styling.
+fn modal_overlay<'a>(
+    content: iced::widget::Column<'a, Message>,
+    base: Element<'a, Message>,
+    theme: &PlaneAiTheme,
+) -> Element<'a, Message> {
+    use iced::widget::stack;
+    let bg = theme.panel_bg();
+    let border_color = theme.border();
+    let panel = container(content)
+        .width(Length::Fixed(500.0))
+        .padding(16)
+        .style(move |_: &Theme| container::Style {
+            background: Some(bg.into()),
+            border: iced::Border {
+                color: border_color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        });
+    let overlay = container(panel)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+    stack![base, overlay].into()
+}
 
 fn title(_state: &WorkflowApp) -> String {
     "PlaneAI Workflow Shell".into()
