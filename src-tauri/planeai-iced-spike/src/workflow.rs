@@ -444,6 +444,18 @@ impl WorkflowApp {
         if !boot_warnings.is_empty() {
             result.0.set_error(boot_warnings.join(" | "));
         }
+        // Register persisted active sessions in NotifyState
+        for session in &result.0.persisted_sessions {
+            if session.status == "active" {
+                let name = if session.name.is_empty() {
+                    &session.id[..8.min(session.id.len())]
+                } else {
+                    &session.name
+                };
+                let provider = session.provider.as_deref().unwrap_or("");
+                result.0.register_notify_session(&session.id, name, provider);
+            }
+        }
         result
     }
 
@@ -510,6 +522,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
@@ -586,6 +599,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                self.register_notify_session(&session_id, &session_id[..8], command);
                 self.clear_error();
                 self.refresh_persisted_sessions();
             }
@@ -622,6 +636,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
                 // Touch MRU for newly attached session
                 self.mru.retain(|id| id != &session_id);
                 self.mru.insert(0, session_id);
@@ -885,6 +900,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
                 self.worktree_prompt = false;
                 self.worktree_branch_input.clear();
                 self.worktree_task_key_input.clear();
@@ -1226,6 +1242,8 @@ impl WorkflowApp {
                 }
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
+                let sid_for_notify = session_id.clone();
+                let cmd_for_notify = cmd.clone();
                 self.sessions.push(Session {
                     id,
                     session_id,
@@ -1238,6 +1256,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
+                self.register_notify_session(&sid_for_notify, &sid_for_notify[..8], &cmd_for_notify);
                 self.session_form = false;
                 self.clear_error();
                 self.refresh_persisted_sessions();
@@ -1466,6 +1485,35 @@ impl WorkflowApp {
         self.error_time = None;
     }
 
+    fn register_notify_session(&self, session_id: &str, name: &str, command: &str) {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let hook_enabled = if command.contains("kiro") {
+            planeai_core::notify::is_kiro_hook_installed_at(
+                &std::path::PathBuf::from(&home).join(".kiro/agents/default.json"),
+            )
+        } else if command.contains("claude") {
+            planeai_core::notify::is_claude_hook_installed_at(
+                &std::path::PathBuf::from(&home).join(".claude/settings.json"),
+            )
+        } else if command.contains("copilot") {
+            let copilot_dir = std::env::var("COPILOT_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from(&home).join(".copilot"));
+            planeai_core::notify::is_copilot_hook_installed_at(&copilot_dir)
+        } else {
+            false
+        };
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|p| p.name.as_str())
+            .unwrap_or("planeai");
+        self.notify_state
+            .lock()
+            .unwrap()
+            .register_session(session_id, name, project_name, hook_enabled);
+    }
+
     fn fire_notification(&self, session_id: &str) {
         let ns = self.notify_state.lock().unwrap();
         let (title, body) = match ns.get_meta(session_id) {
@@ -1473,10 +1521,14 @@ impl WorkflowApp {
             None => ("planeai".to_string(), "Agent is ready".to_string()),
         };
         drop(ns);
-        let _ = notify_rust::Notification::new()
-            .summary(&title)
-            .body(&body)
-            .show();
+        let mut notification = notify_rust::Notification::new();
+        notification.summary(&title).body(&body);
+        #[cfg(target_os = "macos")]
+        {
+            // On macOS, set the app name so notifications group under our bundle
+            notification.appname("planeai");
+        }
+        let _ = notification.show();
     }
 
     fn close_all_overlays(&mut self) {

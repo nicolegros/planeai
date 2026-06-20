@@ -224,6 +224,7 @@ mod tests {
     #[test]
     fn silence_timeout_transitions_to_idle() {
         let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", false);
         state.notify_output("s1");
         state.advance_time("s1", Duration::from_secs(5));
         assert!(state.check_silence("s1"));

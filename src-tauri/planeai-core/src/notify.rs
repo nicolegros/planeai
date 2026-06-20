@@ -135,8 +135,11 @@ impl NotifyState {
         if self.get_state(session_id) != Some(AgentState::Busy) {
             return false;
         }
-        if self.meta.get(session_id).is_some_and(|m| m.hook_enabled) {
-            return false;
+        // Skip sessions without meta (not registered) or with hooks enabled
+        match self.meta.get(session_id) {
+            None => return false,
+            Some(m) if m.hook_enabled => return false,
+            _ => {}
         }
         if let Some(&last) = self.last_output.get(session_id) {
             let elapsed = self.elapsed_since(session_id, last);
@@ -380,6 +383,7 @@ mod tests {
     #[test]
     fn silence_timeout_transitions_to_idle() {
         let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", false);
         state.notify_output("s1");
         state.advance_time("s1", Duration::from_secs(5));
         assert!(state.check_silence("s1"));
