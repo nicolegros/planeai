@@ -200,6 +200,11 @@ struct WorkflowApp {
     // Theme
     theme_source: ThemeSource,
     theme: PlaneAiTheme,
+    // Notify / agent state
+    notify_state: planeai_core::notify::SharedNotifyState,
+    agent_states: std::collections::HashMap<String, planeai_core::notify::AgentState>,
+    // Hook install banner
+    show_hook_banner: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +232,10 @@ enum Message {
     TerminalScroll(f32),
     SidebarItemClicked(usize),
     SidebarScrolled(iced::widget::scrollable::Viewport),
+    CheckSilence,
+    NotifyIpc(planeai_core::notify::NotifyMessage),
+    InstallHooks,
+    DismissHookBanner,
 }
 
 impl WorkflowApp {
@@ -403,6 +412,22 @@ impl WorkflowApp {
                 persisted_sessions,
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
+                notify_state: Arc::new(Mutex::new(planeai_core::notify::NotifyState::new())),
+                agent_states: std::collections::HashMap::new(),
+                show_hook_banner: {
+                    // Check if any hooks need installation
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let kiro_ok = planeai_core::notify::is_kiro_hook_installed_at(
+                        &std::path::PathBuf::from(&home).join(".kiro/agents/default.json"),
+                    );
+                    let claude_ok = planeai_core::notify::is_claude_hook_installed_at(
+                        &std::path::PathBuf::from(&home).join(".claude/settings.json"),
+                    );
+                    // Show banner if either is missing (and the tool is likely installed)
+                    let kiro_exists = std::path::Path::new(&format!("{home}/.kiro")).exists();
+                    let claude_exists = std::path::Path::new(&format!("{home}/.claude")).exists();
+                    (kiro_exists && !kiro_ok) || (claude_exists && !claude_ok)
+                },
             },
             planeai_iced_spike::font::font_load_task().map(|_| Message::FontLoaded),
         );
@@ -414,6 +439,20 @@ impl WorkflowApp {
         // Surface boot warnings visibly
         if !boot_warnings.is_empty() {
             result.0.set_error(boot_warnings.join(" | "));
+        }
+        // Register persisted active sessions in NotifyState
+        for session in &result.0.persisted_sessions {
+            if session.status == "active" {
+                let name = if session.name.is_empty() {
+                    &session.id[..8.min(session.id.len())]
+                } else {
+                    &session.name
+                };
+                let provider = session.provider.as_deref().unwrap_or("");
+                result
+                    .0
+                    .register_notify_session(&session.id, name, provider);
+            }
         }
         result
     }
@@ -469,7 +508,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: self.agent_command.clone(),
@@ -480,7 +519,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
@@ -545,7 +583,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: command.to_string(),
@@ -556,7 +594,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
                 self.clear_error();
                 self.refresh_persisted_sessions();
             }
@@ -581,7 +618,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: "attached".to_string(),
@@ -592,7 +629,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
                 // Touch MRU for newly attached session
                 self.mru.retain(|id| id != &session_id);
                 self.mru.insert(0, session_id);
@@ -844,7 +880,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: self.agent_command.clone(),
@@ -855,7 +891,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
                 self.worktree_prompt = false;
                 self.worktree_branch_input.clear();
                 self.worktree_task_key_input.clear();
@@ -1197,7 +1232,7 @@ impl WorkflowApp {
                 }
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id,
                     command: cmd,
@@ -1208,7 +1243,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
                 self.session_form = false;
                 self.clear_error();
                 self.refresh_persisted_sessions();
@@ -1435,6 +1469,34 @@ impl WorkflowApp {
     fn clear_error(&mut self) {
         self.last_error = None;
         self.error_time = None;
+    }
+
+    fn register_notify_session(&self, session_id: &str, name: &str, command: &str) {
+        let hook_enabled = planeai_core::notify::is_hook_installed_for_provider(command);
+        let project_name = self
+            .project
+            .as_ref()
+            .map(|p| p.name.as_str())
+            .unwrap_or("planeai");
+        self.notify_state.lock().unwrap().register_session(
+            session_id,
+            name,
+            project_name,
+            hook_enabled,
+        );
+    }
+
+    fn push_session(&mut self, session: Session) {
+        let sid = session.session_id.clone();
+        let cmd = session.command.clone();
+        let name = if sid.len() >= 8 { &sid[..8] } else { &sid };
+        self.sessions.push(session);
+        self.active = self.sessions.len() - 1;
+        self.register_notify_session(&sid, name, &cmd);
+    }
+
+    fn fire_notification(&self, session_id: &str) {
+        planeai_iced_spike::notify_sub::fire_notification(&self.notify_state, session_id);
     }
 
     fn close_all_overlays(&mut self) {
@@ -1834,6 +1896,50 @@ impl WorkflowApp {
                 self.launch_from_task();
             }
             Message::FontLoaded => {}
+            Message::InstallHooks => {
+                let home = std::env::var("HOME").unwrap_or_default();
+                let _ = planeai_core::notify::install_all_hooks(&home);
+                self.show_hook_banner = false;
+            }
+            Message::DismissHookBanner => {
+                self.show_hook_banner = false;
+            }
+            Message::CheckSilence => {
+                let to_notify = {
+                    let mut ns = self.notify_state.lock().unwrap();
+                    planeai_iced_spike::notify_sub::check_silence_and_debounce(&mut ns)
+                };
+                for session_id in to_notify {
+                    tracing::info!(session_id = %session_id, "notify: idle (silence/debounce timeout)");
+                    self.fire_notification(&session_id);
+                    self.agent_states
+                        .insert(session_id, planeai_core::notify::AgentState::Idle);
+                }
+            }
+            Message::NotifyIpc(msg) => {
+                let actions = {
+                    let mut ns = self.notify_state.lock().unwrap();
+                    planeai_iced_spike::notify_sub::dispatch_ipc_message(&mut ns, &msg)
+                };
+                for action in actions {
+                    match action {
+                        planeai_iced_spike::notify_sub::NotifyAction::StateChanged {
+                            session_id,
+                            state,
+                        } => {
+                            self.agent_states.insert(session_id, state);
+                        }
+                        planeai_iced_spike::notify_sub::NotifyAction::FireNotification {
+                            session_id,
+                        } => {
+                            self.fire_notification(&session_id);
+                        }
+                        planeai_iced_spike::notify_sub::NotifyAction::RefreshSidebar => {
+                            self.sidebar_dirty = true;
+                        }
+                    }
+                }
+            }
             Message::TerminalScroll(delta) => {
                 if !self.sessions.is_empty() {
                     let session = &mut self.sessions[self.active];
@@ -2568,6 +2674,9 @@ impl WorkflowApp {
                             if let Ok(t) = clipboard.get_text() {
                                 if !t.is_empty() {
                                     let _ = self.sessions[self.active].backend.write(t.as_bytes());
+                                    let sid = &self.sessions[self.active].session_id;
+                                    self.notify_state.lock().unwrap().acknowledge(sid);
+                                    self.agent_states.remove(sid);
                                 }
                             }
                         }
@@ -2596,6 +2705,10 @@ impl WorkflowApp {
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
                             let _ = self.sessions[self.active].backend.write(b);
+                            // Clear agent state on user input (acknowledge)
+                            let sid = &self.sessions[self.active].session_id;
+                            self.notify_state.lock().unwrap().acknowledge(sid);
+                            self.agent_states.remove(sid);
                         }
                     }
                 }
@@ -2669,6 +2782,21 @@ impl WorkflowApp {
                                     .advance(&mut session.terminal.term, &data);
                             }
                             None => break,
+                        }
+                    }
+                    if got_data {
+                        // Notify state machine of output activity
+                        let sid = &self.sessions[i].session_id;
+                        let was_idle = {
+                            let mut ns = self.notify_state.lock().unwrap();
+                            let was =
+                                ns.get_state(sid) != Some(planeai_core::notify::AgentState::Busy);
+                            ns.notify_output(sid);
+                            was
+                        };
+                        if was_idle {
+                            self.agent_states
+                                .insert(sid.clone(), planeai_core::notify::AgentState::Busy);
                         }
                     }
                     if i == self.active && got_data {
@@ -2869,6 +2997,7 @@ impl WorkflowApp {
             sidebar.view(
                 self.sidebar_focused,
                 &self.theme,
+                &self.agent_states,
                 Message::SidebarItemClicked,
                 Message::SidebarScrolled,
             )
@@ -3321,6 +3450,34 @@ impl WorkflowApp {
         );
         let base: Element<'_, Message> = column![title_bar, base].into();
 
+        // Hook install banner
+        let base: Element<'_, Message> = if self.show_hook_banner {
+            let banner = container(
+                row![
+                    text("⚠ Notification hooks not installed — agents won't signal when ready.")
+                        .size(12)
+                        .color(self.theme.warning_text()),
+                    iced::widget::button(text("Install").size(12))
+                        .on_press(Message::InstallHooks)
+                        .padding([2, 8]),
+                    iced::widget::button(text("✕").size(12))
+                        .on_press(Message::DismissHookBanner)
+                        .padding([2, 4]),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([4, 12])
+            .style(move |_: &Theme| container::Style {
+                background: Some(self.theme.warning_bg().into()),
+                ..Default::default()
+            });
+            column![banner, base].into()
+        } else {
+            base
+        };
+
         if self.show_shortcuts {
             use iced::widget::stack;
             let overlay = container(shortcuts_overlay())
@@ -3478,6 +3635,11 @@ impl WorkflowApp {
         Subscription::batch(vec![
             keyboard::listen().map(Message::KeyEvent),
             iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
+            // Silence/debounce checker — tick every 1s
+            iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
+            // IPC notify listener
+            Subscription::run(planeai_iced_spike::notify_sub::notify_ipc_stream)
+                .map(Message::NotifyIpc),
             event::listen_with(|ev, _status, _id| match ev {
                 iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))

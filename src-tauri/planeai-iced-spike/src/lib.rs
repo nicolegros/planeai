@@ -5,6 +5,7 @@ pub mod components;
 pub mod daemon_session;
 pub mod font;
 pub mod input;
+pub mod notify_sub;
 pub mod planeai_local;
 pub mod project_form;
 pub mod shell;
