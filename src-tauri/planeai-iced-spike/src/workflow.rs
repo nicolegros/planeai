@@ -2448,7 +2448,13 @@ impl WorkflowApp {
                     let bytes = input::encode_key_event(&key, &modifiers, &txt);
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
-                            let _ = self.sessions[self.active].backend.write(b);
+                            let session = &mut self.sessions[self.active];
+                            // Clear selection on any keypress to terminal
+                            if session.terminal.selection.is_some() {
+                                session.terminal.selection = None;
+                                session.terminal.cache.clear();
+                            }
+                            let _ = session.backend.write(b);
                             // Clear agent state on user input (acknowledge)
                             let sid = &self.sessions[self.active].session_id;
                             self.notify_state.lock().unwrap().acknowledge(sid);
