@@ -520,11 +520,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(
-                    &session_id,
-                    &session_id[..8],
-                    &self.agent_command.clone(),
-                );
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
@@ -638,11 +634,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(
-                    &session_id,
-                    &session_id[..8],
-                    &self.agent_command.clone(),
-                );
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 // Touch MRU for newly attached session
                 self.mru.retain(|id| id != &session_id);
                 self.mru.insert(0, session_id);
@@ -906,11 +898,7 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(
-                    &session_id,
-                    &session_id[..8],
-                    &self.agent_command.clone(),
-                );
+                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 self.worktree_prompt = false;
                 self.worktree_branch_input.clear();
                 self.worktree_task_key_input.clear();
