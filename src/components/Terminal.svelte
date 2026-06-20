@@ -35,25 +35,10 @@
 
   const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
-  const INPUT_BATCH_MS = 4;
 
-  // ── Input write batching ──────────────────────────────────────────────────
-  let inputQueue: number[] = [];
-  let inputTimer: ReturnType<typeof setTimeout> | null = null;
-
+  // ── Input write — send immediately for responsive typing ──────────────
   function queueWrite(bytes: number[]) {
-    inputQueue.push(...bytes);
-    if (!inputTimer) {
-      inputTimer = setTimeout(flushInput, INPUT_BATCH_MS);
-    }
-  }
-
-  function flushInput() {
-    inputTimer = null;
-    if (inputQueue.length === 0) return;
-    const batch = inputQueue;
-    inputQueue = [];
-    pty.write(sessionId, batch);
+    pty.write(sessionId, bytes);
   }
 
   function terminalFontStack(primary: string): string {
@@ -310,13 +295,14 @@
           // WebGL not available, use default canvas renderer
         }
       }
-      requestAnimationFrame(() => fitAddon.fit());
-    } else {
-      if (webglAddon) {
-        webglAddon.dispose();
-        webglAddon = null;
-      }
+      requestAnimationFrame(() => {
+        const proposed = fitAddon.proposeDimensions();
+        if (proposed && (proposed.cols !== term.cols || proposed.rows !== term.rows)) {
+          fitAddon.fit();
+        }
+      });
     }
+    // WebGL addon stays alive — disposed only on unmount via term.dispose()
   });
 
   $effect(() => {
