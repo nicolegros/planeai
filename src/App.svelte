@@ -12,7 +12,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
-  import { getSnackbarMessage, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
+  import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
   import UnifiedSidebar from "./components/UnifiedSidebar.svelte";
@@ -424,8 +424,8 @@
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg bg-red-600 px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
+  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
     <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs text-red-200 mt-1">Click to copy & dismiss</p>
+    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
