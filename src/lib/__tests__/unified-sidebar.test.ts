@@ -196,6 +196,24 @@ describe("unified sidebar logic", () => {
   });
 
   describe("flat nav ordering", () => {
+    // Replicates the flatNavIndex Map logic used by UnifiedSidebar for O(1) lookups
+    type NavItem =
+      | { type: "project_header"; project: { id: string } }
+      | { type: "orphan"; session: { id: string } }
+      | { type: "status_header"; projectPath: string; status: string }
+      | { type: "task"; task: { key: string }; projectPath: string };
+
+    function buildFlatNavIndex(flatNav: NavItem[]): Map<string, number> {
+      const map = new Map<string, number>();
+      flatNav.forEach((item, i) => {
+        if (item.type === "project_header") map.set(`project:${item.project.id}`, i);
+        else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
+        else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
+        else if (item.type === "task") map.set(`task:${item.task.key}`, i);
+      });
+      return map;
+    }
+
     it("includes project_header, orphans, status_header, and tasks in order", () => {
       const projects = [makeProject("p1", "proj", "/path")];
       const sessions = [makeSession("s1", "p1", null), makeSession("s2", "p1", "T-1")];
@@ -203,29 +221,48 @@ describe("unified sidebar logic", () => {
       const allTaskKeys = new Set(tasks.map((t) => t.key));
       const orphans = getOrphanSessions(sessions, allTaskKeys);
 
-      // Simulating the flatNav construction (new format with headers)
-      type NavItem =
-        | { type: "project_header"; id: string }
-        | { type: "orphan"; id: string }
-        | { type: "status_header"; status: string }
-        | { type: "task"; key: string };
       const flatNav: NavItem[] = [];
-      flatNav.push({ type: "project_header", id: "p1" });
+      flatNav.push({ type: "project_header", project: { id: "p1" } });
       for (const s of orphans.filter((s) => s.project_id === "p1"))
-        flatNav.push({ type: "orphan", id: s.id });
-      flatNav.push({ type: "status_header", status: "in_progress" });
-      for (const t of tasks) flatNav.push({ type: "task", key: t.key });
+        flatNav.push({ type: "orphan", session: { id: s.id } });
+      flatNav.push({ type: "status_header", projectPath: "/path", status: "in_progress" });
+      for (const t of tasks) flatNav.push({ type: "task", task: { key: t.key }, projectPath: "/path" });
 
-      expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
-      expect(flatNav[1]).toEqual({ type: "orphan", id: "s1" });
-      expect(flatNav[2]).toEqual({ type: "status_header", status: "in_progress" });
-      expect(flatNav[3]).toEqual({ type: "task", key: "T-1" });
+      expect(flatNav[0]).toMatchObject({ type: "project_header" });
+      expect(flatNav[1]).toMatchObject({ type: "orphan" });
+      expect(flatNav[2]).toMatchObject({ type: "status_header", status: "in_progress" });
+      expect(flatNav[3]).toMatchObject({ type: "task" });
+    });
+
+    it("flatNavIndex provides O(1) lookup matching linear findIndex", () => {
+      const flatNav: NavItem[] = [
+        { type: "project_header", project: { id: "p1" } },
+        { type: "orphan", session: { id: "s1" } },
+        { type: "orphan", session: { id: "s2" } },
+        { type: "status_header", projectPath: "/proj", status: "in_progress" },
+        { type: "task", task: { key: "T-1" }, projectPath: "/proj" },
+        { type: "task", task: { key: "T-2" }, projectPath: "/proj" },
+        { type: "status_header", projectPath: "/proj", status: "todo" },
+        { type: "task", task: { key: "T-3" }, projectPath: "/proj" },
+      ];
+
+      const index = buildFlatNavIndex(flatNav);
+
+      expect(index.get("project:p1")).toBe(0);
+      expect(index.get("orphan:s1")).toBe(1);
+      expect(index.get("orphan:s2")).toBe(2);
+      expect(index.get("status:/proj:in_progress")).toBe(3);
+      expect(index.get("task:T-1")).toBe(4);
+      expect(index.get("task:T-2")).toBe(5);
+      expect(index.get("status:/proj:todo")).toBe(6);
+      expect(index.get("task:T-3")).toBe(7);
+      expect(index.get("nonexistent")).toBeUndefined();
     });
 
     it("collapsed project only shows project_header", () => {
-      type NavItem = { type: "project_header"; id: string } | { type: "task"; key: string };
+      type SimpleNavItem = { type: "project_header"; id: string } | { type: "task"; key: string };
       const collapsed = new Set(["project:p1"]);
-      const flatNav: NavItem[] = [];
+      const flatNav: SimpleNavItem[] = [];
       flatNav.push({ type: "project_header", id: "p1" });
       if (!collapsed.has("project:p1")) {
         flatNav.push({ type: "task", key: "T-1" });

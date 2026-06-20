@@ -181,6 +181,18 @@
     return result;
   });
 
+  // O(1) lookup map for nav index (avoids O(n²) findIndex in template)
+  const flatNavIndex = $derived.by(() => {
+    const map = new Map<string, number>();
+    flatNav.forEach((item, i) => {
+      if (item.type === "project_header") map.set(`project:${item.project.id}`, i);
+      else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
+      else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
+      else if (item.type === "task") map.set(`task:${item.task.key}`, i);
+    });
+    return map;
+  });
+
   $effect(() => { clampIndex(flatNav.length); });
 
   function handleKeydown(e: KeyboardEvent) {
@@ -300,7 +312,7 @@
         {@const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? []}
         {@const projectKey = `project:${project.id}`}
         {@const projectCollapsed = isProjectCollapsed(project)}
-        {@const projectNavIdx = flatNav.findIndex(n => n.type === "project_header" && n.project.id === project.id)}
+        {@const projectNavIdx = flatNavIndex.get(`project:${project.id}`) ?? -1}
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
           <button
@@ -320,7 +332,7 @@
           {#if projectOrphans.length > 0}
             <ul class="space-y-0.5 ml-1 mb-1">
               {#each projectOrphans as session (session.id)}
-                {@const globalIndex = flatNav.findIndex(n => n.type === "orphan" && n.session.id === session.id)}
+                {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
                 {@const isActive = session.id === activeSessionId}
                 {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
                 <li>
@@ -375,7 +387,7 @@
             {@const items = statusGroups[status] ?? []}
             {#if items.length > 0}
               {@const sectionKey = `${project.path}:${status}`}
-              {@const statusNavIdx = flatNav.findIndex(n => n.type === "status_header" && n.projectPath === project.path && n.status === status)}
+              {@const statusNavIdx = flatNavIndex.get(`status:${project.path}:${status}`) ?? -1}
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div class="ml-1">
                 <button
@@ -391,7 +403,7 @@
                     {#each items as task (task.key)}
                       {@const linked = sessionForTask(task.key)}
                       {@const isActive = linked?.id === activeSessionId}
-                      {@const taskNavIdx = flatNav.findIndex(n => n.type === "task" && n.task.key === task.key)}
+                      {@const taskNavIdx = flatNavIndex.get(`task:${task.key}`) ?? -1}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
                       <li>
