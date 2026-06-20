@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use arboard::Clipboard;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{event, window, Color, Element, Font, Length, Size, Subscription, Theme};
+use iced::{event, window, Color, Element, Length, Size, Subscription, Theme};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
@@ -195,6 +195,8 @@ struct WorkflowApp {
     tab_switcher: TabSwitcher,
     tab_switcher_names: Vec<String>,
     mru: Vec<String>,
+    // Command palette (Cmd+K)
+    command_palette: Option<crate::command_palette::CommandPaletteState>,
     // Theme
     theme_source: ThemeSource,
     theme: PlaneAiTheme,
@@ -395,6 +397,7 @@ impl WorkflowApp {
                 tab_switcher: TabSwitcher::new(),
                 tab_switcher_names: Vec::new(),
                 mru: persisted_sessions.iter().map(|s| s.id.clone()).collect(),
+                command_palette: None,
                 persisted_sessions,
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
@@ -1432,6 +1435,154 @@ impl WorkflowApp {
         self.error_time = None;
     }
 
+    fn close_all_overlays(&mut self) {
+        self.picking_project = false;
+        self.launch_prompt = false;
+        self.worktree_prompt = false;
+        self.task_picker = false;
+        self.new_menu = false;
+        self.session_form = false;
+        self.show_shortcuts = false;
+    }
+
+    fn build_palette_items(&self) -> crate::command_palette::CommandPaletteState {
+        use crate::command_palette::{CommandPaletteState, PaletteItem};
+
+        let mut items = Vec::new();
+
+        // Sessions group — query DB for all active sessions (like sidebar)
+        let attached_ids: Vec<&str> = self
+            .sessions
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect();
+        let active_sid = self
+            .sessions
+            .get(self.active)
+            .map(|s| s.session_id.as_str());
+        let all_sessions: Vec<services::SessionRecord> = self
+            .db
+            .as_ref()
+            .and_then(|db| db.lock().ok())
+            .map(|conn| services::SessionService::list_active(&conn).unwrap_or_default())
+            .unwrap_or_default();
+
+        if all_sessions.is_empty() {
+            // No DB — fall back to attached sessions
+            for (i, session) in self.sessions.iter().enumerate() {
+                let label = format!("Session {}", i + 1);
+                items.push(PaletteItem {
+                    id: format!("session_id:{}", session.session_id),
+                    label,
+                    group: "Sessions".into(),
+                    is_active: i == self.active,
+                });
+            }
+        } else {
+            for record in &all_sessions {
+                let label = if !record.name.is_empty() {
+                    record.name.clone()
+                } else if !record.branch.is_empty() {
+                    record.branch.clone()
+                } else {
+                    record.id[..record.id.len().min(8)].to_string()
+                };
+                let is_attached = attached_ids.contains(&record.id.as_str());
+                let suffix = if !is_attached { " (detached)" } else { "" };
+                items.push(PaletteItem {
+                    id: format!("session_id:{}", record.id),
+                    label: format!("{label}{suffix}"),
+                    group: "Sessions".into(),
+                    is_active: active_sid == Some(record.id.as_str()),
+                });
+            }
+        }
+
+        // Actions group
+        items.push(PaletteItem {
+            id: "action:new".into(),
+            label: "New session".into(),
+            group: "Actions".into(),
+            is_active: false,
+        });
+        if !self.sessions.is_empty() {
+            items.push(PaletteItem {
+                id: "action:kill".into(),
+                label: "Kill session".into(),
+                group: "Actions".into(),
+                is_active: false,
+            });
+            items.push(PaletteItem {
+                id: "action:detach".into(),
+                label: "Detach session".into(),
+                group: "Actions".into(),
+                is_active: false,
+            });
+        }
+        items.push(PaletteItem {
+            id: "action:shortcuts".into(),
+            label: "Toggle shortcuts".into(),
+            group: "Actions".into(),
+            is_active: false,
+        });
+        for (i, path) in self.recent_projects.iter().enumerate().take(5) {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            items.push(PaletteItem {
+                id: format!("project:{i}"),
+                label: format!("Open: {name}"),
+                group: "Actions".into(),
+                is_active: false,
+            });
+        }
+
+        // Tasks group (only if already loaded)
+        for (i, task) in self.task_list.iter().enumerate() {
+            items.push(PaletteItem {
+                id: format!("task:{i}"),
+                label: format!("{}: {}", task.key, task.title),
+                group: "Tasks".into(),
+                is_active: false,
+            });
+        }
+
+        CommandPaletteState::new(items)
+    }
+
+    fn dispatch_palette_action(&mut self, id: &str) {
+        if let Some(sid) = id.strip_prefix("session_id:") {
+            // If already attached, switch to it
+            if let Some(idx) = self.sessions.iter().position(|s| s.session_id == sid) {
+                self.switch_to(idx);
+            } else {
+                // Detached — attach it
+                self.attach_session(sid.to_string());
+            }
+        } else if id == "action:new" {
+            self.launch_session();
+        } else if id == "action:kill" {
+            self.kill_active();
+        } else if id == "action:detach" {
+            self.detach_active();
+        } else if id == "action:shortcuts" {
+            self.show_shortcuts = !self.show_shortcuts;
+        } else if let Some(rest) = id.strip_prefix("project:") {
+            if let Ok(idx) = rest.parse::<usize>() {
+                if let Some(path) = self.recent_projects.get(idx).cloned() {
+                    self.select_project(&path);
+                }
+            }
+        } else if let Some(rest) = id.strip_prefix("task:") {
+            if let Ok(idx) = rest.parse::<usize>() {
+                if idx < self.task_list.len() {
+                    self.selected_task = Some(self.task_list[idx].clone());
+                }
+            }
+        }
+    }
+
     fn switch_to(&mut self, idx: usize) {
         if idx < self.sessions.len() && idx != self.active {
             self.active = idx;
@@ -1714,6 +1865,33 @@ impl WorkflowApp {
                 if self.log_replay.is_some() {
                     if matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape)) {
                         self.log_replay = None;
+                    }
+                    return iced::Task::none();
+                }
+
+                // Command palette mode
+                if self.command_palette.is_some() {
+                    let key_str = match &key {
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => Some("ArrowDown"),
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => Some("ArrowUp"),
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => Some("Enter"),
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => Some("Escape"),
+                        keyboard::Key::Named(keyboard::key::Named::Backspace) => Some("Backspace"),
+                        keyboard::Key::Character(c) => Some(c.as_str()),
+                        _ => None,
+                    };
+                    if let Some(k) = key_str {
+                        let event = self.command_palette.as_mut().unwrap().handle_key(k);
+                        match event {
+                            crate::command_palette::PaletteEvent::Select(id) => {
+                                self.command_palette = None;
+                                self.dispatch_palette_action(&id);
+                            }
+                            crate::command_palette::PaletteEvent::Close => {
+                                self.command_palette = None;
+                            }
+                            crate::command_palette::PaletteEvent::None => {}
+                        }
                     }
                     return iced::Task::none();
                 }
@@ -2192,6 +2370,20 @@ impl WorkflowApp {
                 if cmd && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "/") {
                     self.show_shortcuts = !self.show_shortcuts;
                     self.kill_armed = false;
+                    return iced::Task::none();
+                }
+
+                // Cmd+K — command palette
+                if cmd
+                    && !modifiers.shift()
+                    && matches!(&key, keyboard::Key::Character(c) if c.as_str() == "k")
+                {
+                    if self.command_palette.is_some() {
+                        self.command_palette = None;
+                    } else {
+                        self.close_all_overlays();
+                        self.command_palette = Some(self.build_palette_items());
+                    }
                     return iced::Task::none();
                 }
 
@@ -3118,6 +3310,94 @@ impl WorkflowApp {
                 .style(|_: &Theme| container::Style {
                     background: Some(Color::from_rgba8(0, 0, 0, 0.7).into()),
                     ..Default::default()
+                });
+            stack![base, overlay].into()
+        } else if self.command_palette.is_some() {
+            use iced::widget::stack;
+            let palette = self.command_palette.as_ref().unwrap();
+            let mut items_col = column![].spacing(1);
+
+            // Search input display
+            let search_display = if palette.search().is_empty() {
+                "Type to search...".to_string()
+            } else {
+                format!("{}▏", palette.search())
+            };
+            let search_color = if palette.search().is_empty() {
+                self.theme.text_dimmed()
+            } else {
+                self.theme.text_primary()
+            };
+            items_col = items_col.push(
+                container(text(search_display).color(search_color))
+                    .width(Length::Fill)
+                    .padding([6, 8]),
+            );
+
+            // Items grouped by section
+            let visible = palette.visible_items();
+            let cursor_pos = palette.cursor();
+            let mut current_group = "";
+            for (vi, item) in visible.iter().enumerate() {
+                if item.group != current_group {
+                    current_group = &item.group;
+                    items_col = items_col.push(
+                        container(text(current_group).size(11).color(self.theme.text_dimmed()))
+                            .padding([4, 8]),
+                    );
+                }
+                // Determine absolute index for cursor highlight
+                let is_cursor = vi == cursor_pos % visible.len().max(1);
+                let label_color = if item.is_active {
+                    self.theme.accent()
+                } else if is_cursor {
+                    self.theme.text_primary()
+                } else {
+                    self.theme.text_secondary()
+                };
+                let item_bg = if is_cursor {
+                    Some(Color {
+                        a: 0.12,
+                        ..self.theme.accent()
+                    })
+                } else {
+                    None
+                };
+                let active_mark = if item.is_active { " •" } else { "" };
+                let txt = text(format!("{}{}", item.label, active_mark)).color(label_color);
+                items_col =
+                    items_col.push(container(txt).width(Length::Fill).padding([3, 8]).style(
+                        move |_: &Theme| container::Style {
+                            background: item_bg.map(|c| c.into()),
+                            ..Default::default()
+                        },
+                    ));
+            }
+
+            let panel_bg = self.theme.panel_bg();
+            let border_color = self.theme.border();
+            let panel = container(items_col)
+                .padding(4)
+                .width(Length::Fixed(420.0))
+                .max_height(400.0)
+                .style(move |_: &Theme| container::Style {
+                    background: Some(panel_bg.into()),
+                    border: iced::Border {
+                        color: border_color,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                });
+            let overlay = container(panel)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .padding(iced::Padding {
+                    top: 80.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
                 });
             stack![base, overlay].into()
         } else if self.tab_switcher.is_visible() {

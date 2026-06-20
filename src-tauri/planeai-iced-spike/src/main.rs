@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod adapter;
+pub mod command_palette;
 pub mod common;
 pub mod components;
 pub mod daemon_session;
