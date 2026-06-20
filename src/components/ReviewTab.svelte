@@ -384,7 +384,7 @@
   $effect(() => {
     const dark = isDark();
     if (viewer && mounted) {
-      viewer.setThemeType(dark ? "dark" : "light");
+      viewer.setOptions({ themeType: dark ? "dark" : "light" });
     }
   });
 
