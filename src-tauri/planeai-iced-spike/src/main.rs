@@ -1208,7 +1208,7 @@ fn main() -> iced::Result {
         .title(title)
         .subscription(App::subscription)
         .settings(iced::Settings {
-            default_text_size: iced::Pixels(16.0),
+            default_text_size: iced::Pixels(14.0),
             ..iced::Settings::default()
         })
         .window_size(Size::new(cols as f32 * cw, rows as f32 * ch));

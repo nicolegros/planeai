@@ -3329,7 +3329,7 @@ pub fn run(args: Args) -> iced::Result {
         .theme(|state: &WorkflowApp| state.theme.to_iced_theme())
         .subscription(WorkflowApp::subscription)
         .settings(iced::Settings {
-            default_text_size: iced::Pixels(16.0),
+            default_text_size: iced::Pixels(14.0),
             ..iced::Settings::default()
         })
         .window(window_settings);

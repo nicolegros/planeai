@@ -26,7 +26,7 @@ pub fn view<'a, Message: Clone + 'a>(
             crumb.push_str(p);
         }
         if project_name.is_some() && session_name.is_some() {
-            crumb.push_str(" / ");
+            crumb.push_str("   /   ");
         }
         if let Some(s) = session_name {
             crumb.push_str(s);
@@ -55,7 +55,7 @@ pub fn view<'a, Message: Clone + 'a>(
     let bar = container(
         row(items)
             .align_y(iced::Alignment::Center)
-            .height(28.0)
+            .height(36.0)
             .width(Length::Fill),
     )
     .width(Length::Fill)
