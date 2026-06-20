@@ -275,6 +275,7 @@
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
       else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
+      else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); orchestrator.toggleDiff(); } }
     }
   }
 
