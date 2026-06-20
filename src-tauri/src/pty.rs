@@ -382,6 +382,8 @@ impl PtyManager {
         let done = Arc::new(AtomicBool::new(false));
 
         // ── Reader thread ─────────────────────────────────────────────────
+        // Always drains the PTY to prevent the child process from stalling.
+        // Flow control is applied in the flusher thread (gating sends to frontend).
         let pending_r = pending.clone();
         let observer = self.observer.read().unwrap().clone();
         let sid = session_id.to_string();
@@ -389,12 +391,16 @@ impl PtyManager {
         thread::spawn(move || {
             let mut buf = [0u8; READ_BUF];
             loop {
-                flow_clone.wait_if_paused();
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         let (lock, cv) = &*pending_r;
                         let mut g = lock.lock().unwrap();
+                        // Cap buffer at 1MB to bound memory when paused
+                        if g.len() + n > 1_048_576 {
+                            let excess = g.len() + n - 1_048_576;
+                            g.drain(..excess);
+                        }
                         g.extend_from_slice(&buf[..n]);
                         cv.notify_one();
                         observer.on_output(&sid, n);
@@ -412,6 +418,7 @@ impl PtyManager {
         let exit_key = session_id.to_string();
         let app_flusher = app.clone();
         let cancelled_f = cancelled;
+        let flow_f = flow_clone;
         let capture_f = match (&self.capture_file, &self.capture_session) {
             (Some(f), None) => Some(f.clone()),
             (Some(f), Some(s)) if s == session_id => Some(f.clone()),
@@ -441,6 +448,9 @@ impl PtyManager {
                         g = next;
                     }
                 }
+
+                // Wait for flow control (backpressure from frontend)
+                flow_f.wait_if_paused();
 
                 thread::sleep(FLUSH_COALESCE);
 
@@ -592,6 +602,11 @@ impl PtyManager {
                         observer.on_output(&sid_clone, payload.len());
                         let (lock, cv) = &*pending;
                         let mut g = lock.lock().unwrap();
+                        // Cap buffer at 1MB to bound memory when paused
+                        if g.len() + payload.len() > 1_048_576 {
+                            let excess = g.len() + payload.len() - 1_048_576;
+                            g.drain(..excess);
+                        }
                         g.extend_from_slice(&payload);
                         cv.notify_one();
                     }
