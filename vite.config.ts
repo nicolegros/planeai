@@ -9,4 +9,14 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          xterm: ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-webgl", "@xterm/addon-web-links", "@xterm/addon-unicode11"],
+          codemirror: ["codemirror", "@codemirror/view", "@codemirror/state", "@codemirror/commands", "@codemirror/language", "@codemirror/search", "@codemirror/autocomplete", "@codemirror/merge", "@codemirror/language-data"],
+        },
+      },
+    },
+  },
 });
