@@ -1541,14 +1541,10 @@ impl WorkflowApp {
             None => ("planeai".to_string(), "Agent is ready".to_string()),
         };
         drop(ns);
-        let mut notification = notify_rust::Notification::new();
-        notification.summary(&title).body(&body);
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, set the app name so notifications group under our bundle
-            notification.appname("planeai");
-        }
-        let _ = notification.show();
+        let _ = notify_rust::Notification::new()
+            .summary(&title)
+            .body(&body)
+            .show();
     }
 
     fn close_all_overlays(&mut self) {
