@@ -310,7 +310,7 @@
       } else if (e.key === "Enter" && !e.metaKey) {
         e.preventDefault();
         diffFocus = "body";
-        cursorLine = 1;
+        cursorLine = getFirstVisibleLine();
         showCursor();
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -383,8 +383,41 @@
     selectedRange = { start: cursorLine, end: cursorLine, side: "additions" };
   }
 
+  function getVisibleLineNumbers(): number[] {
+    if (!diffContainer) return [];
+    const items = diffContainer.querySelectorAll("[data-additions] [data-column-number]");
+    const lines: number[] = [];
+    for (const el of items) {
+      const n = parseInt((el as HTMLElement).dataset.columnNumber ?? "", 10);
+      if (!isNaN(n) && n > 0 && !lines.includes(n)) lines.push(n);
+    }
+    // Fall back to any gutter column if additions side isn't found (unified mode)
+    if (lines.length === 0) {
+      const all = diffContainer.querySelectorAll("[data-column-number]");
+      for (const el of all) {
+        const n = parseInt((el as HTMLElement).dataset.columnNumber ?? "", 10);
+        if (!isNaN(n) && n > 0 && !lines.includes(n)) lines.push(n);
+      }
+    }
+    return lines.sort((a, b) => a - b);
+  }
+
   function moveCursorLine(delta: number) {
-    cursorLine = Math.max(1, cursorLine + delta);
+    const lines = getVisibleLineNumbers();
+    if (lines.length === 0) return;
+
+    if (delta === 0) {
+      // Just clamp to nearest available line
+      cursorLine = lines.reduce((prev, curr) =>
+        Math.abs(curr - cursorLine) < Math.abs(prev - cursorLine) ? curr : prev
+      );
+    } else {
+      const currentIdx = lines.findIndex((l) => l >= cursorLine);
+      const idx = currentIdx === -1 ? lines.length - 1 : currentIdx;
+      const nextIdx = Math.max(0, Math.min(lines.length - 1, idx + delta));
+      cursorLine = lines[nextIdx];
+    }
+
     if (selectionAnchor !== null) {
       const start = Math.min(selectionAnchor, cursorLine);
       const end = Math.max(selectionAnchor, cursorLine);
@@ -416,7 +449,7 @@
 
   function scrollToHunk(direction: "next" | "prev") {
     if (!diffContainer) return;
-    const separators = diffContainer.querySelectorAll("[data-hunk-separator]");
+    const separators = diffContainer.querySelectorAll("[data-separator]");
     if (separators.length === 0) return;
 
     const containerTop = diffContainer.scrollTop;
@@ -429,6 +462,20 @@
       const prev = items.reverse().find((el) => (el as HTMLElement).offsetTop < containerTop - 10);
       if (prev) prev.scrollIntoView({ block: "start", behavior: "smooth" });
     }
+  }
+
+  function getFirstVisibleLine(): number {
+    if (!diffContainer) return 1;
+    const scrollTop = diffContainer.scrollTop;
+    const items = diffContainer.querySelectorAll("[data-column-number]");
+    for (const el of items) {
+      if ((el as HTMLElement).offsetTop >= scrollTop) {
+        const num = parseInt((el as HTMLElement).dataset.columnNumber ?? "", 10);
+        if (!isNaN(num) && num > 0) return num;
+      }
+    }
+    const lines = getVisibleLineNumbers();
+    return lines[0] ?? 1;
   }
 
   let mounted = false;
