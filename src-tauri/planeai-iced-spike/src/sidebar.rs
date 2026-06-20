@@ -9,8 +9,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, text};
-use iced::{Color, Element, Length, Theme};
+use iced::widget::{column, container, mouse_area, row, scrollable, svg, text};
+use iced::widget::text::Wrapping;
+use iced::{Color, Element, Font, Length, Padding, Theme};
 use rusqlite::Connection;
 
 use crate::theme::PlaneAiTheme;
@@ -31,6 +32,7 @@ pub enum NavItem {
         session_id: String,
         name: String,
         status: String,
+        has_worktree: bool,
     },
     StatusHeader {
         project_path: String,
@@ -41,6 +43,8 @@ pub enum NavItem {
         key: String,
         title: String,
         status: String,
+        parent_key: Option<String>,
+        is_parent: bool,
         linked_session_id: Option<String>,
     },
 }
@@ -73,6 +77,35 @@ fn status_color(status: &str) -> Color {
         "done" => Color::from_rgb8(168, 85, 247),
         _ => Color::from_rgb8(150, 150, 150),
     }
+}
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+
+fn icon_chevron_right<'a, M: 'a>(color: Color) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(include_bytes!("../icons/chevron-right.svg").as_slice());
+    svg(handle)
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
+fn icon_chevron_down<'a, M: 'a>(color: Color) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(include_bytes!("../icons/chevron-down.svg").as_slice());
+    svg(handle)
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
+fn icon_git_fork<'a, M: 'a>(color: Color) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(include_bytes!("../icons/git-fork.svg").as_slice());
+    svg(handle)
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -187,6 +220,15 @@ impl SidebarState {
         self.active_session_id = id;
     }
 
+    /// Handle a click on a flat_nav item by index. Returns an action if applicable.
+    pub fn handle_click(&mut self, index: usize) -> Option<SidebarAction> {
+        if index >= self.flat_nav.len() {
+            return None;
+        }
+        self.selected_index = index;
+        self.select_current()
+    }
+
     /// Handle a key press. Returns a SidebarAction if the key triggered one.
     pub fn handle_key(&mut self, key: &str) -> Option<SidebarAction> {
         match key {
@@ -288,8 +330,14 @@ impl SidebarState {
     }
 
     /// Render the sidebar as an iced Element.
-    pub fn view<'a, M: Clone + 'a>(&self, focused: bool, theme: &PlaneAiTheme) -> Element<'a, M> {
-        let mut items = column![].spacing(1);
+    /// `on_click` is called with the flat_nav index when an item is clicked.
+    pub fn view<'a, M: Clone + 'a>(
+        &self,
+        focused: bool,
+        theme: &PlaneAiTheme,
+        on_click: impl Fn(usize) -> M + 'a,
+    ) -> Element<'a, M> {
+        let mut items = column![].spacing(4);
 
         for (i, item) in self.flat_nav.iter().enumerate() {
             let is_selected = focused && i == self.selected_index;
@@ -303,49 +351,6 @@ impl SidebarState {
                 } => self.active_session_id.as_deref() == Some(sid),
                 _ => false,
             };
-            let label = match item {
-                NavItem::ProjectHeader { name, .. } => {
-                    let arrow = if self.is_collapsed(item) {
-                        "▶"
-                    } else {
-                        "▼"
-                    };
-                    format!("{} {}", arrow, name.to_uppercase())
-                }
-                NavItem::OrphanSession { name, status, .. } => {
-                    let icon = if is_active {
-                        "▶"
-                    } else if status == "active" {
-                        "●"
-                    } else {
-                        "○"
-                    };
-                    format!("  {} {}", icon, name)
-                }
-                NavItem::StatusHeader { status, count, .. } => {
-                    let arrow = if self.is_collapsed(item) {
-                        "▶"
-                    } else {
-                        "▼"
-                    };
-                    format!("  {} {} ({})", arrow, status_label(status), count)
-                }
-                NavItem::Task {
-                    title,
-                    linked_session_id,
-                    ..
-                } => {
-                    let icon = if is_active {
-                        "▶"
-                    } else if linked_session_id.is_some() {
-                        "●"
-                    } else {
-                        "○"
-                    };
-                    format!("    {} {}", icon, title)
-                }
-            };
-
             let color = match item {
                 NavItem::ProjectHeader { .. } => theme.text_muted(),
                 _ if is_active => theme.accent(),
@@ -373,16 +378,108 @@ impl SidebarState {
                 None
             };
 
-            let txt = text(label).color(color);
-            let item_container =
-                container(txt)
-                    .width(Length::Fill)
-                    .padding([2, 4])
-                    .style(move |_: &Theme| container::Style {
-                        background: bg.map(|c| c.into()),
-                        ..Default::default()
-                    });
-            items = items.push(item_container);
+            let bold_font = Font {
+                weight: iced::font::Weight::Bold,
+                ..Font::default()
+            };
+
+            let chevron: Element<'_, M> = if self.is_collapsed(item) {
+                icon_chevron_right(color)
+            } else {
+                icon_chevron_down(color)
+            };
+
+            let item_content: Element<'_, M> = match item {
+                NavItem::ProjectHeader { name, .. } => {
+                    let name_txt = text(name.to_uppercase()).size(11).color(color).wrapping(Wrapping::None);
+                    row![chevron, name_txt]
+                        .spacing(4)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                }
+                NavItem::OrphanSession {
+                    name, has_worktree, ..
+                } => {
+                    let mut r = row![].spacing(4).align_y(iced::Alignment::Center);
+                    if *has_worktree {
+                        r = r.push(icon_git_fork(theme.text_dimmed()));
+                    }
+                    let name_txt = text(name.clone()).size(13).color(color).wrapping(Wrapping::None);
+                    let name_txt = if is_active {
+                        name_txt.font(bold_font)
+                    } else {
+                        name_txt
+                    };
+                    r = r.push(name_txt);
+                    container(r)
+                        .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 16.0 })
+                        .into()
+                }
+                NavItem::StatusHeader { status, count, .. } => {
+                    let label = format!("{} ({})", status_label(status), count);
+                    let txt = text(label).size(12).color(color).wrapping(Wrapping::None);
+                    container(
+                        row![chevron, txt]
+                            .spacing(4)
+                            .align_y(iced::Alignment::Center),
+                    )
+                    .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 12.0 })
+                    .into()
+                }
+                NavItem::Task {
+                    key,
+                    title,
+                    parent_key,
+                    is_parent,
+                    ..
+                } => {
+                    let key_color = if is_active {
+                        color
+                    } else if *is_parent {
+                        theme.text_dimmed()
+                    } else {
+                        theme.accent()
+                    };
+                    let mut r = row![].spacing(4).align_y(iced::Alignment::Center);
+                    if let Some(pk) = parent_key {
+                        r = r.push(
+                            text(format!("{} ›", pk))
+                                .size(10)
+                                .color(theme.text_dimmed())
+                                .wrapping(Wrapping::None),
+                        );
+                    }
+                    let key_txt = text(key.clone()).size(10).color(key_color).wrapping(Wrapping::None);
+                    let key_txt = if is_active {
+                        key_txt.font(bold_font)
+                    } else {
+                        key_txt
+                    };
+                    r = r.push(key_txt);
+                    let title_txt = text(title.clone()).size(13).color(color).wrapping(Wrapping::None);
+                    let title_txt = if is_active {
+                        title_txt.font(bold_font)
+                    } else {
+                        title_txt
+                    };
+                    r = r.push(title_txt);
+                    container(r).padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 24.0 }).into()
+                }
+            };
+
+            let item_container = container(item_content)
+                .width(Length::Fill)
+                .padding([4, 8])
+                .max_width(self.width - 16.0)
+                .clip(true)
+                .style(move |_: &Theme| container::Style {
+                    background: bg.map(|c| c.into()),
+                    ..Default::default()
+                });
+
+            let clickable =
+                mouse_area(item_container).on_press(on_click(i));
+            items = items.push(clickable);
         }
 
         let sidebar_content = scrollable(items).width(Length::Fill).height(Length::Fill);
@@ -470,6 +567,7 @@ impl SidebarState {
                         s.name.clone()
                     },
                     status: s.status.clone(),
+                    has_worktree: s.worktree_path.is_some(),
                 });
             }
 
@@ -479,6 +577,10 @@ impl SidebarState {
                 .get(&project.path)
                 .cloned()
                 .unwrap_or_default();
+            let parent_keys: HashSet<&str> = project_tasks
+                .iter()
+                .filter_map(|t| t.parent_key.as_deref())
+                .collect();
             let status_order = ["in_progress", "in_review", "todo", "done"];
 
             for status in status_order {
@@ -513,6 +615,8 @@ impl SidebarState {
                         key: task.key.clone(),
                         title: task.title.clone(),
                         status: status.to_string(),
+                        parent_key: task.parent_key.clone(),
+                        is_parent: parent_keys.contains(task.key.as_str()),
                         linked_session_id,
                     });
                 }
