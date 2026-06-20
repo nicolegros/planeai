@@ -200,6 +200,13 @@
 
   const flatTaskKeys = $derived(flatNav.map((item) => item.type === "task" ? item.task.key : `§${item.sectionKey}`));
 
+  // O(1) index lookup map (avoids O(n²) indexOf in template)
+  const flatTaskIndex = $derived.by(() => {
+    const map = new Map<string, number>();
+    flatTaskKeys.forEach((key, i) => map.set(key, i));
+    return map;
+  });
+
   function handleTaskKeydown(e: KeyboardEvent) {
     if (disableKeyboard) return;
     if (getActiveZone() !== "sidebar") return;
@@ -272,7 +279,7 @@
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
                 {@const sectionKey = `${project.path}:${status}`}
-                {@const sectionNavIdx = flatTaskKeys.indexOf(`§${sectionKey}`)}
+                {@const sectionNavIdx = flatTaskIndex.get(`§${sectionKey}`) ?? -1}
                 {@const isSectionSelected = getActiveZone() === 'sidebar' && sectionNavIdx === getSelectedIndex()}
                 <div class="ml-1">
                   <button
@@ -290,7 +297,7 @@
                   {#if !collapsedSections[sectionKey]}
                     <ul class="space-y-0.5 ml-1">
                       {#each items as task (task.key)}
-                        {@const taskFlatIdx = flatTaskKeys.indexOf(task.key)}
+                        {@const taskFlatIdx = flatTaskIndex.get(task.key) ?? -1}
                         {@const isTaskSelected = getActiveZone() === 'sidebar' && taskFlatIdx === getSelectedIndex()}
                         {@const isActive = task.key === activeTaskKey}
                         {@const isParent = isParentTask(task, projectTasks)}
