@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use iced::widget::{button, column, row, text, text_input};
-use iced::{Font, Length};
+use iced::Length;
 use planeai_core::services::{Project, ProjectService};
 use rusqlite::Connection;
 
@@ -176,53 +176,29 @@ impl ProjectFormState {
         M: Clone + 'a,
     {
         let mut col = column![].spacing(3).width(Length::Fill).padding(8);
-        col = col.push(
-            text("Add Project")
-                .size(13)
-                .color(theme.text_primary())
-                .font(Font::MONOSPACE),
-        );
-        col = col.push(
-            text("  Repository path:")
-                .size(11)
-                .color(theme.text_muted())
-                .font(Font::MONOSPACE),
-        );
+        col = col.push(text("Add Project").color(theme.text_primary()));
+        col = col.push(text("  Repository path:").color(theme.text_muted()));
         col = col.push(
             text_input("/path/to/repo", &self.path)
                 .id(iced::widget::Id::new(PATH_INPUT_ID))
                 .on_input(on_path)
                 .on_submit(on_submit.clone())
-                .size(14)
                 .width(Length::Fill),
         );
-        col = col.push(
-            text("  Name:")
-                .size(11)
-                .color(theme.text_muted())
-                .font(Font::MONOSPACE),
-        );
+        col = col.push(text("  Name:").color(theme.text_muted()));
         col = col.push(
             text_input("my-project", &self.name)
                 .on_input(on_name)
                 .on_submit(on_submit.clone())
-                .size(14)
                 .width(Length::Fill),
         );
         if let Some(ref err) = self.error {
-            col = col.push(
-                text(format!("  ⚠ {}", err))
-                    .size(11)
-                    .color(theme.error())
-                    .font(Font::MONOSPACE),
-            );
+            col = col.push(text(format!("  ⚠ {}", err)).color(theme.error()));
         }
         let button_row = row![
-            button(text("Cancel").size(12).font(Font::MONOSPACE))
-                .on_press(on_cancel)
-                .padding([4, 12]),
+            button(text("Cancel")).on_press(on_cancel).padding([4, 12]),
             iced::widget::Space::new().width(Length::Fill),
-            button(text("Add Project ⌘↵").size(12).font(Font::MONOSPACE))
+            button(text("Add Project ⌘↵"))
                 .on_press(on_submit)
                 .padding([4, 12]),
         ]

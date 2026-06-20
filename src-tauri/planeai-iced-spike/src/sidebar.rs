@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use iced::widget::{column, container, mouse_area, row, scrollable, text};
-use iced::{Color, Element, Font, Length, Theme};
+use iced::{Color, Element, Length, Theme};
 use rusqlite::Connection;
 
 use crate::theme::PlaneAiTheme;
@@ -373,7 +373,7 @@ impl SidebarState {
                 None
             };
 
-            let txt = text(label).size(12).color(color).font(Font::MONOSPACE);
+            let txt = text(label).color(color);
             let item_container =
                 container(txt)
                     .width(Length::Fill)

@@ -34,7 +34,7 @@ use iced::mouse;
 use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::widget::Canvas;
 use iced::window;
-use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
+use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Subscription, Theme};
 use serde_json::json;
 
 // --- CLI ---
@@ -1204,13 +1204,13 @@ fn main() -> iced::Result {
 
     ARGS.set(args).unwrap();
 
-    let mut app = iced::application(App::boot, App::update, App::view)
+    let app = iced::application(App::boot, App::update, App::view)
         .title(title)
         .subscription(App::subscription)
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(16.0),
+            ..iced::Settings::default()
+        })
         .window_size(Size::new(cols as f32 * cw, rows as f32 * ch));
-    let font = planeai_iced_spike::font::terminal_font();
-    if font != Font::MONOSPACE {
-        app = app.default_font(font);
-    }
     app.run()
 }

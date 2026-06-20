@@ -1,7 +1,7 @@
 //! Title bar — macOS-style custom title bar with breadcrumb and drag-to-move.
 
 use iced::widget::{container, mouse_area, row, text, Space};
-use iced::{Element, Font, Length, Theme};
+use iced::{Element, Length, Theme};
 
 use crate::theme::PlaneAiTheme;
 
@@ -31,13 +31,7 @@ pub fn view<'a, Message: Clone + 'a>(
         if let Some(s) = session_name {
             crumb.push_str(s);
         }
-        items.push(
-            text(crumb)
-                .size(12)
-                .color(theme.text_secondary())
-                .font(Font::MONOSPACE)
-                .into(),
-        );
+        items.push(text(crumb).color(theme.text_secondary()).into());
 
         // Divider
         items.push(Space::new().width(12.0).into());
