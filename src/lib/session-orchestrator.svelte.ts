@@ -221,16 +221,19 @@ export function startEventListeners(): () => void {
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
-          git.getChangedFiles(session.worktree_path, session.base_branch).then((files) => {
-            if (files.length === 0) return;
-            if (sid === activeSessionId) {
-              if (getSettings().auto_open_review !== false) {
-                toggleDiff();
+          git
+            .getChangedFiles(session.worktree_path, session.base_branch)
+            .then((files) => {
+              if (files.length === 0) return;
+              if (sid === activeSessionId) {
+                if (getSettings().auto_open_review !== false) {
+                  toggleDiff();
+                }
+              } else {
+                reviewReady = { ...reviewReady, [sid]: true };
               }
-            } else {
-              reviewReady = { ...reviewReady, [sid]: true };
-            }
-          }).catch(() => {});
+            })
+            .catch(() => {});
         }
       }
     }),

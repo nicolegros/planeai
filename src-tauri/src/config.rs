@@ -48,7 +48,10 @@ pub struct Config {
     /// Env var PLANEAI_EXTRA_PATH overrides this (colon-separated).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_path_dirs: Vec<String>,
-    #[serde(default = "default_auto_open_review", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_auto_open_review",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub auto_open_review: Option<bool>,
 }
 
