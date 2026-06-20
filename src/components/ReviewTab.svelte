@@ -219,7 +219,7 @@
     const patch = diffCache.get(file.path) ?? await fetchPatch(file);
     if (!patch) return;
 
-    const fileDiff = processFile(patch, { oldFile: { name: file.old_path || file.path, contents: "" }, newFile: { name: file.path, contents: "" } });
+    const fileDiff = processFile(patch);
     if (!fileDiff) return;
 
     const annotations = getAnnotationsForFile(file.path);
