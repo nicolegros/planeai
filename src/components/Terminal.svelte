@@ -46,13 +46,12 @@
     return `${quoted}, "Symbols Nerd Font Mono", monospace`;
   }
 
-  const termBg = $derived(
-    extractTerminalTheme().background || "#000"
-  );
+  let termBg = $state("#000");
 
   onMount(() => {
     const s = getSettings();
     const themeColors = extractTerminalTheme();
+    termBg = themeColors.background || "#000";
 
     term = new Terminal({
       cursorBlink: true,
@@ -318,7 +317,9 @@
     if (!term) return;
     const s = getSettings();
     isDark(); // track reactivity on dark mode change
-    term.options.theme = extractTerminalTheme();
+    const theme = extractTerminalTheme();
+    term.options.theme = theme;
+    termBg = theme.background || "#000";
     term.options.fontSize = s.terminal.font_size;
     term.options.fontFamily = terminalFontStack(s.terminal.font_family);
     term.options.macOptionIsMeta = s.terminal.option_as_meta;
