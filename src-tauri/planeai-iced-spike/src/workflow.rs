@@ -1917,6 +1917,7 @@ impl WorkflowApp {
                     }
                 }
                 for (session_id, state) in to_notify {
+                    tracing::info!(session_id = %session_id, "notify: idle (silence/debounce timeout)");
                     self.fire_notification(&session_id);
                     self.agent_states.insert(session_id, state);
                 }
@@ -1926,7 +1927,8 @@ impl WorkflowApp {
                 match msg.event {
                     NE::Busy => {
                         self.notify_state.lock().unwrap().notify_output(&msg.session_id);
-                        self.agent_states.insert(msg.session_id, AS::Busy);
+                        self.agent_states.insert(msg.session_id.clone(), AS::Busy);
+                        tracing::debug!(session_id = %msg.session_id, "notify: busy (hook)");
                     }
                     NE::Notification => {
                         let fired = self
@@ -1935,6 +1937,7 @@ impl WorkflowApp {
                             .unwrap()
                             .notify_stop_immediate(&msg.session_id);
                         if fired {
+                            tracing::info!(session_id = %msg.session_id, "notify: idle (immediate)");
                             self.fire_notification(&msg.session_id);
                             self.agent_states.insert(msg.session_id, AS::Idle);
                         }
@@ -1944,11 +1947,13 @@ impl WorkflowApp {
                         let hook_enabled =
                             ns.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
                         if hook_enabled {
+                            tracing::debug!(session_id = %msg.session_id, "notify: stop (debouncing)");
                             ns.notify_stop_debounced(&msg.session_id);
                         } else {
                             let fired = ns.notify_stop(&msg.session_id);
                             drop(ns);
                             if fired {
+                                tracing::info!(session_id = %msg.session_id, "notify: idle (stop, no hook)");
                                 self.fire_notification(&msg.session_id);
                                 self.agent_states
                                     .insert(msg.session_id, AS::Idle);
@@ -1956,6 +1961,7 @@ impl WorkflowApp {
                         }
                     }
                     NE::SessionCreated | NE::SessionChanged => {
+                        tracing::debug!(session_id = %msg.session_id, event = ?msg.event, "notify: session event");
                         self.sidebar_dirty = true;
                     }
                 }
@@ -3709,8 +3715,10 @@ fn notify_ipc_stream() -> impl iced::futures::Stream<Item = planeai_core::notify
             let Ok(listener) =
                 planeai_ipc::IpcListener::bind(planeai_ipc::Channel::Notify, &app_dir)
             else {
+                tracing::warn!("notify: failed to bind IPC listener");
                 return;
             };
+            tracing::info!("notify: IPC listener started");
             loop {
                 let stream = match listener.accept() {
                     Ok(s) => s,
