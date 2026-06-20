@@ -1073,7 +1073,10 @@ impl MultiApp {
         }
 
         let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
-            sidebar.view(self.zone == Zone::Sidebar, &crate::theme::default_dark_theme())
+            sidebar.view(
+                self.zone == Zone::Sidebar,
+                &crate::theme::default_dark_theme(),
+            )
         } else {
             container(session_list)
                 .padding(8)

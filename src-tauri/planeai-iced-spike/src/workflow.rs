@@ -3161,16 +3161,38 @@ impl WorkflowApp {
                 let is_selected = i == selected;
                 let label = format!("  {}", name);
                 let color = if is_selected {
-                    Color::from_rgb8(100, 220, 255)
+                    self.theme.accent()
                 } else {
-                    Color::from_rgb8(180, 180, 180)
+                    self.theme.text_primary()
                 };
-                items = items.push(text(label).size(12).color(color).font(Font::MONOSPACE));
+                let item_bg = if is_selected {
+                    Some(Color {
+                        a: 0.15,
+                        ..self.theme.accent()
+                    })
+                } else {
+                    None
+                };
+                let txt = text(label).size(12).color(color).font(Font::MONOSPACE);
+                items = items.push(container(txt).width(Length::Fill).padding([2, 4]).style(
+                    move |_: &Theme| container::Style {
+                        background: item_bg.map(|c| c.into()),
+                        ..Default::default()
+                    },
+                ));
             }
+            let panel_bg = self.theme.panel_bg();
+            let border_color = self.theme.border();
             let panel = container(items)
                 .padding(8)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgb8(30, 40, 55).into()),
+                .width(Length::Fixed(700.0))
+                .style(move |_: &Theme| container::Style {
+                    background: Some(panel_bg.into()),
+                    border: iced::Border {
+                        color: border_color,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
                     ..Default::default()
                 });
             let overlay = container(panel)
