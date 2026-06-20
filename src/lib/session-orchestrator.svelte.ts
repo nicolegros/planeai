@@ -9,6 +9,7 @@ import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { showSnackbar } from "./snackbar.svelte";
+import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
 import {
@@ -242,6 +243,10 @@ export function startEventListeners(): () => void {
 }
 
 export function startSymphonyPolling(): () => void {
+  const settings = getSettings();
+  if (!settings.task_management?.auto_dispatch) {
+    return () => {};
+  }
   const poll = async () => {
     try {
       symphonyStatus = JSON.parse(await symphony.getStatus());

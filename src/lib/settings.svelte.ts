@@ -115,6 +115,11 @@ export function getSettings(): AppConfig {
   return config;
 }
 
+/** Terminal-specific settings — use in effects that should only re-fire on terminal config changes */
+export function getTerminalSettings() {
+  return config.terminal;
+}
+
 export async function loadSettings(): Promise<void> {
   config = await configApi.get();
   applyDarkClass();

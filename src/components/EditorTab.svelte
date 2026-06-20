@@ -3,7 +3,7 @@
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
-  import { vim, Vim, getCM } from "@replit/codemirror-vim";
+  import { vim, Vim } from "@replit/codemirror-vim";
   import { basicSetup } from "codemirror";
   import { defaultKeymap } from "@codemirror/commands";
   import { searchKeymap } from "@codemirror/search";
@@ -116,22 +116,15 @@
     Vim.defineEx("bn", "bn", () => nextBuffer());
     Vim.defineEx("bp", "bp", () => prevBuffer());
 
-    // Track vim mode changes
-    const interval = setInterval(() => {
-      if (!view) return;
-      const cm = getCM(view);
-      if (cm) {
-        const state = (cm as any).state;
-        const mode = state?.vim?.mode || "normal";
-        const sub = state?.vim?.subMode;
-        if (mode === "insert") vimMode = "INSERT";
-        else if (mode === "visual") vimMode = sub === "linewise" ? "V-LINE" : "VISUAL";
-        else if (mode === "replace") vimMode = "REPLACE";
-        else vimMode = "NORMAL";
-      }
-    }, 50);
+    // Track vim mode changes via event (method exists at runtime but not in types)
+    (Vim as any).on("vim-mode-change", (ev: { mode: string; subMode?: string }) => {
+      if (ev.mode === "insert") vimMode = "INSERT";
+      else if (ev.mode === "visual") vimMode = ev.subMode === "linewise" ? "V-LINE" : "VISUAL";
+      else if (ev.mode === "replace") vimMode = "REPLACE";
+      else vimMode = "NORMAL";
+    });
 
-    return () => clearInterval(interval);
+    return () => {};
   }
 
   function ensureView(state: EditorState) {

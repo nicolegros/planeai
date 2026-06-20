@@ -71,6 +71,16 @@
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
+  // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
+  const titlebarTabs = $derived.by(() => {
+    if (!activeSessionId) return [];
+    const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
+    const extra: { index: number; label: string; icon?: string; modified?: boolean }[] = [];
+    if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
+    if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
+    return [...shellTabs, ...extra];
+  });
+
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
@@ -161,14 +171,7 @@
     sessionName={activeSessionName}
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
-    tabs={(() => {
-      if (!activeSessionId) return [];
-      const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
-      const extra = [];
-      if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
-      if (editorTabOpen[activeSessionId]) extra.push({ index: -2, label: editorFileName[activeSessionId] || "Editor", icon: "file", modified: editorModified[activeSessionId] || false });
-      return [...shellTabs, ...extra];
-    })()}
+    tabs={titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
     onSelectTab={orchestrator.selectUnifiedTab}
     onCloseTab={(i) => {

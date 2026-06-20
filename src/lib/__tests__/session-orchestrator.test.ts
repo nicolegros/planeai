@@ -9,6 +9,15 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn() }));
+vi.mock("../settings.svelte", () => ({
+  getSettings: vi.fn(() => ({
+    appearance: { mode: "system", theme: "default" },
+    terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+    providers: {},
+    default_provider: "kiro",
+    task_management: null,
+  })),
+}));
 vi.mock("../tab-switcher.svelte", () => ({
   getCycleState: vi.fn(() => ({ isCycling: false, cycleList: [], index: 0, isVisible: false })),
 }));
@@ -30,6 +39,7 @@ vi.mock("../api", () => ({
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";
+import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
   getSessions,
@@ -235,11 +245,34 @@ describe("session-orchestrator", () => {
     });
 
     it("startSymphonyPolling returns cleanup", () => {
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: { auto_dispatch: { max_concurrent: 2 } },
+      });
       vi.mocked(symphony.getStatus).mockResolvedValue(
         JSON.stringify({ active: true, slots_used: 1, max_concurrent: 3 }),
       );
       const cleanup = startSymphonyPolling();
       expect(typeof cleanup).toBe("function");
+      expect(symphony.getStatus).toHaveBeenCalled();
+      cleanup();
+    });
+
+    it("startSymphonyPolling skips polling when auto_dispatch is not configured", () => {
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+      });
+      vi.mocked(symphony.getStatus).mockClear();
+      const cleanup = startSymphonyPolling();
+      expect(typeof cleanup).toBe("function");
+      expect(symphony.getStatus).not.toHaveBeenCalled();
       cleanup();
     });
   });

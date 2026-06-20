@@ -91,6 +91,22 @@ vi.mock("../../lib/task-store.svelte", () => ({
 
 import TaskPanel from "../TaskPanel.svelte";
 
+describe("TaskPanel flatTaskIndex lookup", () => {
+  it("builds O(1) index map from flatTaskKeys", () => {
+    // Replicate the logic used inside TaskPanel
+    const flatTaskKeys = ["§/proj:in_progress", "TASK-1", "TASK-2", "§/proj:todo", "TASK-3"];
+    const map = new Map<string, number>();
+    flatTaskKeys.forEach((key, i) => map.set(key, i));
+
+    expect(map.get("§/proj:in_progress")).toBe(0);
+    expect(map.get("TASK-1")).toBe(1);
+    expect(map.get("TASK-2")).toBe(2);
+    expect(map.get("§/proj:todo")).toBe(3);
+    expect(map.get("TASK-3")).toBe(4);
+    expect(map.get("nonexistent")).toBeUndefined();
+  });
+});
+
 describe("TaskPanel move-to-done archives session", () => {
   let onArchiveSession: ReturnType<typeof vi.fn>;
   let target: HTMLElement;

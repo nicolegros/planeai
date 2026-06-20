@@ -10,7 +10,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { getSettings, isDark } from "../lib/settings.svelte";
+  import { getSettings, getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractTerminalTheme } from "../lib/theme-loader";
   import { matchTerminalKey } from "../lib/terminal-keys";
 
@@ -35,25 +35,10 @@
 
   const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
-  const INPUT_BATCH_MS = 4;
 
-  // ── Input write batching ──────────────────────────────────────────────────
-  let inputQueue: number[] = [];
-  let inputTimer: ReturnType<typeof setTimeout> | null = null;
-
+  // ── Input write — send immediately for responsive typing ──────────────
   function queueWrite(bytes: number[]) {
-    inputQueue.push(...bytes);
-    if (!inputTimer) {
-      inputTimer = setTimeout(flushInput, INPUT_BATCH_MS);
-    }
-  }
-
-  function flushInput() {
-    inputTimer = null;
-    if (inputQueue.length === 0) return;
-    const batch = inputQueue;
-    inputQueue = [];
-    pty.write(sessionId, batch);
+    pty.write(sessionId, bytes);
   }
 
   function terminalFontStack(primary: string): string {
@@ -61,13 +46,12 @@
     return `${quoted}, "Symbols Nerd Font Mono", monospace`;
   }
 
-  const termBg = $derived(
-    extractTerminalTheme().background || "#000"
-  );
+  let termBg = $state("#000");
 
   onMount(() => {
     const s = getSettings();
     const themeColors = extractTerminalTheme();
+    termBg = themeColors.background || "#000";
 
     term = new Terminal({
       cursorBlink: true,
@@ -218,8 +202,8 @@
     });
 
     // ── Listen for PTY output with flow control ─────────────────────────
-    const FLOW_HIGH = 100_000;
-    const FLOW_LOW = 10_000;
+    const FLOW_HIGH = 32_000;
+    const FLOW_LOW = 8_000;
     let pendingBytes = 0;
     let isPaused = false;
 
@@ -310,13 +294,14 @@
           // WebGL not available, use default canvas renderer
         }
       }
-      requestAnimationFrame(() => fitAddon.fit());
-    } else {
-      if (webglAddon) {
-        webglAddon.dispose();
-        webglAddon = null;
-      }
+      requestAnimationFrame(() => {
+        const proposed = fitAddon.proposeDimensions();
+        if (proposed && (proposed.cols !== term.cols || proposed.rows !== term.rows)) {
+          fitAddon.fit();
+        }
+      });
     }
+    // WebGL addon stays alive — disposed only on unmount via term.dispose()
   });
 
   $effect(() => {
@@ -328,14 +313,17 @@
     }
   });
 
+  // Only re-run when terminal-relevant settings change
   $effect(() => {
     if (!term) return;
-    const s = getSettings();
+    const { font_size, font_family, option_as_meta } = getTerminalSettings();
     isDark(); // track reactivity on dark mode change
-    term.options.theme = extractTerminalTheme();
-    term.options.fontSize = s.terminal.font_size;
-    term.options.fontFamily = terminalFontStack(s.terminal.font_family);
-    term.options.macOptionIsMeta = s.terminal.option_as_meta;
+    const theme = extractTerminalTheme();
+    term.options.theme = theme;
+    termBg = theme.background || "#000";
+    term.options.fontSize = font_size;
+    term.options.fontFamily = terminalFontStack(font_family);
+    term.options.macOptionIsMeta = option_as_meta;
     if (fitAddon) fitAddon.fit();
   });
 
