@@ -112,6 +112,8 @@ export const git = {
     invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch }),
   getFileDiff: (repoPath: string, baseBranch: string, filePath: string, oldPath: string | null) =>
     invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath, oldPath }),
+  getFilePatch: (repoPath: string, baseBranch: string, filePath: string, oldPath: string | null) =>
+    invoke<string>("get_file_patch", { repoPath, baseBranch, filePath, oldPath }),
   listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
   readFile: (filePath: string) => invoke<string>("read_file", { filePath }),
   writeFile: (filePath: string, content: string) => invoke("write_file", { filePath, content }),

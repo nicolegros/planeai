@@ -2,7 +2,7 @@
   import { git } from "../lib/api";
   import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
   import { onMount, onDestroy, untrack } from "svelte";
-  import { FileDiff, type FileContents, type FileDiffOptions, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
+  import { FileDiff, type FileContents, type FileDiffOptions, type DiffLineAnnotation, type SelectedLineRange, processFile, type FileDiffMetadata } from "@pierre/diffs";
   import { isDark } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
@@ -36,7 +36,7 @@
 
   let diffContainer: HTMLElement;
   let renderer: FileDiff<ReviewComment> | null = null;
-  let diffCache = new Map<string, FileDiffData>();
+  let diffCache = new Map<string, string>();
   let cachedLineNumbers: number[] | null = null;
 
   // Comment input state
@@ -59,10 +59,18 @@
   async function sendFeedback() {
     const comments = getComments(sessionId);
     if (comments.length === 0 || sessionExited) return;
-    const serialized = serializeComments(comments, diffCache);
+    // Fetch file contents on-demand for serialization (not on every view)
+    const filePaths = [...new Set(comments.map((c) => c.filePath))];
+    const fileDiffs = new Map<string, FileDiffData>();
+    await Promise.all(filePaths.map(async (path) => {
+      try {
+        const diff = await git.getFileDiff(repoPath, baseBranch, path, null);
+        fileDiffs.set(path, diff);
+      } catch { /* non-critical */ }
+    }));
+    const serialized = serializeComments(comments, fileDiffs);
     const bytes = Array.from(new TextEncoder().encode(serialized));
     await pty.write(sessionId, bytes);
-    // Send carriage return to submit the prompt
     await pty.write(sessionId, [0x0d]);
     const count = comments.length;
     clearComments(sessionId);
@@ -198,9 +206,8 @@
     for (const i of neighbors) {
       if (i >= 0 && i < files.length) {
         prefetchLanguage(files[i].path, theme);
-        // Prefetch the actual diff content in the background
         if (!diffCache.has(files[i].path)) {
-          fetchDiff(files[i]);
+          fetchPatch(files[i]);
         }
       }
     }
@@ -209,26 +216,25 @@
   async function loadFileDiff(file: ChangedFile) {
     if (!renderer || !diffContainer) return;
     cachedLineNumbers = null;
-    const cached = diffCache.get(file.path);
-    const diff = cached ?? await fetchDiff(file);
-    if (!diff) return;
+    const patch = diffCache.get(file.path) ?? await fetchPatch(file);
+    if (!patch) return;
 
-    const oldFile: FileContents = { name: file.old_path || file.path, contents: diff.original };
-    const newFile: FileContents = { name: file.path, contents: diff.modified };
+    const fileDiff = processFile(patch, { oldFile: { name: file.old_path || file.path, contents: "" }, newFile: { name: file.path, contents: "" } });
+    if (!fileDiff) return;
+
     const annotations = getAnnotationsForFile(file.path);
-
     renderer.setOptions(getThemeConfig());
-    renderer.render({ oldFile, newFile, fileContainer: diffContainer, lineAnnotations: annotations });
-    cachedLineNumbers = null; // force re-query after render
+    renderer.render({ fileDiff: fileDiff as FileDiffMetadata, fileContainer: diffContainer, lineAnnotations: annotations });
+    cachedLineNumbers = null;
   }
 
-  async function fetchDiff(file: ChangedFile): Promise<FileDiffData | null> {
+  async function fetchPatch(file: ChangedFile): Promise<string | null> {
     try {
-      const diff = await git.getFileDiff(repoPath, baseBranch, file.path, file.old_path);
-      diffCache.set(file.path, diff);
-      return diff;
+      const patch = await git.getFilePatch(repoPath, baseBranch, file.path, file.old_path ?? null);
+      if (patch) diffCache.set(file.path, patch);
+      return patch || null;
     } catch (e) {
-      console.error("Failed to get file diff:", e);
+      console.error("Failed to get file patch:", e);
       return null;
     }
   }
@@ -499,10 +505,10 @@
   $effect(() => {
     if (visible && !mounted && diffContainer) {
       mounted = true;
-      warmHighlighter({ dark: "github-dark", light: "github-light" }).then(() => {
-        renderer = new FileDiff(getThemeConfig());
-        refresh();
-      });
+      renderer = new FileDiff(getThemeConfig());
+      refresh();
+      // Warm highlighter in background — subsequent renders will have color
+      warmHighlighter({ dark: "github-dark", light: "github-light" });
     }
   });
 

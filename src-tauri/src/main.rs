@@ -288,6 +288,7 @@ fn main() {
             list_branches,
             get_changed_files,
             get_file_diff,
+            get_file_patch,
             detect_default_branch,
             list_files,
             read_file,
