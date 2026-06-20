@@ -2,11 +2,13 @@
   import { git } from "../lib/api";
   import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
   import { onMount, onDestroy } from "svelte";
-  import { FileDiff, type FileContents, type FileDiffOptions } from "@pierre/diffs";
+  import { FileDiff, type FileContents, type FileDiffOptions, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
   import { isDark } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
+  import { addComment, removeComment, getComments, getFileCommentCount, getTotalCommentCount, type ReviewComment } from "../lib/review-comments.svelte";
+  import { MessageSquare, X } from "@lucide/svelte";
 
   interface Props {
     repoPath: string;
@@ -26,16 +28,119 @@
   let sidebarWidth = $state(getLayoutWidth("diff-sidebar", 256));
 
   let diffContainer: HTMLElement;
-  let renderer: FileDiff | null = null;
+  let renderer: FileDiff<ReviewComment> | null = null;
   let diffCache = new Map<string, FileDiffData>();
 
-  function getThemeConfig(): FileDiffOptions<undefined> {
+  // Comment input state
+  let showCommentInput = $state(false);
+  let commentText = $state("");
+  let commentStartLine = $state(0);
+  let commentEndLine = $state(0);
+  let commentType = $state<"line" | "hunk" | "file">("line");
+  let selectedRange = $state<SelectedLineRange | null>(null);
+  let commentInputEl: HTMLTextAreaElement | undefined;
+
+  // Reactive comment count for badge
+  let totalCount = $derived(getTotalCommentCount(sessionId));
+
+  function currentFilePath(): string {
+    return files[selectedIndex]?.path ?? "";
+  }
+
+  function getAnnotationsForFile(filePath: string): DiffLineAnnotation<ReviewComment>[] {
+    return getComments(sessionId)
+      .filter((c) => c.filePath === filePath && c.type !== "file")
+      .map((c) => ({ side: "additions" as const, lineNumber: c.startLine, metadata: c }));
+  }
+
+  function renderAnnotation(annotation: DiffLineAnnotation<ReviewComment>): HTMLElement | undefined {
+    const comment = annotation.metadata;
+    if (!comment) return undefined;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "review-comment-annotation";
+    wrapper.style.cssText = "padding:6px 10px;margin:2px 0;border-radius:4px;font-size:12px;line-height:1.4;display:flex;align-items:flex-start;gap:8px;background:var(--comment-bg,rgba(128,128,128,0.1));border:1px solid var(--comment-border,rgba(128,128,128,0.2))";
+
+    const textEl = document.createElement("span");
+    textEl.style.cssText = "flex:1;white-space:pre-wrap;word-break:break-word";
+    textEl.textContent = comment.text;
+
+    const authorEl = document.createElement("span");
+    authorEl.style.cssText = "font-size:10px;color:var(--comment-muted,#888);white-space:nowrap";
+    authorEl.textContent = "You";
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:var(--comment-muted,#888);font-size:14px;line-height:1";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "Delete comment";
+    deleteBtn.onclick = () => {
+      removeComment(sessionId, comment.id);
+      rerenderDiff();
+    };
+
+    wrapper.appendChild(textEl);
+    wrapper.appendChild(authorEl);
+    wrapper.appendChild(deleteBtn);
+    return wrapper;
+  }
+
+  function getThemeConfig(): FileDiffOptions<ReviewComment> {
     return {
       diffStyle,
       theme: { dark: "github-dark", light: "github-light" },
       themeType: isDark() ? "dark" : "light",
       disableFileHeader: true,
+      preferredHighlighter: "shiki-js",
+      tokenizeMaxLineLength: 1000,
+      enableLineSelection: true,
+      onLineSelected: (range) => { selectedRange = range; },
+      renderAnnotation,
     };
+  }
+
+  function openCommentInput(start: number, end: number, type: "line" | "hunk" | "file") {
+    commentStartLine = start;
+    commentEndLine = end;
+    commentType = type;
+    commentText = "";
+    showCommentInput = true;
+    // Focus textarea after DOM update
+    requestAnimationFrame(() => commentInputEl?.focus());
+  }
+
+  function submitComment() {
+    const text = commentText.trim();
+    if (!text) return;
+    addComment(sessionId, {
+      filePath: currentFilePath(),
+      type: commentType,
+      startLine: commentStartLine,
+      endLine: commentEndLine,
+      text,
+    });
+    cancelComment();
+    rerenderDiff();
+  }
+
+  function cancelComment() {
+    showCommentInput = false;
+    commentText = "";
+  }
+
+  function handleCommentKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelComment();
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submitComment();
+    }
+  }
+
+  function rerenderDiff() {
+    if (!renderer || !diffContainer || files.length === 0) return;
+    const file = files[selectedIndex];
+    if (file) loadFileDiff(file);
   }
 
   async function refresh() {
@@ -63,9 +168,10 @@
 
     const oldFile: FileContents = { name: file.old_path || file.path, contents: diff.original };
     const newFile: FileContents = { name: file.path, contents: diff.modified };
+    const annotations = getAnnotationsForFile(file.path);
 
     renderer.setOptions(getThemeConfig());
-    renderer.render({ oldFile, newFile, fileContainer: diffContainer });
+    renderer.render({ oldFile, newFile, fileContainer: diffContainer, lineAnnotations: annotations });
   }
 
   async function fetchDiff(file: ChangedFile): Promise<FileDiffData | null> {
@@ -81,6 +187,7 @@
 
   function selectFile(index: number) {
     selectedIndex = index;
+    showCommentInput = false;
     const file = files[index];
     if (file) {
       onFileChange?.(file.path.split("/").pop() || file.path);
@@ -90,6 +197,7 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (!visible || getActiveZone() !== "terminal") return;
+    if (showCommentInput) return; // let textarea handle keys
 
     if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {
       e.preventDefault();
@@ -112,6 +220,14 @@
     } else if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) {
       e.preventDefault();
       onEditFile?.(files[selectedIndex].path);
+    } else if (e.key === "c" && !e.metaKey && !e.ctrlKey && files.length > 0) {
+      e.preventDefault();
+      if (selectedRange) {
+        const type = selectedRange.start === selectedRange.end ? "line" : "hunk";
+        openCommentInput(selectedRange.start, selectedRange.end, type);
+      } else {
+        openCommentInput(0, 0, "file");
+      }
     }
   }
 
@@ -157,7 +273,7 @@
     const dark = isDark();
     const style = diffStyle;
     if (renderer && mounted && files.length > 0) {
-      renderer.setOptions({ diffStyle: style, themeType: dark ? "dark" : "light" });
+      renderer.setOptions({ ...getThemeConfig(), diffStyle: style, themeType: dark ? "dark" : "light" });
       renderer.setThemeType(dark ? "dark" : "light");
       loadFileDiff(files[selectedIndex]);
     }
@@ -194,8 +310,53 @@
         class="text-xs px-2 py-0.5 rounded {diffStyle === 'unified' ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300' : 'text-surface-500 hover:text-surface-700 dark:hover:text-surface-400'}"
         onclick={() => (diffStyle = "unified")}
       >Unified</button>
+      <div class="flex-1"></div>
+      {#if files.length > 0}
+        <button
+          class="text-xs px-2 py-0.5 rounded text-surface-500 hover:text-surface-700 dark:hover:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700"
+          onclick={() => openCommentInput(0, 0, "file")}
+          title="Add file-level comment"
+        >
+          <MessageSquare size={12} />
+        </button>
+      {/if}
+      {#if totalCount > 0}
+        <span class="text-xs text-surface-500 dark:text-surface-400">{totalCount} comment{totalCount !== 1 ? 's' : ''}</span>
+      {/if}
     </div>
-    <div bind:this={diffContainer} class="absolute inset-0 top-8 overflow-auto"></div>
+
+    <!-- File-level comment input -->
+    {#if showCommentInput && commentType === "file"}
+      <div class="absolute top-8 left-0 right-0 z-20 p-2 border-b border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-800">
+        <textarea
+          bind:this={commentInputEl}
+          bind:value={commentText}
+          onkeydown={handleCommentKeydown}
+          class="w-full p-2 text-xs rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-900 text-surface-900 dark:text-surface-100 resize-none focus:outline-none focus:ring-1 focus:ring-primary-500"
+          rows="3"
+          placeholder="File-level comment… (Enter to submit, Shift+Enter for newline, Esc to cancel)"
+        ></textarea>
+      </div>
+    {/if}
+
+    <!-- Line/hunk comment input (shown below the toolbar area) -->
+    {#if showCommentInput && commentType !== "file"}
+      <div class="absolute top-8 left-0 right-0 z-20 p-2 border-b border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-800">
+        <div class="text-[10px] text-surface-500 mb-1">
+          Comment on {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}
+        </div>
+        <textarea
+          bind:this={commentInputEl}
+          bind:value={commentText}
+          onkeydown={handleCommentKeydown}
+          class="w-full p-2 text-xs rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-900 text-surface-900 dark:text-surface-100 resize-none focus:outline-none focus:ring-1 focus:ring-primary-500"
+          rows="3"
+          placeholder="Add comment… (Enter to submit, Shift+Enter for newline, Esc to cancel)"
+        ></textarea>
+      </div>
+    {/if}
+
+    <diffs-container bind:this={diffContainer} class="absolute inset-0 top-8 overflow-auto" style="display:block"></diffs-container>
     {#if loading && files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
     {:else if files.length === 0 && !loading}
@@ -210,6 +371,7 @@
     </div>
     <ul class="py-1" role="listbox">
       {#each files as file, i (file.path)}
+        {@const fileCount = getFileCommentCount(sessionId, file.path)}
         <li
           role="option"
           aria-selected={i === selectedIndex}
@@ -220,6 +382,11 @@
           <span class="truncate flex-1" title={file.path}>
             <span class="text-surface-400">{dirName(file.path)}</span>{fileName(file.path)}
           </span>
+          {#if fileCount > 0}
+            <span class="flex items-center gap-0.5 text-[10px] text-primary-600 dark:text-primary-400">
+              <MessageSquare size={10} />{fileCount}
+            </span>
+          {/if}
           <span class="text-green-600 dark:text-green-300 text-[10px]">+{file.additions}</span>
           <span class="text-red-600 dark:text-red-300 text-[10px]">-{file.deletions}</span>
         </li>
