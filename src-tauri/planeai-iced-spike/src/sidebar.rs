@@ -13,6 +13,7 @@ use iced::widget::{column, container, mouse_area, row, scrollable, text};
 use iced::{Color, Element, Font, Length, Theme};
 use rusqlite::Connection;
 
+use crate::theme::PlaneAiTheme;
 use planeai_core::services::{self, ProjectService, SessionRecord, SessionService};
 use planeai_tasks::model::ListFilter;
 use planeai_tasks::provider::TaskProvider;
@@ -287,7 +288,7 @@ impl SidebarState {
     }
 
     /// Render the sidebar as an iced Element.
-    pub fn view<'a, M: Clone + 'a>(&self, focused: bool) -> Element<'a, M> {
+    pub fn view<'a, M: Clone + 'a>(&self, focused: bool, theme: &PlaneAiTheme) -> Element<'a, M> {
         let mut items = column![].spacing(1);
 
         for (i, item) in self.flat_nav.iter().enumerate() {
@@ -346,24 +347,28 @@ impl SidebarState {
             };
 
             let color = match item {
-                NavItem::ProjectHeader { .. } => Color::from_rgb8(150, 150, 150),
-                _ if is_active => Color::from_rgb8(100, 200, 255),
-                NavItem::OrphanSession { status, .. } if status == "active" => {
-                    Color::from_rgb8(180, 180, 180)
-                }
-                NavItem::OrphanSession { .. } => Color::from_rgb8(120, 120, 120),
+                NavItem::ProjectHeader { .. } => theme.text_muted(),
+                _ if is_active => theme.accent(),
+                NavItem::OrphanSession { status, .. } if status == "active" => theme.text_primary(),
+                NavItem::OrphanSession { .. } => theme.text_dimmed(),
                 NavItem::StatusHeader { status, .. } => status_color(status),
                 NavItem::Task {
                     linked_session_id: Some(_),
                     ..
-                } => Color::from_rgb8(100, 200, 255),
-                NavItem::Task { .. } => Color::from_rgb8(180, 180, 180),
+                } => theme.accent(),
+                NavItem::Task { .. } => theme.text_primary(),
             };
 
             let bg = if is_active {
-                Some(Color::from_rgba8(100, 200, 255, 0.1))
+                Some(Color {
+                    a: 0.1,
+                    ..theme.accent()
+                })
             } else if is_selected {
-                Some(Color::from_rgba8(59, 130, 246, 0.15))
+                Some(Color {
+                    a: 0.15,
+                    ..theme.accent()
+                })
             } else {
                 None
             };
@@ -383,17 +388,23 @@ impl SidebarState {
         let sidebar_content = scrollable(items).width(Length::Fill).height(Length::Fill);
 
         let border_color = if focused {
-            Color::from_rgba8(59, 130, 246, 0.3)
+            Color {
+                a: 0.3,
+                ..theme.accent()
+            }
         } else {
-            Color::from_rgb8(40, 40, 40)
+            theme.panel_bg()
         };
+
+        let panel_bg = theme.panel_bg();
+        let handle_bg = theme.border();
 
         let sidebar_panel = container(sidebar_content)
             .width(Length::Fill)
             .height(Length::Fill)
             .padding(4)
             .style(move |_: &Theme| container::Style {
-                background: Some(Color::from_rgb8(20, 20, 20).into()),
+                background: Some(panel_bg.into()),
                 border: iced::Border {
                     color: border_color,
                     width: 1.0,
@@ -407,8 +418,8 @@ impl SidebarState {
             container(text(""))
                 .width(Length::Fixed(4.0))
                 .height(Length::Fill)
-                .style(|_: &Theme| container::Style {
-                    background: Some(Color::from_rgb8(50, 50, 50).into()),
+                .style(move |_: &Theme| container::Style {
+                    background: Some(handle_bg.into()),
                     ..Default::default()
                 }),
         )

@@ -21,6 +21,7 @@ use crate::daemon_session::DaemonSessionInfo;
 use crate::input;
 use crate::shell::{QueuePolicy, Shell};
 use crate::sidebar::{SidebarAction, SidebarState};
+use crate::theme::TerminalColors;
 use crate::Args;
 
 static MULTI_ARGS: OnceLock<Args> = OnceLock::new();
@@ -192,7 +193,7 @@ impl MultiApp {
             };
             let term = new_term(cols, rows);
             let processor = new_processor();
-            let snapshot = snapshot_grid(&term);
+            let snapshot = snapshot_grid(&term, &TerminalColors::default());
             let name = format!("Session {}", i + 1);
 
             metrics_lines.push(json!({
@@ -271,7 +272,7 @@ impl MultiApp {
         let from = self.active;
         self.active = idx;
         let session = &mut self.sessions[idx];
-        session.snapshot = snapshot_grid(&session.term);
+        session.snapshot = snapshot_grid(&session.term, &TerminalColors::default());
         session.cache.clear();
         session.dirty = false;
         let switch_latency = switch_start.elapsed().as_secs_f64() * 1000.0;
@@ -317,7 +318,8 @@ impl MultiApp {
             self.active = self.sessions.len() - 1;
         }
         let a = self.active;
-        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term);
+        self.sessions[a].snapshot =
+            snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
         self.sessions[a].cache.clear();
     }
 
@@ -348,7 +350,8 @@ impl MultiApp {
             self.active = self.sessions.len() - 1;
         }
         let a = self.active;
-        self.sessions[a].snapshot = snapshot_grid(&self.sessions[a].term);
+        self.sessions[a].snapshot =
+            snapshot_grid(&self.sessions[a].term, &TerminalColors::default());
         self.sessions[a].cache.clear();
     }
 
@@ -365,7 +368,7 @@ impl MultiApp {
                 self.sessions_attached += 1;
                 let term = new_term(self.cols, self.rows);
                 let processor = new_processor();
-                let snapshot = snapshot_grid(&term);
+                let snapshot = snapshot_grid(&term, &TerminalColors::default());
                 let name = format!(
                     "Session {} ({})",
                     id + 1,
@@ -491,7 +494,7 @@ impl MultiApp {
                 };
                 session.term.resize(term_size);
                 let _ = session.backend.resize(new_cols, new_rows);
-                session.snapshot = snapshot_grid(&session.term);
+                session.snapshot = snapshot_grid(&session.term, &TerminalColors::default());
                 session.cache.clear();
             }
             Message::KeyEvent(keyboard::Event::KeyPressed {
@@ -600,7 +603,7 @@ impl MultiApp {
                     };
                     let term = new_term(self.cols, self.rows);
                     let processor = new_processor();
-                    let snapshot = snapshot_grid(&term);
+                    let snapshot = snapshot_grid(&term, &TerminalColors::default());
                     let name = format!("Session {}", id + 1);
                     self.metrics_lines.push(json!({
                         "schema_version": 1, "event_type": "session_created",
@@ -650,7 +653,8 @@ impl MultiApp {
                             self.active = self.sessions.len() - 1;
                         }
                         let idx = self.active;
-                        self.sessions[idx].snapshot = snapshot_grid(&self.sessions[idx].term);
+                        self.sessions[idx].snapshot =
+                            snapshot_grid(&self.sessions[idx].term, &TerminalColors::default());
                         self.sessions[idx].cache.clear();
                     }
                     return;
@@ -834,7 +838,7 @@ impl MultiApp {
                     if i == self.active && total_drained > 0 {
                         let render_start = Instant::now();
                         let session = &mut self.sessions[i];
-                        session.snapshot = snapshot_grid(&session.term);
+                        session.snapshot = snapshot_grid(&session.term, &TerminalColors::default());
                         session.cache.clear();
                         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
                         self.sessions[i].render_works.push(render_ms);
@@ -1069,7 +1073,10 @@ impl MultiApp {
         }
 
         let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
-            sidebar.view(self.zone == Zone::Sidebar)
+            sidebar.view(
+                self.zone == Zone::Sidebar,
+                &crate::theme::default_dark_theme(),
+            )
         } else {
             container(session_list)
                 .padding(8)

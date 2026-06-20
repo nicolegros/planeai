@@ -5,3 +5,5 @@ pub mod input;
 pub mod planeai_local;
 pub mod shell;
 pub mod sidebar;
+pub mod theme;
+pub mod theme_parser;

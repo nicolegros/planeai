@@ -7,6 +7,8 @@ use iced::widget::canvas::{self, Cache, Program, Text};
 use iced::{mouse, Color, Font, Point, Rectangle, Renderer, Size, Theme};
 use std::time::Instant;
 
+use crate::theme::TerminalColors;
+
 pub struct EventProxy;
 impl alacritty_terminal::event::EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
@@ -44,56 +46,58 @@ pub struct GridSnapshot {
     pub rows: usize,
 }
 
-pub fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color {
+/// Resolves ANSI colors using the loaded terminal theme.
+pub fn ansi_color_to_iced(
+    color: &alacritty_terminal::vte::ansi::Color,
+    tc: &TerminalColors,
+) -> Color {
     use alacritty_terminal::vte::ansi::Color as AC;
     use alacritty_terminal::vte::ansi::NamedColor;
     match color {
         AC::Named(n) => match n {
-            NamedColor::Black => Color::from_rgb8(0, 0, 0),
-            NamedColor::Red => Color::from_rgb8(205, 49, 49),
-            NamedColor::Green => Color::from_rgb8(13, 188, 121),
-            NamedColor::Yellow => Color::from_rgb8(229, 229, 16),
-            NamedColor::Blue => Color::from_rgb8(36, 114, 200),
-            NamedColor::Magenta => Color::from_rgb8(188, 63, 188),
-            NamedColor::Cyan => Color::from_rgb8(17, 168, 205),
-            NamedColor::White => Color::from_rgb8(229, 229, 229),
-            NamedColor::BrightBlack => Color::from_rgb8(102, 102, 102),
-            NamedColor::BrightRed => Color::from_rgb8(241, 76, 76),
-            NamedColor::BrightGreen => Color::from_rgb8(35, 209, 139),
-            NamedColor::BrightYellow => Color::from_rgb8(245, 245, 67),
-            NamedColor::BrightBlue => Color::from_rgb8(59, 142, 234),
-            NamedColor::BrightMagenta => Color::from_rgb8(214, 112, 214),
-            NamedColor::BrightCyan => Color::from_rgb8(41, 184, 219),
-            NamedColor::BrightWhite | NamedColor::Foreground | NamedColor::BrightForeground => {
-                Color::from_rgb8(229, 229, 229)
-            }
-            NamedColor::Background => Color::from_rgb8(0, 0, 0),
-            _ => Color::from_rgb8(229, 229, 229),
+            NamedColor::Black => tc.black,
+            NamedColor::Red => tc.red,
+            NamedColor::Green => tc.green,
+            NamedColor::Yellow => tc.yellow,
+            NamedColor::Blue => tc.blue,
+            NamedColor::Magenta => tc.magenta,
+            NamedColor::Cyan => tc.cyan,
+            NamedColor::White => tc.white,
+            NamedColor::BrightBlack => tc.bright_black,
+            NamedColor::BrightRed => tc.bright_red,
+            NamedColor::BrightGreen => tc.bright_green,
+            NamedColor::BrightYellow => tc.bright_yellow,
+            NamedColor::BrightBlue => tc.bright_blue,
+            NamedColor::BrightMagenta => tc.bright_magenta,
+            NamedColor::BrightCyan => tc.bright_cyan,
+            NamedColor::BrightWhite => tc.bright_white,
+            NamedColor::Foreground | NamedColor::BrightForeground => tc.foreground,
+            NamedColor::Background => tc.background,
+            _ => tc.foreground,
         },
         AC::Spec(rgb) => Color::from_rgb8(rgb.r, rgb.g, rgb.b),
         AC::Indexed(idx) => {
             let i = *idx;
             if i < 16 {
-                let table: [(u8, u8, u8); 16] = [
-                    (0, 0, 0),
-                    (205, 49, 49),
-                    (13, 188, 121),
-                    (229, 229, 16),
-                    (36, 114, 200),
-                    (188, 63, 188),
-                    (17, 168, 205),
-                    (229, 229, 229),
-                    (102, 102, 102),
-                    (241, 76, 76),
-                    (35, 209, 139),
-                    (245, 245, 67),
-                    (59, 142, 234),
-                    (214, 112, 214),
-                    (41, 184, 219),
-                    (255, 255, 255),
-                ];
-                let (r, g, b) = table[i as usize];
-                Color::from_rgb8(r, g, b)
+                match i {
+                    0 => tc.black,
+                    1 => tc.red,
+                    2 => tc.green,
+                    3 => tc.yellow,
+                    4 => tc.blue,
+                    5 => tc.magenta,
+                    6 => tc.cyan,
+                    7 => tc.white,
+                    8 => tc.bright_black,
+                    9 => tc.bright_red,
+                    10 => tc.bright_green,
+                    11 => tc.bright_yellow,
+                    12 => tc.bright_blue,
+                    13 => tc.bright_magenta,
+                    14 => tc.bright_cyan,
+                    15 => tc.bright_white,
+                    _ => tc.foreground,
+                }
             } else if i < 232 {
                 let j = i - 16;
                 let r = (j / 36) % 6;
@@ -109,7 +113,11 @@ pub fn ansi_color_to_iced(color: &alacritty_terminal::vte::ansi::Color) -> Color
     }
 }
 
-pub fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapshot {
+/// Themed grid snapshot — uses terminal colors from theme.
+pub fn snapshot_grid(
+    term: &alacritty_terminal::Term<EventProxy>,
+    tc: &TerminalColors,
+) -> GridSnapshot {
     let grid = term.grid();
     let rows = grid.screen_lines();
     let cols = grid.columns();
@@ -121,8 +129,8 @@ pub fn snapshot_grid(term: &alacritty_terminal::Term<EventProxy>) -> GridSnapsho
             let cell: &Cell = &grid[Line(i as i32)][Column(j)];
             row.push(GridCell {
                 c: cell.c,
-                fg: ansi_color_to_iced(&cell.fg),
-                bg: ansi_color_to_iced(&cell.bg),
+                fg: ansi_color_to_iced(&cell.fg, tc),
+                bg: ansi_color_to_iced(&cell.bg, tc),
             });
         }
         cells.push(row);
