@@ -52,6 +52,7 @@ planeai-daemon = { path = "../planeai-daemon" }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
 tokio = { workspace = true }
 tokio-stream = "0.1"
+notify-rust = "4"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }

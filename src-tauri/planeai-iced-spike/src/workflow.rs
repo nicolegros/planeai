@@ -1448,6 +1448,19 @@ impl WorkflowApp {
         self.error_time = None;
     }
 
+    fn fire_notification(&self, session_id: &str) {
+        let ns = self.notify_state.lock().unwrap();
+        let (title, body) = match ns.get_meta(session_id) {
+            Some(meta) => (meta.project_name.clone(), format!("{} is ready", meta.name)),
+            None => ("planeai".to_string(), "Agent is ready".to_string()),
+        };
+        drop(ns);
+        let _ = notify_rust::Notification::new()
+            .summary(&title)
+            .body(&body)
+            .show();
+    }
+
     fn close_all_overlays(&mut self) {
         self.picking_project = false;
         self.launch_prompt = false;
@@ -1866,6 +1879,7 @@ impl WorkflowApp {
                     }
                 }
                 for (session_id, state) in to_notify {
+                    self.fire_notification(&session_id);
                     self.agent_states.insert(session_id, state);
                 }
             }
@@ -1883,6 +1897,7 @@ impl WorkflowApp {
                             .unwrap()
                             .notify_stop_immediate(&msg.session_id);
                         if fired {
+                            self.fire_notification(&msg.session_id);
                             self.agent_states.insert(msg.session_id, AS::Idle);
                         }
                     }
@@ -1894,8 +1909,9 @@ impl WorkflowApp {
                             ns.notify_stop_debounced(&msg.session_id);
                         } else {
                             let fired = ns.notify_stop(&msg.session_id);
+                            drop(ns);
                             if fired {
-                                drop(ns);
+                                self.fire_notification(&msg.session_id);
                                 self.agent_states
                                     .insert(msg.session_id, AS::Idle);
                             }
