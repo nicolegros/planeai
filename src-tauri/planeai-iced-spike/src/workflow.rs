@@ -1496,16 +1496,7 @@ impl WorkflowApp {
     }
 
     fn fire_notification(&self, session_id: &str) {
-        let ns = self.notify_state.lock().unwrap();
-        let (title, body) = match ns.get_meta(session_id) {
-            Some(meta) => (meta.project_name.clone(), format!("{} is ready", meta.name)),
-            None => ("planeai".to_string(), "Agent is ready".to_string()),
-        };
-        drop(ns);
-        let _ = notify_rust::Notification::new()
-            .summary(&title)
-            .body(&body)
-            .show();
+        planeai_iced_spike::notify_sub::fire_notification(&self.notify_state, session_id);
     }
 
     fn close_all_overlays(&mut self) {
@@ -1914,71 +1905,38 @@ impl WorkflowApp {
                 self.show_hook_banner = false;
             }
             Message::CheckSilence => {
-                let mut to_notify: Vec<(String, planeai_core::notify::AgentState)> = Vec::new();
-                {
+                let to_notify = {
                     let mut ns = self.notify_state.lock().unwrap();
-                    let busy = ns.busy_sessions();
-                    for id in busy {
-                        if ns.check_silence(&id) {
-                            to_notify.push((id, planeai_core::notify::AgentState::Idle));
-                        }
-                    }
-                    let debounced = ns.debounced_sessions();
-                    for id in debounced {
-                        if ns.check_debounce(&id) {
-                            to_notify.push((id, planeai_core::notify::AgentState::Idle));
-                        }
-                    }
-                }
-                for (session_id, state) in to_notify {
+                    planeai_iced_spike::notify_sub::check_silence_and_debounce(&mut ns)
+                };
+                for session_id in to_notify {
                     tracing::info!(session_id = %session_id, "notify: idle (silence/debounce timeout)");
                     self.fire_notification(&session_id);
-                    self.agent_states.insert(session_id, state);
+                    self.agent_states
+                        .insert(session_id, planeai_core::notify::AgentState::Idle);
                 }
             }
             Message::NotifyIpc(msg) => {
-                use planeai_core::notify::{AgentState as AS, NotifyEvent as NE};
-                match msg.event {
-                    NE::Busy => {
-                        self.notify_state
-                            .lock()
-                            .unwrap()
-                            .notify_output(&msg.session_id);
-                        self.agent_states.insert(msg.session_id.clone(), AS::Busy);
-                        tracing::debug!(session_id = %msg.session_id, "notify: busy (hook)");
-                    }
-                    NE::Notification => {
-                        let fired = self
-                            .notify_state
-                            .lock()
-                            .unwrap()
-                            .notify_stop_immediate(&msg.session_id);
-                        if fired {
-                            tracing::info!(session_id = %msg.session_id, "notify: idle (immediate)");
-                            self.fire_notification(&msg.session_id);
-                            self.agent_states.insert(msg.session_id, AS::Idle);
+                let actions = {
+                    let mut ns = self.notify_state.lock().unwrap();
+                    planeai_iced_spike::notify_sub::dispatch_ipc_message(&mut ns, &msg)
+                };
+                for action in actions {
+                    match action {
+                        planeai_iced_spike::notify_sub::NotifyAction::StateChanged {
+                            session_id,
+                            state,
+                        } => {
+                            self.agent_states.insert(session_id, state);
                         }
-                    }
-                    NE::Stop => {
-                        let mut ns = self.notify_state.lock().unwrap();
-                        let hook_enabled =
-                            ns.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
-                        if hook_enabled {
-                            tracing::debug!(session_id = %msg.session_id, "notify: stop (debouncing)");
-                            ns.notify_stop_debounced(&msg.session_id);
-                        } else {
-                            let fired = ns.notify_stop(&msg.session_id);
-                            drop(ns);
-                            if fired {
-                                tracing::info!(session_id = %msg.session_id, "notify: idle (stop, no hook)");
-                                self.fire_notification(&msg.session_id);
-                                self.agent_states.insert(msg.session_id, AS::Idle);
-                            }
+                        planeai_iced_spike::notify_sub::NotifyAction::FireNotification {
+                            session_id,
+                        } => {
+                            self.fire_notification(&session_id);
                         }
-                    }
-                    NE::SessionCreated | NE::SessionChanged => {
-                        tracing::debug!(session_id = %msg.session_id, event = ?msg.event, "notify: session event");
-                        self.sidebar_dirty = true;
+                        planeai_iced_spike::notify_sub::NotifyAction::RefreshSidebar => {
+                            self.sidebar_dirty = true;
+                        }
                     }
                 }
             }
@@ -3680,7 +3638,8 @@ impl WorkflowApp {
             // Silence/debounce checker — tick every 1s
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
             // IPC notify listener
-            Subscription::run(notify_ipc_stream).map(Message::NotifyIpc),
+            Subscription::run(planeai_iced_spike::notify_sub::notify_ipc_stream)
+                .map(Message::NotifyIpc),
             event::listen_with(|ev, _status, _id| match ev {
                 iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))
@@ -3712,65 +3671,6 @@ impl WorkflowApp {
 // ─── Static args ─────────────────────────────────────────────────────────────
 
 use std::sync::OnceLock;
-
-/// Returns an async stream that yields NotifyMessages from the IPC socket.
-/// Spawns a background thread on first call; subsequent calls share the same receiver.
-fn notify_ipc_stream() -> impl iced::futures::Stream<Item = planeai_core::notify::NotifyMessage> {
-    use tokio::sync::mpsc;
-    static TX: OnceLock<mpsc::UnboundedSender<planeai_core::notify::NotifyMessage>> =
-        OnceLock::new();
-    static RX: OnceLock<
-        Mutex<Option<mpsc::UnboundedReceiver<planeai_core::notify::NotifyMessage>>>,
-    > = OnceLock::new();
-
-    // Initialize once: spawn thread + create channel
-    let _ = TX.get_or_init(|| {
-        let (tx, rx) = mpsc::unbounded_channel();
-        RX.get_or_init(|| Mutex::new(Some(rx)));
-        let tx2 = tx.clone();
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let app_dir = planeai_core::app_data_dir();
-            let Ok(listener) =
-                planeai_ipc::IpcListener::bind(planeai_ipc::Channel::Notify, &app_dir)
-            else {
-                tracing::warn!("notify: failed to bind IPC listener");
-                return;
-            };
-            tracing::info!("notify: IPC listener started");
-            loop {
-                let stream = match listener.accept() {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                let tx = tx2.clone();
-                std::thread::spawn(move || {
-                    let reader = BufReader::new(stream);
-                    for line in reader.lines().map_while(Result::ok) {
-                        let line = line.trim().to_string();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        let msg = planeai_core::notify::parse_notify_message(&line);
-                        if msg.session_id.is_empty() {
-                            continue;
-                        }
-                        let _ = tx.send(msg);
-                    }
-                });
-            }
-        });
-        tx
-    });
-
-    // Take the receiver (only first subscription gets it)
-    let rx = RX
-        .get()
-        .and_then(|m| m.lock().unwrap().take())
-        .expect("notify IPC receiver already taken");
-
-    tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
-}
 static WORKFLOW_ARGS: OnceLock<Args> = OnceLock::new();
 
 /// Wraps content in a centered modal overlay panel with standard styling.
