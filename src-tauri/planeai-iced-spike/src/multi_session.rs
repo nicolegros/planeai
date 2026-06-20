@@ -475,8 +475,8 @@ impl MultiApp {
                 self.refresh_daemon_list();
             }
             Message::WindowResized(size) => {
-                let cw = 9.0f32;
-                let ch = 18.0f32;
+                let font_size = planeai_iced_spike::font::terminal_font_size();
+                let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
                 let new_cols = ((size.width - 140.0) / cw).floor().max(2.0) as u16;
                 let new_rows = ((size.height - 20.0) / ch).floor().max(2.0) as u16;
                 if new_cols == self.cols as u16 && new_rows == self.rows as u16 {
@@ -1177,9 +1177,8 @@ impl<'a> Program<Message> for MultiTermRenderer<'a> {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
-            let cw = bounds.width / self.snapshot.cols as f32;
-            let ch = bounds.height / self.snapshot.rows as f32;
-            let font_size = (ch * 0.85).min(16.0);
+            let font_size = planeai_iced_spike::font::terminal_font_size();
+            let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgb8(30, 30, 30));
             for (ri, row) in self.snapshot.cells.iter().enumerate() {
                 for (ci, cell) in row.iter().enumerate() {
@@ -1201,7 +1200,7 @@ impl<'a> Program<Message> for MultiTermRenderer<'a> {
                             position: Point::new(x, y + 1.0),
                             color: cell.fg,
                             size: font_size.into(),
-                            font: Font::MONOSPACE,
+                            font: planeai_iced_spike::font::terminal_font(),
                             ..Default::default()
                         });
                     }
@@ -1219,13 +1218,26 @@ fn title(_state: &MultiApp) -> String {
 pub fn run(args: Args) -> iced::Result {
     let cols = args.cols;
     let rows = args.rows;
+
+    // Load font from config (default_dark_theme reads ThemeSource which provides family/size)
+    let theme_source = crate::theme::ThemeSource::load();
+    let font_family = args
+        .font_family
+        .as_deref()
+        .unwrap_or(&theme_source.font_family);
+    planeai_iced_spike::font::load(font_family, theme_source.font_size);
+
+    let font_size = planeai_iced_spike::font::terminal_font_size();
+    let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
+
     MULTI_ARGS.set(args).unwrap();
-    iced::application(MultiApp::boot, MultiApp::update, MultiApp::view)
+    let mut app = iced::application(MultiApp::boot, MultiApp::update, MultiApp::view)
         .title(title)
         .subscription(MultiApp::subscription)
-        .window_size(Size::new(
-            cols as f32 * 9.0 + 140.0,
-            rows as f32 * 18.0 + 20.0,
-        ))
-        .run()
+        .window_size(Size::new(cols as f32 * cw + 140.0, rows as f32 * ch + 20.0));
+    let font = planeai_iced_spike::font::terminal_font();
+    if font != Font::MONOSPACE {
+        app = app.default_font(font);
+    }
+    app.run()
 }

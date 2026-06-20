@@ -9,6 +9,11 @@ use std::time::Instant;
 
 use crate::theme::TerminalColors;
 
+/// Monospace font width ratio (advance width / font size).
+pub const CELL_WIDTH_RATIO: f32 = 0.6;
+/// Monospace font height ratio (line height / font size).
+pub const CELL_HEIGHT_RATIO: f32 = 1.2;
+
 pub struct EventProxy;
 impl alacritty_terminal::event::EventListener for EventProxy {
     fn send_event(&self, _event: Event) {}
@@ -199,6 +204,7 @@ pub struct TermRenderer<'a> {
     pub snapshot: &'a GridSnapshot,
     pub cache: &'a Cache,
     pub font_size: Option<f32>,
+    pub font: Font,
 }
 
 impl<'a> Program<()> for TermRenderer<'a> {
@@ -213,9 +219,9 @@ impl<'a> Program<()> for TermRenderer<'a> {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
-            let cw = bounds.width / self.snapshot.cols as f32;
-            let ch = bounds.height / self.snapshot.rows as f32;
-            let font_size = self.font_size.unwrap_or((ch * 0.85).min(16.0));
+            let font_size = self.font_size.unwrap_or(14.0);
+            let cw = font_size * CELL_WIDTH_RATIO;
+            let ch = font_size * CELL_HEIGHT_RATIO;
 
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgb8(30, 30, 30));
 
@@ -239,7 +245,7 @@ impl<'a> Program<()> for TermRenderer<'a> {
                             position: Point::new(x, y + 1.0),
                             color: cell.fg,
                             size: font_size.into(),
-                            font: Font::MONOSPACE,
+                            font: self.font,
                             ..Default::default()
                         });
                     }

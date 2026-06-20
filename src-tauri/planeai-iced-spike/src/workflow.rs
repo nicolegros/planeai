@@ -225,6 +225,7 @@ enum Message {
     WorktreeLaunchSubmit,
     TaskPickerSelect(usize),
     TaskLaunchSelected,
+    FontLoaded,
 }
 
 impl WorkflowApp {
@@ -397,7 +398,7 @@ impl WorkflowApp {
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
             },
-            iced::Task::none(),
+            planeai_iced_spike::font::font_load_task().map(|_| Message::FontLoaded),
         );
         // Resolve theme from source
         result.0.theme = result
@@ -1683,9 +1684,10 @@ impl WorkflowApp {
             Message::TaskLaunchSelected => {
                 self.launch_from_task();
             }
+            Message::FontLoaded => {}
             Message::WindowResized(size) => {
-                let cw = 9.0f32;
-                let ch = 18.0f32;
+                let font_size = self.theme.font_size;
+                let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
                 let new_cols = ((size.width - 180.0) / cw).floor().max(2.0) as u16;
                 let new_rows = ((size.height - 40.0) / ch).floor().max(2.0) as u16;
                 if new_cols as usize == self.cols && new_rows as usize == self.rows {
@@ -3251,9 +3253,9 @@ impl<'a> Program<Message> for WorkflowTermRenderer<'a> {
         _cursor: iced::mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
-            let cw = bounds.width / self.snapshot.cols as f32;
-            let ch = bounds.height / self.snapshot.rows as f32;
-            let font_size = self.font_size.min(ch * 0.85);
+            let font_size = self.font_size;
+            // Derive cell dimensions from font metrics (monospace: width ≈ 0.6 * size)
+            let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
             for (ri, row) in self.snapshot.cells.iter().enumerate() {
                 for (ci, cell) in row.iter().enumerate() {
@@ -3318,13 +3320,26 @@ pub fn run(args: Args) -> iced::Result {
 
     let cols = args.cols;
     let rows = args.rows;
+
+    // Load terminal font (theme config provides family/size, font module loads bytes)
+    let theme_source = theme::ThemeSource::load();
+    let font_family = args
+        .font_family
+        .as_deref()
+        .unwrap_or(&theme_source.font_family);
+    planeai_iced_spike::font::load(font_family, theme_source.font_size);
+
+    let font_size = planeai_iced_spike::font::terminal_font_size();
+    let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
+
     WORKFLOW_ARGS.set(args).unwrap();
-    iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
+    let mut app = iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
         .title(title)
         .subscription(WorkflowApp::subscription)
-        .window_size(Size::new(
-            cols as f32 * 9.0 + 180.0,
-            rows as f32 * 18.0 + 40.0,
-        ))
-        .run()
+        .window_size(Size::new(cols as f32 * cw + 180.0, rows as f32 * ch + 40.0));
+    let font = planeai_iced_spike::font::terminal_font();
+    if font != Font::MONOSPACE {
+        app = app.default_font(font);
+    }
+    app.run()
 }
