@@ -194,7 +194,11 @@ impl ThemeSource {
             }
         };
         let mut theme = theme_from_map(map);
-        theme.font = make_font(&self.font_family);
+        // Font bytes are loaded by font::load() in run(); here we just set the reference.
+        theme.font = Font {
+            family: iced::font::Family::Name(Box::leak(self.font_family.clone().into_boxed_str())),
+            ..Font::MONOSPACE
+        };
         theme.font_size = self.font_size;
         theme.mode = mode;
         theme
@@ -345,16 +349,6 @@ fn theme_from_map(map: &ColorMap) -> PlaneAiTheme {
         font: Font::MONOSPACE,
         font_size: 14.0,
         mode: Mode::Dark,
-    }
-}
-
-/// Create an iced Font from a family name. The leaked &'static str is intentional —
-/// iced requires 'static lifetime for font family names, and we only call this once
-/// per theme load (not per frame).
-fn make_font(family: &str) -> Font {
-    Font {
-        family: iced::font::Family::Name(Box::leak(family.to_string().into_boxed_str())),
-        ..Font::MONOSPACE
     }
 }
 

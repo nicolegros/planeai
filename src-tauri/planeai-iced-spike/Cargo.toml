@@ -44,6 +44,7 @@ portable-pty = "0.8"
 smol_str = "0.2"
 arboard = "3"
 planeai-pty = { path = "../planeai-pty" }
+font-kit = "0.14"
 planeai-core = { path = "../planeai-core" }
 planeai-tasks = { path = "../planeai-tasks" }
 rusqlite = { version = "0.31", features = ["bundled"] }

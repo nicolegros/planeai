@@ -4561,6 +4561,7 @@ dependencies = [
  "arboard",
  "clap",
  "dark-light",
+ "font-kit",
  "iced",
  "libc",
  "planeai-core",

@@ -64,6 +64,8 @@ pub struct Args {
     #[arg(long)]
     pub font_size: Option<f32>,
     #[arg(long)]
+    pub font_family: Option<String>,
+    #[arg(long)]
     pub scrollback_lines: Option<usize>,
     #[arg(long)]
     pub max_runtime_ms: Option<u64>,
@@ -233,6 +235,7 @@ struct GridCell {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct GridSnapshot {
     cells: Vec<Vec<GridCell>>,
     cursor_line: usize,
@@ -404,7 +407,7 @@ impl App {
                 frame_deltas_after_warmup: Vec::new(),
                 input_events_failed: 0,
             },
-            iced::Task::none(),
+            planeai_iced_spike::font::font_load_task().discard(),
         )
     }
 
@@ -452,8 +455,8 @@ impl App {
                     return;
                 }
                 // Compute new cols/rows from window size
-                let cw = 9.0f32;
-                let ch = 18.0f32;
+                let font_size = planeai_iced_spike::font::terminal_font_size();
+                let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
                 let new_cols = (size.width / cw).floor() as u16;
                 let new_rows = (size.height / ch).floor() as u16;
                 if new_cols < 2 || new_rows < 2 {
@@ -1122,12 +1125,8 @@ impl<'a> Program<Message> for TermRenderer<'a> {
         _cursor: mouse::Cursor,
     ) -> Vec<canvas::Geometry> {
         let geom = self.cache.draw(renderer, bounds.size(), |frame| {
-            let cw = bounds.width / self.snapshot.cols as f32;
-            let ch = bounds.height / self.snapshot.rows as f32;
-            let font_size = ARGS
-                .get()
-                .and_then(|a| a.font_size)
-                .unwrap_or((ch * 0.85).min(16.0));
+            let font_size = planeai_iced_spike::font::terminal_font_size();
+            let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
 
             frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgb8(30, 30, 30));
 
@@ -1151,7 +1150,7 @@ impl<'a> Program<Message> for TermRenderer<'a> {
                             position: Point::new(x, y + 1.0),
                             color: cell.fg,
                             size: font_size.into(),
-                            font: Font::MONOSPACE,
+                            font: planeai_iced_spike::font::terminal_font(),
                             ..Default::default()
                         });
                     }
@@ -1189,11 +1188,27 @@ fn main() -> iced::Result {
 
     let cols = args.cols;
     let rows = args.rows;
+
+    // Load terminal font from config (CLI args override)
+    {
+        let ts = crate::theme::ThemeSource::load();
+        let family = args.font_family.as_deref().unwrap_or(&ts.font_family);
+        let size = args.font_size.unwrap_or(ts.font_size);
+        planeai_iced_spike::font::load(family, size);
+    }
+
+    let font_size = planeai_iced_spike::font::terminal_font_size();
+    let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
+
     ARGS.set(args).unwrap();
 
-    iced::application(App::boot, App::update, App::view)
+    let mut app = iced::application(App::boot, App::update, App::view)
         .title(title)
         .subscription(App::subscription)
-        .window_size(Size::new(cols as f32 * 9.0, rows as f32 * 18.0))
-        .run()
+        .window_size(Size::new(cols as f32 * cw, rows as f32 * ch));
+    let font = planeai_iced_spike::font::terminal_font();
+    if font != Font::MONOSPACE {
+        app = app.default_font(font);
+    }
+    app.run()
 }
