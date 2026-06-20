@@ -280,6 +280,23 @@ pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
     content.contains("planeai-stop-notify-copilot")
 }
 
+/// Check if the notification hook is installed for a given provider command.
+pub fn is_hook_installed_for_provider(command: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if command.contains("kiro") {
+        is_kiro_hook_installed_at(&Path::new(&home).join(".kiro/agents/default.json"))
+    } else if command.contains("claude") {
+        is_claude_hook_installed_at(&Path::new(&home).join(".claude/settings.json"))
+    } else if command.contains("copilot") {
+        let copilot_dir = std::env::var("COPILOT_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| Path::new(&home).join(".copilot"));
+        is_copilot_hook_installed_at(&copilot_dir)
+    } else {
+        false
+    }
+}
+
 // ─── Hook installation ───────────────────────────────────────────────────────
 
 /// Install all notification hooks for providers found on this system.
