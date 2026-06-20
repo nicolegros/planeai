@@ -477,7 +477,10 @@ impl SidebarState {
                         .into()
                 }
                 NavItem::OrphanSession {
-                    name, has_worktree, session_id, ..
+                    name,
+                    has_worktree,
+                    session_id,
+                    ..
                 } => {
                     let mut r = row![].spacing(4).align_y(iced::Alignment::Center);
                     if *has_worktree {

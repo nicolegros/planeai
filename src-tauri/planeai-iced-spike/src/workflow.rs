@@ -237,7 +237,7 @@ enum Message {
         state: planeai_core::notify::AgentState,
     },
     CheckSilence,
-    NotifyIpcMessage(planeai_core::notify::NotifyMessage),
+    NotifyIpc(planeai_core::notify::NotifyMessage),
     InstallHooks,
     DismissHookBanner,
 }
@@ -453,7 +453,9 @@ impl WorkflowApp {
                     &session.name
                 };
                 let provider = session.provider.as_deref().unwrap_or("");
-                result.0.register_notify_session(&session.id, name, provider);
+                result
+                    .0
+                    .register_notify_session(&session.id, name, provider);
             }
         }
         result
@@ -522,7 +524,11 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
+                self.register_notify_session(
+                    &session_id,
+                    &session_id[..8],
+                    &self.agent_command.clone(),
+                );
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
@@ -636,7 +642,11 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
+                self.register_notify_session(
+                    &session_id,
+                    &session_id[..8],
+                    &self.agent_command.clone(),
+                );
                 // Touch MRU for newly attached session
                 self.mru.retain(|id| id != &session_id);
                 self.mru.insert(0, session_id);
@@ -900,7 +910,11 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command.clone());
+                self.register_notify_session(
+                    &session_id,
+                    &session_id[..8],
+                    &self.agent_command.clone(),
+                );
                 self.worktree_prompt = false;
                 self.worktree_branch_input.clear();
                 self.worktree_task_key_input.clear();
@@ -1256,7 +1270,11 @@ impl WorkflowApp {
                     log_file_exists,
                 });
                 self.active = self.sessions.len() - 1;
-                self.register_notify_session(&sid_for_notify, &sid_for_notify[..8], &cmd_for_notify);
+                self.register_notify_session(
+                    &sid_for_notify,
+                    &sid_for_notify[..8],
+                    &cmd_for_notify,
+                );
                 self.session_form = false;
                 self.clear_error();
                 self.refresh_persisted_sessions();
@@ -1508,10 +1526,12 @@ impl WorkflowApp {
             .as_ref()
             .map(|p| p.name.as_str())
             .unwrap_or("planeai");
-        self.notify_state
-            .lock()
-            .unwrap()
-            .register_session(session_id, name, project_name, hook_enabled);
+        self.notify_state.lock().unwrap().register_session(
+            session_id,
+            name,
+            project_name,
+            hook_enabled,
+        );
     }
 
     fn fire_notification(&self, session_id: &str) {
@@ -1943,8 +1963,14 @@ impl WorkflowApp {
                     .unwrap_or_else(|_| std::path::PathBuf::from(&home).join(".copilot"));
                 let _ = planeai_core::notify::install_copilot_hook_at(
                     &copilot_dir,
-                    &format!("{}/hooks/planeai-stop-notify-copilot.sh", copilot_dir.display()),
-                    &format!("{}/hooks/planeai-stop-notify-copilot.ps1", copilot_dir.display()),
+                    &format!(
+                        "{}/hooks/planeai-stop-notify-copilot.sh",
+                        copilot_dir.display()
+                    ),
+                    &format!(
+                        "{}/hooks/planeai-stop-notify-copilot.ps1",
+                        copilot_dir.display()
+                    ),
                 );
                 self.show_hook_banner = false;
             }
@@ -1974,11 +2000,14 @@ impl WorkflowApp {
                     self.agent_states.insert(session_id, state);
                 }
             }
-            Message::NotifyIpcMessage(msg) => {
+            Message::NotifyIpc(msg) => {
                 use planeai_core::notify::{AgentState as AS, NotifyEvent as NE};
                 match msg.event {
                     NE::Busy => {
-                        self.notify_state.lock().unwrap().notify_output(&msg.session_id);
+                        self.notify_state
+                            .lock()
+                            .unwrap()
+                            .notify_output(&msg.session_id);
                         self.agent_states.insert(msg.session_id.clone(), AS::Busy);
                         tracing::debug!(session_id = %msg.session_id, "notify: busy (hook)");
                     }
@@ -2007,8 +2036,7 @@ impl WorkflowApp {
                             if fired {
                                 tracing::info!(session_id = %msg.session_id, "notify: idle (stop, no hook)");
                                 self.fire_notification(&msg.session_id);
-                                self.agent_states
-                                    .insert(msg.session_id, AS::Idle);
+                                self.agent_states.insert(msg.session_id, AS::Idle);
                             }
                         }
                     }
@@ -2867,12 +2895,14 @@ impl WorkflowApp {
                         let sid = &self.sessions[i].session_id;
                         let was_idle = {
                             let mut ns = self.notify_state.lock().unwrap();
-                            let was = ns.get_state(sid) != Some(planeai_core::notify::AgentState::Busy);
+                            let was =
+                                ns.get_state(sid) != Some(planeai_core::notify::AgentState::Busy);
                             ns.notify_output(sid);
                             was
                         };
                         if was_idle {
-                            self.agent_states.insert(sid.clone(), planeai_core::notify::AgentState::Busy);
+                            self.agent_states
+                                .insert(sid.clone(), planeai_core::notify::AgentState::Busy);
                         }
                     }
                     if i == self.active && got_data {
@@ -3714,7 +3744,7 @@ impl WorkflowApp {
             // Silence/debounce checker — tick every 1s
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
             // IPC notify listener
-            Subscription::run(notify_ipc_stream).map(Message::NotifyIpcMessage),
+            Subscription::run(notify_ipc_stream).map(Message::NotifyIpc),
             event::listen_with(|ev, _status, _id| match ev {
                 iced::Event::Window(window::Event::Resized(size)) => {
                     Some(Message::WindowResized(size))
@@ -3753,8 +3783,9 @@ fn notify_ipc_stream() -> impl iced::futures::Stream<Item = planeai_core::notify
     use tokio::sync::mpsc;
     static TX: OnceLock<mpsc::UnboundedSender<planeai_core::notify::NotifyMessage>> =
         OnceLock::new();
-    static RX: OnceLock<Mutex<Option<mpsc::UnboundedReceiver<planeai_core::notify::NotifyMessage>>>> =
-        OnceLock::new();
+    static RX: OnceLock<
+        Mutex<Option<mpsc::UnboundedReceiver<planeai_core::notify::NotifyMessage>>>,
+    > = OnceLock::new();
 
     // Initialize once: spawn thread + create channel
     let _ = TX.get_or_init(|| {
@@ -3789,7 +3820,7 @@ fn notify_ipc_stream() -> impl iced::futures::Stream<Item = planeai_core::notify
                             continue;
                         }
                         let _ = tx.send(msg);
-                        }
+                    }
                 });
             }
         });

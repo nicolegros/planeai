@@ -342,7 +342,9 @@ mod tests {
     #[test]
     fn detect_claude_hook_missing_file() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!is_claude_hook_installed_at(&dir.path().join("settings.json")));
+        assert!(!is_claude_hook_installed_at(
+            &dir.path().join("settings.json")
+        ));
     }
 
     #[test]
@@ -379,8 +381,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
-        std::fs::write(hooks_dir.join("planeai-notify.json"), r#"{"version":1,"hooks":{}}"#)
-            .unwrap();
+        std::fs::write(
+            hooks_dir.join("planeai-notify.json"),
+            r#"{"version":1,"hooks":{}}"#,
+        )
+        .unwrap();
         assert!(!is_copilot_hook_installed_at(dir.path()));
     }
 
@@ -473,7 +478,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("planeai-stop-notify"));
-        assert_eq!(settings["hooks"]["Notification"][0]["matcher"], "idle_prompt|permission_prompt");
+        assert_eq!(
+            settings["hooks"]["Notification"][0]["matcher"],
+            "idle_prompt|permission_prompt"
+        );
     }
 
     #[test]

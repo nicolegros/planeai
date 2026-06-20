@@ -44,6 +44,12 @@ pub struct NotifyState {
     time_offset: HashMap<String, Duration>,
 }
 
+impl Default for NotifyState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NotifyState {
     pub fn new() -> Self {
         Self {
@@ -601,7 +607,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let hooks_dir = dir.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
-        std::fs::write(hooks_dir.join("planeai-notify.json"), r#"{"hooks":{"agentStop":[{"bash":"planeai-stop-notify-copilot.sh stop"}]}}"#).unwrap();
+        std::fs::write(
+            hooks_dir.join("planeai-notify.json"),
+            r#"{"hooks":{"agentStop":[{"bash":"planeai-stop-notify-copilot.sh stop"}]}}"#,
+        )
+        .unwrap();
         assert!(is_copilot_hook_installed_at(dir.path()));
     }
 
