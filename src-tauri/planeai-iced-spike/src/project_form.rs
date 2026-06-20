@@ -33,24 +33,13 @@ pub enum SubmitResult {
 }
 
 /// State for the project creation form.
+#[derive(Default)]
 pub struct ProjectFormState {
     pub visible: bool,
     pub path: String,
     pub name: String,
     pub name_edited: bool,
     pub error: Option<String>,
-}
-
-impl Default for ProjectFormState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            path: String::new(),
-            name: String::new(),
-            name_edited: false,
-            error: None,
-        }
-    }
 }
 
 impl ProjectFormState {
@@ -175,7 +164,7 @@ impl ProjectFormState {
     }
 
     /// Render the form content (to be wrapped in modal_overlay by the caller).
-    pub fn view<'a, M: 'a>(
+    pub fn view<'a, M>(
         &'a self,
         theme: &PlaneAiTheme,
         on_path: impl Fn(String) -> M + 'a,
@@ -184,7 +173,7 @@ impl ProjectFormState {
         on_cancel: M,
     ) -> iced::widget::Column<'a, M>
     where
-        M: Clone,
+        M: Clone + 'a,
     {
         let mut col = column![].spacing(3).width(Length::Fill).padding(8);
         col = col.push(
@@ -238,6 +227,7 @@ impl ProjectFormState {
                 .padding([4, 12]),
         ]
         .width(Length::Fill);
+        col = col.push(iced::widget::Space::new().height(16.0));
         col = col.push(button_row);
         col
     }
@@ -250,5 +240,5 @@ fn load_projects_base_path() -> Option<String> {
     let val: serde_json::Value = serde_json::from_str(&content).ok()?;
     val.get("projects_base_path")?
         .as_str()
-        .map(|s| planeai_core::session_launch::expand_tilde(s))
+        .map(planeai_core::session_launch::expand_tilde)
 }

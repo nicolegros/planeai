@@ -1660,8 +1660,7 @@ impl WorkflowApp {
                         project_form::SubmitResult::Created(proj, path) => {
                             self.project = Some(proj);
                             self.project_cwd = path.clone();
-                            self.recent_projects =
-                                add_recent_project(&path.to_string_lossy());
+                            self.recent_projects = add_recent_project(&path.to_string_lossy());
                             self.refresh_persisted_sessions();
                             self.sidebar_dirty = true;
                             self.clear_error();
@@ -1763,10 +1762,10 @@ impl WorkflowApp {
                         keyboard::Key::Named(keyboard::key::Named::Enter)
                             if modifiers.command() =>
                         {
-                            if let Some(result) = self.project_form.update(
-                                project_form::FormMessage::Submit,
-                                &self.db,
-                            ) {
+                            if let Some(result) = self
+                                .project_form
+                                .update(project_form::FormMessage::Submit, &self.db)
+                            {
                                 match result {
                                     project_form::SubmitResult::Created(proj, path) => {
                                         self.project = Some(proj);
