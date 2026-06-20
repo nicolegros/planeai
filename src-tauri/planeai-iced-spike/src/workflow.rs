@@ -230,6 +230,7 @@ enum Message {
     TaskPickerSelect(usize),
     TaskLaunchSelected,
     FontLoaded,
+    TitleBarDrag,
 }
 
 impl WorkflowApp {
@@ -1623,6 +1624,9 @@ impl WorkflowApp {
 impl WorkflowApp {
     fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
+            Message::TitleBarDrag => {
+                return window::oldest().and_then(window::drag);
+            }
             Message::SidebarMouseDown(_) => {
                 if let Some(ref mut sidebar) = self.sidebar {
                     sidebar.handle_mouse_down();
@@ -3157,6 +3161,49 @@ impl WorkflowApp {
             main_content.into()
         };
 
+        // Title bar (full width, above everything)
+        // Same logic as Tauri: project name from DB via session.project_id, session name/branch
+        let active_record = if !self.sessions.is_empty() {
+            let sid = &self.sessions[self.active].session_id;
+            self.persisted_sessions
+                .iter()
+                .find(|r| r.id == *sid)
+                .cloned()
+                .or_else(|| {
+                    self.db.as_ref().and_then(|db| {
+                        let conn = db.lock().unwrap();
+                        services::SessionService::get(&conn, sid).ok().flatten()
+                    })
+                })
+        } else {
+            None
+        };
+        let project_name_owned = active_record.as_ref().and_then(|r| {
+            self.db.as_ref().and_then(|db| {
+                let conn = db.lock().unwrap();
+                services::ProjectService::get_by_id(&conn, &r.project_id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.name)
+            })
+        });
+        let project_name = project_name_owned.as_deref();
+        let session_name_owned = active_record.as_ref().map(|r| {
+            if r.name.is_empty() {
+                r.branch.clone()
+            } else {
+                r.name.clone()
+            }
+        });
+        let session_name = session_name_owned.as_deref();
+        let title_bar = crate::titlebar::view(
+            project_name,
+            session_name,
+            &self.theme,
+            Message::TitleBarDrag,
+        );
+        let base: Element<'_, Message> = column![title_bar, base].into();
+
         if self.show_shortcuts {
             use iced::widget::stack;
             let overlay = container(shortcuts_overlay())
@@ -3333,9 +3380,6 @@ pub fn run(args: Args) -> iced::Result {
         .init();
     tracing::info!("planeai-iced starting");
 
-    let cols = args.cols;
-    let rows = args.rows;
-
     // Load terminal font (theme config provides family/size, font module loads bytes)
     let theme_source = theme::ThemeSource::load();
     let font_family = args
@@ -3344,15 +3388,24 @@ pub fn run(args: Args) -> iced::Result {
         .unwrap_or(&theme_source.font_family);
     planeai_iced_spike::font::load(font_family, theme_source.font_size);
 
-    let font_size = planeai_iced_spike::font::terminal_font_size();
-    let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
-
     WORKFLOW_ARGS.set(args).unwrap();
+    let window_settings = window::Settings {
+        size: Size::new(1200.0, 800.0),
+        min_size: Some(Size::new(640.0, 480.0)),
+        decorations: true,
+        transparent: true,
+        platform_specific: window::settings::PlatformSpecific {
+            title_hidden: true,
+            titlebar_transparent: true,
+            fullsize_content_view: true,
+        },
+        ..Default::default()
+    };
     let mut app = iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
         .title(title)
         .theme(|state: &WorkflowApp| state.theme.to_iced_theme())
         .subscription(WorkflowApp::subscription)
-        .window_size(Size::new(cols as f32 * cw + 180.0, rows as f32 * ch + 40.0));
+        .window(window_settings);
     let font = planeai_iced_spike::font::terminal_font();
     if font != Font::MONOSPACE {
         app = app.default_font(font);
