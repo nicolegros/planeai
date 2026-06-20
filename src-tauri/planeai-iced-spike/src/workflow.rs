@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use arboard::Clipboard;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{event, window, Color, Element, Length, Size, Subscription, Theme};
+use iced::{event, window, Color, Element, Length, Point, Size, Subscription, Theme};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
@@ -27,7 +27,7 @@ use crate::daemon_session::{
 use crate::input;
 use crate::forms::{project::{self as project_form, ProjectFormState}, session::{self as session_form, SessionFormState}};
 use crate::sidebar::{SidebarAction, SidebarState};
-use crate::terminal_view::{TerminalRenderer, TerminalView};
+use crate::terminal_view::{GridPos, Selection, TerminalRenderer, TerminalView};
 use crate::theme::{self, PlaneAiTheme, ThemeSource};
 use crate::Args;
 
@@ -168,6 +168,10 @@ struct WorkflowApp {
     mru: Vec<String>,
     // Command palette (Cmd+K)
     command_palette: Option<crate::command_palette::CommandPaletteState>,
+    // Terminal text selection in progress
+    terminal_selecting: bool,
+    // Last cursor position for mouse event handling
+    last_cursor_pos: Point,
     // Theme
     theme_source: ThemeSource,
     theme: PlaneAiTheme,
@@ -184,7 +188,7 @@ enum Message {
     Poll,
     KeyEvent(keyboard::Event),
     WindowResized(Size),
-    SidebarDrag(f32),
+    SidebarDrag(Point),
     SidebarDragEnd,
     SidebarMouseDown(f32),
     ProjectInputChanged(String),
@@ -202,6 +206,7 @@ enum Message {
     FontLoaded,
     TitleBarDrag,
     TerminalScroll(f32),
+    TerminalDataReady,
     SidebarItemClicked(usize),
     SidebarScrolled(iced::widget::scrollable::Viewport),
     CheckSilence,
@@ -370,6 +375,8 @@ impl WorkflowApp {
                 tab_switcher_names: Vec::new(),
                 mru: persisted_sessions.iter().map(|s| s.id.clone()).collect(),
                 command_palette: None,
+                terminal_selecting: false,
+                last_cursor_pos: Point::ORIGIN,
                 persisted_sessions,
                 theme_source: ThemeSource::load(),
                 theme: theme::default_dark_theme(),
@@ -1533,6 +1540,21 @@ impl WorkflowApp {
         }
     }
 
+    /// Convert pixel coordinates (relative to terminal area) to grid row/col.
+    fn pixel_to_grid(&self, x: f32, y: f32) -> GridPos {
+        let font_size = self.theme.font_size;
+        let cw = font_size * CELL_WIDTH_RATIO;
+        let ch = font_size * CELL_HEIGHT_RATIO;
+        // y is in window coords; subtract title bar height (36px)
+        let ty = (y - 36.0).max(0.0);
+        let col = (x / cw).floor().max(0.0) as usize;
+        let row = (ty / ch).floor().max(0.0) as usize;
+        GridPos {
+            row: row.min(self.rows.saturating_sub(1)),
+            col: col.min(self.cols.saturating_sub(1)),
+        }
+    }
+
     fn switch_to(&mut self, idx: usize) {
         if idx < self.sessions.len() && idx != self.active {
             self.active = idx;
@@ -1715,8 +1737,25 @@ impl WorkflowApp {
                 }
             }
             Message::SidebarMouseDown(_) => {
-                if let Some(ref mut sidebar) = self.sidebar {
-                    sidebar.handle_mouse_down();
+                let sidebar_w = self.sidebar.as_ref().map_or(0.0, |s| s.width);
+                let pos = self.last_cursor_pos;
+                if pos.x <= sidebar_w {
+                    // Click in sidebar
+                    if let Some(ref mut sidebar) = self.sidebar {
+                        sidebar.handle_mouse_down();
+                    }
+                } else {
+                    // Click in terminal area — start selection
+                    if !self.sessions.is_empty() {
+                        let x = pos.x - sidebar_w;
+                        let grid_pos = self.pixel_to_grid(x, pos.y);
+                        let session = &mut self.sessions[self.active];
+                        session.terminal.selection =
+                            Some(Selection { start: grid_pos, end: grid_pos });
+                        session.terminal.cache.clear();
+                        self.terminal_selecting = true;
+                        self.sidebar_focused = false;
+                    }
                 }
             }
             Message::SidebarScrolled(viewport) => {
@@ -1724,10 +1763,22 @@ impl WorkflowApp {
                     sidebar.on_scrolled(viewport);
                 }
             }
-            Message::SidebarDrag(x) => {
+            Message::SidebarDrag(pos) => {
+                self.last_cursor_pos = pos;
                 // Only track cursor position if sidebar exists; resize check is O(1)
                 if let Some(ref mut sidebar) = self.sidebar {
-                    sidebar.handle_mouse_move(x);
+                    sidebar.handle_mouse_move(pos.x);
+                }
+                // Update terminal selection if dragging
+                if self.terminal_selecting && !self.sessions.is_empty() {
+                    let sidebar_w = self.sidebar.as_ref().map_or(0.0, |s| s.width);
+                    let tx = (pos.x - sidebar_w).max(0.0);
+                    let grid_pos = self.pixel_to_grid(tx, pos.y);
+                    let session = &mut self.sessions[self.active];
+                    if let Some(ref mut sel) = session.terminal.selection {
+                        sel.end = grid_pos;
+                    }
+                    session.terminal.cache.clear();
                 }
             }
             Message::SidebarDragEnd => {
@@ -1735,6 +1786,27 @@ impl WorkflowApp {
                     if let Some(ref db) = self.db {
                         let conn = db.lock().unwrap();
                         sidebar.handle_mouse_up(&conn);
+                    }
+                }
+                // Finalize terminal selection
+                if self.terminal_selecting && !self.sessions.is_empty() {
+                    self.terminal_selecting = false;
+                    let session = &self.sessions[self.active];
+                    if let Some(ref sel) = session.terminal.selection {
+                        let (s, e) = sel.ordered();
+                        if s != e {
+                            let selected_text = sel.text(&session.terminal.snapshot);
+                            if !selected_text.is_empty() {
+                                if let Ok(mut clipboard) = Clipboard::new() {
+                                    let _ = clipboard.set_text(selected_text);
+                                }
+                            }
+                        } else {
+                            // Single click — clear selection
+                            let session = &mut self.sessions[self.active];
+                            session.terminal.selection = None;
+                            session.terminal.cache.clear();
+                        }
                     }
                 }
             }
@@ -1863,6 +1935,29 @@ impl WorkflowApp {
                     let lines = (delta / 3.0).round() as i32;
                     if lines != 0 {
                         session.terminal.scroll(lines);
+                        session.terminal.update_snapshot(&self.theme.terminal);
+                    }
+                }
+            }
+            Message::TerminalDataReady => {
+                if !self.sessions.is_empty() {
+                    let i = self.active;
+                    let session = &mut self.sessions[i];
+                    let mut got_data = false;
+                    loop {
+                        match session.backend.try_read_batch().unwrap_or(None) {
+                            Some(data) => {
+                                got_data = true;
+                                session.bytes_processed += data.len() as u64;
+                                session.terminal.processor.advance(&mut session.terminal.term, &data);
+                            }
+                            None => break,
+                        }
+                    }
+                    if got_data {
+                        if !session.terminal.is_scrolled() {
+                            session.terminal.scroll_to_bottom();
+                        }
                         session.terminal.update_snapshot(&self.theme.terminal);
                     }
                 }
@@ -2365,13 +2460,6 @@ impl WorkflowApp {
                     }
                     return iced::Task::none();
                 }
-                // Sidebar: Escape from terminal focuses sidebar
-                if !self.sidebar_focused
-                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
-                {
-                    self.sidebar_focused = true;
-                    return iced::Task::none();
-                }
                 // When sidebar is focused, route keys there
                 if self.sidebar_focused {
                     self.handle_sidebar_key(&key);
@@ -2386,7 +2474,13 @@ impl WorkflowApp {
                     let bytes = input::encode_key_event(&key, &modifiers, &txt);
                     if let Some(ref b) = bytes {
                         if !b.is_empty() {
-                            let _ = self.sessions[self.active].backend.write(b);
+                            let session = &mut self.sessions[self.active];
+                            // Clear selection on any keypress to terminal
+                            if session.terminal.selection.is_some() {
+                                session.terminal.selection = None;
+                                session.terminal.cache.clear();
+                            }
+                            let _ = session.backend.write(b);
                             // Clear agent state on user input (acknowledge)
                             let sid = &self.sessions[self.active].session_id;
                             self.notify_state.lock().unwrap().acknowledge(sid);
@@ -2710,6 +2804,8 @@ impl WorkflowApp {
                 cache: &replay.terminal.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
+                selection_color: self.theme.terminal.selection,
+                selection: &replay.terminal.selection,
                 font: self.theme.font,
                 font_size: self.theme.font_size,
             })
@@ -2733,6 +2829,8 @@ impl WorkflowApp {
                 cache: &session.terminal.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
+                selection_color: self.theme.terminal.selection,
+                selection: &session.terminal.selection,
                 font: self.theme.font,
                 font_size: self.theme.font_size,
             })
@@ -3208,9 +3306,9 @@ impl WorkflowApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch(vec![
+        let mut subs = vec![
             keyboard::listen().map(Message::KeyEvent),
-            iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
+            iced::time::every(Duration::from_millis(50)).map(|_| Message::Poll),
             // Silence/debounce checker — tick every 1s
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
             // IPC notify listener
@@ -3227,7 +3325,7 @@ impl WorkflowApp {
                     iced::mouse::Button::Left,
                 )) => Some(Message::SidebarDragEnd),
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Some(Message::SidebarDrag(position.x))
+                    Some(Message::SidebarDrag(position))
                 }
                 iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
                     let y = match delta {
@@ -3238,7 +3336,14 @@ impl WorkflowApp {
                 }
                 _ => None,
             }),
-        ])
+        ];
+        // Fast poll for terminal data when sessions exist
+        if !self.sessions.is_empty() {
+            subs.push(
+                iced::time::every(Duration::from_millis(1)).map(|_| Message::TerminalDataReady),
+            );
+        }
+        Subscription::batch(subs)
     }
 }
 

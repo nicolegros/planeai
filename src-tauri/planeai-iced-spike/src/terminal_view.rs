@@ -15,6 +15,80 @@ use crate::common::{
 };
 use crate::theme::TerminalColors;
 
+// ─── Selection ───────────────────────────────────────────────────────────────
+
+/// A (row, col) position in the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridPos {
+    pub row: usize,
+    pub col: usize,
+}
+
+/// Terminal text selection state.
+#[derive(Debug, Clone)]
+pub struct Selection {
+    pub start: GridPos,
+    pub end: GridPos,
+}
+
+impl Selection {
+    /// Returns (start, end) in reading order.
+    pub fn ordered(&self) -> (GridPos, GridPos) {
+        if self.start.row < self.end.row
+            || (self.start.row == self.end.row && self.start.col <= self.end.col)
+        {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        }
+    }
+
+    /// Returns true if the given cell is within the selection.
+    pub fn contains(&self, row: usize, col: usize) -> bool {
+        let (s, e) = self.ordered();
+        if row < s.row || row > e.row {
+            return false;
+        }
+        if s.row == e.row {
+            return col >= s.col && col <= e.col;
+        }
+        if row == s.row {
+            return col >= s.col;
+        }
+        if row == e.row {
+            return col <= e.col;
+        }
+        true
+    }
+
+    /// Extract the selected text from a grid snapshot.
+    pub fn text(&self, snapshot: &GridSnapshot) -> String {
+        let (s, e) = self.ordered();
+        let mut result = String::new();
+        for row in s.row..=e.row.min(snapshot.rows.saturating_sub(1)) {
+            let row_cells = &snapshot.cells[row];
+            let col_start = if row == s.row { s.col } else { 0 };
+            let col_end = if row == e.row {
+                e.col.min(snapshot.cols.saturating_sub(1))
+            } else {
+                snapshot.cols.saturating_sub(1)
+            };
+            for col in col_start..=col_end {
+                let c = row_cells[col].c;
+                result.push(if c == '\0' { ' ' } else { c });
+            }
+            // Trim trailing spaces for non-last lines and add newline
+            if row != e.row {
+                let trimmed = result.trim_end_matches(' ');
+                let trimmed_len = trimmed.len();
+                result.truncate(trimmed_len);
+                result.push('\n');
+            }
+        }
+        result
+    }
+}
+
 /// Default number of scrollback lines kept in history.
 const DEFAULT_SCROLLBACK: usize = 10_000;
 
@@ -47,6 +121,7 @@ pub struct TerminalView {
     pub processor: Processor,
     pub snapshot: GridSnapshot,
     pub cache: Cache,
+    pub selection: Option<Selection>,
 }
 
 impl TerminalView {
@@ -70,6 +145,7 @@ impl TerminalView {
             processor: Processor::new(),
             snapshot,
             cache: Cache::new(),
+            selection: None,
         }
     }
 
@@ -152,6 +228,8 @@ pub struct TerminalRenderer<'a> {
     pub cache: &'a Cache,
     pub background: Color,
     pub cursor_color: Color,
+    pub selection_color: Color,
+    pub selection: &'a Option<Selection>,
     pub font: Font,
     pub font_size: f32,
 }
@@ -179,6 +257,16 @@ impl<'a, M> Program<M> for TerminalRenderer<'a> {
                     let y = ri as f32 * ch;
                     if cell.bg != self.background {
                         frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), cell.bg);
+                    }
+                    // Selection highlight
+                    if let Some(sel) = self.selection {
+                        if sel.contains(ri, ci) {
+                            frame.fill_rectangle(
+                                Point::new(x, y),
+                                Size::new(cw, ch),
+                                self.selection_color,
+                            );
+                        }
                     }
                     if ri == self.snapshot.cursor_line && ci == self.snapshot.cursor_col {
                         let cursor_with_alpha = Color {
