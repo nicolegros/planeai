@@ -3365,6 +3365,7 @@ pub fn run(args: Args) -> iced::Result {
     WORKFLOW_ARGS.set(args).unwrap();
     iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
         .title(title)
+        .theme(|state: &WorkflowApp| state.theme.to_iced_theme())
         .subscription(WorkflowApp::subscription)
         .window_size(Size::new(
             cols as f32 * 9.0 + 180.0,
