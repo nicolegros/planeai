@@ -10,7 +10,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import "@xterm/xterm/css/xterm.css";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { getSettings, isDark } from "../lib/settings.svelte";
+  import { getSettings, getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractTerminalTheme } from "../lib/theme-loader";
   import { matchTerminalKey } from "../lib/terminal-keys";
 
@@ -313,16 +313,17 @@
     }
   });
 
+  // Only re-run when terminal-relevant settings change
   $effect(() => {
     if (!term) return;
-    const s = getSettings();
+    const { font_size, font_family, option_as_meta } = getTerminalSettings();
     isDark(); // track reactivity on dark mode change
     const theme = extractTerminalTheme();
     term.options.theme = theme;
     termBg = theme.background || "#000";
-    term.options.fontSize = s.terminal.font_size;
-    term.options.fontFamily = terminalFontStack(s.terminal.font_family);
-    term.options.macOptionIsMeta = s.terminal.option_as_meta;
+    term.options.fontSize = font_size;
+    term.options.fontFamily = terminalFontStack(font_family);
+    term.options.macOptionIsMeta = option_as_meta;
     if (fitAddon) fitAddon.fit();
   });
 
