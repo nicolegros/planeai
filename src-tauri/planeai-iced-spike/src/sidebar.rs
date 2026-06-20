@@ -109,6 +109,24 @@ fn icon_git_fork<'a, M: 'a>(color: Color) -> Element<'a, M> {
         .into()
 }
 
+fn icon_loader<'a, M: 'a>(color: Color) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(include_bytes!("../icons/loader-circle.svg").as_slice());
+    svg(handle)
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
+fn icon_lightbulb<'a, M: 'a>(color: Color) -> Element<'a, M> {
+    let handle = svg::Handle::from_memory(include_bytes!("../icons/lightbulb.svg").as_slice());
+    svg(handle)
+        .width(12)
+        .height(12)
+        .style(move |_, _| svg::Style { color: Some(color) })
+        .into()
+}
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 pub struct SidebarState {
@@ -391,6 +409,7 @@ impl SidebarState {
         &self,
         focused: bool,
         theme: &PlaneAiTheme,
+        agent_states: &std::collections::HashMap<String, planeai_core::notify::AgentState>,
         on_click: impl Fn(usize) -> M + 'a,
         on_scroll: impl Fn(iced::widget::scrollable::Viewport) -> M + 'a,
     ) -> Element<'a, M> {
@@ -458,7 +477,7 @@ impl SidebarState {
                         .into()
                 }
                 NavItem::OrphanSession {
-                    name, has_worktree, ..
+                    name, has_worktree, session_id, ..
                 } => {
                     let mut r = row![].spacing(4).align_y(iced::Alignment::Center);
                     if *has_worktree {
@@ -474,6 +493,18 @@ impl SidebarState {
                         name_txt
                     };
                     r = r.push(name_txt);
+                    // Agent state indicator
+                    if let Some(state) = agent_states.get(session_id) {
+                        use planeai_core::notify::AgentState;
+                        match state {
+                            AgentState::Busy => {
+                                r = r.push(icon_loader(theme.text_dimmed()));
+                            }
+                            AgentState::Idle => {
+                                r = r.push(icon_lightbulb(Color::from_rgb8(245, 158, 11)));
+                            }
+                        }
+                    }
                     container(r)
                         .padding(Padding {
                             top: 0.0,

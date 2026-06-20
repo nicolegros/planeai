@@ -2977,6 +2977,7 @@ impl WorkflowApp {
             sidebar.view(
                 self.sidebar_focused,
                 &self.theme,
+                &self.agent_states,
                 Message::SidebarItemClicked,
                 Message::SidebarScrolled,
             )
