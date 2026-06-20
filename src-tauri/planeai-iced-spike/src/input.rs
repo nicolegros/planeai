@@ -47,6 +47,11 @@ pub fn encode_key_event(
         }
     }
 
+    // Shift+Enter sends newline (useful for multi-line input in AI agents)
+    if modifiers.shift() && matches!(key, Key::Named(Named::Enter)) {
+        return Some(b"\n".to_vec());
+    }
+
     match key {
         Key::Named(named) => {
             let bytes: &[u8] = match named {
@@ -110,6 +115,13 @@ mod tests {
     fn test_enter() {
         let (k, m, t) = named(Named::Enter);
         assert_eq!(encode_key_event(&k, &m, &t), Some(b"\r".to_vec()));
+    }
+
+    #[test]
+    fn test_shift_enter() {
+        let k = Key::Named(Named::Enter);
+        let m = Modifiers::SHIFT;
+        assert_eq!(encode_key_event(&k, &m, &None), Some(b"\n".to_vec()));
     }
 
     #[test]

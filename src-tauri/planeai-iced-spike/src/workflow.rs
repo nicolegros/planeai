@@ -1544,8 +1544,10 @@ impl WorkflowApp {
         let font_size = self.theme.font_size;
         let cw = font_size * CELL_WIDTH_RATIO;
         let ch = font_size * CELL_HEIGHT_RATIO;
+        // y is in window coords; subtract title bar height (36px)
+        let ty = (y - 36.0).max(0.0);
         let col = (x / cw).floor().max(0.0) as usize;
-        let row = (y / ch).floor().max(0.0) as usize;
+        let row = (ty / ch).floor().max(0.0) as usize;
         GridPos {
             row: row.min(self.rows.saturating_sub(1)),
             col: col.min(self.cols.saturating_sub(1)),
