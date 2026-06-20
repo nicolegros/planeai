@@ -4,7 +4,6 @@ members = [
   "planeai-tasks",
   "planeai-daemon",
   "planeai-ipc",
-  "planeai-iced-spike",
   "planeai-pty",
 ]
 resolver = "2"
