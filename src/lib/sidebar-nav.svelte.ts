@@ -11,6 +11,7 @@ export type SidebarNavAction =
   | { type: "restart" }
   | { type: "edit" }
   | { type: "open_pr" }
+  | { type: "review" }
   | { type: "collapse" }
   | { type: "expand" }
   | { type: "status"; status: string }
@@ -103,6 +104,11 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   }
 
   if (key === "r") {
+    e.preventDefault();
+    return { type: "review" };
+  }
+
+  if (key === "n") {
     e.preventDefault();
     return { type: "rename" };
   }

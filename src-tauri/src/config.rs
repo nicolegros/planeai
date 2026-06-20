@@ -48,6 +48,8 @@ pub struct Config {
     /// Env var PLANEAI_EXTRA_PATH overrides this (colon-separated).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_path_dirs: Vec<String>,
+    #[serde(default = "default_auto_open_review", skip_serializing_if = "Option::is_none")]
+    pub auto_open_review: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -75,6 +77,10 @@ pub struct Terminal {
 
 fn default_option_as_meta() -> bool {
     cfg!(target_os = "macos")
+}
+
+fn default_auto_open_review() -> Option<bool> {
+    Some(true)
 }
 
 fn default_theme() -> String {
@@ -256,6 +262,7 @@ impl Default for Config {
             daemon_pty_core: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
+            auto_open_review: Some(true),
         }
     }
 }
@@ -558,6 +565,7 @@ mod tests {
             daemon_pty_core: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
+            auto_open_review: Some(true),
         };
 
         let json = serde_json::to_string_pretty(&custom).unwrap();

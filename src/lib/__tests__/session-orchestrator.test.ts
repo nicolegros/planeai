@@ -36,6 +36,7 @@ vi.mock("../api", () => ({
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
   tasks: { fireNotifyHook: vi.fn(() => Promise.resolve()) },
+  git: { getChangedFiles: vi.fn(() => Promise.resolve([])) },
 }));
 
 import { sessions as sessionsApi, symphony } from "../api";

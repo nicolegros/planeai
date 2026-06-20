@@ -60,6 +60,7 @@ export interface AppConfig {
   scrollback_lines?: number | null;
   max_mounted_terminals?: number | null;
   web_links?: boolean | null;
+  auto_open_review?: boolean | null;
 }
 
 let config = $state<AppConfig>({

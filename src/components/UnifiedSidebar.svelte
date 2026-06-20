@@ -268,6 +268,7 @@
       else if (action.type === "rename") startRename(session);
       else if (action.type === "restart") onRestartSession(session);
       else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
+      else if (action.type === "review") { onSelectSession(session.id); orchestrator.toggleDiff(); }
     } else {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
@@ -363,6 +364,9 @@
                       {#if session.worktree_path}<GitFork class="size-3 shrink-0 text-surface-600 dark:text-surface-400" />{/if}
                       <span class="truncate">{session.name || session.branch}</span>
                       <span class="ml-auto shrink-0 flex items-center gap-1">
+                        {#if orchestrator.getReviewReady()[session.id]}
+                          <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
+                        {/if}
                         {#if session.pr_url}
                           <button
                             class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
@@ -495,6 +499,7 @@
           { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
         ]
       : [
+          { label: "Review", onSelect: () => { onSelectSession(contextMenu!.session.id); orchestrator.toggleDiff(); } },
           { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
           { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
           { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },

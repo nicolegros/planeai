@@ -91,8 +91,13 @@ describe("sidebar-nav", () => {
       expect(action).toEqual({ type: "archive" });
     });
 
-    it("r returns rename", () => {
+    it("r returns review", () => {
       const action = handleSidebarKey(key({ key: "r" }), 5);
+      expect(action).toEqual({ type: "review" });
+    });
+
+    it("n returns rename", () => {
+      const action = handleSidebarKey(key({ key: "n" }), 5);
       expect(action).toEqual({ type: "rename" });
     });
 
