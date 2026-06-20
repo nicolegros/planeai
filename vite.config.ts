@@ -28,7 +28,6 @@ export default defineConfig({
             "@codemirror/language",
             "@codemirror/search",
             "@codemirror/autocomplete",
-            "@codemirror/merge",
             "@codemirror/language-data",
           ],
         },
