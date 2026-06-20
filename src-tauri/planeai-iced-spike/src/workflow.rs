@@ -12,15 +12,10 @@ use planeai_core::tab_switcher::TabSwitcher;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
-use alacritty_terminal::vte::ansi::Processor;
 use arboard::Clipboard;
 use iced::keyboard;
-use iced::widget::canvas::{self, Cache, Program};
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{
-    event, window, Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription,
-    Theme,
-};
+use iced::{event, window, Color, Element, Font, Length, Size, Subscription, Theme};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
@@ -32,6 +27,7 @@ use crate::daemon_session::{
 use crate::input;
 use crate::project_form::{self, ProjectFormState};
 use crate::sidebar::{SidebarAction, SidebarState};
+use crate::terminal_view::{TerminalRenderer, TerminalView};
 use crate::theme::{self, PlaneAiTheme, ThemeSource};
 use crate::Args;
 
@@ -111,10 +107,7 @@ struct Session {
     cwd: PathBuf,
     status: SessionStatus,
     backend: Box<dyn PlaneAiTerminalSession>,
-    term: alacritty_terminal::Term<EventProxy>,
-    processor: Processor,
-    snapshot: GridSnapshot,
-    cache: Cache,
+    terminal: TerminalView,
     bytes_processed: u64,
     log_file_exists: bool,
 }
@@ -123,9 +116,7 @@ struct Session {
 
 #[allow(dead_code)]
 struct LogReplayState {
-    term: alacritty_terminal::Term<EventProxy>,
-    snapshot: GridSnapshot,
-    cache: Cache,
+    terminal: TerminalView,
     session_id: String,
 }
 
@@ -231,6 +222,7 @@ enum Message {
     TaskLaunchSelected,
     FontLoaded,
     TitleBarDrag,
+    TerminalScroll(f32),
 }
 
 impl WorkflowApp {
@@ -316,8 +308,14 @@ impl WorkflowApp {
         let agent_command = resolved.command_label.clone();
         let extra_path_dirs = resolved.request.extra_path_dirs.clone();
         let provider_label = resolved.provider_label.clone().unwrap_or_default();
-        let cols = resolved.request.cols as usize;
-        let rows = resolved.request.rows as usize;
+        // Clamp initial cols/rows to fit the default window (1200x800) minus sidebar
+        let (cw, ch) = planeai_iced_spike::font::cell_dimensions(
+            planeai_iced_spike::font::terminal_font_size(),
+        );
+        let max_cols = ((1200.0 - 224.0) / cw).floor().max(2.0) as usize;
+        let max_rows = ((800.0 - 40.0) / ch).floor().max(2.0) as usize;
+        let cols = (resolved.request.cols as usize).min(max_cols);
+        let rows = (resolved.request.rows as usize).min(max_rows);
 
         if let Some(ref dir) = resolved.session_log_dir {
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
@@ -464,9 +462,7 @@ impl WorkflowApp {
         );
         match result {
             Ok(backend) => {
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -475,10 +471,7 @@ impl WorkflowApp {
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -545,9 +538,7 @@ impl WorkflowApp {
         );
         match result {
             Ok(backend) => {
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -556,10 +547,7 @@ impl WorkflowApp {
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -586,9 +574,7 @@ impl WorkflowApp {
         let result = attach(id, &session_id, self.cols as u16, self.rows as u16);
         match result {
             Ok(backend) => {
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -597,10 +583,7 @@ impl WorkflowApp {
                     cwd: self.project_cwd.clone(),
                     status: SessionStatus::Attached,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -854,9 +837,7 @@ impl WorkflowApp {
         );
         match result {
             Ok(backend) => {
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -865,10 +846,7 @@ impl WorkflowApp {
                     cwd: resolved.cwd,
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -1212,9 +1190,7 @@ impl WorkflowApp {
                         "in_progress",
                     );
                 }
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -1223,10 +1199,7 @@ impl WorkflowApp {
                     cwd: working_dir,
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -1379,9 +1352,7 @@ impl WorkflowApp {
                     tracing::warn!(task_key = %task.key, error = %e, "lifecycle hook (in_progress) failed");
                 }
 
-                let term = new_term(self.cols, self.rows);
-                let processor = new_processor();
-                let snapshot = snapshot_grid(&term, &self.theme.terminal);
+                let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
                 self.sessions.push(Session {
                     id,
@@ -1390,10 +1361,7 @@ impl WorkflowApp {
                     cwd: wt_resolved.cwd,
                     status: SessionStatus::Running,
                     backend: Box::new(backend),
-                    term,
-                    processor,
-                    snapshot,
-                    cache: Cache::new(),
+                    terminal,
                     bytes_processed: 0,
                     log_file_exists,
                 });
@@ -1468,8 +1436,7 @@ impl WorkflowApp {
         if idx < self.sessions.len() && idx != self.active {
             self.active = idx;
             let session = &mut self.sessions[idx];
-            session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
-            session.cache.clear();
+            session.terminal.update_snapshot(&self.theme.terminal);
             if let Some(ref mut sidebar) = self.sidebar {
                 sidebar.set_active_session(Some(self.sessions[idx].session_id.clone()));
             }
@@ -1608,14 +1575,11 @@ impl WorkflowApp {
                 return;
             }
         };
-        let mut term = new_term(self.cols, self.rows);
-        let mut processor = new_processor();
-        processor.advance(&mut term, &data);
-        let snapshot = snapshot_grid(&term, &self.theme.terminal);
+        let mut tv = TerminalView::new(self.cols, self.rows);
+        tv.processor.advance(&mut tv.term, &data);
+        tv.update_snapshot(&self.theme.terminal);
         self.log_replay = Some(LogReplayState {
-            term,
-            snapshot,
-            cache: Cache::new(),
+            terminal: tv,
             session_id,
         });
     }
@@ -1706,10 +1670,21 @@ impl WorkflowApp {
                 self.launch_from_task();
             }
             Message::FontLoaded => {}
+            Message::TerminalScroll(delta) => {
+                if !self.sessions.is_empty() {
+                    let session = &mut self.sessions[self.active];
+                    let lines = (delta / 3.0).round() as i32;
+                    if lines != 0 {
+                        session.terminal.scroll(lines);
+                        session.terminal.update_snapshot(&self.theme.terminal);
+                    }
+                }
+            }
             Message::WindowResized(size) => {
                 let font_size = self.theme.font_size;
                 let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
-                let new_cols = ((size.width - 180.0) / cw).floor().max(2.0) as u16;
+                let sidebar_w = self.sidebar.as_ref().map_or(0.0, |s| s.width);
+                let new_cols = ((size.width - sidebar_w) / cw).floor().max(2.0) as u16;
                 let new_rows = ((size.height - 40.0) / ch).floor().max(2.0) as u16;
                 if new_cols as usize == self.cols && new_rows as usize == self.rows {
                     return iced::Task::none();
@@ -1720,14 +1695,14 @@ impl WorkflowApp {
                     return iced::Task::none();
                 }
                 let session = &mut self.sessions[self.active];
-                let term_size = TermSize {
+                let term_size = crate::terminal_view::ScrollbackTermSize {
                     cols: self.cols,
                     rows: self.rows,
+                    scrollback: 10_000,
                 };
-                session.term.resize(term_size);
+                session.terminal.term.resize(term_size);
                 let _ = session.backend.resize(new_cols, new_rows);
-                session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
-                session.cache.clear();
+                session.terminal.update_snapshot(&self.theme.terminal);
             }
             Message::KeyEvent(keyboard::Event::KeyPressed {
                 key,
@@ -2444,8 +2419,7 @@ impl WorkflowApp {
                 if let Some(new_theme) = self.theme_source.poll_mode() {
                     self.theme = new_theme;
                     for s in &mut self.sessions {
-                        s.snapshot = snapshot_grid(&s.term, &self.theme.terminal);
-                        s.cache.clear();
+                        s.terminal.update_snapshot(&self.theme.terminal);
                     }
                 }
 
@@ -2473,21 +2447,28 @@ impl WorkflowApp {
 
                 // Drain output from all sessions
                 for i in 0..self.sessions.len() {
+                    let mut got_data = false;
                     loop {
                         let output = self.sessions[i].backend.try_read_batch().unwrap_or(None);
                         match output {
                             Some(data) => {
+                                got_data = true;
                                 self.sessions[i].bytes_processed += data.len() as u64;
                                 let session = &mut self.sessions[i];
-                                session.processor.advance(&mut session.term, &data);
+                                session
+                                    .terminal
+                                    .processor
+                                    .advance(&mut session.terminal.term, &data);
                             }
                             None => break,
                         }
                     }
-                    if i == self.active {
+                    if i == self.active && got_data {
                         let session = &mut self.sessions[i];
-                        session.snapshot = snapshot_grid(&session.term, &self.theme.terminal);
-                        session.cache.clear();
+                        if !session.terminal.is_scrolled() {
+                            session.terminal.scroll_to_bottom();
+                        }
+                        session.terminal.update_snapshot(&self.theme.terminal);
                     }
                 }
 
@@ -2710,9 +2691,9 @@ impl WorkflowApp {
                 background: Some(self.theme.warning_bg().into()),
                 ..Default::default()
             });
-            let canvas_view = Canvas::new(WorkflowTermRenderer {
-                snapshot: &replay.snapshot,
-                cache: &replay.cache,
+            let canvas_view = Canvas::new(TerminalRenderer {
+                snapshot: &replay.terminal.snapshot,
+                cache: &replay.terminal.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
                 font: self.theme.font,
@@ -2735,9 +2716,9 @@ impl WorkflowApp {
             .into()
         } else {
             let session = &self.sessions[self.active];
-            Canvas::new(WorkflowTermRenderer {
-                snapshot: &session.snapshot,
-                cache: &session.cache,
+            Canvas::new(TerminalRenderer {
+                snapshot: &session.terminal.snapshot,
+                cache: &session.terminal.cache,
                 background: self.theme.terminal.background,
                 cursor_color: self.theme.terminal.cursor,
                 font: self.theme.font,
@@ -3286,72 +3267,20 @@ impl WorkflowApp {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                     Some(Message::SidebarDrag(position.x))
                 }
+                iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) => {
+                    let y = match delta {
+                        iced::mouse::ScrollDelta::Lines { y, .. } => y,
+                        iced::mouse::ScrollDelta::Pixels { y, .. } => y / 20.0,
+                    };
+                    Some(Message::TerminalScroll(y))
+                }
                 _ => None,
             }),
         ])
     }
 }
 
-// ─── Canvas renderer ─────────────────────────────────────────────────────────
-
-struct WorkflowTermRenderer<'a> {
-    snapshot: &'a GridSnapshot,
-    cache: &'a Cache,
-    background: Color,
-    cursor_color: Color,
-    font: Font,
-    font_size: f32,
-}
-
-impl<'a> Program<Message> for WorkflowTermRenderer<'a> {
-    type State = ();
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        let geom = self.cache.draw(renderer, bounds.size(), |frame| {
-            let font_size = self.font_size;
-            // Derive cell dimensions from font metrics (monospace: width ≈ 0.6 * size)
-            let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
-            frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.background);
-            for (ri, row) in self.snapshot.cells.iter().enumerate() {
-                for (ci, cell) in row.iter().enumerate() {
-                    let x = ci as f32 * cw;
-                    let y = ri as f32 * ch;
-                    if cell.bg != self.background {
-                        frame.fill_rectangle(Point::new(x, y), Size::new(cw, ch), cell.bg);
-                    }
-                    if ri == self.snapshot.cursor_line && ci == self.snapshot.cursor_col {
-                        let cursor_with_alpha = Color {
-                            a: 0.4,
-                            ..self.cursor_color
-                        };
-                        frame.fill_rectangle(
-                            Point::new(x, y),
-                            Size::new(cw, ch),
-                            cursor_with_alpha,
-                        );
-                    }
-                    if cell.c != ' ' && cell.c != '\0' {
-                        frame.fill_text(canvas::Text {
-                            content: cell.c.to_string(),
-                            position: Point::new(x, y + 1.0),
-                            color: cell.fg,
-                            size: font_size.into(),
-                            font: self.font,
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        });
-        vec![geom]
-    }
-}
+// ─── Canvas renderer (moved to terminal_view.rs) ─────────────────────────────
 
 // ─── Static args ─────────────────────────────────────────────────────────────
 
