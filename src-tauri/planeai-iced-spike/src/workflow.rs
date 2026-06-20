@@ -232,10 +232,6 @@ enum Message {
     TerminalScroll(f32),
     SidebarItemClicked(usize),
     SidebarScrolled(iced::widget::scrollable::Viewport),
-    AgentStateChanged {
-        session_id: String,
-        state: planeai_core::notify::AgentState,
-    },
     CheckSilence,
     NotifyIpc(planeai_core::notify::NotifyMessage),
     InstallHooks,
@@ -1928,9 +1924,6 @@ impl WorkflowApp {
                 self.launch_from_task();
             }
             Message::FontLoaded => {}
-            Message::AgentStateChanged { session_id, state } => {
-                self.agent_states.insert(session_id, state);
-            }
             Message::InstallHooks => {
                 let home = std::env::var("HOME").unwrap_or_default();
                 let _ = planeai_core::notify::install_all_hooks(&home);
