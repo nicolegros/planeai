@@ -202,8 +202,8 @@
     });
 
     // ── Listen for PTY output with flow control ─────────────────────────
-    const FLOW_HIGH = 100_000;
-    const FLOW_LOW = 10_000;
+    const FLOW_HIGH = 32_000;
+    const FLOW_LOW = 8_000;
     let pendingBytes = 0;
     let isPaused = false;
 
