@@ -1525,18 +1525,6 @@ impl WorkflowApp {
             group: "Actions".into(),
             is_active: false,
         });
-        for (i, path) in self.recent_projects.iter().enumerate().take(5) {
-            let name = std::path::Path::new(path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone());
-            items.push(PaletteItem {
-                id: format!("project:{i}"),
-                label: format!("Open: {name}"),
-                group: "Actions".into(),
-                is_active: false,
-            });
-        }
 
         // Tasks group (only if already loaded)
         for (i, task) in self.task_list.iter().enumerate() {
@@ -1561,19 +1549,13 @@ impl WorkflowApp {
                 self.attach_session(sid.to_string());
             }
         } else if id == "action:new" {
-            self.launch_session();
+            self.open_session_form();
         } else if id == "action:kill" {
             self.kill_active();
         } else if id == "action:detach" {
             self.detach_active();
         } else if id == "action:shortcuts" {
             self.show_shortcuts = !self.show_shortcuts;
-        } else if let Some(rest) = id.strip_prefix("project:") {
-            if let Ok(idx) = rest.parse::<usize>() {
-                if let Some(path) = self.recent_projects.get(idx).cloned() {
-                    self.select_project(&path);
-                }
-            }
         } else if let Some(rest) = id.strip_prefix("task:") {
             if let Ok(idx) = rest.parse::<usize>() {
                 if idx < self.task_list.len() {
