@@ -586,7 +586,7 @@ impl SidebarState {
         };
 
         let panel_bg = theme.panel_bg();
-        let handle_bg = theme.border();
+        let handle_bg = panel_bg;
 
         let sidebar_panel = container(sidebar_content)
             .width(Length::Fill)
