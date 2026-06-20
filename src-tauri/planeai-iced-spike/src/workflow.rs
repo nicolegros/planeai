@@ -1632,7 +1632,10 @@ impl WorkflowApp {
             }
             Message::SidebarDragEnd => {
                 if let Some(ref mut sidebar) = self.sidebar {
-                    sidebar.handle_mouse_up();
+                    if let Some(ref db) = self.db {
+                        let conn = db.lock().unwrap();
+                        sidebar.handle_mouse_up(&conn);
+                    }
                 }
             }
             Message::ProjectInputChanged(val) => {

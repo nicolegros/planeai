@@ -140,7 +140,7 @@ impl SidebarState {
             selected_index: 0,
             collapsed: HashSet::new(),
             db_path: db_path.to_path_buf(),
-            width: DEFAULT_SIDEBAR_WIDTH,
+            width: services::LayoutService::get(conn, "sidebar_width", DEFAULT_SIDEBAR_WIDTH),
             resizing: false,
             last_cursor_x: 0.0,
             active_session_id: None,
@@ -217,7 +217,10 @@ impl SidebarState {
     }
 
     /// Call on mouse button release.
-    pub fn handle_mouse_up(&mut self) {
+    pub fn handle_mouse_up(&mut self, conn: &Connection) {
+        if self.resizing {
+            services::LayoutService::set(conn, "sidebar_width", self.width);
+        }
         self.resizing = false;
     }
 
