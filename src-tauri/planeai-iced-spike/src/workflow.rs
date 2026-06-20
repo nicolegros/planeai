@@ -2547,8 +2547,7 @@ impl WorkflowApp {
         } else {
             ("⚠ daemon disconnected", self.theme.warning())
         };
-        left_panel_content =
-            left_panel_content.push(text(indicator).size(11).color(color).font(Font::MONOSPACE));
+        left_panel_content = left_panel_content.push(text(indicator).color(color));
         left_panel_content = left_panel_content.push(text("").size(4));
 
         // Session cards (Part 8)
@@ -2642,8 +2641,7 @@ impl WorkflowApp {
                 }
                 _ => self.theme.text_primary(),
             };
-            left_panel_content =
-                left_panel_content.push(text(label).size(10).color(color).font(Font::MONOSPACE));
+            left_panel_content = left_panel_content.push(text(label).color(color));
         }
 
         // Unattached daemon sessions
@@ -2660,12 +2658,8 @@ impl WorkflowApp {
                 .collect();
             if !unattached.is_empty() {
                 left_panel_content = left_panel_content.push(text("").size(4));
-                left_panel_content = left_panel_content.push(
-                    text("── detached ──")
-                        .size(10)
-                        .color(self.theme.text_dimmed())
-                        .font(Font::MONOSPACE),
-                );
+                left_panel_content =
+                    left_panel_content.push(text("── detached ──").color(self.theme.text_dimmed()));
                 for info in unattached.iter().take(5) {
                     let label = format!(
                         "  {} {}",
@@ -2677,8 +2671,7 @@ impl WorkflowApp {
                     } else {
                         self.theme.text_dimmed()
                     };
-                    left_panel_content = left_panel_content
-                        .push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                    left_panel_content = left_panel_content.push(text(label).color(color));
                 }
             }
         }
@@ -2699,10 +2692,7 @@ impl WorkflowApp {
         let terminal_area: Element<'_, Message> = if let Some(ref replay) = self.log_replay {
             // Log replay view
             let banner = container(
-                text("READ-ONLY LOG REPLAY — Escape to exit")
-                    .size(12)
-                    .color(self.theme.warning_text())
-                    .font(Font::MONOSPACE),
+                text("READ-ONLY LOG REPLAY — Escape to exit").color(self.theme.warning_text()),
             )
             .width(Length::Fill)
             .padding(2)
@@ -2724,9 +2714,7 @@ impl WorkflowApp {
         } else if self.sessions.is_empty() {
             container(
                 text("No sessions. Cmd+N to launch, Cmd+A to attach.")
-                    .size(14)
-                    .color(self.theme.text_dimmed())
-                    .font(Font::MONOSPACE),
+                    .color(self.theme.text_dimmed()),
             )
             .width(Length::Fill)
             .height(Length::Fill)
@@ -2786,18 +2774,13 @@ impl WorkflowApp {
                 format!(" | ⚠ {}", error_display)
             },
         );
-        let status_bar = container(
-            text(status_text)
-                .size(12)
-                .color(self.theme.text_primary())
-                .font(Font::MONOSPACE),
-        )
-        .width(Length::Fill)
-        .padding(2)
-        .style(|_: &Theme| container::Style {
-            background: Some(self.theme.panel_bg().into()),
-            ..Default::default()
-        });
+        let status_bar = container(text(status_text).color(self.theme.text_primary()))
+            .width(Length::Fill)
+            .padding(2)
+            .style(|_: &Theme| container::Style {
+                background: Some(self.theme.panel_bg().into()),
+                ..Default::default()
+            });
 
         // Build layout
         let main_content = row![left_panel, column![terminal_area, status_bar]];
@@ -2812,17 +2795,12 @@ impl WorkflowApp {
                 )
                 .on_input(Message::ProjectInputChanged)
                 .on_submit(Message::ProjectInputSubmit)
-                .size(14)
                 .width(Length::Fill),
             );
             // Show recent projects
             if !self.recent_projects.is_empty() {
-                picker_col = picker_col.push(
-                    text("Recent (Cmd+1..9 to select):")
-                        .size(11)
-                        .color(self.theme.text_muted())
-                        .font(Font::MONOSPACE),
-                );
+                picker_col = picker_col
+                    .push(text("Recent (Cmd+1..9 to select):").color(self.theme.text_muted()));
                 for (i, p) in self.recent_projects.iter().take(9).enumerate() {
                     let exists = PathBuf::from(p).is_dir();
                     let marker = if !exists { " (missing)" } else { "" };
@@ -2832,8 +2810,7 @@ impl WorkflowApp {
                     } else {
                         self.theme.text_dimmed()
                     };
-                    picker_col =
-                        picker_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                    picker_col = picker_col.push(text(label).color(color));
                 }
             }
             let picker = container(picker_col).style(|_: &Theme| container::Style {
@@ -2846,7 +2823,6 @@ impl WorkflowApp {
                 text_input("Command to launch...", &self.launch_prompt_input)
                     .on_input(Message::LaunchPromptChanged)
                     .on_submit(Message::LaunchPromptSubmit)
-                    .size(14)
                     .width(Length::Fill),
             )
             .width(Length::Fill)
@@ -2874,21 +2850,14 @@ impl WorkflowApp {
                 .unwrap_or_else(|| "project".to_string());
             wt_col = wt_col.push(
                 text(format!("Worktree Launch — project: {}", project_name))
-                    .size(12)
-                    .color(self.theme.accent())
-                    .font(Font::MONOSPACE),
+                    .color(self.theme.accent()),
             );
             let mode_label = if self.worktree_use_worktree {
                 "● Worktree mode (Cmd+B to toggle)"
             } else {
                 "○ Direct cwd mode (Cmd+B to toggle)"
             };
-            wt_col = wt_col.push(
-                text(mode_label)
-                    .size(11)
-                    .color(self.theme.text_secondary())
-                    .font(Font::MONOSPACE),
-            );
+            wt_col = wt_col.push(text(mode_label).color(self.theme.text_secondary()));
             if self.worktree_use_worktree {
                 wt_col = wt_col.push(
                     text_input(
@@ -2897,7 +2866,6 @@ impl WorkflowApp {
                     )
                     .on_input(Message::WorktreeBranchChanged)
                     .on_submit(Message::WorktreeLaunchSubmit)
-                    .size(13)
                     .width(Length::Fill),
                 );
                 wt_col = wt_col.push(
@@ -2907,32 +2875,18 @@ impl WorkflowApp {
                     )
                     .on_input(Message::WorktreeTaskKeyChanged)
                     .on_submit(Message::WorktreeLaunchSubmit)
-                    .size(13)
                     .width(Length::Fill),
                 );
                 if let Some(ref path) = self.worktree_computed_path {
-                    wt_col = wt_col.push(
-                        text(format!("→ {}", path))
-                            .size(10)
-                            .color(self.theme.text_muted())
-                            .font(Font::MONOSPACE),
-                    );
+                    wt_col =
+                        wt_col.push(text(format!("→ {}", path)).color(self.theme.text_muted()));
                 }
                 if let Some(ref err) = self.worktree_error {
-                    wt_col = wt_col.push(
-                        text(format!("⚠ {}", err))
-                            .size(11)
-                            .color(self.theme.error())
-                            .font(Font::MONOSPACE),
-                    );
+                    wt_col = wt_col.push(text(format!("⚠ {}", err)).color(self.theme.error()));
                 }
             }
-            wt_col = wt_col.push(
-                text("Enter to launch | Escape to cancel")
-                    .size(10)
-                    .color(self.theme.text_dimmed())
-                    .font(Font::MONOSPACE),
-            );
+            wt_col = wt_col
+                .push(text("Enter to launch | Escape to cancel").color(self.theme.text_dimmed()));
             let wt_panel = container(wt_col).style(|_: &Theme| container::Style {
                 background: Some(self.theme.panel_bg().into()),
                 ..Default::default()
@@ -2943,9 +2897,7 @@ impl WorkflowApp {
             let mut nm_col = column![].spacing(2).width(Length::Fill).padding(6);
             nm_col = nm_col.push(
                 text("New... (↑↓ navigate, Enter select, Escape cancel)")
-                    .size(12)
-                    .color(self.theme.text_secondary())
-                    .font(Font::MONOSPACE),
+                    .color(self.theme.text_secondary()),
             );
             for (i, item) in items.iter().enumerate() {
                 let marker = if i == self.new_menu_index { "▶" } else { " " };
@@ -2954,22 +2906,12 @@ impl WorkflowApp {
                 } else {
                     self.theme.text_muted()
                 };
-                nm_col = nm_col.push(
-                    text(format!("{} {}", marker, item))
-                        .size(12)
-                        .color(color)
-                        .font(Font::MONOSPACE),
-                );
+                nm_col = nm_col.push(text(format!("{} {}", marker, item)).color(color));
             }
             modal_overlay(nm_col, main_content.into(), &self.theme)
         } else if self.session_form {
             let mut sf_col = column![].spacing(3).width(Length::Fill).padding(8);
-            sf_col = sf_col.push(
-                text("New Session")
-                    .size(13)
-                    .color(Color::from_rgb8(255, 255, 255))
-                    .font(Font::MONOSPACE),
-            );
+            sf_col = sf_col.push(text("New Session").color(Color::from_rgb8(255, 255, 255)));
 
             // Mode toggle
             let mode_highlight = self.session_form_focus == SessionFormField::Mode;
@@ -2991,13 +2933,11 @@ impl WorkflowApp {
                     },
                     " T",
                 ))
-                .size(11)
                 .color(if mode_highlight {
                     Color::from_rgb8(200, 220, 255)
                 } else {
                     Color::from_rgb8(160, 160, 160)
-                })
-                .font(Font::MONOSPACE),
+                }),
             );
 
             // Project (custom combobox)
@@ -3031,13 +2971,11 @@ impl WorkflowApp {
                     name_display,
                     if name_highlight { "▏" } else { "" }
                 ))
-                .size(11)
                 .color(if name_highlight {
                     Color::from_rgb8(100, 220, 255)
                 } else {
                     Color::from_rgb8(160, 160, 160)
-                })
-                .font(Font::MONOSPACE),
+                }),
             );
 
             // Toggles
@@ -3063,13 +3001,11 @@ impl WorkflowApp {
                     "{}[{}] Worktree W  [{}] Auto-approve A  Provider: {} P",
                     toggles_prefix, wt_mark, aa_mark, provider_name
                 ))
-                .size(11)
                 .color(if toggles_highlight {
                     Color::from_rgb8(100, 220, 255)
                 } else {
                     Color::from_rgb8(160, 160, 160)
-                })
-                .font(Font::MONOSPACE),
+                }),
             );
 
             // Branch field
@@ -3087,31 +3023,23 @@ impl WorkflowApp {
                     branch_display,
                     if branch_highlight { "▏" } else { "" }
                 ))
-                .size(11)
                 .color(if branch_highlight {
                     Color::from_rgb8(100, 220, 255)
                 } else {
                     Color::from_rgb8(160, 160, 160)
-                })
-                .font(Font::MONOSPACE),
+                }),
             );
 
             // Error
             if let Some(ref err) = self.session_form_error {
-                sf_col = sf_col.push(
-                    text(format!("  ⚠ {}", err))
-                        .size(11)
-                        .color(Color::from_rgb8(255, 100, 100))
-                        .font(Font::MONOSPACE),
-                );
+                sf_col = sf_col
+                    .push(text(format!("  ⚠ {}", err)).color(Color::from_rgb8(255, 100, 100)));
             }
 
             // Footer
             sf_col = sf_col.push(
                 text("  Tab=next field | Cmd+Enter=create | Escape=cancel")
-                    .size(10)
-                    .color(Color::from_rgb8(80, 80, 80))
-                    .font(Font::MONOSPACE),
+                    .color(Color::from_rgb8(80, 80, 80)),
             );
 
             modal_overlay(sf_col, main_content.into(), &self.theme)
@@ -3119,16 +3047,11 @@ impl WorkflowApp {
             let mut tp_col = column![].spacing(2).width(Length::Fill).padding(6);
             tp_col = tp_col.push(
                 text("Task Picker (↑↓ navigate, Enter select, Escape cancel)")
-                    .size(12)
-                    .color(self.theme.accent())
-                    .font(Font::MONOSPACE),
+                    .color(self.theme.accent()),
             );
             if self.task_list.is_empty() {
                 tp_col = tp_col.push(
-                    text("  No tasks found for this project.")
-                        .size(11)
-                        .color(self.theme.text_muted())
-                        .font(Font::MONOSPACE),
+                    text("  No tasks found for this project.").color(self.theme.text_muted()),
                 );
             } else {
                 for (i, task) in self.task_list.iter().take(15).enumerate() {
@@ -3149,7 +3072,7 @@ impl WorkflowApp {
                     } else {
                         self.theme.text_primary()
                     };
-                    tp_col = tp_col.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                    tp_col = tp_col.push(text(label).color(color));
                 }
             }
             let tp_panel = container(tp_col).style(|_: &Theme| container::Style {
@@ -3236,7 +3159,7 @@ impl WorkflowApp {
                 } else {
                     None
                 };
-                let txt = text(label).size(12).color(color).font(Font::MONOSPACE);
+                let txt = text(label).color(color);
                 items = items.push(container(txt).width(Length::Fill).padding([2, 4]).style(
                     move |_: &Theme| container::Style {
                         background: item_bg.map(|c| c.into()),
@@ -3401,14 +3324,14 @@ pub fn run(args: Args) -> iced::Result {
         },
         ..Default::default()
     };
-    let mut app = iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
+    let app = iced::application(WorkflowApp::boot, WorkflowApp::update, WorkflowApp::view)
         .title(title)
         .theme(|state: &WorkflowApp| state.theme.to_iced_theme())
         .subscription(WorkflowApp::subscription)
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(14.0),
+            ..iced::Settings::default()
+        })
         .window(window_settings);
-    let font = planeai_iced_spike::font::terminal_font();
-    if font != Font::MONOSPACE {
-        app = app.default_font(font);
-    }
     app.run()
 }

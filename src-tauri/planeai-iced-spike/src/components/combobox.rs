@@ -1,7 +1,7 @@
 //! Keyboard-driven combobox: type to filter, ↑↓ to navigate, Enter to select.
 
 use iced::widget::{column, text};
-use iced::{Color, Element, Font};
+use iced::{Color, Element};
 
 /// A single item in the combobox.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,11 +108,8 @@ impl ComboBoxState {
             Color::from_rgb8(160, 160, 160)
         };
 
-        let mut col = column![text(format!("{}{}: {}", prefix, label, display))
-            .size(11)
-            .color(color)
-            .font(Font::MONOSPACE)]
-        .spacing(1);
+        let mut col =
+            column![text(format!("{}{}: {}", prefix, label, display)).color(color)].spacing(1);
 
         // Show filtered dropdown when focused
         if focused {
@@ -125,19 +122,12 @@ impl ComboBoxState {
                 } else {
                     Color::from_rgb8(140, 140, 140)
                 };
-                col = col.push(
-                    text(format!("    {} {}", marker, item.label))
-                        .size(10)
-                        .color(item_color)
-                        .font(Font::MONOSPACE),
-                );
+                col = col.push(text(format!("    {} {}", marker, item.label)).color(item_color));
             }
             if filtered.len() > show {
                 col = col.push(
                     text(format!("    ... +{} more", filtered.len() - show))
-                        .size(10)
-                        .color(Color::from_rgb8(100, 100, 100))
-                        .font(Font::MONOSPACE),
+                        .color(Color::from_rgb8(100, 100, 100)),
                 );
             }
         }

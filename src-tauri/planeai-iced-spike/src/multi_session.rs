@@ -10,8 +10,7 @@ use iced::mouse;
 use iced::widget::canvas::{self, Cache, Program};
 use iced::widget::{column, container, row, text, Canvas};
 use iced::{
-    event, window, Color, Element, Font, Length, Point, Rectangle, Renderer, Size, Subscription,
-    Theme,
+    event, window, Color, Element, Length, Point, Rectangle, Renderer, Size, Subscription, Theme,
 };
 use serde_json::json;
 
@@ -260,7 +259,7 @@ impl MultiApp {
                 sessions_detached: 0,
                 sessions_killed: 0,
             },
-            iced::Task::none(),
+            planeai_iced_spike::font::font_load_task().discard(),
         )
     }
 
@@ -1008,8 +1007,7 @@ impl MultiApp {
             } else {
                 ("⚠ disconnected", Color::from_rgb8(255, 150, 50))
             };
-            session_list =
-                session_list.push(text(indicator).size(11).color(color).font(Font::MONOSPACE));
+            session_list = session_list.push(text(indicator).color(color));
             session_list = session_list.push(text("").size(4)); // spacer
         }
 
@@ -1031,8 +1029,7 @@ impl MultiApp {
                 (SessionStatus::Detached, _) => Color::from_rgb8(200, 150, 50),
                 _ => Color::from_rgb8(180, 180, 180),
             };
-            session_list =
-                session_list.push(text(label).size(13).color(color).font(Font::MONOSPACE));
+            session_list = session_list.push(text(label).color(color));
         }
 
         // Show unattached daemon sessions
@@ -1049,12 +1046,8 @@ impl MultiApp {
                 .collect();
             if !unattached.is_empty() {
                 session_list = session_list.push(text("").size(4));
-                session_list = session_list.push(
-                    text("── detached ──")
-                        .size(10)
-                        .color(Color::from_rgb8(120, 120, 120))
-                        .font(Font::MONOSPACE),
-                );
+                session_list = session_list
+                    .push(text("── detached ──").color(Color::from_rgb8(120, 120, 120)));
                 for info in unattached.iter().take(5) {
                     let label = format!(
                         "  {} {}",
@@ -1066,8 +1059,7 @@ impl MultiApp {
                     } else {
                         Color::from_rgb8(100, 100, 100)
                     };
-                    session_list =
-                        session_list.push(text(label).size(11).color(color).font(Font::MONOSPACE));
+                    session_list = session_list.push(text(label).color(color));
                 }
             }
         }
@@ -1106,18 +1098,13 @@ impl MultiApp {
             self.sessions.len(),
             self.args.session_source,
         );
-        let status_bar = container(
-            text(status_text)
-                .size(12)
-                .color(Color::from_rgb8(180, 180, 180))
-                .font(Font::MONOSPACE),
-        )
-        .width(Length::Fill)
-        .padding(2)
-        .style(|_: &Theme| container::Style {
-            background: Some(Color::from_rgb8(40, 40, 40).into()),
-            ..Default::default()
-        });
+        let status_bar = container(text(status_text).color(Color::from_rgb8(180, 180, 180)))
+            .width(Length::Fill)
+            .padding(2)
+            .style(|_: &Theme| container::Style {
+                background: Some(Color::from_rgb8(40, 40, 40).into()),
+                ..Default::default()
+            });
 
         let base = row![left_panel, column![terminal_canvas, status_bar]];
 
@@ -1231,13 +1218,13 @@ pub fn run(args: Args) -> iced::Result {
     let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
 
     MULTI_ARGS.set(args).unwrap();
-    let mut app = iced::application(MultiApp::boot, MultiApp::update, MultiApp::view)
+    let app = iced::application(MultiApp::boot, MultiApp::update, MultiApp::view)
         .title(title)
         .subscription(MultiApp::subscription)
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(16.0),
+            ..iced::Settings::default()
+        })
         .window_size(Size::new(cols as f32 * cw + 140.0, rows as f32 * ch + 20.0));
-    let font = planeai_iced_spike::font::terminal_font();
-    if font != Font::MONOSPACE {
-        app = app.default_font(font);
-    }
     app.run()
 }
