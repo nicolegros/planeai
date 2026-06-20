@@ -8,5 +8,6 @@ pub mod planeai_local;
 pub mod project_form;
 pub mod shell;
 pub mod sidebar;
+pub mod terminal_view;
 pub mod theme;
 pub mod theme_parser;
