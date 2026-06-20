@@ -463,6 +463,16 @@
                   View branch diff
                 </Command.Item>
                 <Command.Item
+                  value="review changes"
+                  keywords={["review", "diff", "changes", "git"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onToggleDiff(); close(); }}
+                >
+                  Review Changes
+                  <kbd class="ml-auto text-xs text-surface-500 dark:text-surface-400">⌘⇧R</kbd>
+                </Command.Item>
+                <Command.Item
                   value="open pull request"
                   keywords={["pr", "pull request", "github", "link", "review"]}
                   disabled={!activeSessionId}

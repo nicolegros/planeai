@@ -132,6 +132,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "refresh_tasks" };
   }
 
+  // Mod+Shift+R — review changes (toggle diff/review tab)
+  if (mod && e.shiftKey && key === "r") {
+    return { type: "toggle_diff" };
+  }
+
   // Mod+/ — keyboard shortcuts
   if (mod && !e.shiftKey && e.key === "/") {
     return { type: "show_shortcuts" };
