@@ -116,8 +116,8 @@
     Vim.defineEx("bn", "bn", () => nextBuffer());
     Vim.defineEx("bp", "bp", () => prevBuffer());
 
-    // Track vim mode changes via event
-    Vim.on("vim-mode-change", (ev: { mode: string; subMode?: string }) => {
+    // Track vim mode changes via event (method exists at runtime but not in types)
+    (Vim as any).on("vim-mode-change", (ev: { mode: string; subMode?: string }) => {
       if (ev.mode === "insert") vimMode = "INSERT";
       else if (ev.mode === "visual") vimMode = ev.subMode === "linewise" ? "V-LINE" : "VISUAL";
       else if (ev.mode === "replace") vimMode = "REPLACE";
