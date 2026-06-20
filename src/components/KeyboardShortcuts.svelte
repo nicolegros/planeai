@@ -59,7 +59,7 @@
     { keys: `a`, description: "Archive" },
     { keys: `dd`, description: "Delete" },
     { keys: `r`, description: "Review session changes" },
-    { keys: `n`, description: "Rename" },
+    { keys: `E`, description: "Rename" },
     { keys: `e`, description: "Edit task" },
     { keys: `R`, description: "Restart" },
     { keys: `o`, description: "Open PR" },

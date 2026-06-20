@@ -96,8 +96,8 @@ describe("sidebar-nav", () => {
       expect(action).toEqual({ type: "review" });
     });
 
-    it("n returns rename", () => {
-      const action = handleSidebarKey(key({ key: "n" }), 5);
+    it("E returns rename", () => {
+      const action = handleSidebarKey(key({ key: "E" }), 5);
       expect(action).toEqual({ type: "rename" });
     });
 

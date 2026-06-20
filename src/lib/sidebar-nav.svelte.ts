@@ -108,7 +108,7 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
     return { type: "review" };
   }
 
-  if (key === "n") {
+  if (key === "E") {
     e.preventDefault();
     return { type: "rename" };
   }
