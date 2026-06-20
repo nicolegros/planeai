@@ -12,7 +12,9 @@ enum InnerStream {
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
-    _Placeholder(std::convert::Infallible),
+    NamedPipe(tokio::net::windows::named_pipe::NamedPipeClient),
+    #[cfg(windows)]
+    NamedPipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
 }
 
 impl AsyncRead for AsyncIpcStream {
@@ -25,7 +27,9 @@ impl AsyncRead for AsyncIpcStream {
             #[cfg(unix)]
             InnerStream::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
             #[cfg(windows)]
-            InnerStream::_Placeholder(never) => match *never {},
+            InnerStream::NamedPipe(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            #[cfg(windows)]
+            InnerStream::NamedPipeServer(s) => std::pin::Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -40,7 +44,9 @@ impl AsyncWrite for AsyncIpcStream {
             #[cfg(unix)]
             InnerStream::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
             #[cfg(windows)]
-            InnerStream::_Placeholder(never) => match *never {},
+            InnerStream::NamedPipe(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            #[cfg(windows)]
+            InnerStream::NamedPipeServer(s) => std::pin::Pin::new(s).poll_write(cx, buf),
         }
     }
 
@@ -52,7 +58,9 @@ impl AsyncWrite for AsyncIpcStream {
             #[cfg(unix)]
             InnerStream::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
             #[cfg(windows)]
-            InnerStream::_Placeholder(never) => match *never {},
+            InnerStream::NamedPipe(s) => std::pin::Pin::new(s).poll_flush(cx),
+            #[cfg(windows)]
+            InnerStream::NamedPipeServer(s) => std::pin::Pin::new(s).poll_flush(cx),
         }
     }
 
@@ -64,7 +72,9 @@ impl AsyncWrite for AsyncIpcStream {
             #[cfg(unix)]
             InnerStream::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
             #[cfg(windows)]
-            InnerStream::_Placeholder(never) => match *never {},
+            InnerStream::NamedPipe(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            #[cfg(windows)]
+            InnerStream::NamedPipeServer(s) => std::pin::Pin::new(s).poll_shutdown(cx),
         }
     }
 }
@@ -81,25 +91,32 @@ impl AsyncIpcStream {
         }
         #[cfg(windows)]
         {
-            let _ = path;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "async connect not yet implemented on Windows",
-            ))
+            use tokio::net::windows::named_pipe::ClientOptions;
+            let pipe_name = path.to_string_lossy();
+            let client = ClientOptions::new().open(&*pipe_name)?;
+            Ok(Self {
+                inner: InnerStream::NamedPipe(client),
+            })
         }
     }
 }
 
 /// Async IPC listener.
+///
+/// On Windows, wraps a named pipe server. Each `accept()` creates a new pipe instance
+/// and waits for a client to connect (standard multi-client named pipe pattern).
 pub struct AsyncIpcListener {
     #[cfg(unix)]
     inner: tokio::net::UnixListener,
     #[cfg(windows)]
-    _private: (),
+    pipe_name: String,
+    #[cfg(windows)]
+    is_first: std::sync::atomic::AtomicBool,
 }
 
 impl AsyncIpcListener {
     /// Bind at the given path. Creates parent dir with 0700 on Unix.
+    /// On Windows, `path` is a named pipe address (e.g. `\\.\pipe\planeai-daemon`).
     pub fn bind(path: &Path) -> std::io::Result<Self> {
         #[cfg(unix)]
         {
@@ -114,11 +131,11 @@ impl AsyncIpcListener {
         }
         #[cfg(windows)]
         {
-            let _ = path;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "async named pipe not yet implemented on Windows",
-            ))
+            let pipe_name = path.to_string_lossy().into_owned();
+            Ok(Self {
+                pipe_name,
+                is_first: std::sync::atomic::AtomicBool::new(true),
+            })
         }
     }
 
@@ -133,10 +150,17 @@ impl AsyncIpcListener {
         }
         #[cfg(windows)]
         {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "async named pipe not yet implemented on Windows",
-            ))
+            use std::sync::atomic::Ordering;
+            use tokio::net::windows::named_pipe::ServerOptions;
+
+            let first = self.is_first.swap(false, Ordering::SeqCst);
+            let server = ServerOptions::new()
+                .first_pipe_instance(first)
+                .create(&self.pipe_name)?;
+            server.connect().await?;
+            Ok(AsyncIpcStream {
+                inner: InnerStream::NamedPipeServer(server),
+            })
         }
     }
 }
