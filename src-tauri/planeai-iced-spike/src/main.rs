@@ -5,7 +5,6 @@ pub mod common;
 pub mod components;
 pub mod daemon_session;
 pub mod input;
-mod multi_session;
 pub mod planeai_local;
 pub mod project_form;
 pub mod shell;
@@ -84,14 +83,6 @@ pub struct Args {
     pub flood_command: Option<String>,
     #[arg(long, default_value = "block")]
     pub output_queue_policy: String,
-    #[arg(long)]
-    pub multi_session: bool,
-    #[arg(long, default_value_t = 3)]
-    pub sessions: usize,
-    #[arg(long)]
-    pub session_command: Option<String>,
-    #[arg(long, default_value = "spike-local")]
-    pub session_source: String,
     #[arg(long, default_value_t = true)]
     pub detach_on_close: bool,
     #[arg(long)]
@@ -1178,10 +1169,7 @@ fn main() -> iced::Result {
         return workflow::run(args);
     }
 
-    // Multi-session mode
-    if args.multi_session {
-        return multi_session::run(args);
-    }
+    // Multi-session mode removed — workflow subsumes it
 
     // Validate: need one of --replay, --shell, or --command
     if args.replay.is_none() && !args.shell && args.command.is_none() {
