@@ -1,7 +1,7 @@
 <script lang="ts">
   import { git } from "../lib/api";
   import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { FileDiff, type FileContents, type FileDiffOptions, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
   import { isDark } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
@@ -37,6 +37,7 @@
   let diffContainer: HTMLElement;
   let renderer: FileDiff<ReviewComment> | null = null;
   let diffCache = new Map<string, FileDiffData>();
+  let cachedLineNumbers: number[] | null = null;
 
   // Comment input state
   let showCommentInput = $state(false);
@@ -207,6 +208,7 @@
 
   async function loadFileDiff(file: ChangedFile) {
     if (!renderer || !diffContainer) return;
+    cachedLineNumbers = null;
     const cached = diffCache.get(file.path);
     const diff = cached ?? await fetchDiff(file);
     if (!diff) return;
@@ -217,6 +219,7 @@
 
     renderer.setOptions(getThemeConfig());
     renderer.render({ oldFile, newFile, fileContainer: diffContainer, lineAnnotations: annotations });
+    cachedLineNumbers = null; // force re-query after render
   }
 
   async function fetchDiff(file: ChangedFile): Promise<FileDiffData | null> {
@@ -384,22 +387,25 @@
   }
 
   function getVisibleLineNumbers(): number[] {
+    if (cachedLineNumbers) return cachedLineNumbers;
     if (!diffContainer) return [];
     const items = diffContainer.querySelectorAll("[data-additions] [data-column-number]");
+    const seen = new Set<number>();
     const lines: number[] = [];
     for (const el of items) {
       const n = parseInt((el as HTMLElement).dataset.columnNumber ?? "", 10);
-      if (!isNaN(n) && n > 0 && !lines.includes(n)) lines.push(n);
+      if (!isNaN(n) && n > 0 && !seen.has(n)) { seen.add(n); lines.push(n); }
     }
     // Fall back to any gutter column if additions side isn't found (unified mode)
     if (lines.length === 0) {
       const all = diffContainer.querySelectorAll("[data-column-number]");
       for (const el of all) {
         const n = parseInt((el as HTMLElement).dataset.columnNumber ?? "", 10);
-        if (!isNaN(n) && n > 0 && !lines.includes(n)) lines.push(n);
+        if (!isNaN(n) && n > 0 && !seen.has(n)) { seen.add(n); lines.push(n); }
       }
     }
-    return lines.sort((a, b) => a - b);
+    cachedLineNumbers = lines.sort((a, b) => a - b);
+    return cachedLineNumbers;
   }
 
   function moveCursorLine(delta: number) {
@@ -504,10 +510,11 @@
   $effect(() => {
     const dark = isDark();
     const style = diffStyle;
-    if (renderer && mounted && files.length > 0) {
+    if (renderer && mounted) {
+      cachedLineNumbers = null;
       renderer.setOptions({ ...getThemeConfig(), diffStyle: style, themeType: dark ? "dark" : "light" });
       renderer.setThemeType(dark ? "dark" : "light");
-      loadFileDiff(files[selectedIndex]);
+      untrack(() => rerenderDiff());
     }
   });
 
