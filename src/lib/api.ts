@@ -116,6 +116,10 @@ export const git = {
   readFile: (filePath: string) => invoke<string>("read_file", { filePath }),
   writeFile: (filePath: string, content: string) => invoke("write_file", { filePath, content }),
   fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
+  stageLines: (repoPath: string, filePath: string, baseBranch: string, startLine: number, endLine: number) =>
+    invoke("stage_lines", { repoPath, filePath, baseBranch, startLine, endLine }),
+  revertLines: (repoPath: string, filePath: string, baseBranch: string, startLine: number, endLine: number) =>
+    invoke("revert_lines", { repoPath, filePath, baseBranch, startLine, endLine }),
 };
 
 export const notify = {

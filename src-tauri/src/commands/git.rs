@@ -35,3 +35,25 @@ pub fn get_file_diff(
 pub fn detect_default_branch(repo_path: String) -> Result<String, String> {
     git::detect_default_branch(&repo_path)
 }
+
+#[tauri::command]
+pub fn stage_lines(
+    repo_path: String,
+    file_path: String,
+    base_branch: String,
+    start_line: u32,
+    end_line: u32,
+) -> Result<(), String> {
+    git::stage_lines(&repo_path, &file_path, &base_branch, start_line, end_line)
+}
+
+#[tauri::command]
+pub fn revert_lines(
+    repo_path: String,
+    file_path: String,
+    base_branch: String,
+    start_line: u32,
+    end_line: u32,
+) -> Result<(), String> {
+    git::revert_lines(&repo_path, &file_path, &base_branch, start_line, end_line)
+}

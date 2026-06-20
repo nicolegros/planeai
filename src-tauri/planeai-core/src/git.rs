@@ -360,6 +360,190 @@ pub fn detect_language(file_path: &str) -> String {
     .to_string()
 }
 
+/// Stage specific lines of a file by extracting the relevant hunk from the diff
+/// against the base branch and applying it to the index with `git apply --cached`.
+pub fn stage_lines(
+    repo_path: &str,
+    file_path: &str,
+    base_branch: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Result<(), String> {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
+    let diff_output = Command::new("git")
+        .args(["diff", &resolved, "--", file_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !diff_output.status.success() {
+        return Err(String::from_utf8_lossy(&diff_output.stderr).to_string());
+    }
+
+    let full_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
+    if full_diff.is_empty() {
+        return Err("no changes for this file".to_string());
+    }
+
+    let patch = extract_hunk_patch(&full_diff, start_line, end_line)?;
+
+    // Apply the patch to the index (stages the hunk)
+    let mut child = Command::new("git")
+        .args(["apply", "--cached", "--recount", "--allow-empty", "-"])
+        .current_dir(repo_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn git apply: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("failed to write patch: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for git apply: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git apply failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
+}
+
+/// Revert specific lines in the working tree by reversing the hunk from the
+/// diff against the base branch.
+pub fn revert_lines(
+    repo_path: &str,
+    file_path: &str,
+    base_branch: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Result<(), String> {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
+    let diff_output = Command::new("git")
+        .args(["diff", &resolved, "--", file_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !diff_output.status.success() {
+        return Err(String::from_utf8_lossy(&diff_output.stderr).to_string());
+    }
+
+    let full_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
+    if full_diff.is_empty() {
+        return Err("no changes for this file".to_string());
+    }
+
+    let patch = extract_hunk_patch(&full_diff, start_line, end_line)?;
+
+    // Apply the patch in reverse to the working tree
+    let mut child = Command::new("git")
+        .args(["apply", "--reverse", "--recount", "--allow-empty", "-"])
+        .current_dir(repo_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn git apply: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("failed to write patch: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("failed to wait for git apply: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git apply --reverse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(())
+}
+
+/// Extract a patch containing only the hunk whose new-file lines overlap [start_line, end_line].
+/// Keeps the diff header and the matching hunk.
+fn extract_hunk_patch(full_diff: &str, start_line: u32, end_line: u32) -> Result<String, String> {
+    let lines: Vec<&str> = full_diff.lines().collect();
+    // Find the diff header (everything before the first @@ line)
+    let first_hunk_idx = lines
+        .iter()
+        .position(|l| l.starts_with("@@"))
+        .ok_or("no hunks found in diff")?;
+
+    let header = &lines[..first_hunk_idx];
+
+    // Split into hunks (each starting with @@)
+    let mut hunks: Vec<(usize, usize)> = Vec::new();
+    let mut i = first_hunk_idx;
+    while i < lines.len() {
+        if lines[i].starts_with("@@") {
+            let start = i;
+            i += 1;
+            while i < lines.len() && !lines[i].starts_with("@@") {
+                i += 1;
+            }
+            hunks.push((start, i));
+        } else {
+            i += 1;
+        }
+    }
+
+    // Find hunk that overlaps [start_line, end_line] in the new file
+    for &(hunk_start, hunk_end) in &hunks {
+        let hunk_header = lines[hunk_start];
+        if let Some(add_start) = parse_hunk_new_start(hunk_header) {
+            // Count the number of new-file lines in this hunk
+            let mut new_line_count: u32 = 0;
+            for &line in &lines[hunk_start + 1..hunk_end] {
+                if !line.starts_with('-') {
+                    new_line_count += 1;
+                }
+            }
+            let add_end = add_start + new_line_count.saturating_sub(1);
+            // Check overlap
+            if start_line <= add_end && end_line >= add_start {
+                let mut patch = String::new();
+                for &h in header {
+                    patch.push_str(h);
+                    patch.push('\n');
+                }
+                for &l in &lines[hunk_start..hunk_end] {
+                    patch.push_str(l);
+                    patch.push('\n');
+                }
+                return Ok(patch);
+            }
+        }
+    }
+
+    Err("no hunk found overlapping the specified line range".to_string())
+}
+
+/// Parse the new-file start line from a hunk header like `@@ -X,Y +Z,W @@`.
+fn parse_hunk_new_start(header: &str) -> Option<u32> {
+    // Format: @@ -old_start[,old_count] +new_start[,new_count] @@
+    let plus_idx = header.find("+")? + 1;
+    let rest = &header[plus_idx..];
+    let end = rest.find([',', ' '])?;
+    rest[..end].parse().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -773,5 +957,113 @@ mod tests {
             .unwrap();
         let result = detect_default_branch(p.to_str().unwrap()).unwrap();
         assert_eq!(result, "master");
+    }
+
+    #[test]
+    fn stage_lines_stages_hunk_to_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "line1\nline2\nline3\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+
+        // Modify working tree
+        fs::write(p.join("file.txt"), "line1\nmodified\nline3\n").unwrap();
+
+        // Stage just that hunk (line 2 in new file)
+        stage_lines(p.to_str().unwrap(), "file.txt", "main", 1, 3).unwrap();
+
+        // Verify it's staged: git diff --cached should show the change
+        let output = Command::new("git")
+            .args(["diff", "--cached", "--stat"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        let staged = String::from_utf8_lossy(&output.stdout);
+        assert!(staged.contains("file.txt"), "file.txt should be staged");
+    }
+
+    #[test]
+    fn revert_lines_reverts_hunk_in_working_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "line1\nline2\nline3\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+
+        // Modify working tree
+        fs::write(p.join("file.txt"), "line1\nmodified\nline3\n").unwrap();
+
+        // Revert that hunk
+        revert_lines(p.to_str().unwrap(), "file.txt", "main", 1, 3).unwrap();
+
+        // Verify the file is back to original
+        let content = fs::read_to_string(p.join("file.txt")).unwrap();
+        assert_eq!(content, "line1\nline2\nline3\n");
+    }
+
+    #[test]
+    fn stage_lines_errors_when_no_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "clean\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(p)
+            .output()
+            .unwrap();
+
+        let result = stage_lines(p.to_str().unwrap(), "file.txt", "main", 1, 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no changes"));
+    }
+
+    #[test]
+    fn parse_hunk_new_start_parses_correctly() {
+        assert_eq!(parse_hunk_new_start("@@ -1,3 +1,4 @@"), Some(1));
+        assert_eq!(
+            parse_hunk_new_start("@@ -10,5 +12,7 @@ fn main()"),
+            Some(12)
+        );
+        assert_eq!(parse_hunk_new_start("@@ -1 +1,2 @@"), Some(1));
     }
 }

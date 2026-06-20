@@ -29,7 +29,7 @@ build:
 bundle:
 	pnpm install
 	pnpm tauri build -b app
-	@echo "$(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
+	@echo "open $(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
 	@echo "✅ Bundle path copied to clipboard"
 
 open: bundle

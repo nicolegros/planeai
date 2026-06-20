@@ -2,7 +2,7 @@
   import { git } from "../lib/api";
   import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
   import { onMount, onDestroy } from "svelte";
-  import { FileDiff, type FileContents, type FileDiffOptions, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs";
+  import { FileDiff, type FileContents, type FileDiffOptions, type HunkData, type DiffLineAnnotation, type SelectedLineRange, parseDiffFromFile } from "@pierre/diffs";
   import { isDark } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
@@ -26,10 +26,35 @@
   let loading = $state(true);
   let diffStyle = $state<"split" | "unified">("split");
   let sidebarWidth = $state(getLayoutWidth("diff-sidebar", 256));
+  let focusedHunkIndex = $state(0);
 
   let diffContainer: HTMLElement;
   let renderer: FileDiff<ReviewComment> | null = null;
   let diffCache = new Map<string, FileDiffData>();
+  let currentFileDiffMetadata: ReturnType<typeof parseDiffFromFile> | null = null;
+
+  function createHunkSeparator(hunk: HunkData, instance: FileDiff): HTMLElement | null {
+    // Only render buttons above the right (additions) column in split, or in unified
+    if (hunk.type === "deletions") return null;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "hunk-actions flex items-center gap-1 px-2 py-1";
+    wrapper.dataset.hunkIndex = String(hunk.hunkIndex);
+
+    const acceptBtn = document.createElement("button");
+    acceptBtn.className = "hunk-btn accept text-[11px] px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800/60";
+    acceptBtn.textContent = "✓ Accept";
+    acceptBtn.onclick = (e) => { e.stopPropagation(); acceptHunk(hunk.hunkIndex); };
+
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "hunk-btn reject text-[11px] px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800/60";
+    rejectBtn.textContent = "✗ Reject";
+    rejectBtn.onclick = (e) => { e.stopPropagation(); rejectHunk(hunk.hunkIndex); };
+
+    wrapper.appendChild(acceptBtn);
+    wrapper.appendChild(rejectBtn);
+    return wrapper;
+  }
 
   // Comment input state
   let showCommentInput = $state(false);
@@ -95,6 +120,7 @@
       enableLineSelection: true,
       onLineSelected: (range) => { selectedRange = range; },
       renderAnnotation,
+      hunkSeparators: createHunkSeparator,
     };
   }
 
@@ -143,6 +169,100 @@
     if (file) loadFileDiff(file);
   }
 
+  let hunkBusy = $state(false);
+
+  function flashHunk(hunkIndex: number, type: "accept" | "reject") {
+    const el = diffContainer?.querySelector(`[data-hunk-index="${hunkIndex}"]`);
+    if (!el) return;
+    const cls = type === "accept" ? "hunk-flash-accept" : "hunk-flash-reject";
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), 400);
+  }
+
+  async function acceptHunk(hunkIndex: number) {
+    const file = files[selectedIndex];
+    if (!file || !currentFileDiffMetadata || hunkBusy) return;
+    const hunk = currentFileDiffMetadata.hunks[hunkIndex];
+    if (!hunk) return;
+
+    hunkBusy = true;
+    flashHunk(hunkIndex, "accept");
+    try {
+      await git.stageLines(repoPath, file.path, baseBranch, hunk.additionStart, hunk.additionStart + hunk.additionCount - 1);
+      await refreshCurrentFile();
+    } catch (e) {
+      console.error("Failed to accept hunk:", e);
+    }
+    hunkBusy = false;
+  }
+
+  async function rejectHunk(hunkIndex: number) {
+    const file = files[selectedIndex];
+    if (!file || !currentFileDiffMetadata || hunkBusy) return;
+    const hunk = currentFileDiffMetadata.hunks[hunkIndex];
+    if (!hunk) return;
+
+    hunkBusy = true;
+    flashHunk(hunkIndex, "reject");
+    try {
+      await git.revertLines(repoPath, file.path, baseBranch, hunk.additionStart, hunk.additionStart + hunk.additionCount - 1);
+      await refreshCurrentFile();
+    } catch (e) {
+      console.error("Failed to reject hunk:", e);
+    }
+    hunkBusy = false;
+  }
+
+  async function acceptAll() {
+    const file = files[selectedIndex];
+    if (!file || !currentFileDiffMetadata) return;
+    for (let i = currentFileDiffMetadata.hunks.length - 1; i >= 0; i--) {
+      const hunk = currentFileDiffMetadata.hunks[i];
+      try {
+        await git.stageLines(repoPath, file.path, baseBranch, hunk.additionStart, hunk.additionStart + hunk.additionCount - 1);
+      } catch (e) {
+        console.error("Failed to accept hunk:", e);
+        break;
+      }
+    }
+    await refreshCurrentFile();
+  }
+
+  async function rejectAll() {
+    const file = files[selectedIndex];
+    if (!file || !currentFileDiffMetadata) return;
+    for (let i = currentFileDiffMetadata.hunks.length - 1; i >= 0; i--) {
+      const hunk = currentFileDiffMetadata.hunks[i];
+      try {
+        await git.revertLines(repoPath, file.path, baseBranch, hunk.additionStart, hunk.additionStart + hunk.additionCount - 1);
+      } catch (e) {
+        console.error("Failed to reject hunk:", e);
+        break;
+      }
+    }
+    await refreshCurrentFile();
+  }
+
+  async function refreshCurrentFile() {
+    const file = files[selectedIndex];
+    if (!file) return;
+    diffCache.delete(file.path);
+
+    // Re-fetch file list to check if file still has changes
+    const updatedFiles = await git.getChangedFiles(repoPath, baseBranch);
+    files = updatedFiles;
+
+    if (files.length === 0) {
+      currentFileDiffMetadata = null;
+      if (diffContainer) diffContainer.innerHTML = "";
+      return;
+    }
+
+    if (selectedIndex >= files.length) selectedIndex = files.length - 1;
+    await loadFileDiff(files[selectedIndex]);
+    onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
+  }
+
   async function refresh() {
     loading = true;
     diffCache.clear();
@@ -169,6 +289,10 @@
     const oldFile: FileContents = { name: file.old_path || file.path, contents: diff.original };
     const newFile: FileContents = { name: file.path, contents: diff.modified };
     const annotations = getAnnotationsForFile(file.path);
+
+    // Parse metadata for hunk line info
+    currentFileDiffMetadata = parseDiffFromFile(oldFile, newFile);
+    focusedHunkIndex = 0;
 
     renderer.setOptions(getThemeConfig());
     renderer.render({ oldFile, newFile, fileContainer: diffContainer, lineAnnotations: annotations });
@@ -207,10 +331,10 @@
       if (selectedIndex > 0) selectFile(selectedIndex - 1);
     } else if (e.key === "n" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollToHunk("next");
+      navigateHunk("next");
     } else if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollToHunk("prev");
+      navigateHunk("prev");
     } else if (e.key === "u" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       diffStyle = diffStyle === "split" ? "unified" : "split";
@@ -228,24 +352,33 @@
       } else {
         openCommentInput(0, 0, "file");
       }
+    } else if (e.key === "a" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      acceptHunk(focusedHunkIndex);
+    } else if (e.key === "x" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      rejectHunk(focusedHunkIndex);
     }
+  }
+
+  function navigateHunk(direction: "next" | "prev") {
+    if (!currentFileDiffMetadata) return;
+    const maxIndex = currentFileDiffMetadata.hunks.length - 1;
+    if (direction === "next" && focusedHunkIndex < maxIndex) {
+      focusedHunkIndex++;
+    } else if (direction === "prev" && focusedHunkIndex > 0) {
+      focusedHunkIndex--;
+    }
+    scrollToHunk(direction);
   }
 
   function scrollToHunk(direction: "next" | "prev") {
     if (!diffContainer) return;
-    const separators = diffContainer.querySelectorAll("[data-hunk-separator]");
+    const separators = diffContainer.querySelectorAll("[data-hunk-index]");
     if (separators.length === 0) return;
 
-    const containerTop = diffContainer.scrollTop;
-    const items = Array.from(separators);
-
-    if (direction === "next") {
-      const next = items.find((el) => (el as HTMLElement).offsetTop > containerTop + 10);
-      if (next) next.scrollIntoView({ block: "start", behavior: "smooth" });
-    } else {
-      const prev = items.reverse().find((el) => (el as HTMLElement).offsetTop < containerTop - 10);
-      if (prev) prev.scrollIntoView({ block: "start", behavior: "smooth" });
-    }
+    const target = diffContainer.querySelector(`[data-hunk-index="${focusedHunkIndex}"]`);
+    if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
   }
 
   let mounted = false;
@@ -312,6 +445,14 @@
       >Unified</button>
       <div class="flex-1"></div>
       {#if files.length > 0}
+        <button
+          class="text-xs px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800/60"
+          onclick={acceptAll}
+        >Accept All</button>
+        <button
+          class="text-xs px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800/60"
+          onclick={rejectAll}
+        >Reject All</button>
         <button
           class="text-xs px-2 py-0.5 rounded text-surface-500 hover:text-surface-700 dark:hover:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700"
           onclick={() => openCommentInput(0, 0, "file")}
@@ -394,3 +535,20 @@
     </ul>
   </div>
 </div>
+
+<style>
+  :global(.hunk-flash-accept) {
+    animation: flash-green 0.4s ease-out;
+  }
+  :global(.hunk-flash-reject) {
+    animation: flash-red 0.4s ease-out;
+  }
+  @keyframes flash-green {
+    0% { background: rgba(34, 197, 94, 0.3); }
+    100% { background: transparent; }
+  }
+  @keyframes flash-red {
+    0% { background: rgba(239, 68, 68, 0.3); }
+    100% { background: transparent; }
+  }
+</style>

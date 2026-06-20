@@ -289,6 +289,8 @@ fn main() {
             get_changed_files,
             get_file_diff,
             detect_default_branch,
+            stage_lines,
+            revert_lines,
             list_files,
             read_file,
             write_file,
