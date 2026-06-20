@@ -32,7 +32,9 @@ pub fn open_db_at(path: &Path) -> SqlResult<Connection> {
 
 /// Convenience alias — runs project/session migrations only.
 pub fn migrate(conn: &Connection) -> SqlResult<()> {
-    migrate_project_session_schema(conn)
+    migrate_project_session_schema(conn)?;
+    LayoutService::migrate(conn)?;
+    Ok(())
 }
 
 /// Idempotent project/session schema migration — the single source of truth.
@@ -944,4 +946,36 @@ pub struct TaskLaunchResult {
     pub log_path: Option<PathBuf>,
     pub prompt_was_injected: bool,
     pub auto_approve_was_applied: bool,
+}
+
+// ─── Layout persistence ──────────────────────────────────────────────────────
+
+pub struct LayoutService;
+
+impl LayoutService {
+    pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS layout_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn get(conn: &Connection, key: &str, default: f32) -> f32 {
+        conn.query_row(
+            "SELECT value FROM layout_state WHERE key = ?1",
+            [key],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(default)
+    }
+
+    pub fn set(conn: &Connection, key: &str, value: f32) {
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO layout_state (key, value) VALUES (?1, ?2)",
+            rusqlite::params![key, format!("{}", value)],
+        );
+    }
 }

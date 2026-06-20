@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use arboard::Clipboard;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{event, window, Color, Element, Font, Length, Size, Subscription, Theme};
+use iced::{event, window, Color, Element, Length, Size, Subscription, Theme};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;
@@ -223,6 +223,8 @@ enum Message {
     FontLoaded,
     TitleBarDrag,
     TerminalScroll(f32),
+    SidebarItemClicked(usize),
+    SidebarScrolled(iced::widget::scrollable::Viewport),
 }
 
 impl WorkflowApp {
@@ -1591,9 +1593,35 @@ impl WorkflowApp {
             Message::TitleBarDrag => {
                 return window::oldest().and_then(window::drag);
             }
+            Message::SidebarItemClicked(index) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    if let Some(action) = sidebar.handle_click(index) {
+                        match action {
+                            SidebarAction::FocusTerminal => {
+                                self.sidebar_focused = false;
+                            }
+                            SidebarAction::SwitchSession(sid) => {
+                                if let Some(idx) =
+                                    self.sessions.iter().position(|s| s.session_id == sid)
+                                {
+                                    self.switch_to(idx);
+                                } else {
+                                    self.attach_session(sid);
+                                }
+                                self.sidebar_focused = false;
+                            }
+                        }
+                    }
+                }
+            }
             Message::SidebarMouseDown(_) => {
                 if let Some(ref mut sidebar) = self.sidebar {
                     sidebar.handle_mouse_down();
+                }
+            }
+            Message::SidebarScrolled(viewport) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.on_scrolled(viewport);
                 }
             }
             Message::SidebarDrag(x) => {
@@ -1604,7 +1632,10 @@ impl WorkflowApp {
             }
             Message::SidebarDragEnd => {
                 if let Some(ref mut sidebar) = self.sidebar {
-                    sidebar.handle_mouse_up();
+                    if let Some(ref db) = self.db {
+                        let conn = db.lock().unwrap();
+                        sidebar.handle_mouse_up(&conn);
+                    }
                 }
             }
             Message::ProjectInputChanged(val) => {
@@ -2379,6 +2410,9 @@ impl WorkflowApp {
                 // When sidebar is focused, route keys there
                 if self.sidebar_focused {
                     self.handle_sidebar_key(&key);
+                    if let Some(ref sidebar) = self.sidebar {
+                        return sidebar.scroll_to_selected();
+                    }
                     return iced::Task::none();
                 }
                 // Forward input to active session
@@ -2658,7 +2692,12 @@ impl WorkflowApp {
         }
 
         let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
-            sidebar.view(self.sidebar_focused, &self.theme)
+            sidebar.view(
+                self.sidebar_focused,
+                &self.theme,
+                Message::SidebarItemClicked,
+                Message::SidebarScrolled,
+            )
         } else {
             container(left_panel_content)
                 .padding(8)
