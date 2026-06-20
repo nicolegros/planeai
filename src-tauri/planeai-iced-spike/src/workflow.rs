@@ -206,6 +206,7 @@ enum Message {
     FontLoaded,
     TitleBarDrag,
     TerminalScroll(f32),
+    TerminalDataReady,
     SidebarItemClicked(usize),
     SidebarScrolled(iced::widget::scrollable::Viewport),
     CheckSilence,
@@ -1938,6 +1939,29 @@ impl WorkflowApp {
                     }
                 }
             }
+            Message::TerminalDataReady => {
+                if !self.sessions.is_empty() {
+                    let i = self.active;
+                    let session = &mut self.sessions[i];
+                    let mut got_data = false;
+                    loop {
+                        match session.backend.try_read_batch().unwrap_or(None) {
+                            Some(data) => {
+                                got_data = true;
+                                session.bytes_processed += data.len() as u64;
+                                session.terminal.processor.advance(&mut session.terminal.term, &data);
+                            }
+                            None => break,
+                        }
+                    }
+                    if got_data {
+                        if !session.terminal.is_scrolled() {
+                            session.terminal.scroll_to_bottom();
+                        }
+                        session.terminal.update_snapshot(&self.theme.terminal);
+                    }
+                }
+            }
             Message::WindowResized(size) => {
                 let font_size = self.theme.font_size;
                 let (cw, ch) = planeai_iced_spike::font::cell_dimensions(font_size);
@@ -3282,9 +3306,9 @@ impl WorkflowApp {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch(vec![
+        let mut subs = vec![
             keyboard::listen().map(Message::KeyEvent),
-            iced::time::every(Duration::from_millis(8)).map(|_| Message::Poll),
+            iced::time::every(Duration::from_millis(50)).map(|_| Message::Poll),
             // Silence/debounce checker — tick every 1s
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
             // IPC notify listener
@@ -3312,7 +3336,14 @@ impl WorkflowApp {
                 }
                 _ => None,
             }),
-        ])
+        ];
+        // Fast poll for terminal data when sessions exist
+        if !self.sessions.is_empty() {
+            subs.push(
+                iced::time::every(Duration::from_millis(1)).map(|_| Message::TerminalDataReady),
+            );
+        }
+        Subscription::batch(subs)
     }
 }
 
