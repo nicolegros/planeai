@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint docs
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs dogfood bundle-iced open-iced
 
 ci: lint test ## Run lint + tests
 
@@ -52,6 +52,15 @@ dev-bundle:
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
+
+bundle-iced: ## Package iced app as macOS .app
+	cd src-tauri && cargo build --release -p planeai-iced-spike -p planeai
+	$(eval TARGET := $(shell rustc -vV | awk '/^host:/{print $$2}'))
+	cp src-tauri/target/release/planeai-daemon src-tauri/target/release/planeai-daemon-$(TARGET)
+	cd src-tauri/planeai-iced-spike && cargo packager --release --config Packager.toml --formats app
+
+open-iced: bundle-iced ## Bundle and open iced .app
+	open src-tauri/target/release/bundle/planeai.app
 
 docs: ## Run docs site locally
 	cd docs && pnpm dev

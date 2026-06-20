@@ -1,0 +1,26 @@
+# cargo-packager configuration for planeai-iced
+# Identifier will become ca.nicolegros.planeai once iced replaces tauri
+
+name = "planeai-iced-spike"
+product-name = "planeai"
+identifier = "ca.nicolegros.planeai-rs"
+version = "0.1.0"
+description = "AI coding agents in parallel — native Rust UI"
+homepage = "https://github.com/nicolegros/planeai"
+license-file = "../../LICENSE"
+category = "DeveloperTool"
+icons = ["../icons/icon.icns", "../icons/icon.png"]
+out-dir = "../target/release/bundle"
+binaries-dir = "../target/release"
+formats = ["dmg", "app"]
+
+# planeai-daemon is spawned as a subprocess — must live next to the main binary
+external-binaries = ["../target/release/planeai-daemon"]
+
+[[binaries]]
+path = "planeai-iced"
+main = true
+
+[macos]
+minimum-system-version = "12.0"
+# Set APPLE_SIGNING_IDENTITY env var for code signing (CI only)
