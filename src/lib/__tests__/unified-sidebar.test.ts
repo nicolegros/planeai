@@ -208,14 +208,15 @@ describe("unified sidebar logic", () => {
       flatNav.forEach((item, i) => {
         if (item.type === "project_header") map.set(`project:${item.project.id}`, i);
         else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
-        else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
+        else if (item.type === "status_header")
+          map.set(`status:${item.projectPath}:${item.status}`, i);
         else if (item.type === "task") map.set(`task:${item.task.key}`, i);
       });
       return map;
     }
 
     it("includes project_header, orphans, status_header, and tasks in order", () => {
-      const projects = [makeProject("p1", "proj", "/path")];
+      const _projects = [makeProject("p1", "proj", "/path")];
       const sessions = [makeSession("s1", "p1", null), makeSession("s2", "p1", "T-1")];
       const tasks = [makeTask("T-1", "in_progress")];
       const allTaskKeys = new Set(tasks.map((t) => t.key));
@@ -226,7 +227,8 @@ describe("unified sidebar logic", () => {
       for (const s of orphans.filter((s) => s.project_id === "p1"))
         flatNav.push({ type: "orphan", session: { id: s.id } });
       flatNav.push({ type: "status_header", projectPath: "/path", status: "in_progress" });
-      for (const t of tasks) flatNav.push({ type: "task", task: { key: t.key }, projectPath: "/path" });
+      for (const t of tasks)
+        flatNav.push({ type: "task", task: { key: t.key }, projectPath: "/path" });
 
       expect(flatNav[0]).toMatchObject({ type: "project_header" });
       expect(flatNav[1]).toMatchObject({ type: "orphan" });
