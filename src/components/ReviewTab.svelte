@@ -14,6 +14,7 @@
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
+  import { warmHighlighter, prefetchLanguage, queueHighlightWork, buildCacheKey, getCachedHTML, setCachedHTML, invalidateCache } from "../lib/diff-highlight";
 
   interface Props {
     repoPath: string;
@@ -110,8 +111,9 @@
       theme: { dark: "github-dark", light: "github-light" },
       themeType: isDark() ? "dark" : "light",
       disableFileHeader: true,
-      preferredHighlighter: "shiki-js",
+      preferredHighlighter: "shiki-wasm",
       tokenizeMaxLineLength: 1000,
+      tokenizeMaxLength: 5000,
       enableLineSelection: true,
       onLineSelected: (range) => { selectedRange = range; },
       renderAnnotation,
@@ -166,18 +168,31 @@
   async function refresh() {
     loading = true;
     diffCache.clear();
+    invalidateCache();
     try {
       files = await git.getChangedFiles(repoPath, baseBranch);
       if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
       if (files.length > 0) {
         await loadFileDiff(files[selectedIndex]);
         onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
+        // Prefetch adjacent files' language grammars
+        prefetchAdjacentFiles(selectedIndex);
       }
     } catch (e) {
       console.error("Failed to get changed files:", e);
       files = [];
     }
     loading = false;
+  }
+
+  function prefetchAdjacentFiles(index: number) {
+    const theme = { dark: "github-dark", light: "github-light" };
+    const neighbors = [index - 1, index + 1];
+    for (const i of neighbors) {
+      if (i >= 0 && i < files.length) {
+        prefetchLanguage(files[i].path, theme);
+      }
+    }
   }
 
   async function loadFileDiff(file: ChangedFile) {
@@ -212,6 +227,7 @@
     if (file) {
       onFileChange?.(file.path.split("/").pop() || file.path);
       loadFileDiff(file);
+      prefetchAdjacentFiles(index);
     }
   }
 
@@ -290,8 +306,10 @@
   $effect(() => {
     if (visible && !mounted && diffContainer) {
       mounted = true;
-      renderer = new FileDiff(getThemeConfig());
-      refresh();
+      warmHighlighter({ dark: "github-dark", light: "github-light" }).then(() => {
+        renderer = new FileDiff(getThemeConfig());
+        refresh();
+      });
     }
   });
 
