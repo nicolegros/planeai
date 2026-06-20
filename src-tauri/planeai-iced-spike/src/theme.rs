@@ -154,6 +154,21 @@ impl PlaneAiTheme {
             Mode::Light => self.surface.s200,
         }
     }
+
+    /// Convert to an iced `Theme` so all widgets inherit these colors.
+    pub fn to_iced_theme(&self) -> iced::Theme {
+        iced::Theme::custom(
+            String::from("PlaneAI"),
+            iced::theme::Palette {
+                background: self.chrome_bg(),
+                text: self.text_primary(),
+                primary: self.accent(),
+                success: self.accent(),
+                danger: self.error(),
+                warning: self.warning(),
+            },
+        )
+    }
 }
 
 /// Holds both parsed blocks so we can swap mode at runtime without re-reading the file.
