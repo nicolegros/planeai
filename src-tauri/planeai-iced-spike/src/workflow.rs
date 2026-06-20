@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use arboard::Clipboard;
 use iced::keyboard;
 use iced::widget::{column, container, row, text, text_input, Canvas};
-use iced::{event, window, Color, Element, Font, Length, Size, Subscription, Theme};
+use iced::{event, window, Color, Element, Length, Size, Subscription, Theme};
 
 use crate::adapter::PlaneAiTerminalSession;
 use crate::common::*;

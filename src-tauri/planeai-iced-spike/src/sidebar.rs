@@ -435,9 +435,9 @@ impl SidebarState {
                 None
             };
 
-            let bold_font = Font {
-                weight: iced::font::Weight::Bold,
-                ..Font::default()
+            let medium_font = Font {
+                weight: iced::font::Weight::Medium,
+                ..Font::DEFAULT
             };
 
             let chevron: Element<'_, M> = if self.is_collapsed(item) {
@@ -469,7 +469,7 @@ impl SidebarState {
                         .color(color)
                         .wrapping(Wrapping::None);
                     let name_txt = if is_active {
-                        name_txt.font(bold_font)
+                        name_txt.font(medium_font)
                     } else {
                         name_txt
                     };
@@ -527,7 +527,7 @@ impl SidebarState {
                         .color(key_color)
                         .wrapping(Wrapping::None);
                     let key_txt = if is_active {
-                        key_txt.font(bold_font)
+                        key_txt.font(medium_font)
                     } else {
                         key_txt
                     };
@@ -537,7 +537,7 @@ impl SidebarState {
                         .color(color)
                         .wrapping(Wrapping::None);
                     let title_txt = if is_active {
-                        title_txt.font(bold_font)
+                        title_txt.font(medium_font)
                     } else {
                         title_txt
                     };
