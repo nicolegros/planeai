@@ -14,6 +14,7 @@
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
+  import { Dialog } from "bits-ui";
   import { warmHighlighter, prefetchLanguage, queueHighlightWork, buildCacheKey, getCachedHTML, setCachedHTML, invalidateCache } from "../lib/diff-highlight";
 
   interface Props {
@@ -40,6 +41,7 @@
   // Comment input state
   let showCommentInput = $state(false);
   let showHelp = $state(false);
+  let diffFocus = $state<"list" | "body">("list");
   let commentText = $state("");
   let commentStartLine = $state(0);
   let commentEndLine = $state(0);
@@ -118,7 +120,7 @@
       tokenizeMaxLineLength: 1000,
       tokenizeMaxLength: 5000,
       enableLineSelection: true,
-      onLineSelected: (range) => { selectedRange = range; },
+      onLineSelected: (range) => { selectedRange = range; diffFocus = "body"; cursorLine = range.start; },
       renderAnnotation,
     };
   }
@@ -144,6 +146,7 @@
       text,
     });
     cancelComment();
+    clearSelection();
     rerenderDiff();
   }
 
@@ -233,6 +236,7 @@
     cursorLine = 1;
     selectionAnchor = null;
     selectedRange = null;
+    renderer?.setSelectedLines(null);
     const file = files[index];
     if (file) {
       onFileChange?.(file.path.split("/").pop() || file.path);
@@ -252,70 +256,131 @@
 
     if (showCommentInput) return; // let textarea handle keys
 
-    if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
+    // ─── Global keys (both modes) ─────────────────────────────────────
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
       e.preventDefault();
-      if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
-    } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
+      showHelp = !showHelp;
+      return;
+    }
+    if ((e.key === "n" && e.ctrlKey && !e.metaKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
       e.preventDefault();
-      if (selectedIndex > 0) selectFile(selectedIndex - 1);
-    } else if (e.key === "]" && !e.metaKey && !e.ctrlKey) {
+      if (selectedIndex < files.length - 1) navigateFile(selectedIndex + 1);
+      return;
+    }
+    if ((e.key === "p" && e.ctrlKey && !e.metaKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
       e.preventDefault();
-      if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
-    } else if (e.key === "[" && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      if (selectedIndex > 0) selectFile(selectedIndex - 1);
-    } else if (e.key === "n" && !e.metaKey && !e.ctrlKey) {
+      if (selectedIndex > 0) navigateFile(selectedIndex - 1);
+      return;
+    }
+    if (e.key === "]" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       scrollToHunk("next");
-    } else if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
+      return;
+    }
+    if (e.key === "[" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       scrollToHunk("prev");
-    } else if (e.key === "J" && !e.metaKey && !e.ctrlKey) {
+      return;
+    }
+    if (e.key === "u" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      diffStyle = diffStyle === "split" ? "unified" : "split";
+      return;
+    }
+    if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      refresh();
+      cursorLine = 1;
+      return;
+    }
+    if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) {
+      e.preventDefault();
+      onEditFile?.(files[selectedIndex].path);
+      return;
+    }
+
+    // ─── List mode ────────────────────────────────────────────────────
+    if (diffFocus === "list") {
+      if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault();
+        if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
+      } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault();
+        if (selectedIndex > 0) selectFile(selectedIndex - 1);
+      } else if (e.key === "Enter" && !e.metaKey) {
+        e.preventDefault();
+        diffFocus = "body";
+        cursorLine = 1;
+        showCursor();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        if (showHelp) showHelp = false;
+      }
+      return;
+    }
+
+    // ─── Body mode ────────────────────────────────────────────────────
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (showHelp) { showHelp = false; return; }
+      if (selectionAnchor !== null) { clearSelection(); return; }
+      diffFocus = "list";
+      clearSelection();
+      return;
+    }
+    if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
       e.preventDefault();
       moveCursorLine(1);
-    } else if (e.key === "K" && !e.metaKey && !e.ctrlKey) {
+    } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
       e.preventDefault();
+      moveCursorLine(-1);
+    } else if (e.key === "ArrowDown" && e.shiftKey) {
+      e.preventDefault();
+      if (selectionAnchor === null) selectionAnchor = cursorLine;
+      moveCursorLine(1);
+    } else if (e.key === "ArrowUp" && e.shiftKey) {
+      e.preventDefault();
+      if (selectionAnchor === null) selectionAnchor = cursorLine;
       moveCursorLine(-1);
     } else if (e.key === "v" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       toggleSelectionMode();
     } else if (e.key === "d" && !e.metaKey && !e.ctrlKey || e.key === "f" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollDiff("page-down");
+      moveCursorLine(Math.floor((diffContainer?.clientHeight ?? 400) / 40));
     } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollDiff("page-up");
+      moveCursorLine(-Math.floor((diffContainer?.clientHeight ?? 400) / 40));
     } else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      scrollDiff("top");
+      cursorLine = 1;
+      moveCursorLine(0);
     } else if (e.key === "G" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollDiff("bottom");
-    } else if (e.key === "u" && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      diffStyle = diffStyle === "split" ? "unified" : "split";
-    } else if (e.key === "r" && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      refresh();
-    } else if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) {
-      e.preventDefault();
-      onEditFile?.(files[selectedIndex].path);
+      cursorLine = 99999;
+      moveCursorLine(0);
     } else if (e.key === "c" && !e.metaKey && !e.ctrlKey && files.length > 0) {
       e.preventDefault();
       if (selectedRange) {
         const type = selectedRange.start === selectedRange.end ? "line" : "hunk";
         openCommentInput(selectedRange.start, selectedRange.end, type);
       } else {
-        openCommentInput(0, 0, "file");
+        openCommentInput(cursorLine, cursorLine, "line");
       }
-    } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
-      e.preventDefault();
-      showHelp = !showHelp;
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      if (showHelp) showHelp = false;
-      else if (selectionAnchor !== null) clearSelection();
     }
+  }
+
+  function navigateFile(index: number) {
+    selectFile(index);
+    if (diffFocus === "body") {
+      cursorLine = 1;
+      requestAnimationFrame(() => showCursor());
+    }
+  }
+
+  function showCursor() {
+    renderer?.setSelectedLines({ start: cursorLine, end: cursorLine, side: "additions" }, { scroll: true });
+    selectedRange = { start: cursorLine, end: cursorLine, side: "additions" };
   }
 
   function moveCursorLine(delta: number) {
@@ -347,19 +412,6 @@
     selectionAnchor = null;
     selectedRange = null;
     renderer?.setSelectedLines(null);
-  }
-
-  function scrollDiff(action: "line-up" | "line-down" | "page-up" | "page-down" | "top" | "bottom") {
-    if (!diffContainer) return;
-    const lineHeight = 20;
-    switch (action) {
-      case "line-up": diffContainer.scrollTop -= lineHeight; break;
-      case "line-down": diffContainer.scrollTop += lineHeight; break;
-      case "page-up": diffContainer.scrollTop -= diffContainer.clientHeight * 0.8; break;
-      case "page-down": diffContainer.scrollTop += diffContainer.clientHeight * 0.8; break;
-      case "top": diffContainer.scrollTop = 0; break;
-      case "bottom": diffContainer.scrollTop = diffContainer.scrollHeight; break;
-    }
   }
 
   function scrollToHunk(direction: "next" | "prev") {
@@ -497,30 +549,41 @@
       </div>
     {/if}
 
-    <diffs-container bind:this={diffContainer} class="absolute inset-0 top-8 overflow-auto" style="display:block"></diffs-container>
+    <diffs-container bind:this={diffContainer} class="absolute inset-0 top-8 overflow-auto {diffFocus === 'body' ? 'ring-1 ring-primary-400/40 ring-inset' : ''}" style="display:block"></diffs-container>
     {#if showHelp}
-      <div class="absolute inset-0 top-8 z-30 flex items-center justify-center bg-black/60" onclick={() => (showHelp = false)} role="presentation">
-        <div class="bg-surface-50 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-lg p-4 shadow-lg max-w-sm text-xs text-surface-700 dark:text-surface-300 space-y-2">
-          <h3 class="font-semibold text-sm text-surface-900 dark:text-surface-100 mb-2">Keyboard Shortcuts</h3>
-          <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k</kbd><span>Previous / next file</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">[/]</kbd><span>Previous / next file</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">n/p</kbd><span>Next / previous hunk</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">J/K</kbd><span>Move line cursor down / up</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">v</kbd><span>Start / stop line selection</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">d/f</kbd><span>Page down</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">b</kbd><span>Page up</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">g/G</kbd><span>Top / bottom</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">u</kbd><span>Toggle split / unified</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Comment on selection</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">e</kbd><span>Edit file</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">r</kbd><span>Refresh</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">⌘↵</kbd><span>Send feedback</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">Esc</kbd><span>Clear selection</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">?</kbd><span>Toggle this help</span>
-          </div>
-        </div>
-      </div>
+      <Dialog.Root open={showHelp} onOpenChange={(v) => (showHelp = v)}>
+        <Dialog.Portal>
+          <Dialog.Content
+            class="fixed left-1/2 top-1/2 z-50 w-full max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+          >
+            <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-3">Review Shortcuts</Dialog.Title>
+            <div class="text-xs text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">List mode</div>
+            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300 mb-3">
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k ↓/↑</kbd><span>Navigate files</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Enter</kbd><span>Focus diff body</span>
+            </div>
+            <div class="text-xs text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">Body mode</div>
+            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300 mb-3">
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k ↓/↑</kbd><span>Move cursor</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Shift+↓/↑</kbd><span>Extend selection</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">v</kbd><span>Toggle visual select</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">d/f  b</kbd><span>Half-page ↓ / ↑</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">g / G</kbd><span>Top / bottom</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Comment on selection</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Esc</kbd><span>Back to list</span>
+            </div>
+            <div class="text-xs text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">Both modes</div>
+            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300">
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Ctrl+n/p</kbd><span>Next / prev file</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">] / [</kbd><span>Next / prev hunk</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">u</kbd><span>Split / unified</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">e</kbd><span>Edit file</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">r</kbd><span>Refresh</span>
+              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">⌘↵</kbd><span>Send feedback</span>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     {/if}
     {#if loading && files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
@@ -529,7 +592,7 @@
     {/if}
   </div>
 
-  <div class="relative shrink-0 border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-y-auto" style:width="{sidebarWidth}px">
+  <div class="relative shrink-0 border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-y-auto transition-opacity {diffFocus === 'body' ? 'opacity-60' : ''}" style:width="{sidebarWidth}px">
     <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={256} onResizeEnd={(w) => setLayoutWidth("diff-sidebar", w)} />
     <div class="px-3 py-2 text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wider border-b border-surface-200 dark:border-surface-800">
       Changed files ({files.length})
