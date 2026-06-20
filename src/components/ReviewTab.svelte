@@ -46,6 +46,8 @@
   let commentType = $state<"line" | "hunk" | "file">("line");
   let selectedRange = $state<SelectedLineRange | null>(null);
   let commentInputEl: HTMLTextAreaElement | undefined;
+  let cursorLine = $state(1);
+  let selectionAnchor = $state<number | null>(null);
 
   // Reactive comment count for badge
   let totalCount = $derived(getTotalCommentCount(sessionId));
@@ -228,6 +230,9 @@
   function selectFile(index: number) {
     selectedIndex = index;
     showCommentInput = false;
+    cursorLine = 1;
+    selectionAnchor = null;
+    selectedRange = null;
     const file = files[index];
     if (file) {
       onFileChange?.(file.path.split("/").pop() || file.path);
@@ -267,10 +272,13 @@
       scrollToHunk("prev");
     } else if (e.key === "J" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollDiff("line-down");
+      moveCursorLine(1);
     } else if (e.key === "K" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      scrollDiff("line-up");
+      moveCursorLine(-1);
+    } else if (e.key === "v" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      toggleSelectionMode();
     } else if (e.key === "d" && !e.metaKey && !e.ctrlKey || e.key === "f" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       scrollDiff("page-down");
@@ -306,7 +314,39 @@
     } else if (e.key === "Escape") {
       e.preventDefault();
       if (showHelp) showHelp = false;
+      else if (selectionAnchor !== null) clearSelection();
     }
+  }
+
+  function moveCursorLine(delta: number) {
+    cursorLine = Math.max(1, cursorLine + delta);
+    if (selectionAnchor !== null) {
+      const start = Math.min(selectionAnchor, cursorLine);
+      const end = Math.max(selectionAnchor, cursorLine);
+      selectedRange = { start, end, side: "additions" };
+      renderer?.setSelectedLines({ start, end, side: "additions" }, { scroll: true });
+    } else {
+      selectedRange = { start: cursorLine, end: cursorLine, side: "additions" };
+      renderer?.setSelectedLines({ start: cursorLine, end: cursorLine, side: "additions" }, { scroll: true });
+    }
+  }
+
+  function toggleSelectionMode() {
+    if (selectionAnchor !== null) {
+      // Already in selection mode — exit but keep the range
+      selectionAnchor = null;
+    } else {
+      // Enter selection mode at cursor
+      selectionAnchor = cursorLine;
+      selectedRange = { start: cursorLine, end: cursorLine, side: "additions" };
+      renderer?.setSelectedLines({ start: cursorLine, end: cursorLine, side: "additions" });
+    }
+  }
+
+  function clearSelection() {
+    selectionAnchor = null;
+    selectedRange = null;
+    renderer?.setSelectedLines(null);
   }
 
   function scrollDiff(action: "line-up" | "line-down" | "page-up" | "page-down" | "top" | "bottom") {
@@ -466,15 +506,17 @@
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k</kbd><span>Previous / next file</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">[/]</kbd><span>Previous / next file</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">n/p</kbd><span>Next / previous hunk</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">J/K</kbd><span>Scroll line down / up</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">J/K</kbd><span>Move line cursor down / up</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">v</kbd><span>Start / stop line selection</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">d/f</kbd><span>Page down</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">b</kbd><span>Page up</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">g/G</kbd><span>Top / bottom</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">u</kbd><span>Toggle split / unified</span>
-            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Add comment</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Comment on selection</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">e</kbd><span>Edit file</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">r</kbd><span>Refresh</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">⌘↵</kbd><span>Send feedback</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">Esc</kbd><span>Clear selection</span>
             <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">?</kbd><span>Toggle this help</span>
           </div>
         </div>
