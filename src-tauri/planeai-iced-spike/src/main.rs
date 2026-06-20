@@ -7,7 +7,7 @@ pub mod components;
 pub mod daemon_session;
 pub mod input;
 pub mod planeai_local;
-pub mod project_form;
+pub mod forms;
 pub mod shell;
 pub mod sidebar;
 pub mod terminal_view;
