@@ -282,6 +282,157 @@ pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
 
 // ─── Hook installation ───────────────────────────────────────────────────────
 
+/// Install all notification hooks for providers found on this system.
+pub fn install_all_hooks(home: &str) -> Result<(), String> {
+    let kiro_dir = std::path::Path::new(home).join(".kiro");
+    if kiro_dir.exists() {
+        install_kiro_hook(home)?;
+    }
+    let claude_dir = std::path::Path::new(home).join(".claude");
+    if claude_dir.exists() {
+        install_claude_hook(home)?;
+    }
+    install_copilot_hook(home)?;
+    Ok(())
+}
+
+pub fn install_kiro_hook(home: &str) -> Result<(), String> {
+    let hooks_dir = format!("{home}/.kiro/hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.sh"),
+        include_str!("../resources/planeai-stop-notify.sh"),
+    );
+    #[cfg(windows)]
+    let (script_path, script_content) = (
+        format!("{hooks_dir}/planeai-stop-notify.ps1"),
+        include_str!("../resources/planeai-stop-notify.ps1"),
+    );
+
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    let agents_dir = format!("{home}/.kiro/agents");
+    std::fs::create_dir_all(&agents_dir)
+        .map_err(|e| format!("failed to create agents dir: {e}"))?;
+    let config_path = format!("{agents_dir}/default.json");
+
+    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse default.json: {e}"))?
+    } else {
+        serde_json::json!({ "name": "default", "tools": ["*"] })
+    };
+
+    #[cfg(not(windows))]
+    let hook_command = format!("{hooks_dir}/planeai-stop-notify.sh");
+    #[cfg(windows)]
+    let hook_command =
+        format!("powershell -NoProfile -File \"{hooks_dir}/planeai-stop-notify.ps1\"");
+
+    let hooks = config
+        .as_object_mut()
+        .unwrap()
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    let hooks_obj = hooks.as_object_mut().unwrap();
+
+    let mut ensure_hook = |event: &str| {
+        let arr = hooks_obj
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+        let arr = arr.as_array_mut().unwrap();
+        let already = arr.iter().any(|h| {
+            h.get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("planeai-stop-notify"))
+        });
+        if !already {
+            arr.push(serde_json::json!({ "command": hook_command }));
+        }
+    };
+
+    ensure_hook("stop");
+    ensure_hook("userPromptSubmit");
+
+    let output = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, output)
+        .map_err(|e| format!("failed to write default.json: {e}"))?;
+    Ok(())
+}
+
+pub fn install_claude_hook(home: &str) -> Result<(), String> {
+    let claude_dir = std::path::PathBuf::from(format!("{home}/.claude"));
+    let hooks_dir = claude_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (script_path, script_content) = (
+        hooks_dir.join("planeai-stop-notify-claude.sh"),
+        include_str!("../resources/planeai-stop-notify-claude.sh"),
+    );
+    #[cfg(windows)]
+    let (script_path, script_content) = (
+        hooks_dir.join("planeai-stop-notify-claude.ps1"),
+        include_str!("../resources/planeai-stop-notify-claude.ps1"),
+    );
+
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    let script_command = script_path.to_string_lossy().to_string();
+    install_claude_hook_at(&claude_dir, &script_command)
+}
+
+pub fn install_copilot_hook(home: &str) -> Result<(), String> {
+    let copilot_dir = std::env::var("COPILOT_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.copilot")));
+    let hooks_dir = copilot_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir).map_err(|e| format!("failed to create hooks dir: {e}"))?;
+
+    #[cfg(not(windows))]
+    let (bash_path, bash_content) = (
+        hooks_dir.join("planeai-stop-notify-copilot.sh"),
+        include_str!("../resources/planeai-stop-notify-copilot.sh"),
+    );
+    #[cfg(not(windows))]
+    {
+        std::fs::write(&bash_path, bash_content)
+            .map_err(|e| format!("failed to write hook script: {e}"))?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bash_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("failed to chmod hook: {e}"))?;
+    }
+
+    #[cfg(windows)]
+    let bash_path = hooks_dir.join("planeai-stop-notify-copilot.sh");
+
+    let ps_path = hooks_dir.join("planeai-stop-notify-copilot.ps1");
+    let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
+    std::fs::write(&ps_path, ps_content)
+        .map_err(|e| format!("failed to write hook script: {e}"))?;
+
+    install_copilot_hook_at(
+        &copilot_dir,
+        &bash_path.to_string_lossy(),
+        &ps_path.to_string_lossy(),
+    )
+}
+
 pub fn install_copilot_hook_at(
     copilot_dir: &Path,
     bash_script: &str,

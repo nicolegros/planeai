@@ -8,10 +8,12 @@ use planeai::ipc::{Channel, IpcListener};
 
 // Re-export shared types from planeai-core
 pub use planeai_core::notify::{
-    install_claude_hook_at, install_copilot_hook_at, is_claude_hook_installed_at,
-    is_copilot_hook_installed_at, is_kiro_hook_installed_at, parse_notify_message, AgentState,
-    NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
+    is_claude_hook_installed_at, is_copilot_hook_installed_at, is_kiro_hook_installed_at,
+    parse_notify_message, AgentState, NotifyEvent, NotifyMessage, NotifyState, SharedNotifyState,
 };
+// Used in tests
+#[cfg(test)]
+pub(crate) use planeai_core::notify::{install_claude_hook_at, install_copilot_hook_at};
 
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 

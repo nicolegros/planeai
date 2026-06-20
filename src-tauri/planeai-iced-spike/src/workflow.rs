@@ -1949,25 +1949,7 @@ impl WorkflowApp {
             }
             Message::InstallHooks => {
                 let home = std::env::var("HOME").unwrap_or_default();
-                // Install all hooks via the shared planeai-core functions
-                let _ = planeai_core::notify::install_claude_hook_at(
-                    &std::path::PathBuf::from(&home).join(".claude"),
-                    &format!("{home}/.claude/hooks/planeai-stop-notify-claude.sh"),
-                );
-                let copilot_dir = std::env::var("COPILOT_HOME")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from(&home).join(".copilot"));
-                let _ = planeai_core::notify::install_copilot_hook_at(
-                    &copilot_dir,
-                    &format!(
-                        "{}/hooks/planeai-stop-notify-copilot.sh",
-                        copilot_dir.display()
-                    ),
-                    &format!(
-                        "{}/hooks/planeai-stop-notify-copilot.ps1",
-                        copilot_dir.display()
-                    ),
-                );
+                let _ = planeai_core::notify::install_all_hooks(&home);
                 self.show_hook_banner = false;
             }
             Message::DismissHookBanner => {
