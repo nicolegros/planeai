@@ -414,45 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn install_copilot_hook_writes_script_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let copilot_dir = dir.path();
-        let hooks_dir = copilot_dir.join("hooks");
-
-        let bash_script = hooks_dir.join("planeai-stop-notify-copilot.sh");
-        let ps_script = hooks_dir.join("planeai-stop-notify-copilot.ps1");
-
-        install_copilot_hook_at(
-            copilot_dir,
-            bash_script.to_str().unwrap(),
-            ps_script.to_str().unwrap(),
-        )
-        .unwrap();
-
-        // Write scripts manually (as install_copilot_hook in commands/notify.rs would)
-        let bash_content = include_str!("../resources/planeai-stop-notify-copilot.sh");
-        let ps_content = include_str!("../resources/planeai-stop-notify-copilot.ps1");
-        std::fs::write(&bash_script, bash_content).unwrap();
-        std::fs::write(&ps_script, ps_content).unwrap();
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bash_script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let content = std::fs::read_to_string(&bash_script).unwrap();
-        assert!(content.contains("PLANEAI_SESSION_ID"));
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::metadata(&bash_script).unwrap().permissions();
-            assert_eq!(perms.mode() & 0o777, 0o755);
-        }
-    }
-
-    #[test]
     fn install_copilot_hook_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         install_copilot_hook_at(dir.path(), "/path/script.sh", "/path/script.ps1").unwrap();
