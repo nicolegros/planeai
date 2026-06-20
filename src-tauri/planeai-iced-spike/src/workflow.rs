@@ -508,7 +508,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: self.agent_command.clone(),
@@ -519,8 +519,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 self.refresh_persisted_sessions();
             }
             Err(e) => {
@@ -585,7 +583,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: command.to_string(),
@@ -596,8 +594,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], command);
                 self.clear_error();
                 self.refresh_persisted_sessions();
             }
@@ -622,7 +618,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: "attached".to_string(),
@@ -633,8 +629,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 // Touch MRU for newly attached session
                 self.mru.retain(|id| id != &session_id);
                 self.mru.insert(0, session_id);
@@ -886,7 +880,7 @@ impl WorkflowApp {
             Ok(backend) => {
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id: session_id.clone(),
                     command: self.agent_command.clone(),
@@ -897,8 +891,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
-                self.register_notify_session(&session_id, &session_id[..8], &self.agent_command);
                 self.worktree_prompt = false;
                 self.worktree_branch_input.clear();
                 self.worktree_task_key_input.clear();
@@ -1240,9 +1232,7 @@ impl WorkflowApp {
                 }
                 let terminal = TerminalView::new(self.cols, self.rows);
                 let log_file_exists = self.check_log_exists(&session_id);
-                let sid_for_notify = session_id.clone();
-                let cmd_for_notify = cmd.clone();
-                self.sessions.push(Session {
+                self.push_session(Session {
                     id,
                     session_id,
                     command: cmd,
@@ -1253,12 +1243,6 @@ impl WorkflowApp {
                     bytes_processed: 0,
                     log_file_exists,
                 });
-                self.active = self.sessions.len() - 1;
-                self.register_notify_session(
-                    &sid_for_notify,
-                    &sid_for_notify[..8],
-                    &cmd_for_notify,
-                );
                 self.session_form = false;
                 self.clear_error();
                 self.refresh_persisted_sessions();
@@ -1500,6 +1484,15 @@ impl WorkflowApp {
             project_name,
             hook_enabled,
         );
+    }
+
+    fn push_session(&mut self, session: Session) {
+        let sid = session.session_id.clone();
+        let cmd = session.command.clone();
+        let name = if sid.len() >= 8 { &sid[..8] } else { &sid };
+        self.sessions.push(session);
+        self.active = self.sessions.len() - 1;
+        self.register_notify_session(&sid, name, &cmd);
     }
 
     fn fire_notification(&self, session_id: &str) {
