@@ -277,8 +277,15 @@
     }
   }
 
-  // Window focus refresh
-  function onWindowFocus() { taskStore.refresh(projects.map(p => p.path)); }
+  // Window focus refresh (debounced to avoid IPC storms from rapid alt-tabbing)
+  let lastFocusRefresh = 0;
+  const FOCUS_REFRESH_COOLDOWN_MS = 5000;
+  function onWindowFocus() {
+    const now = Date.now();
+    if (now - lastFocusRefresh < FOCUS_REFRESH_COOLDOWN_MS) return;
+    lastFocusRefresh = now;
+    taskStore.refresh(projects.map(p => p.path));
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
