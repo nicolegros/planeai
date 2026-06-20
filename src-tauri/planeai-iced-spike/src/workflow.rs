@@ -203,6 +203,8 @@ struct WorkflowApp {
     // Notify / agent state
     notify_state: planeai_core::notify::SharedNotifyState,
     agent_states: std::collections::HashMap<String, planeai_core::notify::AgentState>,
+    // Hook install banner
+    show_hook_banner: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +238,8 @@ enum Message {
     },
     CheckSilence,
     NotifyIpcMessage(planeai_core::notify::NotifyMessage),
+    InstallHooks,
+    DismissHookBanner,
 }
 
 impl WorkflowApp {
@@ -414,6 +418,20 @@ impl WorkflowApp {
                 theme: theme::default_dark_theme(),
                 notify_state: Arc::new(Mutex::new(planeai_core::notify::NotifyState::new())),
                 agent_states: std::collections::HashMap::new(),
+                show_hook_banner: {
+                    // Check if any hooks need installation
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let kiro_ok = planeai_core::notify::is_kiro_hook_installed_at(
+                        &std::path::PathBuf::from(&home).join(".kiro/agents/default.json"),
+                    );
+                    let claude_ok = planeai_core::notify::is_claude_hook_installed_at(
+                        &std::path::PathBuf::from(&home).join(".claude/settings.json"),
+                    );
+                    // Show banner if either is missing (and the tool is likely installed)
+                    let kiro_exists = std::path::Path::new(&format!("{home}/.kiro")).exists();
+                    let claude_exists = std::path::Path::new(&format!("{home}/.claude")).exists();
+                    (kiro_exists && !kiro_ok) || (claude_exists && !claude_ok)
+                },
             },
             planeai_iced_spike::font::font_load_task().map(|_| Message::FontLoaded),
         );
@@ -1860,6 +1878,26 @@ impl WorkflowApp {
             Message::FontLoaded => {}
             Message::AgentStateChanged { session_id, state } => {
                 self.agent_states.insert(session_id, state);
+            }
+            Message::InstallHooks => {
+                let home = std::env::var("HOME").unwrap_or_default();
+                // Install all hooks via the shared planeai-core functions
+                let _ = planeai_core::notify::install_claude_hook_at(
+                    &std::path::PathBuf::from(&home).join(".claude"),
+                    &format!("{home}/.claude/hooks/planeai-stop-notify-claude.sh"),
+                );
+                let copilot_dir = std::env::var("COPILOT_HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(&home).join(".copilot"));
+                let _ = planeai_core::notify::install_copilot_hook_at(
+                    &copilot_dir,
+                    &format!("{}/hooks/planeai-stop-notify-copilot.sh", copilot_dir.display()),
+                    &format!("{}/hooks/planeai-stop-notify-copilot.ps1", copilot_dir.display()),
+                );
+                self.show_hook_banner = false;
+            }
+            Message::DismissHookBanner => {
+                self.show_hook_banner = false;
             }
             Message::CheckSilence => {
                 let mut to_notify: Vec<(String, planeai_core::notify::AgentState)> = Vec::new();
@@ -3429,6 +3467,34 @@ impl WorkflowApp {
             Message::TitleBarDrag,
         );
         let base: Element<'_, Message> = column![title_bar, base].into();
+
+        // Hook install banner
+        let base: Element<'_, Message> = if self.show_hook_banner {
+            let banner = container(
+                row![
+                    text("⚠ Notification hooks not installed — agents won't signal when ready.")
+                        .size(12)
+                        .color(self.theme.warning_text()),
+                    iced::widget::button(text("Install").size(12))
+                        .on_press(Message::InstallHooks)
+                        .padding([2, 8]),
+                    iced::widget::button(text("✕").size(12))
+                        .on_press(Message::DismissHookBanner)
+                        .padding([2, 4]),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .padding([4, 12])
+            .style(move |_: &Theme| container::Style {
+                background: Some(self.theme.warning_bg().into()),
+                ..Default::default()
+            });
+            column![banner, base].into()
+        } else {
+            base
+        };
 
         if self.show_shortcuts {
             use iced::widget::stack;
