@@ -20,9 +20,16 @@ use crate::common::*;
 use crate::daemon_session::DaemonSessionInfo;
 use crate::input;
 use crate::shell::{QueuePolicy, Shell};
+use crate::sidebar::{SidebarAction, SidebarState};
 use crate::Args;
 
 static MULTI_ARGS: OnceLock<Args> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Zone {
+    Terminal,
+    Sidebar,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum SessionStatus {
@@ -71,6 +78,12 @@ struct MultiApp {
     ui_bytes_drained_total: u64,
     // Shortcuts overlay
     show_shortcuts: bool,
+    // Focus zone
+    zone: Zone,
+    // Sidebar
+    sidebar: Option<SidebarState>,
+    sidebar_db_conn: Option<rusqlite::Connection>,
+    last_sidebar_refresh: Option<Instant>,
     // Daemon lifecycle
     daemon_connected: bool,
     daemon_sessions_listed: Vec<DaemonSessionInfo>,
@@ -234,6 +247,10 @@ impl MultiApp {
                 daemon_connected,
                 daemon_sessions_listed,
                 show_shortcuts: false,
+                zone: Zone::Terminal,
+                sidebar: None,
+                sidebar_db_conn: None,
+                last_sidebar_refresh: None,
                 detach_on_close,
                 kill_on_close,
                 last_health_check: None,
@@ -386,6 +403,23 @@ impl MultiApp {
                 "timestamp_ms": ts_ms(&self.boot_instant),
                 "count": self.daemon_sessions_listed.len(),
             }));
+        }
+    }
+
+    fn refresh_sidebar(&mut self) {
+        // Lazy init DB connection
+        if self.sidebar_db_conn.is_none() {
+            if let Ok(conn) = planeai_core::services::open_db() {
+                self.sidebar_db_conn = Some(conn);
+            }
+        }
+        if let Some(ref conn) = self.sidebar_db_conn {
+            let db_path = planeai_core::app_data_dir().join("planeai.db");
+            if let Some(ref mut sidebar) = self.sidebar {
+                sidebar.refresh(conn);
+            } else {
+                self.sidebar = Some(SidebarState::new(conn, &db_path));
+            }
         }
     }
 
@@ -683,6 +717,47 @@ impl MultiApp {
                     }
                     return;
                 }
+                // Zone-based routing: Escape toggles sidebar focus
+                if self.zone == Zone::Terminal
+                    && matches!(key, keyboard::Key::Named(keyboard::key::Named::Escape))
+                {
+                    self.zone = Zone::Sidebar;
+                    return;
+                }
+                // When sidebar is focused, route keys there
+                if self.zone == Zone::Sidebar {
+                    let key_str = match &key {
+                        keyboard::Key::Named(keyboard::key::Named::ArrowDown) => "ArrowDown",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowUp) => "ArrowUp",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => "ArrowLeft",
+                        keyboard::Key::Named(keyboard::key::Named::ArrowRight) => "ArrowRight",
+                        keyboard::Key::Named(keyboard::key::Named::Enter) => "Enter",
+                        keyboard::Key::Named(keyboard::key::Named::Escape) => "Escape",
+                        keyboard::Key::Character(c) => c.as_str(),
+                        _ => "",
+                    };
+                    if !key_str.is_empty() {
+                        if let Some(ref mut sidebar) = self.sidebar {
+                            if let Some(action) = sidebar.handle_key(key_str) {
+                                match action {
+                                    SidebarAction::FocusTerminal => {
+                                        self.zone = Zone::Terminal;
+                                    }
+                                    SidebarAction::SwitchSession(sid) => {
+                                        // Find matching terminal session by daemon_session_id
+                                        if let Some(idx) = self.sessions.iter().position(|s| {
+                                            s.daemon_session_id.as_deref() == Some(&sid)
+                                        }) {
+                                            self.switch_to(idx);
+                                        }
+                                        self.zone = Zone::Terminal;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
                 // Input to active session
                 let bytes = input::encode_key_event(&key, &modifiers, &txt);
                 if let Some(ref b) = bytes {
@@ -693,10 +768,25 @@ impl MultiApp {
             }
             Message::KeyEvent(_) => {}
             Message::Poll => {
-                if self.done || self.sessions.is_empty() {
+                if self.done {
                     return;
                 }
                 let now = Instant::now();
+
+                // Sidebar: lazy init and periodic refresh (every 2s)
+                // Runs even with 0 sessions so the sidebar always appears.
+                let should_refresh_sidebar = self
+                    .last_sidebar_refresh
+                    .map(|t| now.duration_since(t) >= Duration::from_secs(2))
+                    .unwrap_or(true);
+                if should_refresh_sidebar {
+                    self.refresh_sidebar();
+                    self.last_sidebar_refresh = Some(now);
+                }
+
+                if self.sessions.is_empty() {
+                    return;
+                }
                 if let Some(prev) = self.last_frame_instant {
                     let delta = now.duration_since(prev).as_secs_f64() * 1000.0;
                     self.frame_deltas.push(delta);
@@ -978,12 +1068,17 @@ impl MultiApp {
             }
         }
 
-        let left_panel = container(session_list)
-            .padding(8)
-            .style(|_: &Theme| container::Style {
-                background: Some(Color::from_rgb8(20, 20, 20).into()),
-                ..Default::default()
-            });
+        let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
+            sidebar.view(self.zone == Zone::Sidebar)
+        } else {
+            container(session_list)
+                .padding(8)
+                .style(|_: &Theme| container::Style {
+                    background: Some(Color::from_rgb8(20, 20, 20).into()),
+                    ..Default::default()
+                })
+                .into()
+        };
 
         let active_session = &self.sessions[self.active];
         let terminal_canvas = Canvas::new(MultiTermRenderer {

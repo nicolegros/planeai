@@ -6,6 +6,7 @@ pub mod orchestrator;
 pub mod services;
 pub mod session;
 pub mod session_launch;
+pub mod tab_switcher;
 pub mod task;
 pub mod template;
 
