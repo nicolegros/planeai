@@ -224,6 +224,7 @@ enum Message {
     TitleBarDrag,
     TerminalScroll(f32),
     SidebarItemClicked(usize),
+    SidebarScrolled(iced::widget::scrollable::Viewport),
 }
 
 impl WorkflowApp {
@@ -1618,6 +1619,11 @@ impl WorkflowApp {
                     sidebar.handle_mouse_down();
                 }
             }
+            Message::SidebarScrolled(viewport) => {
+                if let Some(ref mut sidebar) = self.sidebar {
+                    sidebar.on_scrolled(viewport);
+                }
+            }
             Message::SidebarDrag(x) => {
                 // Only track cursor position if sidebar exists; resize check is O(1)
                 if let Some(ref mut sidebar) = self.sidebar {
@@ -2401,6 +2407,9 @@ impl WorkflowApp {
                 // When sidebar is focused, route keys there
                 if self.sidebar_focused {
                     self.handle_sidebar_key(&key);
+                    if let Some(ref sidebar) = self.sidebar {
+                        return sidebar.scroll_to_selected();
+                    }
                     return iced::Task::none();
                 }
                 // Forward input to active session
@@ -2680,7 +2689,12 @@ impl WorkflowApp {
         }
 
         let left_panel: Element<'_, Message> = if let Some(ref sidebar) = self.sidebar {
-            sidebar.view(self.sidebar_focused, &self.theme, Message::SidebarItemClicked)
+            sidebar.view(
+                self.sidebar_focused,
+                &self.theme,
+                Message::SidebarItemClicked,
+                Message::SidebarScrolled,
+            )
         } else {
             container(left_panel_content)
                 .padding(8)

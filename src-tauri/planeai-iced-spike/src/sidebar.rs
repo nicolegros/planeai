@@ -9,8 +9,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use iced::widget::{column, container, mouse_area, row, scrollable, svg, text};
+use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::Wrapping;
+use iced::widget::{column, container, mouse_area, row, scrollable, svg, text};
 use iced::{Color, Element, Font, Length, Padding, Theme};
 use rusqlite::Connection;
 
@@ -119,6 +120,10 @@ pub struct SidebarState {
     resizing: bool,
     last_cursor_x: f32,
     active_session_id: Option<String>,
+    scrollable_id: iced::widget::Id,
+    viewport_height: f32,
+    scroll_offset_y: f32,
+    content_height: f32,
     // Cached data from last refresh
     cached_projects: Vec<services::Project>,
     cached_sessions: Vec<SessionRecord>,
@@ -139,6 +144,10 @@ impl SidebarState {
             resizing: false,
             last_cursor_x: 0.0,
             active_session_id: None,
+            scrollable_id: iced::widget::Id::unique(),
+            viewport_height: 0.0,
+            scroll_offset_y: 0.0,
+            content_height: 0.0,
             cached_projects: Vec::new(),
             cached_sessions: Vec::new(),
             cached_tasks_by_project: HashMap::new(),
@@ -227,6 +236,50 @@ impl SidebarState {
         }
         self.selected_index = index;
         self.select_current()
+    }
+
+    /// Returns a Task that scrolls the selected item into view only when near edges.
+    pub fn scroll_to_selected<M: 'static>(&self) -> iced::Task<M> {
+        use iced::widget::scrollable::AbsoluteOffset;
+        let n = self.flat_nav.len();
+        if n == 0 || self.viewport_height == 0.0 {
+            return iced::Task::none();
+        }
+        // Derive item height from actual content height
+        let content_height = self.content_height.max(self.viewport_height);
+        let item_height = content_height / n as f32;
+
+        let item_top = self.selected_index as f32 * item_height;
+        let item_bottom = item_top + item_height;
+        let view_top = self.scroll_offset_y;
+        let view_bottom = view_top + self.viewport_height;
+
+        if item_bottom > view_bottom {
+            iced::widget::operation::scroll_to(
+                self.scrollable_id.clone(),
+                AbsoluteOffset {
+                    x: 0.0,
+                    y: item_bottom - self.viewport_height,
+                },
+            )
+        } else if item_top < view_top {
+            iced::widget::operation::scroll_to(
+                self.scrollable_id.clone(),
+                AbsoluteOffset {
+                    x: 0.0,
+                    y: item_top,
+                },
+            )
+        } else {
+            iced::Task::none()
+        }
+    }
+
+    /// Call when the scrollable viewport changes.
+    pub fn on_scrolled(&mut self, viewport: iced::widget::scrollable::Viewport) {
+        self.scroll_offset_y = viewport.absolute_offset().y;
+        self.viewport_height = viewport.bounds().height;
+        self.content_height = viewport.content_bounds().height;
     }
 
     /// Handle a key press. Returns a SidebarAction if the key triggered one.
@@ -336,6 +389,7 @@ impl SidebarState {
         focused: bool,
         theme: &PlaneAiTheme,
         on_click: impl Fn(usize) -> M + 'a,
+        on_scroll: impl Fn(iced::widget::scrollable::Viewport) -> M + 'a,
     ) -> Element<'a, M> {
         let mut items = column![].spacing(4);
 
@@ -391,7 +445,10 @@ impl SidebarState {
 
             let item_content: Element<'_, M> = match item {
                 NavItem::ProjectHeader { name, .. } => {
-                    let name_txt = text(name.to_uppercase()).size(11).color(color).wrapping(Wrapping::None);
+                    let name_txt = text(name.to_uppercase())
+                        .size(11)
+                        .color(color)
+                        .wrapping(Wrapping::None);
                     row![chevron, name_txt]
                         .spacing(4)
                         .align_y(iced::Alignment::Center)
@@ -404,7 +461,10 @@ impl SidebarState {
                     if *has_worktree {
                         r = r.push(icon_git_fork(theme.text_dimmed()));
                     }
-                    let name_txt = text(name.clone()).size(13).color(color).wrapping(Wrapping::None);
+                    let name_txt = text(name.clone())
+                        .size(13)
+                        .color(color)
+                        .wrapping(Wrapping::None);
                     let name_txt = if is_active {
                         name_txt.font(bold_font)
                     } else {
@@ -412,7 +472,12 @@ impl SidebarState {
                     };
                     r = r.push(name_txt);
                     container(r)
-                        .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 16.0 })
+                        .padding(Padding {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 0.0,
+                            left: 8.0,
+                        })
                         .into()
                 }
                 NavItem::StatusHeader { status, count, .. } => {
@@ -423,7 +488,12 @@ impl SidebarState {
                             .spacing(4)
                             .align_y(iced::Alignment::Center),
                     )
-                    .padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 12.0 })
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: 8.0,
+                    })
                     .into()
                 }
                 NavItem::Task {
@@ -449,21 +519,34 @@ impl SidebarState {
                                 .wrapping(Wrapping::None),
                         );
                     }
-                    let key_txt = text(key.clone()).size(10).color(key_color).wrapping(Wrapping::None);
+                    let key_txt = text(key.clone())
+                        .size(10)
+                        .color(key_color)
+                        .wrapping(Wrapping::None);
                     let key_txt = if is_active {
                         key_txt.font(bold_font)
                     } else {
                         key_txt
                     };
                     r = r.push(key_txt);
-                    let title_txt = text(title.clone()).size(13).color(color).wrapping(Wrapping::None);
+                    let title_txt = text(title.clone())
+                        .size(13)
+                        .color(color)
+                        .wrapping(Wrapping::None);
                     let title_txt = if is_active {
                         title_txt.font(bold_font)
                     } else {
                         title_txt
                     };
                     r = r.push(title_txt);
-                    container(r).padding(Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 24.0 }).into()
+                    container(r)
+                        .padding(Padding {
+                            top: 0.0,
+                            right: 0.0,
+                            bottom: 0.0,
+                            left: 16.0,
+                        })
+                        .into()
                 }
             };
 
@@ -477,12 +560,18 @@ impl SidebarState {
                     ..Default::default()
                 });
 
-            let clickable =
-                mouse_area(item_container).on_press(on_click(i));
+            let clickable = mouse_area(item_container).on_press(on_click(i));
             items = items.push(clickable);
         }
 
-        let sidebar_content = scrollable(items).width(Length::Fill).height(Length::Fill);
+        let sidebar_content = scrollable(items)
+            .id(self.scrollable_id.clone())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .on_scroll(on_scroll)
+            .direction(Direction::Vertical(
+                Scrollbar::new().width(0).scroller_width(0),
+            ));
 
         let border_color = if focused {
             Color {
