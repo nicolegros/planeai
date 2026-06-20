@@ -39,6 +39,7 @@
 
   // Comment input state
   let showCommentInput = $state(false);
+  let showHelp = $state(false);
   let commentText = $state("");
   let commentStartLine = $state(0);
   let commentEndLine = $state(0);
@@ -187,10 +188,14 @@
 
   function prefetchAdjacentFiles(index: number) {
     const theme = { dark: "github-dark", light: "github-light" };
-    const neighbors = [index - 1, index + 1];
+    const neighbors = [index - 1, index + 1, index + 2];
     for (const i of neighbors) {
       if (i >= 0 && i < files.length) {
         prefetchLanguage(files[i].path, theme);
+        // Prefetch the actual diff content in the background
+        if (!diffCache.has(files[i].path)) {
+          fetchDiff(files[i]);
+        }
       }
     }
   }
@@ -242,10 +247,16 @@
 
     if (showCommentInput) return; // let textarea handle keys
 
-    if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey)) {
+    if (e.key === "ArrowDown" || (e.key === "j" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
       e.preventDefault();
       if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
-    } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey)) {
+    } else if (e.key === "ArrowUp" || (e.key === "k" && !e.metaKey && !e.ctrlKey && !e.shiftKey)) {
+      e.preventDefault();
+      if (selectedIndex > 0) selectFile(selectedIndex - 1);
+    } else if (e.key === "]" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      if (selectedIndex < files.length - 1) selectFile(selectedIndex + 1);
+    } else if (e.key === "[" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       if (selectedIndex > 0) selectFile(selectedIndex - 1);
     } else if (e.key === "n" && !e.metaKey && !e.ctrlKey) {
@@ -254,6 +265,24 @@
     } else if (e.key === "p" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       scrollToHunk("prev");
+    } else if (e.key === "J" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      scrollDiff("line-down");
+    } else if (e.key === "K" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      scrollDiff("line-up");
+    } else if (e.key === "d" && !e.metaKey && !e.ctrlKey || e.key === "f" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      scrollDiff("page-down");
+    } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      scrollDiff("page-up");
+    } else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      scrollDiff("top");
+    } else if (e.key === "G" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      scrollDiff("bottom");
     } else if (e.key === "u" && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       diffStyle = diffStyle === "split" ? "unified" : "split";
@@ -271,6 +300,25 @@
       } else {
         openCommentInput(0, 0, "file");
       }
+    } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      showHelp = !showHelp;
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      if (showHelp) showHelp = false;
+    }
+  }
+
+  function scrollDiff(action: "line-up" | "line-down" | "page-up" | "page-down" | "top" | "bottom") {
+    if (!diffContainer) return;
+    const lineHeight = 20;
+    switch (action) {
+      case "line-up": diffContainer.scrollTop -= lineHeight; break;
+      case "line-down": diffContainer.scrollTop += lineHeight; break;
+      case "page-up": diffContainer.scrollTop -= diffContainer.clientHeight * 0.8; break;
+      case "page-down": diffContainer.scrollTop += diffContainer.clientHeight * 0.8; break;
+      case "top": diffContainer.scrollTop = 0; break;
+      case "bottom": diffContainer.scrollTop = diffContainer.scrollHeight; break;
     }
   }
 
@@ -371,6 +419,11 @@
           <span class="ml-1">Send Feedback ({totalCount})</span>
         </Button>
       {/if}
+      <button
+        class="text-xs px-1.5 py-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-700"
+        onclick={() => (showHelp = !showHelp)}
+        title="Keyboard shortcuts (?)"
+      >?</button>
     </div>
 
     <!-- File-level comment input -->
@@ -405,6 +458,28 @@
     {/if}
 
     <diffs-container bind:this={diffContainer} class="absolute inset-0 top-8 overflow-auto" style="display:block"></diffs-container>
+    {#if showHelp}
+      <div class="absolute inset-0 top-8 z-30 flex items-center justify-center bg-black/60" onclick={() => (showHelp = false)} role="presentation">
+        <div class="bg-surface-50 dark:bg-surface-900 border border-surface-200 dark:border-surface-700 rounded-lg p-4 shadow-lg max-w-sm text-xs text-surface-700 dark:text-surface-300 space-y-2">
+          <h3 class="font-semibold text-sm text-surface-900 dark:text-surface-100 mb-2">Keyboard Shortcuts</h3>
+          <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k</kbd><span>Previous / next file</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">[/]</kbd><span>Previous / next file</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">n/p</kbd><span>Next / previous hunk</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">J/K</kbd><span>Scroll line down / up</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">d/f</kbd><span>Page down</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">b</kbd><span>Page up</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">g/G</kbd><span>Top / bottom</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">u</kbd><span>Toggle split / unified</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Add comment</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">e</kbd><span>Edit file</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">r</kbd><span>Refresh</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">⌘↵</kbd><span>Send feedback</span>
+            <kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-700 px-1 rounded">?</kbd><span>Toggle this help</span>
+          </div>
+        </div>
+      </div>
+    {/if}
     {#if loading && files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
     {:else if files.length === 0 && !loading}
