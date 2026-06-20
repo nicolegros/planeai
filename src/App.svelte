@@ -21,7 +21,7 @@
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
-  import DiffTab from "./components/DiffTab.svelte";
+  import ReviewTab from "./components/ReviewTab.svelte";
   import EditorTab from "./components/EditorTab.svelte";
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
@@ -283,11 +283,11 @@
       {#if hasDiff && project}
         {@const repoPath = session.worktree_path ?? project.path}
         {@const baseBranch = session.base_branch ?? "main"}
-        <DiffTab
+        <ReviewTab
           {repoPath}
           {baseBranch}
           visible={session.id === activeSessionId && isDiffActive}
-          theme={isDark() ? "vs-dark" : "vs"}
+          sessionId={session.id}
           onEditFile={(filePath) => orchestrator.openFile(filePath)}
           onFileChange={(name) => orchestrator.setDiffFileName(session.id, name)}
         />

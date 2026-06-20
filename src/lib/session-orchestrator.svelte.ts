@@ -8,6 +8,7 @@ import { sessions as sessionsApi, symphony, tasks } from "./api";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import { clearComments } from "./review-comments.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
@@ -130,6 +131,7 @@ export function createSession(session: Session): void {
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
   destroyTabState(s.id);
+  clearComments(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -141,6 +143,7 @@ export async function deleteSession(s: Session): Promise<void> {
 
 export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
+  clearComments(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
