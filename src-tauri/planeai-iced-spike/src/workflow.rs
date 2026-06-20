@@ -3284,7 +3284,7 @@ impl WorkflowApp {
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch(vec![
             keyboard::listen().map(Message::KeyEvent),
-            iced::time::every(Duration::from_millis(16)).map(|_| Message::Poll),
+            iced::time::every(Duration::from_millis(8)).map(|_| Message::Poll),
             // Silence/debounce checker — tick every 1s
             iced::time::every(Duration::from_secs(1)).map(|_| Message::CheckSilence),
             // IPC notify listener
