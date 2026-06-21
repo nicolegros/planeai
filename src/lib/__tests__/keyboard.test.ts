@@ -116,15 +116,27 @@ describe("matchChord", () => {
     });
   });
 
-  it("returns next_tab on platform mod+Shift+]", () => {
-    expect(matchChord(key({ key: "]", [modKey]: true, shiftKey: true }))).toEqual({
+  it("returns next_tab on platform mod+]", () => {
+    expect(matchChord(key({ key: "]", [modKey]: true }))).toEqual({
       type: "next_tab",
     });
   });
 
-  it("returns prev_tab on platform mod+Shift+[", () => {
-    expect(matchChord(key({ key: "[", [modKey]: true, shiftKey: true }))).toEqual({
+  it("returns prev_tab on platform mod+[", () => {
+    expect(matchChord(key({ key: "[", [modKey]: true }))).toEqual({
       type: "prev_tab",
+    });
+  });
+
+  it("returns next_session on platform mod+Shift+}", () => {
+    expect(matchChord(key({ key: "}", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "next_session",
+    });
+  });
+
+  it("returns prev_session on platform mod+Shift+{", () => {
+    expect(matchChord(key({ key: "{", [modKey]: true, shiftKey: true }))).toEqual({
+      type: "prev_session",
     });
   });
 

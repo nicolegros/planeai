@@ -9,7 +9,7 @@
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
-  import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
+  import { getCycleState, startCycle, startCycleOrdered, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -142,6 +142,15 @@
         else if (action.type === "close_tab") { orchestrator.handleCloseTab(); }
         else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
+        else if (action.type === "next_session") {
+          const sw = getCycleState();
+          if (!sw.isCycling) startCycleOrdered(sessions.map((s) => s.id), activeSessionId ?? undefined, 1);
+          else advance(1);
+        } else if (action.type === "prev_session") {
+          const sw = getCycleState();
+          if (!sw.isCycling) startCycleOrdered(sessions.map((s) => s.id), activeSessionId ?? undefined, -1);
+          else advance(-1);
+        }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
@@ -155,7 +164,9 @@
     );
 
     function onKeyUp(e: KeyboardEvent) {
-      if (e.key === "Control" && !e.ctrlKey && getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      if (!getCycleState().isCycling) return;
+      const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
+      if (isModRelease) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus() && getCycleState().isCycling) cancel(); }, 0); }
     window.addEventListener("keyup", onKeyUp);

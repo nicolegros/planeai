@@ -26,6 +26,8 @@ export type KeyboardAction =
   | { type: "new_session" }
   | { type: "new_project" }
   | { type: "jump_to_session"; index: number }
+  | { type: "next_session" }
+  | { type: "prev_session" }
   | { type: "tab_switch" }
   | { type: "tab_switch_reverse" }
   | { type: "command_palette" }
@@ -92,14 +94,24 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "close_tab" };
   }
 
-  // Mod+Shift+] — next tab
-  if (mod && e.shiftKey && e.key === "]") {
+  // Mod+] — next tab
+  if (mod && !e.shiftKey && e.key === "]") {
     return { type: "next_tab" };
   }
 
-  // Mod+Shift+[ — prev tab
-  if (mod && e.shiftKey && e.key === "[") {
+  // Mod+[ — prev tab
+  if (mod && !e.shiftKey && e.key === "[") {
     return { type: "prev_tab" };
+  }
+
+  // Mod+Shift+] (mod+}) — next session
+  if (mod && e.shiftKey && e.key === "}") {
+    return { type: "next_session" };
+  }
+
+  // Mod+Shift+[ (mod+{) — prev session
+  if (mod && e.shiftKey && e.key === "{") {
+    return { type: "prev_session" };
   }
 
   // Mod+D — toggle diff tab
@@ -183,6 +195,8 @@ export function installKeyboardRouter(
     "new_tab",
     "next_tab",
     "prev_tab",
+    "next_session",
+    "prev_session",
     "open_preferences",
   ]);
 

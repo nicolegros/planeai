@@ -177,6 +177,18 @@ export function jumpToSession(index: number): void {
   if (index < sessions.length) selectSession(sessions[index].id);
 }
 
+export function nextSession(): void {
+  if (sessions.length <= 1) return;
+  const idx = sessions.findIndex((s) => s.id === activeSessionId);
+  selectSession(sessions[(idx + 1) % sessions.length].id);
+}
+
+export function prevSession(): void {
+  if (sessions.length <= 1) return;
+  const idx = sessions.findIndex((s) => s.id === activeSessionId);
+  selectSession(sessions[(idx - 1 + sessions.length) % sessions.length].id);
+}
+
 // ─── State setters ───────────────────────────────────────────────────────────
 
 export function clearAgentState(sessionId: string): void {
