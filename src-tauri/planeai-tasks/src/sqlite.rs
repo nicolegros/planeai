@@ -219,7 +219,7 @@ impl TaskProvider for SqliteRepository {
                 status: status.as_str().to_string(),
                 priority: params.priority,
                 parent_key: params.parent_key,
-                base_branch: params.base_branch,
+                base_branch: Some(params.base_branch),
                 created_at: now.clone(),
                 updated_at: now,
             },

@@ -3179,15 +3179,18 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planeai"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "clap",
  "font-kit",
  "json_comments",
  "notify",
  "planeai-core",
+ "planeai-daemon",
+ "planeai-ipc",
  "planeai-jira",
+ "planeai-pty",
  "planeai-tasks",
- "portable-pty",
  "regex",
  "rusqlite",
  "serde",
@@ -3205,14 +3208,17 @@ dependencies = [
  "tracing-subscriber",
  "trash",
  "uuid",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "planeai-core"
 version = "0.0.0"
 dependencies = [
+ "chrono",
+ "json_comments",
+ "planeai-tasks",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -3220,6 +3226,34 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "planeai-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "planeai-ipc",
+ "planeai-pty",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "planeai-ipc"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "tokio",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3244,6 +3278,14 @@ dependencies = [
  "tracing",
  "url",
  "wiremock",
+]
+
+[[package]]
+name = "planeai-pty"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "portable-pty",
 ]
 
 [[package]]

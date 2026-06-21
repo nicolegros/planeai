@@ -141,22 +141,6 @@ fn main() {
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
 
-            // Stale worktree cleanup (fire-and-forget background thread)
-            let cleanup_db_path = paths::db_path();
-            let cleanup_cfg = cfg.clone();
-            std::thread::spawn(move || {
-                let cleanup_conn =
-                    rusqlite::Connection::open(&cleanup_db_path).expect("open db for cleanup");
-                let errors =
-                    crate::worktree::cleanup_stale_worktrees(&cleanup_conn, &cleanup_cfg);
-                for e in &errors {
-                    tracing::warn!("stale worktree cleanup error: {e}");
-                }
-                if errors.is_empty() {
-                    tracing::info!("stale worktree cleanup: complete");
-                }
-            });
-
             // Jira integration (before cfg is moved into ConfigState)
             let jira_state = jira::init_jira(&cfg);
             if let Some(ref state) = jira_state {
