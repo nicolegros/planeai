@@ -1,7 +1,7 @@
 <script lang="ts">
   import { projects as projectsApi } from "../lib/api";
   import type { TaskItem, Session, Project } from "../lib/types";
-  import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
+  import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -194,6 +194,20 @@
   });
 
   $effect(() => { clampIndex(flatNav.length); });
+
+  // Auto-focus active session when sessions panel is toggled
+  $effect(() => {
+    if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") return;
+    if (!activeSessionId) return;
+    // Try orphan lookup first
+    let idx = flatNavIndex.get(`orphan:${activeSessionId}`);
+    // If not found, look up via task_key
+    if (idx === undefined) {
+      const active = sessions.find(s => s.id === activeSessionId);
+      if (active?.task_key) idx = flatNavIndex.get(`task:${active.task_key}`);
+    }
+    if (idx !== undefined) setSelectedIndex(idx);
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (zone !== "sidebar") return;

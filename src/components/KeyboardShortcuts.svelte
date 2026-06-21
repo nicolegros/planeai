@@ -31,7 +31,7 @@
     ]},
     { section: "View", items: [
       { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
-      { keys: `${MOD_LABEL}⇧S`, description: "Focus sessions panel" },
+      { keys: `${MOD_LABEL}⇧S`, description: "Focus sessions panel (jumps to active)" },
       { keys: `${MOD_LABEL}⇧T`, description: "Focus tasks panel" },
       { keys: `${MOD_LABEL}R`, description: "Refresh tasks" },
       { keys: `${MOD_LABEL}⇧R`, description: "Open Review" },
