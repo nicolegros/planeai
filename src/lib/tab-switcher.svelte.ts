@@ -33,22 +33,6 @@ export function startCycle(currentSessionId: string | undefined, validIds?: Set<
   return true;
 }
 
-/** Begin a cycle with an explicit ordered list (e.g. sidebar order). */
-export function startCycleOrdered(orderedIds: string[], currentSessionId: string | undefined, direction: 1 | -1): boolean {
-  if (orderedIds.length <= 1) return false;
-  cycleList = orderedIds;
-  originSessionId = currentSessionId ?? null;
-  const currentIdx = currentSessionId ? orderedIds.indexOf(currentSessionId) : -1;
-  index = currentIdx === -1 ? 0 : (currentIdx + direction + orderedIds.length) % orderedIds.length;
-  isCycling = true;
-
-  showTimer = setTimeout(() => {
-    if (isCycling) isVisible = true;
-  }, SHOW_DELAY_MS);
-
-  return true;
-}
-
 /** Advance selection forward (+1) or backward (-1). */
 export function advance(direction: 1 | -1): void {
   if (!isCycling) return;
