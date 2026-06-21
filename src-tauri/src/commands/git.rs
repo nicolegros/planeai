@@ -32,6 +32,27 @@ pub fn get_file_diff(
 }
 
 #[tauri::command]
+pub fn get_file_patch(
+    repo_path: String,
+    base_branch: String,
+    file_path: String,
+    old_path: Option<String>,
+) -> Result<String, String> {
+    git::get_file_patch(&repo_path, &base_branch, &file_path, old_path.as_deref())
+}
+
+#[tauri::command]
+pub async fn get_all_file_patches(
+    repo_path: String,
+    base_branch: String,
+    files: Vec<(String, Option<String>)>,
+) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || git::get_all_file_patches(&repo_path, &base_branch, &files))
+        .await
+        .map_err(|e| format!("task failed: {e}"))?
+}
+
+#[tauri::command]
 pub fn detect_default_branch(repo_path: String) -> Result<String, String> {
     git::detect_default_branch(&repo_path)
 }

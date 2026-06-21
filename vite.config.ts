@@ -9,6 +9,9 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  worker: {
+    format: "es",
+  },
   build: {
     rollupOptions: {
       output: {
@@ -28,7 +31,6 @@ export default defineConfig({
             "@codemirror/language",
             "@codemirror/search",
             "@codemirror/autocomplete",
-            "@codemirror/merge",
             "@codemirror/language-data",
           ],
         },
