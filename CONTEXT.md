@@ -117,6 +117,13 @@ For tmux backend, a local PTY is spawned via `portable-pty` running `tmux attach
 
 For daemon backend, the daemon process owns the PTY directly. The GUI/CLI communicates with the daemon via its IPC socket (control for spawn/kill/list, data for I/O streaming).
 
+### Shell tabs
+
+Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
+
+- **Daemon backend**: shell tabs are spawned in the daemon with composed ID `{session_id}:{tab_index}`. They persist across app restarts (same as the agent session). On archive/destroy, all shell tabs are killed alongside the agent session.
+- **Tmux backend**: shell tabs use a local PTY (`PtyTarget::Shell`) and are ephemeral — they die with the app.
+
 ### Exit detection
 
 - **tmux**: PTY reader thread gets EOF → emit `pty-exited` → mark session as `exited` in DB.

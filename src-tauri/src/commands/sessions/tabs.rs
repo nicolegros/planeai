@@ -41,11 +41,28 @@ pub fn spawn_tab(
     });
 
     let pty_key = format!("{}:{}", session_id, tab_index);
-    let target = pty::PtyTarget::Shell {
-        command: shell,
-        args: vec!["-l".to_string()],
-        cwd,
+
+    let target = if session.backend == "daemon" {
+        // Check if shell tab already exists in daemon (reattach after app restart)
+        let already_running = crate::daemon_client::list_sessions_sync()
+            .map(|ids| ids.contains(&pty_key))
+            .unwrap_or(false);
+        if !already_running {
+            crate::daemon::spawn_session(&pty_key, &shell, &cwd, None)?;
+        }
+        let socket_path = planeai_ipc::daemon_socket_path();
+        pty::PtyTarget::Daemon {
+            session_id: pty_key.clone(),
+            socket_path,
+        }
+    } else {
+        pty::PtyTarget::Shell {
+            command: shell,
+            args: vec!["-l".to_string()],
+            cwd,
+        }
     };
+
     state
         .0
         .attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
@@ -67,6 +84,13 @@ pub fn close_tab(
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
+
+    // Kill daemon shell session if daemon backend
+    if session.backend == "daemon" {
+        let kill_ops = crate::cleanup::real_kill_ops();
+        let _ = (kill_ops.kill_daemon_session)(&pty_key);
+    }
+
     let new_count = (session.tab_count - 1).max(1);
     db::update_tab_count(&conn, &session_id, new_count).map_err(|e| e.to_string())?;
     Ok(())
