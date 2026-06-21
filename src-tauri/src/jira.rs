@@ -76,7 +76,10 @@ impl JiraState {
         })();
         if let Some(wb_config) = wb_config {
             tokio::spawn(async move {
-                if let Err(e) = writeback.on_status_change(&issue_key, action, &wb_config).await {
+                if let Err(e) = writeback
+                    .on_status_change(&issue_key, action, &wb_config)
+                    .await
+                {
                     tracing::warn!(error = %e, "jira writeback failed");
                 }
             });

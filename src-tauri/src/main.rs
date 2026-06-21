@@ -160,7 +160,6 @@ fn main() {
                     tracing::info!("stale worktree cleanup: complete");
                 }
             });
-
             // Jira integration (before cfg is moved into ConfigState)
             let jira_state = jira::init_jira(&cfg);
             if let Some(ref state) = jira_state {

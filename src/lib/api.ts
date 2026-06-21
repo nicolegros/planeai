@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck, JiraStatus, SyncResult } from "./types";
+import type {
+  Session,
+  Project,
+  TaskItem,
+  DirEntry,
+  ChangedFile,
+  FileDiff,
+  CiCheck,
+  JiraStatus,
+  SyncResult,
+} from "./types";
 import type { AppConfig } from "./settings.svelte";
 
 export interface LaunchSessionParams {
