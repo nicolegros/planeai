@@ -9,6 +9,7 @@
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
+  import { getCycleState } from "../lib/tab-switcher.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -344,6 +345,7 @@
                 {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
                 {@const isActive = session.id === activeSessionId}
                 {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
+                {@const isPreviewing = getCycleState().mode === 'sidebar' && getCycleState().cycleList[getCycleState().index] === session.id}
                 <li>
                   {#if renamingSessionId === session.id}
                     <input
@@ -357,7 +359,7 @@
                     <button
                       class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
                         {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                        {isSelected ? 'ring-1 ring-primary-500/50' : ''}
+                        {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}
                         {session.status === 'exited' ? 'opacity-60' : ''}"
                       onclick={() => handleOrphanClick(session)}
                       oncontextmenu={(e) => onContextMenu(e, session)}
@@ -418,11 +420,12 @@
                       {@const taskNavIdx = flatNavIndex.get(`task:${task.key}`) ?? -1}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
+                      {@const isPreviewing = linked && getCycleState().mode === 'sidebar' && getCycleState().cycleList[getCycleState().index] === linked.id}
                       <li>
                         <button
                           class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
                             {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                            {isSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                            {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}"
                           onclick={() => handleTaskClick(task, project.path)}
                           oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                         >

@@ -2,18 +2,21 @@ import { getMruList } from "./mru.svelte";
 
 const SHOW_DELAY_MS = 150;
 
+export type CycleMode = "overlay" | "sidebar";
+
 let isCycling = $state(false);
 let isVisible = $state(false);
 let cycleList = $state<string[]>([]);
 let index = $state(0);
 let originSessionId = $state<string | null>(null);
+let mode = $state<CycleMode>("overlay");
 let showTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function getCycleState() {
-  return { isCycling, isVisible, cycleList, index };
+  return { isCycling, isVisible, cycleList, index, mode };
 }
 
-/** Begin a cycle. Returns false if nothing to switch to. */
+/** Begin a cycle (MRU overlay). Returns false if nothing to switch to. */
 export function startCycle(currentSessionId: string | undefined, validIds?: Set<string>): boolean {
   const mru = getMruList();
   const filtered = validIds ? mru.filter((id) => validIds.has(id)) : mru;
@@ -25,11 +28,25 @@ export function startCycle(currentSessionId: string | undefined, validIds?: Set<
   originSessionId = currentSessionId ?? null;
   index = 0;
   isCycling = true;
+  mode = "overlay";
 
   showTimer = setTimeout(() => {
     if (isCycling) isVisible = true;
   }, SHOW_DELAY_MS);
 
+  return true;
+}
+
+/** Begin a cycle in sidebar order. */
+export function startCycleOrdered(orderedIds: string[], currentSessionId: string | undefined, direction: 1 | -1): boolean {
+  if (orderedIds.length <= 1) return false;
+  cycleList = orderedIds;
+  originSessionId = currentSessionId ?? null;
+  const currentIdx = currentSessionId ? orderedIds.indexOf(currentSessionId) : -1;
+  index = currentIdx === -1 ? 0 : (currentIdx + direction + orderedIds.length) % orderedIds.length;
+  isCycling = true;
+  isVisible = true;
+  mode = "sidebar";
   return true;
 }
 
@@ -64,4 +81,5 @@ function reset(): void {
   cycleList = [];
   index = 0;
   originSessionId = null;
+  mode = "overlay";
 }
