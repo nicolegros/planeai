@@ -110,37 +110,41 @@ pub struct PrDefaults {
 }
 
 #[tauri::command]
-pub fn generate_pr_defaults(
+pub async fn generate_pr_defaults(
     session_id: String,
-    db_state: State<DbState>,
+    db_state: State<'_, DbState>,
 ) -> Result<PrDefaults, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-
-    let title = match &session.task_key {
-        Some(key) => {
-            let prefix = format!("{}: ", key);
-            let name = session.name.strip_prefix(&prefix).unwrap_or(&session.name);
-            format!("{} [{}]", name, key)
-        }
-        None => session.name.clone(),
+    let (cwd, session_name, task_key, base) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (
+            cwd,
+            session.name.clone(),
+            session.task_key.clone(),
+            session.base_branch.clone(),
+        )
     };
 
+    let title = match &task_key {
+        Some(key) => {
+            let prefix = format!("{}: ", key);
+            let name = session_name.strip_prefix(&prefix).unwrap_or(&session_name);
+            format!("{} [{}]", name, key)
+        }
+        None => session_name,
+    };
+
+    let base_ref = base.as_deref().unwrap_or("main");
+
     // Diff stats for body
-    let diff_output = std::process::Command::new("git")
-        .args([
-            "diff",
-            "--stat",
-            &format!(
-                "{}...HEAD",
-                session.base_branch.as_deref().unwrap_or("main")
-            ),
-        ])
+    let diff_output = tokio::process::Command::new("git")
+        .args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
         .current_dir(&cwd)
         .output()
+        .await
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -152,9 +156,10 @@ pub fn generate_pr_defaults(
         format!("## Changes\n\n```\n{diff_output}\n```")
     };
 
-    let base_branch = session
-        .base_branch
-        .unwrap_or_else(|| detect_default_branch(&cwd));
+    let base_branch = match base {
+        Some(b) => b,
+        None => detect_default_branch_async(&cwd).await,
+    };
 
     Ok(PrDefaults {
         title,
@@ -163,11 +168,12 @@ pub fn generate_pr_defaults(
     })
 }
 
-fn detect_default_branch(cwd: &str) -> String {
-    std::process::Command::new("git")
+async fn detect_default_branch_async(cwd: &str) -> String {
+    tokio::process::Command::new("git")
         .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
         .current_dir(cwd)
         .output()
+        .await
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| {
@@ -197,10 +203,11 @@ pub async fn create_pr(
     };
 
     // Push branch
-    let push = std::process::Command::new("git")
+    let push = tokio::process::Command::new("git")
         .args(["push", "-u", "origin", &branch])
         .current_dir(&cwd)
         .output()
+        .await
         .map_err(|e| format!("failed to run git push: {e}"))?;
     if !push.status.success() {
         let stderr = String::from_utf8_lossy(&push.stderr);
@@ -208,9 +215,10 @@ pub async fn create_pr(
     }
 
     // Check gh is available
-    let gh_check = std::process::Command::new("gh")
+    let gh_check = tokio::process::Command::new("gh")
         .args(["--version"])
-        .output();
+        .output()
+        .await;
     if gh_check.is_err() {
         return Err("GitHub CLI (gh) not found. Install from https://cli.github.com/".to_string());
     }
@@ -229,10 +237,11 @@ pub async fn create_pr(
     if draft {
         args.push("--draft".to_string());
     }
-    let pr_output = std::process::Command::new("gh")
+    let pr_output = tokio::process::Command::new("gh")
         .args(&args)
         .current_dir(&cwd)
         .output()
+        .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
     if !pr_output.status.success() {
         let stderr = String::from_utf8_lossy(&pr_output.stderr).to_string();
@@ -498,11 +507,14 @@ mod tests {
         assert!(result.unwrap_err().contains("not configured"));
     }
 
-    #[test]
-    fn detect_default_branch_fallback() {
+    #[tokio::test]
+    async fn detect_default_branch_fallback() {
         let dir = tempfile::tempdir().unwrap();
         // No git repo — should fallback to "main"
-        assert_eq!(detect_default_branch(dir.path().to_str().unwrap()), "main");
+        assert_eq!(
+            detect_default_branch_async(dir.path().to_str().unwrap()).await,
+            "main"
+        );
     }
 
     #[test]
