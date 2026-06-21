@@ -230,7 +230,8 @@ export function startEventListeners(): () => void {
               preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
               if (sid === activeSessionId) {
                 if (getSettings().auto_open_review !== false) {
-                  toggleDiff();
+                  // Defer to next frame so state updates don't block the current tick
+                  requestAnimationFrame(() => toggleDiff());
                 }
               } else {
                 reviewReady = { ...reviewReady, [sid]: true };
