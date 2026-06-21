@@ -71,6 +71,28 @@
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
+  // Session IDs in sidebar display order (orphans first, then tasks by status/priority per project)
+  const sidebarSessionOrder = $derived.by(() => {
+    const tasksByProject = taskStore.getTasksByProject();
+    const allTaskKeys = new Set(Object.values(tasksByProject).flat().map(t => t.key));
+    const statusOrder = ["in_progress", "in_review", "todo", "done"];
+    const ids: string[] = [];
+    for (const project of projects) {
+      // Orphan sessions
+      for (const s of sessions.filter(s => s.project_id === project.id && (!s.task_key || !allTaskKeys.has(s.task_key)))) ids.push(s.id);
+      // Task sessions in status/priority order
+      const projectTasks = tasksByProject[project.path] ?? [];
+      for (const status of statusOrder) {
+        const group = projectTasks.filter(t => t.status === status).sort((a, b) => b.priority - a.priority);
+        for (const t of group) {
+          const linked = sessions.find(s => s.task_key === t.key);
+          if (linked) ids.push(linked.id);
+        }
+      }
+    }
+    return ids;
+  });
+
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
     if (!activeSessionId) return [];
@@ -144,11 +166,11 @@
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
         else if (action.type === "next_session") {
           const sw = getCycleState();
-          if (!sw.isCycling) startCycleOrdered(sessions.map((s) => s.id), activeSessionId ?? undefined, 1);
+          if (!sw.isCycling) startCycleOrdered(sidebarSessionOrder, activeSessionId ?? undefined, 1);
           else advance(1);
         } else if (action.type === "prev_session") {
           const sw = getCycleState();
-          if (!sw.isCycling) startCycleOrdered(sessions.map((s) => s.id), activeSessionId ?? undefined, -1);
+          if (!sw.isCycling) startCycleOrdered(sidebarSessionOrder, activeSessionId ?? undefined, -1);
           else advance(-1);
         }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
