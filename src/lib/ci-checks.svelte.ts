@@ -28,6 +28,10 @@ export function getCiChecks(): CiCheck[] {
   return ciChecks;
 }
 
+export function getPollingSessionId(): string | null {
+  return activeSessionId;
+}
+
 export function refreshCiChecks(): void {
   if (activeSessionId && activePrUrl) fetchChecks(activeSessionId);
 }

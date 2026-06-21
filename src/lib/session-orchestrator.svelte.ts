@@ -4,7 +4,8 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { sessions as sessionsApi, symphony, tasks, git } from "./api";
+import { sessions as sessionsApi, symphony, tasks, git, pr } from "./api";
+import { getPollingSessionId, classifyCheck } from "./ci-checks.svelte";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
@@ -66,6 +67,7 @@ let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurren
   null,
 );
 let reviewReady = $state<Record<string, boolean>>({});
+let ciStatuses = $state<Record<string, 'passing' | 'failing' | 'running' | null>>({});
 
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
@@ -76,6 +78,7 @@ export function _resetForTests(): void {
   agentStates = {};
   symphonyStatus = null;
   reviewReady = {};
+  ciStatuses = {};
   tabLayoutReset();
 }
 
@@ -105,6 +108,10 @@ export function getReviewReady(): Record<string, boolean> {
 export function clearReviewReady(sessionId: string): void {
   const { [sessionId]: _, ...rest } = reviewReady;
   reviewReady = rest;
+}
+
+export function getCiStatus(sessionId: string): 'passing' | 'failing' | 'running' | null {
+  return ciStatuses[sessionId] ?? null;
 }
 
 export function toggleDiff(): void {
@@ -299,6 +306,39 @@ export function startSymphonyPolling(): () => void {
 }
 
 // ─── Quit confirmation helper ────────────────────────────────────────────────
+
+export function startCiPolling(): () => void {
+  const pollAll = async () => {
+    const titlebarSession = getPollingSessionId();
+    const targets = sessions.filter(
+      (s) => s.status === "active" && s.pr_url && s.id !== titlebarSession,
+    );
+    for (const s of targets) {
+      try {
+        const checks = await pr.getCiChecks(s.id);
+        if (checks.length === 0) {
+          ciStatuses = { ...ciStatuses, [s.id]: null };
+        } else if (checks.some((c) => classifyCheck(c) === "fail")) {
+          ciStatuses = { ...ciStatuses, [s.id]: "failing" };
+        } else if (checks.some((c) => classifyCheck(c) === "pending")) {
+          ciStatuses = { ...ciStatuses, [s.id]: "running" };
+        } else {
+          ciStatuses = { ...ciStatuses, [s.id]: "passing" };
+        }
+      } catch {
+        ciStatuses = { ...ciStatuses, [s.id]: null };
+      }
+    }
+  };
+  pollAll();
+  const id = setInterval(pollAll, 60_000);
+  const onFocus = () => pollAll();
+  window.addEventListener("focus", onFocus);
+  return () => {
+    clearInterval(id);
+    window.removeEventListener("focus", onFocus);
+  };
+}
 
 export function getActiveDirectCount(): number {
   return sessions.filter((s) => s.status === "active" && s.backend === "direct").length;

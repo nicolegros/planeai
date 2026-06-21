@@ -5,7 +5,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap, GitFork, GitPullRequest, GitMerge, Plus, Settings } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap, GitFork, GitPullRequest, GitMerge, Plus, Settings, CheckCircle2, XCircle } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -386,6 +386,13 @@
                         {#if orchestrator.getReviewReady()[session.id]}
                           <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
                         {/if}
+                        {#if orchestrator.getCiStatus(session.id) === 'passing'}
+                          <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
+                        {:else if orchestrator.getCiStatus(session.id) === 'failing'}
+                          <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
+                        {:else if orchestrator.getCiStatus(session.id) === 'running'}
+                          <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
+                        {/if}
                         {#if session.pr_url}
                           <button
                             class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
@@ -456,6 +463,13 @@
                                 <LoaderCircle class="size-3.5 animate-spin text-surface-500" />
                               {:else if agentStates[linked.id] === 'Idle'}
                                 <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
+                              {/if}
+                              {#if orchestrator.getCiStatus(linked.id) === 'passing'}
+                                <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
+                              {:else if orchestrator.getCiStatus(linked.id) === 'failing'}
+                                <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
+                              {:else if orchestrator.getCiStatus(linked.id) === 'running'}
+                                <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
                               {/if}
                               {#if linked.pr_url}
                                 <button
