@@ -326,14 +326,7 @@ pub fn get_file_patch(
 
     // Try tracked file diff first
     let output = Command::new("git")
-        .args([
-            "diff",
-            "--no-color",
-            "-U3",
-            &resolved,
-            "--",
-            base_file_path,
-        ])
+        .args(["diff", "--no-color", "-U3", &resolved, "--", base_file_path])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;

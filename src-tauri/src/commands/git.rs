@@ -47,11 +47,9 @@ pub async fn get_all_file_patches(
     base_branch: String,
     files: Vec<(String, Option<String>)>,
 ) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        git::get_all_file_patches(&repo_path, &base_branch, &files)
-    })
-    .await
-    .map_err(|e| format!("task failed: {e}"))?
+    tokio::task::spawn_blocking(move || git::get_all_file_patches(&repo_path, &base_branch, &files))
+        .await
+        .map_err(|e| format!("task failed: {e}"))?
 }
 
 #[tauri::command]
