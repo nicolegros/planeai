@@ -16,6 +16,9 @@ lint: ## Check formatting and clippy
 dev:
 	pnpm tauri dev
 
+dev-release: ## Release Rust binary + hot-reload frontend
+	pnpm tauri dev --release
+
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 	cd src-tauri && \
 	PLANEAI_DAEMON_PTY_CORE=planeai-pty \

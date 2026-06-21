@@ -12,13 +12,15 @@
     tabs: Tab[];
     activeTabIndex: number;
     prUrl: string | null;
+    hasChanges: boolean;
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
     onSelectTab: (index: number) => void;
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
+    onCreatePr?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, symphonyStatus, onSelectTab, onCloseTab, onAddTab }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, hasChanges, symphonyStatus, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
 </script>
@@ -62,7 +64,18 @@
       onclick={() => openUrl(prUrl!)}
     >
       <GitPullRequest class="size-3.5" />
-      <span>Open PR</span>
+      <span>View PR</span>
+    </button>
+  {:else if hasChanges && onCreatePr}
+    <button
+      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+      title="Create pull request"
+      tabindex="-1"
+      onmousedown={(e: MouseEvent) => e.preventDefault()}
+      onclick={onCreatePr}
+    >
+      <GitPullRequest class="size-3.5" />
+      <span>Create PR</span>
     </button>
   {/if}
 
