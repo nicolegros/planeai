@@ -130,6 +130,9 @@ export const pr = {
       sessionId,
     }),
   getCiChecks: (sessionId: string) => invoke<CiCheck[]>("get_ci_checks", { sessionId }),
+  getAllowedStrategies: (sessionId: string) =>
+    invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
+  merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
 };
 
 export const notify = {

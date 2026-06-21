@@ -1,8 +1,10 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest, Zap, RefreshCw, ChevronDown } from "@lucide/svelte";
+  import { GitPullRequest, Zap, RefreshCw, ChevronDown, GitMerge } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
+  import { pr } from "../lib/api";
+  import { showSnackbar } from "../lib/snackbar.svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -13,6 +15,7 @@
     tabs: Tab[];
     activeTabIndex: number;
     prUrl: string | null;
+    prState: string | null;
     hasChanges: boolean;
     sessionId: string | null;
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
@@ -22,16 +25,25 @@
     onCreatePr?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, hasChanges, sessionId, symphonyStatus, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
+  const STORAGE_KEY = "planeai:merge-strategy";
 
   let ciExpanded = $state(false);
+  let mergeExpanded = $state(false);
+  let merging = $state(false);
+  let allowedStrategies = $state<string[]>([]);
+  let selectedStrategy = $state<string>(localStorage.getItem(STORAGE_KEY) || "squash");
+  let strategiesFetchedFor = $state<string | null>(null);
 
   let checks = $derived(sessionId ? getCiChecks(sessionId) : []);
   let passedCount = $derived(checks.filter((c) => classifyCheck(c) === "pass").length);
   let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
   let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
+  let checksPassing = $derived(checks.length === 0 || (allConcluded && failedCount === 0));
+  let isMerged = $derived(prState === "merged");
+  let canMerge = $derived(prUrl && !isMerged && checksPassing && !merging);
 
   function summary(): string {
     if (failedCount > 0) return `${failedCount} failed`;
@@ -51,8 +63,52 @@
     return { char: "◌", color: "text-yellow-500 animate-pulse" };
   }
 
+  function mergeDisabledReason(): string | null {
+    if (isMerged) return "PR already merged";
+    if (merging) return "Merging…";
+    if (failedCount > 0) return "CI checks failing";
+    if (checks.length > 0 && !allConcluded) return "CI checks pending";
+    return null;
+  }
+
+  async function fetchStrategies() {
+    if (!sessionId || strategiesFetchedFor === sessionId) return;
+    try {
+      allowedStrategies = await pr.getAllowedStrategies(sessionId);
+      strategiesFetchedFor = sessionId;
+      if (allowedStrategies.length > 0 && !allowedStrategies.includes(selectedStrategy)) {
+        selectedStrategy = allowedStrategies[0];
+      }
+    } catch {
+      allowedStrategies = ["squash", "merge", "rebase"];
+    }
+  }
+
+  async function doMerge(strategy: string) {
+    if (!sessionId || !canMerge) return;
+    merging = true;
+    mergeExpanded = false;
+    try {
+      await pr.merge(sessionId, strategy);
+      selectedStrategy = strategy;
+      localStorage.setItem(STORAGE_KEY, strategy);
+      showSnackbar("PR merged ✓", "success");
+    } catch (e) {
+      showSnackbar(String(e), "error");
+    } finally {
+      merging = false;
+    }
+  }
+
+  $effect(() => {
+    if (prUrl && sessionId && !isMerged) {
+      fetchStrategies();
+    }
+  });
+
   function handleClickOutside(e: MouseEvent) {
     if (ciExpanded) ciExpanded = false;
+    if (mergeExpanded) mergeExpanded = false;
   }
 </script>
 
@@ -137,6 +193,44 @@
                 </li>
               {/each}
             </ul>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Merge button -->
+    {#if !isMerged}
+      {@const disabledReason = mergeDisabledReason()}
+      <div class="ml-1 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
+        <button
+          class="flex items-center gap-1 px-2 py-1 rounded-l text-xs text-purple-600 dark:text-purple-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          title={disabledReason ?? `Merge (${selectedStrategy})`}
+          tabindex="-1"
+          disabled={!canMerge}
+          onclick={() => doMerge(selectedStrategy)}
+        >
+          <GitMerge class="size-3.5" />
+          <span class="capitalize">{selectedStrategy}</span>
+        </button>
+        <button
+          class="px-1 py-1 rounded-r text-xs text-purple-600 dark:text-purple-400 hover:bg-surface-200 dark:hover:bg-surface-800 border-l border-surface-300 dark:border-surface-600 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          tabindex="-1"
+          disabled={!canMerge}
+          onclick={() => (mergeExpanded = !mergeExpanded)}
+        >
+          <ChevronDown class="size-3" />
+        </button>
+
+        {#if mergeExpanded}
+          <div class="absolute top-full right-0 mt-1 z-50 w-40 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-1">
+            {#each allowedStrategies as strat (strat)}
+              <button
+                class="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-surface-200 dark:hover:bg-surface-700 capitalize {strat === selectedStrategy ? 'text-purple-600 dark:text-purple-400 font-medium' : 'text-surface-700 dark:text-surface-300'}"
+                onclick={() => doMerge(strat)}
+              >
+                {strat}
+              </button>
+            {/each}
           </div>
         {/if}
       </div>

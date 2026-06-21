@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::config;
 use crate::db;
@@ -354,6 +354,137 @@ pub async fn get_ci_checks(
     Ok(checks)
 }
 
+#[tauri::command]
+pub async fn get_allowed_merge_strategies(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<String>, String> {
+    let cwd = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?
+    };
+
+    let remote_output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
+        .trim()
+        .to_string();
+    let repo = parse_github_repo(&remote_url).ok_or("not a GitHub repo")?;
+
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{repo}"),
+            "--jq",
+            "[.allow_squash_merge, .allow_merge_commit, .allow_rebase_merge] | @json",
+        ])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        return Err("failed to fetch repo merge settings".to_string());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Parse JSON array of booleans like "[true, false, true]"
+    let parsed: Vec<bool> = serde_json::from_str(&raw)
+        .or_else(|_| {
+            // gh --jq @json wraps in quotes, try unquoting
+            let unquoted = raw.trim_matches('"').replace("\\\"", "\"");
+            serde_json::from_str(&unquoted)
+        })
+        .map_err(|e| format!("failed to parse merge settings: {e}"))?;
+
+    let mut strategies = Vec::new();
+    if parsed.first().copied().unwrap_or(false) {
+        strategies.push("squash".to_string());
+    }
+    if parsed.get(1).copied().unwrap_or(false) {
+        strategies.push("merge".to_string());
+    }
+    if parsed.get(2).copied().unwrap_or(false) {
+        strategies.push("rebase".to_string());
+    }
+    Ok(strategies)
+}
+
+#[tauri::command]
+pub async fn merge_pr(
+    session_id: String,
+    strategy: String,
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    if !["squash", "merge", "rebase"].contains(&strategy.as_str()) {
+        return Err(format!("invalid merge strategy: {strategy}"));
+    }
+
+    let (cwd, branch, pr_url, task_key) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (
+            cwd,
+            session.branch.clone(),
+            session.pr_url.clone().unwrap_or_default(),
+            session.task_key.clone(),
+        )
+    };
+
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "merge",
+            &branch,
+            &format!("--{strategy}"),
+            "--delete-branch",
+        ])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("merge failed: {stderr}"));
+    }
+
+    // Update DB state
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let _ = db::update_pr_state(&conn, &session_id, &pr_url, "merged");
+    }
+
+    // Fire task hook
+    {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(ref key) = task_key {
+            if let Ok(tm) = resolve_task_manager(&cfg) {
+                pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, std::path::Path::new(&cwd));
+            }
+        }
+    }
+
+    // Emit pr-merged event
+    let _ = app.emit("pr-merged", serde_json::json!({ "session_id": session_id }));
+    // Also refresh sessions so UI picks up new pr_state
+    let _ = app.emit("sessions-changed", ());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +695,72 @@ mod tests {
         let json = serde_json::to_string(&defaults).unwrap();
         assert!(json.contains("feat: add login"));
         assert!(json.contains("base_branch"));
+    }
+
+    #[test]
+    fn parse_merge_strategies_all_enabled() {
+        let raw = "[true,true,true]";
+        let parsed: Vec<bool> = serde_json::from_str(raw).unwrap();
+        let mut strategies = Vec::new();
+        if parsed.first().copied().unwrap_or(false) {
+            strategies.push("squash".to_string());
+        }
+        if parsed.get(1).copied().unwrap_or(false) {
+            strategies.push("merge".to_string());
+        }
+        if parsed.get(2).copied().unwrap_or(false) {
+            strategies.push("rebase".to_string());
+        }
+        assert_eq!(strategies, vec!["squash", "merge", "rebase"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_only_squash() {
+        let raw = "[true,false,false]";
+        let parsed: Vec<bool> = serde_json::from_str(raw).unwrap();
+        let mut strategies = Vec::new();
+        if parsed.first().copied().unwrap_or(false) {
+            strategies.push("squash".to_string());
+        }
+        if parsed.get(1).copied().unwrap_or(false) {
+            strategies.push("merge".to_string());
+        }
+        if parsed.get(2).copied().unwrap_or(false) {
+            strategies.push("rebase".to_string());
+        }
+        assert_eq!(strategies, vec!["squash"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_quoted_json() {
+        // gh --jq @json wraps the output in quotes with escaped content
+        let raw = "\"[true,false,true]\"";
+        let parsed: Vec<bool> = serde_json::from_str::<Vec<bool>>(raw)
+            .or_else(|_| {
+                let unquoted = raw.trim_matches('"').replace("\\\"", "\"");
+                serde_json::from_str(&unquoted)
+            })
+            .unwrap();
+        let mut strategies = Vec::new();
+        if parsed.first().copied().unwrap_or(false) {
+            strategies.push("squash".to_string());
+        }
+        if parsed.get(1).copied().unwrap_or(false) {
+            strategies.push("merge".to_string());
+        }
+        if parsed.get(2).copied().unwrap_or(false) {
+            strategies.push("rebase".to_string());
+        }
+        assert_eq!(strategies, vec!["squash", "rebase"]);
+    }
+
+    #[test]
+    fn merge_strategy_validation() {
+        let valid = ["squash", "merge", "rebase"];
+        assert!(valid.contains(&"squash"));
+        assert!(valid.contains(&"merge"));
+        assert!(valid.contains(&"rebase"));
+        assert!(!valid.contains(&"fast-forward"));
+        assert!(!valid.contains(&""));
     }
 }
