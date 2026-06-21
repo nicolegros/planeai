@@ -89,11 +89,13 @@ pub fn jira_status(
         .and_then(|g| g.as_ref().map(|s| s.auth.is_connected()))
         .unwrap_or(false);
 
-    let site = config_state
-        .0
-        .lock()
-        .ok()
-        .and_then(|cfg| cfg.integrations.as_ref()?.jira.as_ref().map(|j| j.site.clone()));
+    let site = config_state.0.lock().ok().and_then(|cfg| {
+        cfg.integrations
+            .as_ref()?
+            .jira
+            .as_ref()
+            .map(|j| j.site.clone())
+    });
 
     JiraStatusResponse { connected, site }
 }
