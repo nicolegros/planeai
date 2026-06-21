@@ -95,21 +95,21 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   }
 
   // Mod+] — next tab
-  if (mod && !e.shiftKey && (e.key === "]")) {
+  if (mod && !e.shiftKey && e.key === "]") {
     return { type: "next_tab" };
   }
 
   // Mod+[ — prev tab
-  if (mod && !e.shiftKey && (e.key === "[")) {
+  if (mod && !e.shiftKey && e.key === "[") {
     return { type: "prev_tab" };
   }
 
-  // Mod+{ (mod+Shift+[) — next session
+  // Mod+} (Cmd+Shift+]) — next session
   if (mod && e.shiftKey && (e.key === "}" || e.key === "]")) {
     return { type: "next_session" };
   }
 
-  // Mod+} (mod+Shift+]) — prev session
+  // Mod+{ (Cmd+Shift+[) — prev session
   if (mod && e.shiftKey && (e.key === "{" || e.key === "[")) {
     return { type: "prev_session" };
   }
