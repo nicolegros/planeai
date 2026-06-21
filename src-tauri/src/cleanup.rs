@@ -30,6 +30,8 @@ pub struct CleanupOps {
 }
 
 /// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
+/// For daemon-backend sessions with tab_count > 1, also kills shell tabs
+/// ({session_id}:1, {session_id}:2, ...).
 pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
@@ -206,6 +208,7 @@ mod tests {
         assert!(errors.is_empty());
         KILLED.with(|k| {
             let killed = k.borrow();
+            // Kills agent session + 2 shell tabs (tab_count=3 means tabs 0,1,2; 0 is agent)
             assert_eq!(killed.len(), 3);
             assert!(killed.contains(&"sess-abc".to_string()));
             assert!(killed.contains(&"sess-abc:1".to_string()));
