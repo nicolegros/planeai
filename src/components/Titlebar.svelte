@@ -3,8 +3,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { GitPullRequest, Zap, RefreshCw, ChevronDown } from "@lucide/svelte";
   import { onDestroy } from "svelte";
-  import { pr } from "../lib/api";
-  import type { CiCheck } from "../lib/types";
+  import { getCiChecks, classifyCheck, startPolling, stopPolling, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -28,64 +27,43 @@
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
 
-  // ─── CI Checks ──────────────────────────────────────────────────────────────
-
-  let ciChecks = $state<CiCheck[]>([]);
-  let ciLoading = $state(false);
   let ciExpanded = $state(false);
-  let ciPollTimer: ReturnType<typeof setInterval> | null = null;
 
-  let allChecksConcluded = $derived(
-    ciChecks.length > 0 && ciChecks.every((c) => c.status === "completed" || c.conclusion !== null)
-  );
-  let ciPassedCount = $derived(ciChecks.filter((c) => c.conclusion === "success" || c.conclusion === "neutral" || c.conclusion === "skipped").length);
-  let ciFailedCount = $derived(ciChecks.filter((c) => c.conclusion === "failure" || c.conclusion === "cancelled" || c.conclusion === "timed_out").length);
+  let checks = $derived(getCiChecks());
+  let passedCount = $derived(checks.filter((c) => classifyCheck(c) === "pass").length);
+  let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
+  let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
 
-  function ciSummary(): string {
-    if (ciFailedCount > 0) return `${ciFailedCount} failed`;
-    if (allChecksConcluded) return "All passed";
-    return `${ciPassedCount}/${ciChecks.length}`;
+  function summary(): string {
+    if (failedCount > 0) return `${failedCount} failed`;
+    if (allConcluded) return "All passed";
+    return `${passedCount}/${checks.length}`;
   }
 
-  function ciColor(): string {
-    if (ciFailedCount > 0) return "text-red-600 dark:text-red-400";
-    if (allChecksConcluded) return "text-green-600 dark:text-green-400";
+  function summaryColor(): string {
+    if (failedCount > 0) return "text-red-600 dark:text-red-400";
+    if (allConcluded) return "text-green-600 dark:text-green-400";
     return "text-yellow-500";
   }
 
-  async function fetchCiChecks() {
-    if (!sessionId || !prUrl) return;
-    ciLoading = ciChecks.length === 0;
-    try {
-      ciChecks = await pr.getCiChecks(sessionId);
-    } catch {
-      // gh not available or no checks
-    }
-    ciLoading = false;
-  }
-
-  function startCiPolling() {
-    stopCiPolling();
-    if (!sessionId || !prUrl) return;
-    fetchCiChecks();
-    ciPollTimer = setInterval(() => {
-      if (!sessionId || !prUrl || allChecksConcluded) { stopCiPolling(); return; }
-      fetchCiChecks();
-    }, 30_000);
-  }
-
-  function stopCiPolling() {
-    if (ciPollTimer) { clearInterval(ciPollTimer); ciPollTimer = null; }
+  function iconFor(c: CiConclusion): { char: string; color: string } {
+    if (c === "pass") return { char: "✓", color: "text-green-600 dark:text-green-400" };
+    if (c === "fail") return { char: "✗", color: "text-red-600 dark:text-red-400" };
+    return { char: "◌", color: "text-yellow-500 animate-pulse" };
   }
 
   $effect(() => {
-    if (sessionId && prUrl) { startCiPolling(); }
-    else { stopCiPolling(); ciChecks = []; }
-    return () => stopCiPolling();
+    startPolling(sessionId, prUrl);
   });
 
-  onDestroy(() => stopCiPolling());
+  onDestroy(() => stopPolling());
+
+  function handleClickOutside(e: MouseEvent) {
+    if (ciExpanded) ciExpanded = false;
+  }
 </script>
+
+<svelte:window onclick={handleClickOutside} />
 
 <header
   data-tauri-drag-region
@@ -130,22 +108,22 @@
     </button>
 
     <!-- CI Checks summary -->
-    {#if ciChecks.length > 0}
-      <div class="ml-1 shrink-0 relative flex items-center">
+    {#if checks.length > 0}
+      <div class="ml-1 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
         <button
-          class="flex items-center gap-1 px-2 py-1 rounded text-xs {ciColor()} hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-          title={ciChecks.map(c => `${c.conclusion === "success" ? "✓" : c.conclusion === "failure" ? "✗" : "◌"} ${c.name}`).join("\n")}
+          class="flex items-center gap-1 px-2 py-1 rounded text-xs {summaryColor()} hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+          title={checks.map(c => `${iconFor(classifyCheck(c)).char} ${c.name}`).join("\n")}
           tabindex="-1"
           onclick={() => (ciExpanded = !ciExpanded)}
         >
-          <span>{ciSummary()}</span>
+          <span>{summary()}</span>
           <ChevronDown class="size-3" />
         </button>
         <button
           class="ml-0.5 p-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
           tabindex="-1"
           title="Refresh checks"
-          onclick={() => fetchCiChecks()}
+          onclick={() => refreshCiChecks()}
         >
           <RefreshCw size={11} />
         </button>
@@ -154,11 +132,10 @@
           <div class="absolute top-full right-0 mt-1 z-50 w-64 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-2">
             <div class="text-[10px] text-surface-500 uppercase tracking-wide mb-1">CI Checks</div>
             <ul class="space-y-0.5">
-              {#each ciChecks as check (check.name)}
-                {@const icon = check.conclusion === "success" || check.conclusion === "neutral" || check.conclusion === "skipped" ? "✓" : check.conclusion === "failure" || check.conclusion === "cancelled" || check.conclusion === "timed_out" ? "✗" : "◌"}
-                {@const color = icon === "✓" ? "text-green-600 dark:text-green-400" : icon === "✗" ? "text-red-600 dark:text-red-400" : "text-yellow-500 animate-pulse"}
+              {#each checks as check (check.name)}
+                {@const ic = iconFor(classifyCheck(check))}
                 <li class="flex items-center gap-1.5 text-xs">
-                  <span class={color}>{icon}</span>
+                  <span class={ic.color}>{ic.char}</span>
                   {#if check.url}
                     <button class="text-surface-700 dark:text-surface-300 hover:underline truncate text-left" onclick={() => openUrl(check.url!)}>{check.name}</button>
                   {:else}
