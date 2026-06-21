@@ -336,6 +336,7 @@ fn main() {
             fetch_pr_url,
             create_pr,
             generate_pr_defaults,
+            get_ci_checks,
             check_cli_installed,
             install_cli,
             get_symphony_status,

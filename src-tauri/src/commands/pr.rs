@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config;
@@ -110,37 +110,41 @@ pub struct PrDefaults {
 }
 
 #[tauri::command]
-pub fn generate_pr_defaults(
+pub async fn generate_pr_defaults(
     session_id: String,
-    db_state: State<DbState>,
+    db_state: State<'_, DbState>,
 ) -> Result<PrDefaults, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-
-    let title = match &session.task_key {
-        Some(key) => {
-            let prefix = format!("{}: ", key);
-            let name = session.name.strip_prefix(&prefix).unwrap_or(&session.name);
-            format!("{} [{}]", name, key)
-        }
-        None => session.name.clone(),
+    let (cwd, session_name, task_key, base) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (
+            cwd,
+            session.name.clone(),
+            session.task_key.clone(),
+            session.base_branch.clone(),
+        )
     };
 
+    let title = match &task_key {
+        Some(key) => {
+            let prefix = format!("{}: ", key);
+            let name = session_name.strip_prefix(&prefix).unwrap_or(&session_name);
+            format!("{} [{}]", name, key)
+        }
+        None => session_name,
+    };
+
+    let base_ref = base.as_deref().unwrap_or("main");
+
     // Diff stats for body
-    let diff_output = std::process::Command::new("git")
-        .args([
-            "diff",
-            "--stat",
-            &format!(
-                "{}...HEAD",
-                session.base_branch.as_deref().unwrap_or("main")
-            ),
-        ])
+    let diff_output = tokio::process::Command::new("git")
+        .args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
         .current_dir(&cwd)
         .output()
+        .await
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -152,9 +156,10 @@ pub fn generate_pr_defaults(
         format!("## Changes\n\n```\n{diff_output}\n```")
     };
 
-    let base_branch = session
-        .base_branch
-        .unwrap_or_else(|| detect_default_branch(&cwd));
+    let base_branch = match base {
+        Some(b) => b,
+        None => detect_default_branch_async(&cwd).await,
+    };
 
     Ok(PrDefaults {
         title,
@@ -163,11 +168,12 @@ pub fn generate_pr_defaults(
     })
 }
 
-fn detect_default_branch(cwd: &str) -> String {
-    std::process::Command::new("git")
+async fn detect_default_branch_async(cwd: &str) -> String {
+    tokio::process::Command::new("git")
         .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
         .current_dir(cwd)
         .output()
+        .await
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| {
@@ -197,10 +203,11 @@ pub async fn create_pr(
     };
 
     // Push branch
-    let push = std::process::Command::new("git")
+    let push = tokio::process::Command::new("git")
         .args(["push", "-u", "origin", &branch])
         .current_dir(&cwd)
         .output()
+        .await
         .map_err(|e| format!("failed to run git push: {e}"))?;
     if !push.status.success() {
         let stderr = String::from_utf8_lossy(&push.stderr);
@@ -208,9 +215,10 @@ pub async fn create_pr(
     }
 
     // Check gh is available
-    let gh_check = std::process::Command::new("gh")
+    let gh_check = tokio::process::Command::new("gh")
         .args(["--version"])
-        .output();
+        .output()
+        .await;
     if gh_check.is_err() {
         return Err("GitHub CLI (gh) not found. Install from https://cli.github.com/".to_string());
     }
@@ -229,10 +237,11 @@ pub async fn create_pr(
     if draft {
         args.push("--draft".to_string());
     }
-    let pr_output = std::process::Command::new("gh")
+    let pr_output = tokio::process::Command::new("gh")
         .args(&args)
         .current_dir(&cwd)
         .output()
+        .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
     if !pr_output.status.success() {
         let stderr = String::from_utf8_lossy(&pr_output.stderr).to_string();
@@ -253,6 +262,96 @@ pub async fn create_pr(
     }
 
     Ok(url)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiCheck {
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhCheckRun {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    details_url: Option<String>,
+    workflow_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhPrView {
+    status_check_rollup: Vec<GhCheckRun>,
+}
+
+#[tauri::command]
+pub async fn get_ci_checks(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<CiCheck>, String> {
+    let (cwd, branch) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (cwd, session.branch.clone())
+    };
+
+    tracing::debug!(session_id = %session_id, branch = %branch, "get_ci_checks called");
+
+    // Only run for GitHub-hosted repos
+    let remote_output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
+        .trim()
+        .to_string();
+    if parse_github_repo(&remote_url).is_none() {
+        tracing::debug!(remote_url = %remote_url, "not a GitHub remote, skipping CI checks");
+        return Ok(vec![]);
+    }
+
+    let output = tokio::process::Command::new("gh")
+        .args(["pr", "view", &branch, "--json", "statusCheckRollup"])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        tracing::warn!(stderr = %stderr, "gh pr view failed");
+        return Ok(vec![]);
+    }
+
+    let pr_view: GhPrView = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse pr view: {e}"))?;
+
+    tracing::debug!(
+        count = pr_view.status_check_rollup.len(),
+        "ci checks fetched"
+    );
+
+    let checks: Vec<CiCheck> = pr_view
+        .status_check_rollup
+        .into_iter()
+        .map(|c| CiCheck {
+            name: c.workflow_name.unwrap_or(c.name),
+            status: c.status.to_lowercase(),
+            conclusion: c.conclusion.map(|s| s.to_lowercase()),
+            url: c.details_url,
+        })
+        .collect();
+
+    Ok(checks)
 }
 
 #[cfg(test)]
@@ -408,11 +507,14 @@ mod tests {
         assert!(result.unwrap_err().contains("not configured"));
     }
 
-    #[test]
-    fn detect_default_branch_fallback() {
+    #[tokio::test]
+    async fn detect_default_branch_fallback() {
         let dir = tempfile::tempdir().unwrap();
         // No git repo — should fallback to "main"
-        assert_eq!(detect_default_branch(dir.path().to_str().unwrap()), "main");
+        assert_eq!(
+            detect_default_branch_async(dir.path().to_str().unwrap()).await,
+            "main"
+        );
     }
 
     #[test]

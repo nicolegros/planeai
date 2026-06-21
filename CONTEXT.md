@@ -177,6 +177,18 @@ Uses the `tracing` crate with a rolling daily file appender. Logs go to `<app_da
 - **Filter**: `RUST_LOG` env var (defaults to `info`).
 - **Convention**: Use `tracing::info!` for happy-path events, `tracing::warn!` for recoverable failures, `tracing::error!` for unrecoverable failures. Include relevant identifiers (session_id, tmux_name) as structured fields.
 
+## Performance
+
+Performance is critical — planeai is a real-time terminal multiplexer. The UI must never stutter or freeze.
+
+**Cardinal rule: never block the main thread.**
+
+- All Tauri commands that perform I/O (subprocess calls, network, filesystem) **must** be `async` and use `tokio` (e.g., `tokio::process::Command`, `tokio::fs`).
+- Release Mutex locks **before** awaiting I/O — hold locks only for in-memory reads/writes.
+- Synchronous `std::process::Command` is forbidden in Tauri commands. Use `tokio::process::Command` instead.
+- Frontend polling intervals should be reasonable (≥30s for non-critical data) and stop when data is no longer needed (tab hidden, task complete).
+- Batch IPC calls where possible — prefer one `invoke` returning a list over N individual calls.
+
 ## Architecture decisions
 
 See `docs/adr/` for recorded decisions.

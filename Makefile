@@ -14,9 +14,6 @@ lint: ## Check formatting and clippy
 	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev:
-	pnpm tauri dev
-
-dev-release: ## Release Rust binary + hot-reload frontend
 	pnpm tauri dev --release
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
