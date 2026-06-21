@@ -16,7 +16,7 @@ pub use file_explorer::*;
 pub use files::*;
 pub use git::*;
 pub use notify::*;
-pub use pr::{create_pr, fetch_pr_url, generate_pr_defaults};
+pub use pr::{create_pr, fetch_pr_url, generate_pr_defaults, get_ci_checks};
 pub use projects::*;
 pub use sessions::*;
 pub use symphony::*;

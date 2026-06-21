@@ -229,6 +229,7 @@
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
     hasChanges={!!activeSessionId}
+    sessionId={activeSessionId}
     tabs={titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
     onSelectTab={orchestrator.selectUnifiedTab}

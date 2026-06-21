@@ -147,6 +147,13 @@
   overflow: hidden;
 }
 
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-width: none;

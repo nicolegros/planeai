@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config;
@@ -253,6 +253,96 @@ pub async fn create_pr(
     }
 
     Ok(url)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiCheck {
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhCheckRun {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    details_url: Option<String>,
+    workflow_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhPrView {
+    status_check_rollup: Vec<GhCheckRun>,
+}
+
+#[tauri::command]
+pub async fn get_ci_checks(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<CiCheck>, String> {
+    let (cwd, branch) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (cwd, session.branch.clone())
+    };
+
+    tracing::debug!(session_id = %session_id, branch = %branch, "get_ci_checks called");
+
+    // Only run for GitHub-hosted repos
+    let remote_output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
+        .trim()
+        .to_string();
+    if parse_github_repo(&remote_url).is_none() {
+        tracing::debug!(remote_url = %remote_url, "not a GitHub remote, skipping CI checks");
+        return Ok(vec![]);
+    }
+
+    let output = tokio::process::Command::new("gh")
+        .args(["pr", "view", &branch, "--json", "statusCheckRollup"])
+        .current_dir(&cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        tracing::warn!(stderr = %stderr, "gh pr view failed");
+        return Ok(vec![]);
+    }
+
+    let pr_view: GhPrView = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse pr view: {e}"))?;
+
+    tracing::debug!(
+        count = pr_view.status_check_rollup.len(),
+        "ci checks fetched"
+    );
+
+    let checks: Vec<CiCheck> = pr_view
+        .status_check_rollup
+        .into_iter()
+        .map(|c| CiCheck {
+            name: c.workflow_name.unwrap_or(c.name),
+            status: c.status.to_lowercase(),
+            conclusion: c.conclusion.map(|s| s.to_lowercase()),
+            url: c.details_url,
+        })
+        .collect();
+
+    Ok(checks)
 }
 
 #[cfg(test)]
