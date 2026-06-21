@@ -3,7 +3,8 @@
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
-  import { vim, Vim } from "@replit/codemirror-vim";
+  import { vim } from "@replit/codemirror-vim";
+  import { registerEditor, unregisterEditor } from "../lib/vim-registry";
   import { basicSetup } from "codemirror";
   import { defaultKeymap } from "@codemirror/commands";
   import { searchKeymap } from "@codemirror/search";
@@ -98,40 +99,29 @@
 
   function setupView() {
     if (!editorContainer) return;
-
-    // Register custom ex commands (global, only once)
-    Vim.defineEx("w", "w", () => saveCurrentBuffer());
-    Vim.defineEx("q", "q", (cm: any, params: any) => {
-      if (params?.bang) {
-        closeCurrentBuffer(true);
-      } else {
-        closeCurrentBuffer(false);
-      }
-    });
-    Vim.defineEx("qa", "qa", () => onClose());
-    Vim.defineEx("wq", "wq", async () => {
-      await saveCurrentBuffer();
-      closeCurrentBuffer(true);
-    });
-    Vim.defineEx("bn", "bn", () => nextBuffer());
-    Vim.defineEx("bp", "bp", () => prevBuffer());
-
-    // Track vim mode changes via event (method exists at runtime but not in types)
-    (Vim as any).on("vim-mode-change", (ev: { mode: string; subMode?: string }) => {
-      if (ev.mode === "insert") vimMode = "INSERT";
-      else if (ev.mode === "visual") vimMode = ev.subMode === "linewise" ? "V-LINE" : "VISUAL";
-      else if (ev.mode === "replace") vimMode = "REPLACE";
-      else vimMode = "NORMAL";
-    });
-
     return () => {};
+  }
+
+  function registerCurrentView() {
+    if (!view) return;
+    registerEditor(view, {
+      save: () => saveCurrentBuffer(),
+      close: (force) => closeCurrentBuffer(force),
+      closeAll: () => onClose(),
+      saveAndClose: async () => { await saveCurrentBuffer(); closeCurrentBuffer(true); },
+      nextBuffer: () => nextBuffer(),
+      prevBuffer: () => prevBuffer(),
+      onModeChange: (mode) => { vimMode = mode; },
+    });
   }
 
   function ensureView(state: EditorState) {
     if (view) {
+      unregisterEditor(view);
       view.destroy();
     }
     view = new EditorView({ state, parent: editorContainer });
+    registerCurrentView();
   }
 
   let cleanupInterval: (() => void) | undefined;
@@ -244,7 +234,10 @@
 
   onDestroy(() => {
     cleanupInterval?.();
-    view?.destroy();
+    if (view) {
+      unregisterEditor(view);
+      view.destroy();
+    }
     view = null;
   });
 
