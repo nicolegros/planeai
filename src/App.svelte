@@ -11,6 +11,7 @@
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
+  import { computeSidebarSessionOrder } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -72,27 +73,8 @@
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
-  // Session IDs in sidebar display order (orphans first, then tasks by status/priority per project)
-  const sidebarSessionOrder = $derived.by(() => {
-    const tasksByProject = taskStore.getTasksByProject();
-    const allTaskKeys = new Set(Object.values(tasksByProject).flat().map(t => t.key));
-    const statusOrder = ["in_progress", "in_review", "todo", "done"];
-    const ids: string[] = [];
-    for (const project of projects) {
-      // Orphan sessions
-      for (const s of sessions.filter(s => s.project_id === project.id && (!s.task_key || !allTaskKeys.has(s.task_key)))) ids.push(s.id);
-      // Task sessions in status/priority order
-      const projectTasks = tasksByProject[project.path] ?? [];
-      for (const status of statusOrder) {
-        const group = projectTasks.filter(t => t.status === status).sort((a, b) => b.priority - a.priority);
-        for (const t of group) {
-          const linked = sessions.find(s => s.task_key === t.key);
-          if (linked) ids.push(linked.id);
-        }
-      }
-    }
-    return ids;
-  });
+  // Session IDs in sidebar display order
+  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject()));
 
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
