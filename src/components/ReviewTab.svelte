@@ -50,7 +50,7 @@
 
   // CodeView + Worker Pool
   let viewerRoot: HTMLElement;
-  let viewer: CodeView | null = null;
+  let viewer: CodeView<ReviewComment> | null = null;
   let mounted = false;
 
   let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
@@ -341,8 +341,8 @@
     }
   }
 
-  function createViewer(): CodeView {
-    const v = new CodeView({
+  function createViewer(): CodeView<ReviewComment> {
+    const v = new CodeView<ReviewComment>({
       theme: { dark: "github-dark", light: "github-light" },
       themeType: isDark() ? "dark" : "light",
       diffStyle,
