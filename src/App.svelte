@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pty, notify, sessionLogs } from "./lib/api";
+  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -46,6 +46,47 @@
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
+
+  // PR form state
+  let showPrForm = $state(false);
+  let prTitle = $state("");
+  let prBody = $state("");
+  let prBaseBranch = $state("");
+  let prDraft = $state(false);
+  let prSubmitting = $state(false);
+  let prError = $state("");
+
+  async function openPrForm() {
+    if (!activeSessionId) return;
+    prError = "";
+    prSubmitting = false;
+    try {
+      const defaults = await prApi.generateDefaults(activeSessionId);
+      prTitle = defaults.title;
+      prBody = defaults.body;
+      prBaseBranch = defaults.base_branch;
+      prDraft = false;
+      showPrForm = true;
+    } catch (e: any) {
+      showSnackbar(e.toString());
+    }
+  }
+
+  async function submitPr() {
+    if (prSubmitting || !activeSessionId) return;
+    prSubmitting = true;
+    prError = "";
+    try {
+      const url = await prApi.create(activeSessionId, prTitle, prBody, prBaseBranch, prDraft);
+      showPrForm = false;
+      showSnackbar(`PR created: ${url}`, "success");
+      await orchestrator.loadSessions();
+    } catch (e: any) {
+      prError = e.toString();
+    } finally {
+      prSubmitting = false;
+    }
+  }
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
@@ -187,6 +228,7 @@
     sessionName={activeSessionName}
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
+    hasChanges={!!activeSessionId}
     tabs={titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
     onSelectTab={orchestrator.selectUnifiedTab}
@@ -197,6 +239,7 @@
       else { orchestrator.closeShellTab(activeSessionId, i); }
     }}
     onAddTab={() => orchestrator.handleNewTab()}
+    onCreatePr={openPrForm}
     {symphonyStatus}
   />
 
@@ -269,6 +312,7 @@
       onToggleDiff={() => orchestrator.toggleDiff()}
       onOpenFile={(path) => orchestrator.openFile(path)}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
+      onCreatePr={openPrForm}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
@@ -436,6 +480,44 @@
   {/if}
   </div>
 </main>
+
+{#if showPrForm}
+  <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showPrForm = false; }}>
+    <Dialog.Portal>
+      <Dialog.Overlay class="fixed inset-0 z-50" />
+      <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none">
+        <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Create Pull Request</Dialog.Title>
+        <div class="flex flex-col gap-3">
+          <div>
+            <label for="pr-title" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Title</label>
+            <input id="pr-title" type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+          </div>
+          <div>
+            <label for="pr-body" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Body</label>
+            <textarea id="pr-body" bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 resize-y focus:outline-none focus:ring-1 focus:ring-primary-500 font-mono text-xs"></textarea>
+          </div>
+          <div>
+            <label for="pr-base" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Base branch</label>
+            <input id="pr-base" type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+          </div>
+          <label class="flex items-center gap-2 text-xs text-surface-700 dark:text-surface-300">
+            <input type="checkbox" bind:checked={prDraft} class="rounded border-surface-300 dark:border-surface-600" />
+            Draft PR
+          </label>
+          {#if prError}
+            <p class="text-xs text-error-500">{prError}</p>
+          {/if}
+          <div class="flex justify-end gap-2 mt-1">
+            <button class="px-2 py-1 text-xs rounded border border-surface-300 text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-800" onclick={() => (showPrForm = false)}>Cancel</button>
+            <button class="px-2 py-1 text-xs rounded bg-surface-900 text-surface-50 hover:bg-surface-800 dark:bg-surface-50 dark:text-surface-900 dark:hover:bg-surface-200 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()} onclick={submitPr}>
+              {prSubmitting ? "Creating…" : "Create"}
+            </button>
+          </div>
+        </div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
+{/if}
 
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->

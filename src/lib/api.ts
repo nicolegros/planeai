@@ -122,6 +122,15 @@ export const git = {
   fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
 };
 
+export const pr = {
+  create: (sessionId: string, title: string, body: string, baseBranch: string, draft: boolean) =>
+    invoke<string>("create_pr", { sessionId, title, body, baseBranch, draft }),
+  generateDefaults: (sessionId: string) =>
+    invoke<{ title: string; body: string; base_branch: string }>("generate_pr_defaults", {
+      sessionId,
+    }),
+};
+
 export const notify = {
   isInstalled: () => invoke<boolean>("is_notify_hook_installed"),
   install: () => invoke("install_notify_hook"),

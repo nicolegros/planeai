@@ -334,6 +334,8 @@ fn main() {
             fe_watch_directory,
             fe_unwatch_directory,
             fetch_pr_url,
+            create_pr,
+            generate_pr_defaults,
             check_cli_installed,
             install_cli,
             get_symphony_status,

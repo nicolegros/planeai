@@ -1,3 +1,4 @@
+use serde::Serialize;
 use tauri::State;
 
 use crate::config;
@@ -99,6 +100,159 @@ pub fn fetch_pr_url(
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     fetch_pr_url_inner(&conn, &cfg, &session_id)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrDefaults {
+    pub title: String,
+    pub body: String,
+    pub base_branch: String,
+}
+
+#[tauri::command]
+pub fn generate_pr_defaults(
+    session_id: String,
+    db_state: State<DbState>,
+) -> Result<PrDefaults, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+
+    let title = match &session.task_key {
+        Some(key) => {
+            let prefix = format!("{}: ", key);
+            let name = session.name.strip_prefix(&prefix).unwrap_or(&session.name);
+            format!("{} [{}]", name, key)
+        }
+        None => session.name.clone(),
+    };
+
+    // Diff stats for body
+    let diff_output = std::process::Command::new("git")
+        .args([
+            "diff",
+            "--stat",
+            &format!(
+                "{}...HEAD",
+                session.base_branch.as_deref().unwrap_or("main")
+            ),
+        ])
+        .current_dir(&cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let body = if diff_output.is_empty() {
+        String::new()
+    } else {
+        format!("## Changes\n\n```\n{diff_output}\n```")
+    };
+
+    let base_branch = session
+        .base_branch
+        .unwrap_or_else(|| detect_default_branch(&cwd));
+
+    Ok(PrDefaults {
+        title,
+        body,
+        base_branch,
+    })
+}
+
+fn detect_default_branch(cwd: &str) -> String {
+    std::process::Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            s.strip_prefix("origin/").map(|b| b.to_string())
+        })
+        .unwrap_or_else(|| "main".to_string())
+}
+
+#[tauri::command]
+pub async fn create_pr(
+    session_id: String,
+    title: String,
+    body: String,
+    base_branch: String,
+    draft: bool,
+    db_state: State<'_, DbState>,
+    _config_state: State<'_, ConfigState>,
+) -> Result<String, String> {
+    let (cwd, branch) = {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+        (cwd, session.branch.clone())
+    };
+
+    // Push branch
+    let push = std::process::Command::new("git")
+        .args(["push", "-u", "origin", &branch])
+        .current_dir(&cwd)
+        .output()
+        .map_err(|e| format!("failed to run git push: {e}"))?;
+    if !push.status.success() {
+        let stderr = String::from_utf8_lossy(&push.stderr);
+        return Err(format!("git push failed: {stderr}"));
+    }
+
+    // Check gh is available
+    let gh_check = std::process::Command::new("gh")
+        .args(["--version"])
+        .output();
+    if gh_check.is_err() {
+        return Err("GitHub CLI (gh) not found. Install from https://cli.github.com/".to_string());
+    }
+
+    // Create PR
+    let mut args = vec![
+        "pr".to_string(),
+        "create".to_string(),
+        "--title".to_string(),
+        title,
+        "--body".to_string(),
+        body,
+        "--base".to_string(),
+        base_branch,
+    ];
+    if draft {
+        args.push("--draft".to_string());
+    }
+    let pr_output = std::process::Command::new("gh")
+        .args(&args)
+        .current_dir(&cwd)
+        .output()
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+    if !pr_output.status.success() {
+        let stderr = String::from_utf8_lossy(&pr_output.stderr).to_string();
+        if stderr.contains("not logged") || stderr.contains("auth login") {
+            return Err("Run `gh auth login` to authenticate".to_string());
+        }
+        return Err(format!("gh pr create failed: {stderr}"));
+    }
+
+    let url = String::from_utf8_lossy(&pr_output.stdout)
+        .trim()
+        .to_string();
+
+    // Store in DB
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let _ = db::update_pr_state(&conn, &session_id, &url, "open");
+    }
+
+    Ok(url)
 }
 
 #[cfg(test)]
@@ -252,5 +406,61 @@ mod tests {
         let result = fetch_pr_url_inner(&conn, &cfg, "s1");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not configured"));
+    }
+
+    #[test]
+    fn detect_default_branch_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        // No git repo — should fallback to "main"
+        assert_eq!(detect_default_branch(dir.path().to_str().unwrap()), "main");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn generate_pr_defaults_uses_session_name_and_base_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "test", dir.path().to_str().unwrap()).unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "add login page",
+            None,
+            "feat/login",
+            None,
+            None,
+            "daemon",
+            true,
+            None,
+            Some("develop"),
+        )
+        .unwrap();
+
+        let session = db::get_session(&conn, "s1").unwrap().unwrap();
+        let cwd = session_cwd(&conn, &session).expect("should resolve to project path");
+
+        assert_eq!(session.name, "add login page");
+        assert_eq!(session.base_branch, Some("develop".to_string()));
+        assert_eq!(cwd, dir.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn pr_defaults_struct_serializes() {
+        let defaults = PrDefaults {
+            title: "feat: add login".into(),
+            body: "## Changes\n\nstuff".into(),
+            base_branch: "main".into(),
+        };
+        let json = serde_json::to_string(&defaults).unwrap();
+        assert!(json.contains("feat: add login"));
+        assert!(json.contains("base_branch"));
     }
 }

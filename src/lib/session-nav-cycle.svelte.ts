@@ -9,14 +9,18 @@ let index = $state(0);
 let originId = $state<string | null>(null);
 
 export function getPreviewId(): string | null {
-  return cycling ? orderedIds[index] ?? null : null;
+  return cycling ? (orderedIds[index] ?? null) : null;
 }
 
 export function isCycling(): boolean {
   return cycling;
 }
 
-export function startPreview(ids: string[], currentId: string | undefined, direction: 1 | -1): void {
+export function startPreview(
+  ids: string[],
+  currentId: string | undefined,
+  direction: 1 | -1,
+): void {
   if (ids.length <= 1) return;
   orderedIds = ids;
   originId = currentId ?? null;
