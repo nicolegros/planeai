@@ -5,18 +5,17 @@
   import { CodeView, parsePatchFiles, type CodeViewItem, type DiffLineAnnotation, type SelectedLineRange, type FileDiffMetadata } from "@pierre/diffs";
   import { getOrCreateWorkerPoolSingleton, terminateWorkerPoolSingleton } from "@pierre/diffs/worker";
   import { workerFactory } from "../lib/worker-factory";
-  import { isDark } from "../lib/settings.svelte";
+  import { isDark, getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, removeComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, Send } from "@lucide/svelte";
+  import { MessageSquare, Send, Check } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
-  import { Dialog } from "bits-ui";
   import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
 
   interface Props {
@@ -38,7 +37,6 @@
 
   // Focus state
   let showCommentInput = $state(false);
-  let showHelp = $state(false);
   let diffFocus = $state<"list" | "body">("list");
   let commentText = $state("");
   let commentStartLine = $state(0);
@@ -52,6 +50,17 @@
   let viewerRoot: HTMLElement;
   let viewer: CodeView<ReviewComment> | null = null;
   let mounted = false;
+
+  // Hunk navigation state: array of { fileIndex, line } for each hunk's first changed line (additions side)
+  let hunkPositions: { fileIndex: number; line: number }[] = [];
+  // Visible line ranges per file index: ranges the cursor can occupy
+  let visibleRanges: Map<number, { start: number; end: number }[]> = new Map();
+
+  // Viewed files state
+  let viewedFiles = $state<Set<string>>(new Set());
+  let patchFingerprints = new Map<string, string>();
+  let allItems: CodeViewItem<ReviewComment>[] = [];
+  let viewedVersion = 0;
 
   let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
 
@@ -108,7 +117,20 @@
       patches = await git.getAllFilePatches(repoPath, baseBranch, fileArgs);
     }
 
+    if (!viewer) return;
     if (preloaded) clearPreloadedPatches(sessionId);
+
+    // Update fingerprints and invalidate viewed state for changed files
+    const newFingerprints = new Map<string, string>();
+    for (let i = 0; i < files.length; i++) {
+      const fp = `${files[i].additions}:${files[i].deletions}:${(patches[i] || "").length}`;
+      newFingerprints.set(files[i].path, fp);
+      if (viewedFiles.has(files[i].path) && patchFingerprints.get(files[i].path) !== fp) {
+        viewedFiles.delete(files[i].path);
+        viewedFiles = new Set(viewedFiles);
+      }
+    }
+    patchFingerprints = newFingerprints;
 
     const items: CodeViewItem<ReviewComment>[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -117,6 +139,7 @@
       const parsed = parsePatchFiles(patch, `${sessionId}-${i}`);
       const fileDiff = parsed[0]?.files[0];
       if (!fileDiff) continue;
+      delete fileDiff.cacheKey;
       const annotations = getAnnotationsForFile(files[i].path);
       items.push({
         id: `diff:${files[i].path}`,
@@ -125,10 +148,42 @@
         annotations,
       });
     }
-    viewer.setItems(items);
-    if (items.length > 0) {
+    allItems = items;
+    viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
+    computeHunkMeta(items);
+    if (items.length > 0 && viewer.getItem(currentFileId())) {
       viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
     }
+  }
+
+  function computeHunkMeta(items: CodeViewItem<ReviewComment>[]) {
+    const positions: { fileIndex: number; line: number }[] = [];
+    const ranges = new Map<number, { start: number; end: number }[]>();
+
+    for (let fi = 0; fi < items.length; fi++) {
+      const item = items[fi];
+      if (item.type !== "diff") continue;
+      // Map item back to files[] index
+      const filesIdx = files.findIndex((f) => `diff:${f.path}` === item.id);
+      const fileRanges: { start: number; end: number }[] = [];
+      for (const hunk of item.fileDiff.hunks) {
+        // Find the first changed line in this hunk
+        let firstChangeLine = hunk.additionStart;
+        for (const seg of hunk.hunkContent) {
+          if (seg.type === "change") {
+            firstChangeLine = hunk.additionStart + (seg.additionLineIndex - hunk.additionLineIndex);
+            break;
+          }
+        }
+        positions.push({ fileIndex: filesIdx, line: firstChangeLine });
+
+        // Visible range for this hunk: additionStart to additionStart + additionCount - 1
+        fileRanges.push({ start: hunk.additionStart, end: hunk.additionStart + hunk.additionCount - 1 });
+      }
+      ranges.set(filesIdx, fileRanges);
+    }
+    hunkPositions = positions;
+    visibleRanges = ranges;
   }
 
   function getAnnotationsForFile(filePath: string): DiffLineAnnotation<ReviewComment>[] {
@@ -140,10 +195,12 @@
   function selectFile(index: number) {
     selectedIndex = index;
     showCommentInput = false;
-    cursorLine = 1;
     selectionAnchor = null;
     onFileChange?.(files[index]?.path.split("/").pop() || files[index]?.path || "");
-    viewer?.scrollTo({ type: "item", id: `diff:${files[index]?.path}`, align: "start" });
+    cursorLine = snapToVisible(1, 1);
+    const id = `diff:${files[index]?.path}`;
+    if (viewer?.getItem(id)) viewer.scrollTo({ type: "item", id, align: "start" });
+    if (diffFocus === "body") showCursor();
   }
 
   function navigateFile(index: number) {
@@ -221,20 +278,99 @@
     showSnackbar(`Feedback sent (${count} comment${count !== 1 ? "s" : ""})`, "success");
   }
 
+  // ─── Viewed ──────────────────────────────────────────────────────────────────
+
+  function toggleViewed(index: number, advance = false) {
+    const path = files[index]?.path;
+    if (!path) return;
+    const wasViewed = viewedFiles.has(path);
+    if (wasViewed) { viewedFiles.delete(path); } else { viewedFiles.add(path); }
+    viewedFiles = new Set(viewedFiles);
+    // Update CodeView items (collapse/uncollapse viewed files)
+    viewedVersion++;
+    viewer?.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")), version: viewedVersion })));
+    // Auto-advance to next unviewed file when marking as viewed
+    if (advance && !wasViewed) {
+      const next = files.findIndex((f, i) => i > index && !viewedFiles.has(f.path));
+      if (next !== -1) { selectFile(next); return; }
+      const wrap = files.findIndex((f) => !viewedFiles.has(f.path));
+      if (wrap !== -1) { selectFile(wrap); return; }
+    }
+  }
+
   // ─── Selection ──────────────────────────────────────────────────────────────
 
+  function navigateHunk(direction: 1 | -1) {
+    if (hunkPositions.length === 0) return;
+    // Find next hunk relative to current file + cursor position
+    let targetIdx = -1;
+    if (direction === 1) {
+      targetIdx = hunkPositions.findIndex((h) => h.fileIndex > selectedIndex || (h.fileIndex === selectedIndex && h.line > cursorLine));
+      if (targetIdx === -1) targetIdx = 0; // wrap
+    } else {
+      for (let i = hunkPositions.length - 1; i >= 0; i--) {
+        if (hunkPositions[i].fileIndex < selectedIndex || (hunkPositions[i].fileIndex === selectedIndex && hunkPositions[i].line < cursorLine)) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) targetIdx = hunkPositions.length - 1; // wrap
+    }
+    const target = hunkPositions[targetIdx];
+    if (target.fileIndex !== selectedIndex) {
+      selectedIndex = target.fileIndex;
+      onFileChange?.(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
+    }
+    diffFocus = "body";
+    cursorLine = target.line;
+    selectionAnchor = null;
+    const id = `diff:${files[selectedIndex]?.path}`;
+    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "center" });
+    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
+  }
+
   function showCursor() {
-    viewer?.setSelectedLines({ id: currentFileId(), range: { start: cursorLine, end: cursorLine, side: "additions" } });
+    const id = currentFileId();
+    if (!id) return;
+    const ranges = visibleRanges.get(selectedIndex);
+    if (ranges && ranges.length > 0) {
+      const inRange = ranges.some((r) => cursorLine >= r.start && cursorLine <= r.end);
+      if (!inRange) cursorLine = ranges[0].start;
+    }
+    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
+    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "nearest" });
   }
 
   function moveCursor(delta: number) {
-    cursorLine = Math.max(1, cursorLine + delta);
+    const newLine = Math.max(1, cursorLine + delta);
+    cursorLine = snapToVisible(newLine, delta >= 0 ? 1 : -1);
     if (selectionAnchor !== null) {
       const start = Math.min(selectionAnchor, cursorLine);
       const end = Math.max(selectionAnchor, cursorLine);
-      viewer?.setSelectedLines({ id: currentFileId(), range: { start, end, side: "additions" } });
+      try { viewer?.setSelectedLines({ id: currentFileId(), range: { start, end, side: "additions" } }); } catch {}
     } else {
       showCursor();
+    }
+  }
+
+  function snapToVisible(line: number, direction: 1 | -1): number {
+    const fileRanges = visibleRanges.get(selectedIndex);
+    if (!fileRanges || fileRanges.length === 0) return line;
+    // Check if line falls within any visible range
+    for (const r of fileRanges) {
+      if (line >= r.start && line <= r.end) return line;
+    }
+    // Line is in a folded region — find the nearest visible line in the given direction
+    if (direction === 1) {
+      for (const r of fileRanges) {
+        if (r.start > line) return r.start;
+      }
+      return fileRanges[fileRanges.length - 1].end; // clamp to last
+    } else {
+      for (let i = fileRanges.length - 1; i >= 0; i--) {
+        if (fileRanges[i].end < line) return fileRanges[i].end;
+      }
+      return fileRanges[0].start; // clamp to first
     }
   }
 
@@ -256,7 +392,11 @@
     if (showCommentInput) return;
 
     // Global keys (both modes)
-    if (e.key === "?" || (e.key === "/" && e.shiftKey)) { e.preventDefault(); showHelp = !showHelp; return; }
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true, bubbles: true }));
+      return;
+    }
     if ((e.key === "n" && e.ctrlKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
       e.preventDefault();
       if (selectedIndex < files.length - 1) navigateFile(selectedIndex + 1);
@@ -269,15 +409,16 @@
     }
     if (e.key === "]" && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      viewer?.scrollTo({ type: "position", position: (viewerRoot?.scrollTop ?? 0) + 200 });
+      navigateHunk(1);
       return;
     }
     if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      viewer?.scrollTo({ type: "position", position: Math.max(0, (viewerRoot?.scrollTop ?? 0) - 200) });
+      navigateHunk(-1);
       return;
     }
     if (e.key === "u" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleDiffStyle(); return; }
+    if (e.key === "m" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); toggleViewed(selectedIndex, true); return; }
     if (e.key === "r" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); refresh(); return; }
     if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); onEditFile?.(files[selectedIndex].path); return; }
 
@@ -292,11 +433,10 @@
       } else if (e.key === "Enter" && !e.metaKey) {
         e.preventDefault();
         diffFocus = "body";
-        cursorLine = 1;
+        cursorLine = snapToVisible(1, 1);
         showCursor();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        if (showHelp) showHelp = false;
       }
       return;
     }
@@ -304,7 +444,6 @@
     // Body mode
     if (e.key === "Escape") {
       e.preventDefault();
-      if (showHelp) { showHelp = false; return; }
       if (selectionAnchor !== null) { clearSelection(); return; }
       diffFocus = "list";
       clearSelection();
@@ -317,8 +456,8 @@
     else if (e.key === "v" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleSelectionMode(); }
     else if (e.key === "d" && !e.metaKey && !e.ctrlKey || e.key === "f" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); moveCursor(15); }
     else if (e.key === "b" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); moveCursor(-15); }
-    else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); cursorLine = 1; showCursor(); }
-    else if (e.key === "G" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); cursorLine = 9999; showCursor(); }
+    else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); cursorLine = snapToVisible(1, 1); showCursor(); }
+    else if (e.key === "G" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); cursorLine = snapToVisible(9999, -1); showCursor(); }
     else if (e.key === "c" && !e.metaKey && !e.ctrlKey && files.length > 0) {
       e.preventDefault();
       if (selectionAnchor !== null) {
@@ -346,9 +485,26 @@
       theme: { dark: "github-dark", light: "github-light" },
       themeType: isDark() ? "dark" : "light",
       diffStyle,
-      stickyHeaders: true,
+      stickyHeaders: false,
       enableLineSelection: true,
+      disableVirtualizationBuffers: true,
       disableFileHeader: false,
+      renderHeaderMetadata(fileDiff) {
+        const path = fileDiff.name;
+        const idx = files.findIndex((f) => f.path === path);
+        if (idx === -1) return null;
+        const btn = document.createElement("button");
+        btn.title = "Mark as viewed (m)";
+        btn.style.cssText = "background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;display:flex;align-items:center;line-height:1";
+        const updateBtn = () => {
+          btn.innerHTML = viewedFiles.has(path)
+            ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:#16a34a"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+            : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#888"><circle cx="12" cy="12" r="10"></circle></svg>`;
+        };
+        updateBtn();
+        btn.onclick = (e) => { e.stopPropagation(); toggleViewed(idx); updateBtn(); };
+        return btn;
+      },
       onLineSelected(range) {
         if (range) {
           diffFocus = "body";
@@ -381,21 +537,37 @@
 
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
+    window.addEventListener("keyup", handleKeyup);
   });
 
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
+    window.removeEventListener("keyup", handleKeyup);
     viewer?.cleanUp();
     viewer = null;
   });
+
+  function handleKeyup(e: KeyboardEvent) {
+    if (e.key === "Shift" && selectionAnchor !== null && diffFocus === "body") {
+      selectionAnchor = null;
+    }
+  }
 
   $effect(() => {
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
+      applyDiffFont();
       refresh();
     }
   });
+
+  function applyDiffFont() {
+    if (!viewerRoot) return;
+    const { font_family, font_size } = getSettings().terminal;
+    viewerRoot.style.setProperty("--diffs-font-family", `"${font_family}", monospace`);
+    viewerRoot.style.setProperty("--diffs-font-size", `${font_size}px`);
+  }
 
   $effect(() => {
     const dark = isDark();
@@ -431,7 +603,7 @@
       {#if totalCount > 0}
         <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : "Send feedback (⌘Enter)"}><Send size={12} /><span class="ml-1">Send ({totalCount})</span></Button>
       {/if}
-      <button class="text-xs px-1.5 py-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-700" onclick={() => (showHelp = !showHelp)} title="Keyboard shortcuts (?)">?</button>
+      <button class="text-xs px-1.5 py-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-700" onclick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true, bubbles: true }))} title="Keyboard shortcuts (?)">?</button>
     </div>
 
     <!-- Comment input -->
@@ -448,46 +620,12 @@
     <div bind:this={viewerRoot} class="absolute inset-0 top-8 overflow-auto {diffFocus === 'body' ? 'ring-1 ring-primary-400/40 ring-inset' : ''}"></div>
 
     <!-- Loading states -->
-    {#if loading && files.length === 0}
-      <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">Loading diff…</div>
-    {:else if files.length === 0 && !loading}
-      <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">No changes on this branch</div>
+    {#if loading}
+      <div class="absolute inset-0 top-8 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900 z-[5]">Loading diff…</div>
+    {:else if files.length === 0}
+      <div class="absolute inset-0 top-8 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">No changes on this branch</div>
     {/if}
 
-    <!-- Help dialog -->
-    {#if showHelp}
-      <Dialog.Root open={showHelp} onOpenChange={(v) => (showHelp = v)}>
-        <Dialog.Portal>
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-xs -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none">
-            <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-3">Review Shortcuts</Dialog.Title>
-            <div class="text-xs text-surface-500 uppercase tracking-wide mb-1">List</div>
-            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300 mb-2">
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k</kbd><span>Navigate files</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Enter</kbd><span>Focus diff</span>
-            </div>
-            <div class="text-xs text-surface-500 uppercase tracking-wide mb-1">Body</div>
-            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300 mb-2">
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">j/k</kbd><span>Move cursor</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Shift+↓/↑</kbd><span>Select</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">v</kbd><span>Visual select</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">d/f b</kbd><span>Page ↓/↑</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">g/G</kbd><span>Top/bottom</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">c</kbd><span>Comment</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Esc</kbd><span>Back to list</span>
-            </div>
-            <div class="text-xs text-surface-500 uppercase tracking-wide mb-1">Both</div>
-            <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700 dark:text-surface-300">
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">Ctrl+n/p</kbd><span>Next/prev file</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">]/[</kbd><span>Scroll hunks</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">u</kbd><span>Split/unified</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">e</kbd><span>Edit file</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">r</kbd><span>Refresh</span>
-              <kbd class="font-mono bg-surface-200 dark:bg-surface-700 px-1 rounded">⌘↵</kbd><span>Send feedback</span>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    {/if}
   </div>
 
   <!-- File sidebar -->
@@ -497,8 +635,13 @@
     <ul class="py-1" role="listbox">
       {#each files as file, i (file.path)}
         {@const fileCount = getFileCommentCount(sessionId, file.path)}
-        <li role="option" aria-selected={i === selectedIndex} class="px-2 py-1 cursor-pointer flex items-center gap-1 text-xs text-surface-700 dark:text-surface-200 hover:bg-surface-100 dark:hover:bg-surface-800 {i === selectedIndex ? 'bg-surface-200 dark:bg-surface-700' : ''}" onclick={() => selectFile(i)}>
-          <span class="font-mono w-4 shrink-0 {statusColor(file.status)}">{file.status}</span>
+        {@const viewed = viewedFiles.has(file.path)}
+        <li role="option" aria-selected={i === selectedIndex} class="px-2 py-1 cursor-pointer flex items-center gap-1 text-xs text-surface-700 dark:text-surface-200 hover:bg-surface-100 dark:hover:bg-surface-800 {i === selectedIndex ? 'bg-surface-200 dark:bg-surface-700' : ''} {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
+          {#if viewed}
+            <button class="shrink-0 text-green-600 dark:text-green-400" onclick={(e) => { e.stopPropagation(); toggleViewed(i); }} title="Mark as unviewed"><Check size={12} /></button>
+          {:else}
+            <span class="font-mono w-4 shrink-0 {statusColor(file.status)}">{file.status}</span>
+          {/if}
           <span class="truncate flex-1" title={file.path}><span class="text-surface-400">{dirName(file.path)}</span>{fileName(file.path)}</span>
           {#if fileCount > 0}<span class="flex items-center gap-0.5 text-[10px] text-primary-600 dark:text-primary-400"><MessageSquare size={10} />{fileCount}</span>{/if}
           <span class="text-green-600 dark:text-green-300 text-[10px]">+{file.additions}</span>
