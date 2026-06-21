@@ -129,13 +129,13 @@ describe("matchChord", () => {
   });
 
   it("returns next_session on platform mod+Shift+}", () => {
-    expect(matchChord(key({ key: "}", [modKey]: true, shiftKey: true }))).toEqual({
+    expect(matchChord(key({ key: "]", [modKey]: true, shiftKey: true }))).toEqual({
       type: "next_session",
     });
   });
 
   it("returns prev_session on platform mod+Shift+{", () => {
-    expect(matchChord(key({ key: "{", [modKey]: true, shiftKey: true }))).toEqual({
+    expect(matchChord(key({ key: "[", [modKey]: true, shiftKey: true }))).toEqual({
       type: "prev_session",
     });
   });
