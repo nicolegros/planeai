@@ -112,6 +112,11 @@
     projects.map(p => ({ project: p, sessions: orphanSessions.filter(s => s.project_id === p.id) })).filter(g => g.sessions.length > 0)
   );
 
+  const previewSessionId = $derived.by(() => {
+    const state = getCycleState();
+    return state.mode === "sidebar" && state.isCycling ? state.cycleList[state.index] ?? null : null;
+  });
+
   function sessionForTask(key: string): Session | undefined {
     return sessions.find(s => s.task_key === key);
   }
@@ -345,7 +350,7 @@
                 {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
                 {@const isActive = session.id === activeSessionId}
                 {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
-                {@const isPreviewing = getCycleState().mode === 'sidebar' && getCycleState().cycleList[getCycleState().index] === session.id}
+                {@const isPreviewing = session.id === previewSessionId}
                 <li>
                   {#if renamingSessionId === session.id}
                     <input
@@ -420,7 +425,7 @@
                       {@const taskNavIdx = flatNavIndex.get(`task:${task.key}`) ?? -1}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
-                      {@const isPreviewing = linked && getCycleState().mode === 'sidebar' && getCycleState().cycleList[getCycleState().index] === linked.id}
+                      {@const isPreviewing = linked && linked.id === previewSessionId}
                       <li>
                         <button
                           class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
