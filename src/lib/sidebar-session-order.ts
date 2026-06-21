@@ -3,7 +3,6 @@
  * Shared between App.svelte (for keyboard navigation) and UnifiedSidebar (for rendering).
  */
 import type { Session, Project, TaskItem } from "./types";
-import { getSettings } from "./settings.svelte";
 
 const STATUS_ORDER = ["in_progress", "in_review", "todo", "done"] as const;
 
@@ -11,9 +10,9 @@ export function computeSidebarSessionOrder(
   projects: Project[],
   sessions: Session[],
   tasksByProject: Record<string, TaskItem[]>,
+  hideDone: boolean,
 ): string[] {
   const allTaskKeys = new Set(Object.values(tasksByProject).flat().map(t => t.key));
-  const hideDone = getSettings().hide_done_tasks;
   const ids: string[] = [];
 
   for (const project of projects) {

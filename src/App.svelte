@@ -74,7 +74,7 @@
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
 
   // Session IDs in sidebar display order
-  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject()));
+  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject(), !!getSettings().hide_done_tasks));
 
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
