@@ -72,10 +72,28 @@
     { keys: `ss`, description: "Start session" },
   ]};
 
+  const reviewShortcuts = { section: "Review (Diff)", items: [
+    { keys: `j/k`, description: "Navigate files / move cursor" },
+    { keys: `Enter`, description: "Focus diff body" },
+    { keys: `Esc`, description: "Back to file list" },
+    { keys: `]/[`, description: "Next/prev hunk" },
+    { keys: `Ctrl+n/p`, description: "Next/prev file" },
+    { keys: `m`, description: "Mark file viewed" },
+    { keys: `Shift+↓/↑`, description: "Select lines" },
+    { keys: `v`, description: "Visual select" },
+    { keys: `c`, description: "Comment on line/selection" },
+    { keys: `d/f b`, description: "Page down / up" },
+    { keys: `g/G`, description: "Top / bottom" },
+    { keys: `u`, description: "Split / unified" },
+    { keys: `e`, description: "Edit file" },
+    { keys: `r`, description: "Refresh" },
+    { keys: `⌘↵`, description: "Send feedback" },
+  ]};
+
   const visibleShortcuts = $derived(
     getActiveZone() === "sidebar"
       ? [sidebarShortcuts, ...shortcuts]
-      : shortcuts
+      : [reviewShortcuts, ...shortcuts]
   );
 </script>
 
