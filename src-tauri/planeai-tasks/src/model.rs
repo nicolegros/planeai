@@ -75,6 +75,7 @@ impl Default for CreateParams {
         Self {
             title: String::new(),
             description: String::new(),
+            status: None,
             priority: 0,
             parent_key: None,
             blocked_by: Vec::new(),
