@@ -53,13 +53,20 @@
   let viewer: CodeView | null = null;
   let mounted = false;
 
-  const workerPool = getOrCreateWorkerPoolSingleton({
-    poolOptions: { workerFactory },
-    highlighterOptions: {
-      theme: { dark: "github-dark", light: "github-light" },
-      langs: ["typescript", "javascript", "css", "html", "rust", "python", "go", "svelte", "json", "yaml", "toml", "bash", "sql"],
-    },
-  });
+  let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
+
+  function getWorkerPool() {
+    if (!workerPool) {
+      workerPool = getOrCreateWorkerPoolSingleton({
+        poolOptions: { workerFactory },
+        highlighterOptions: {
+          theme: { dark: "github-dark", light: "github-light" },
+          langs: ["typescript", "javascript", "css", "html", "rust", "python", "go", "svelte", "json", "yaml", "toml", "bash", "sql"],
+        },
+      });
+    }
+    return workerPool;
+  }
 
   // Reactive
   let totalCount = $derived(getTotalCommentCount(sessionId));
@@ -364,7 +371,7 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-    }, workerPool);
+    }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
   }
