@@ -10,6 +10,8 @@
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
+  import * as navCycle from "./lib/session-nav-cycle.svelte";
+  import { computeSidebarSessionOrder } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -70,6 +72,9 @@
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
+
+  // Session IDs in sidebar display order
+  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject(), !!getSettings().hide_done_tasks));
 
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
@@ -134,6 +139,7 @@
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
+          if (navCycle.isCycling()) navCycle.cancel();
           showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
@@ -142,6 +148,13 @@
         else if (action.type === "close_tab") { orchestrator.handleCloseTab(); }
         else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
+        else if (action.type === "next_session") {
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, 1);
+          else navCycle.advance(1);
+        } else if (action.type === "prev_session") {
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, -1);
+          else navCycle.advance(-1);
+        }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
@@ -150,14 +163,17 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling,
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId])
     );
 
     function onKeyUp(e: KeyboardEvent) {
-      if (e.key === "Control" && !e.ctrlKey && getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
+      if (!isModRelease) return;
+      if (getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
     }
-    function onBlur() { setTimeout(() => { if (!document.hasFocus() && getCycleState().isCycling) cancel(); }, 0); }
+    function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 

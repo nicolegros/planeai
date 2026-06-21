@@ -22,12 +22,14 @@
       { keys: `${MOD_LABEL}⇧N`, description: "New project" },
       { keys: `${MOD_LABEL}1–9`, description: "Jump to session" },
       { keys: `Ctrl+Tab`, description: "Switch session (MRU)" },
+      { keys: `${MOD_LABEL}}`, description: "Next session" },
+      { keys: `${MOD_LABEL}{`, description: "Previous session" },
     ]},
     { section: "Tabs", items: [
       { keys: `${MOD_LABEL}T`, description: "New tab" },
       { keys: `${MOD_LABEL}W`, description: "Close tab" },
-      { keys: `${MOD_LABEL}⇧]`, description: "Next tab" },
-      { keys: `${MOD_LABEL}⇧[`, description: "Previous tab" },
+      { keys: `${MOD_LABEL}]`, description: "Next tab" },
+      { keys: `${MOD_LABEL}[`, description: "Previous tab" },
     ]},
     { section: "View", items: [
       { keys: `${MOD_LABEL}B`, description: "Toggle sidebar" },
@@ -81,11 +83,11 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+      class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
     >
       <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Keyboard Shortcuts</Dialog.Title>
       <Dialog.Description class="sr-only">List of keyboard shortcuts available in planeai.</Dialog.Description>
-      <div class="space-y-4">
+      <div class="grid grid-cols-2 gap-x-6 gap-y-4">
         {#each visibleShortcuts as group}
           <div>
             <h3 class="text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">{group.section}</h3>
