@@ -7,7 +7,12 @@ export function serializeComments(
 ): string {
   if (comments.length === 0) return "";
 
-  const grouped = Map.groupBy(comments, (c) => c.filePath);
+  const grouped = new Map<string, ReviewComment[]>();
+  for (const c of comments) {
+    const arr = grouped.get(c.filePath) ?? [];
+    arr.push(c);
+    grouped.set(c.filePath, arr);
+  }
   const lines: string[] = ["Please address these review comments:"];
 
   for (const [filePath, fileComments] of grouped) {
