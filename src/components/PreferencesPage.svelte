@@ -526,6 +526,24 @@
     </section>
 
     <section class="space-y-3">
+      <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Auto-open Review</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-surface-700 dark:text-surface-300">Auto-open review when agent finishes</p>
+          <p class="text-xs text-surface-500 dark:text-surface-400">Automatically open the Review tab when the active session's agent stops and has changes.</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {(config.auto_open_review ?? true) ? 'bg-primary-500' : 'bg-surface-300 dark:bg-surface-700'}"
+          onclick={() => updateSettings({ auto_open_review: !(config.auto_open_review ?? true) } as Partial<AppConfig>)}
+          role="switch"
+          aria-checked={config.auto_open_review ?? true}
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {(config.auto_open_review ?? true) ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
+    </section>
+
+    <section class="space-y-3">
       <h2 class="text-sm font-medium text-surface-600 dark:text-surface-300 uppercase tracking-wide">Projects Base Path</h2>
       <div class="flex gap-2">
         <Input

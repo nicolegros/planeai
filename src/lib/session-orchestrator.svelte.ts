@@ -4,11 +4,13 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { sessions as sessionsApi, symphony, tasks } from "./api";
+import { sessions as sessionsApi, symphony, tasks, git } from "./api";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import { clearComments } from "./review-comments.svelte";
 import { showSnackbar } from "./snackbar.svelte";
+import { preloadPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
@@ -20,6 +22,7 @@ import {
   cleanup as tabLayoutCleanup,
   resetAll as tabLayoutReset,
   closeShellTab,
+  toggleDiff as _toggleDiff,
 } from "./tab-layout.svelte";
 
 // Re-export tab layout functions for consumers still importing from orchestrator
@@ -39,7 +42,6 @@ export {
   handleCloseTab,
   handleNextTab,
   handlePrevTab,
-  toggleDiff,
   toggleEditor,
   registerEditorRef,
   unregisterEditorRef,
@@ -63,6 +65,7 @@ let agentStates = $state<Record<string, string>>({});
 let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurrent: number } | null>(
   null,
 );
+let reviewReady = $state<Record<string, boolean>>({});
 
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
@@ -72,6 +75,7 @@ export function _resetForTests(): void {
   activeSessionId = null;
   agentStates = {};
   symphonyStatus = null;
+  reviewReady = {};
   tabLayoutReset();
 }
 
@@ -94,6 +98,18 @@ export function getAgentState(id: string): string | undefined {
 }
 export function getSymphonyStatus() {
   return symphonyStatus;
+}
+export function getReviewReady(): Record<string, boolean> {
+  return reviewReady;
+}
+export function clearReviewReady(sessionId: string): void {
+  const { [sessionId]: _, ...rest } = reviewReady;
+  reviewReady = rest;
+}
+
+export function toggleDiff(): void {
+  _toggleDiff();
+  if (activeSessionId) clearReviewReady(activeSessionId);
 }
 
 // ─── Session Lifecycle ───────────────────────────────────────────────────────
@@ -130,6 +146,7 @@ export function createSession(session: Session): void {
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
   destroyTabState(s.id);
+  clearComments(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -141,6 +158,7 @@ export async function deleteSession(s: Session): Promise<void> {
 
 export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
+  clearComments(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
@@ -200,6 +218,27 @@ export function startEventListeners(): () => void {
         tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
           if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
         });
+        // Auto-open review tab when agent finishes
+        const sid = event.payload.session_id;
+        const session = sessions.find((s) => s.id === sid);
+        if (session?.worktree_path && session.base_branch) {
+          git
+            .getChangedFiles(session.worktree_path, session.base_branch)
+            .then((files) => {
+              if (files.length === 0) return;
+              // Preload all patches so ReviewTab opens instantly
+              preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
+              if (sid === activeSessionId) {
+                if (getSettings().auto_open_review !== false) {
+                  // Defer to next frame so state updates don't block the current tick
+                  requestAnimationFrame(() => toggleDiff());
+                }
+              } else {
+                reviewReady = { ...reviewReady, [sid]: true };
+              }
+            })
+            .catch(() => {});
+        }
       }
     }),
   );

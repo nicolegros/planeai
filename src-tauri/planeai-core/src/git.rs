@@ -313,6 +313,64 @@ pub fn get_file_diff(
     })
 }
 
+/// Get the unified diff patch for a single file. Uses native git diff which is
+/// much faster than recomputing the diff in JavaScript.
+pub fn get_file_patch(
+    repo_path: &str,
+    base_branch: &str,
+    file_path: &str,
+    old_path: Option<&str>,
+) -> Result<String, String> {
+    let resolved = resolve_base_branch(repo_path, base_branch)?;
+    let base_file_path = old_path.unwrap_or(file_path);
+
+    // Try tracked file diff first
+    let output = Command::new("git")
+        .args(["diff", "--no-color", "-U3", &resolved, "--", base_file_path])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    let patch = String::from_utf8_lossy(&output.stdout).to_string();
+
+    // If empty, file might be untracked — generate a diff against /dev/null
+    if patch.trim().is_empty() {
+        let full_path = std::path::Path::new(repo_path).join(file_path);
+        let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+        if content.is_empty() {
+            return Ok(String::new());
+        }
+        // Build a synthetic unified diff for new files
+        let lines: Vec<&str> = content.lines().collect();
+        let count = lines.len();
+        let mut result = format!(
+            "--- /dev/null\n+++ b/{}\n@@ -0,0 +1,{} @@\n",
+            file_path, count
+        );
+        for line in &lines {
+            result.push('+');
+            result.push_str(line);
+            result.push('\n');
+        }
+        return Ok(result);
+    }
+
+    Ok(patch)
+}
+
+/// Get unified diff patches for all given files in one call.
+/// Returns a vec of patch strings in the same order as the input paths.
+pub fn get_all_file_patches(
+    repo_path: &str,
+    base_branch: &str,
+    files: &[(String, Option<String>)],
+) -> Result<Vec<String>, String> {
+    files
+        .iter()
+        .map(|(path, old_path)| get_file_patch(repo_path, base_branch, path, old_path.as_deref()))
+        .collect()
+}
+
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {

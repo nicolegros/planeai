@@ -8,6 +8,7 @@ fmt:
 
 lint: ## Check formatting and clippy
 	pnpm lint
+	pnpm exec svelte-check
 	pnpm fmt:check
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
