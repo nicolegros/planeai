@@ -12,6 +12,7 @@ pub struct CleanupContext {
     pub project_path: Option<String>,
     pub branch: Option<String>,
     pub session_id: Option<String>,
+    pub tab_count: i64,
 }
 
 /// Operations to kill a backend session (injectable for testing).
@@ -29,10 +30,13 @@ pub struct CleanupOps {
 }
 
 /// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
+/// For daemon-backend sessions with tab_count > 1, also kills shell tabs
+/// ({session_id}:1, {session_id}:2, ...).
 pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
     session_id: Option<&str>,
+    tab_count: i64,
     ops: &KillOps,
 ) -> Vec<String> {
     let mut errors = vec![];
@@ -49,6 +53,13 @@ pub fn kill_backend(
                 if let Err(e) = (ops.kill_daemon_session)(id) {
                     errors.push(format!("daemon kill: {e}"));
                 }
+                // Kill shell tabs (tab indices 1..tab_count)
+                for i in 1..tab_count {
+                    let tab_id = format!("{id}:{i}");
+                    if let Err(e) = (ops.kill_daemon_session)(&tab_id) {
+                        errors.push(format!("daemon kill tab {i}: {e}"));
+                    }
+                }
             }
         }
         _ => {}
@@ -62,6 +73,7 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         &ctx.backend,
         ctx.tmux_name.as_deref(),
         ctx.session_id.as_deref(),
+        ctx.tab_count,
         &ops.kill,
     );
 
@@ -151,6 +163,51 @@ mod tests {
     use std::cell::RefCell;
 
     #[test]
+    fn kill_backend_kills_shell_tabs_for_daemon_backend() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|id| {
+                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), 3, &ops);
+        assert!(errors.is_empty());
+        KILLED.with(|k| {
+            let killed = k.borrow();
+            // Kills agent session + 2 shell tabs (tab_count=3 means tabs 0,1,2; 0 is agent)
+            assert_eq!(killed.len(), 3);
+            assert!(killed.contains(&"sess-abc".to_string()));
+            assert!(killed.contains(&"sess-abc:1".to_string()));
+            assert!(killed.contains(&"sess-abc:2".to_string()));
+        });
+    }
+
+    #[test]
+    fn kill_backend_with_single_tab_only_kills_agent() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|id| {
+                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), 1, &ops);
+        assert!(errors.is_empty());
+        KILLED.with(|k| {
+            let killed = k.borrow();
+            assert_eq!(killed.len(), 1);
+            assert_eq!(killed[0], "sess-abc");
+        });
+    }
+
+    #[test]
     fn cleanup_kills_daemon_session_for_daemon_backend() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
@@ -174,6 +231,7 @@ mod tests {
             project_path: None,
             branch: None,
             session_id: Some("sess-123".to_string()),
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -206,6 +264,7 @@ mod tests {
             project_path: None,
             branch: None,
             session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -246,6 +305,7 @@ mod tests {
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("test-iv".to_string()),
             session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -284,6 +344,7 @@ mod tests {
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("feat-x".to_string()),
             session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert_eq!(errors.len(), 4);

@@ -67,6 +67,7 @@ pub fn archive(
         &session.backend,
         session.tmux_name.as_deref(),
         Some(session.id.as_str()),
+        session.tab_count,
         kill_ops,
     );
     if !kill_errors.is_empty() {
@@ -180,6 +181,7 @@ pub fn destroy(
             None
         },
         session_id: Some(session.id.clone()),
+        tab_count: session.tab_count,
     };
     let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
 
