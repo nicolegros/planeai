@@ -10,6 +10,7 @@ import { initSession, getTabCount, destroySession as destroyTabState } from "./s
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { clearComments } from "./review-comments.svelte";
 import { showSnackbar } from "./snackbar.svelte";
+import { preloadPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getCycleState } from "./tab-switcher.svelte";
@@ -225,6 +226,8 @@ export function startEventListeners(): () => void {
             .getChangedFiles(session.worktree_path, session.base_branch)
             .then((files) => {
               if (files.length === 0) return;
+              // Preload all patches so ReviewTab opens instantly
+              preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
               if (sid === activeSessionId) {
                 if (getSettings().auto_open_review !== false) {
                   toggleDiff();

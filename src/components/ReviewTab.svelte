@@ -17,6 +17,7 @@
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
   import { Dialog } from "bits-ui";
+  import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
 
   interface Props {
     repoPath: string;
@@ -88,10 +89,18 @@
 
   async function loadAllDiffs() {
     if (!viewer) return;
-    // Fetch all patches in parallel
+    // Use preloaded patches if available (populated when agent finishes)
+    const preloaded = getPreloadedPatches(sessionId);
+
     const patches = await Promise.all(
-      files.map((f) => git.getFilePatch(repoPath, baseBranch, f.path, f.old_path ?? null).catch(() => ""))
+      files.map(async (f) => {
+        const cached = preloaded?.get(f.path);
+        if (cached) return cached;
+        return git.getFilePatch(repoPath, baseBranch, f.path, f.old_path ?? null).catch(() => "");
+      })
     );
+
+    if (preloaded) clearPreloadedPatches(sessionId);
 
     const items: CodeViewItem<ReviewComment>[] = [];
     for (let i = 0; i < files.length; i++) {
@@ -109,7 +118,6 @@
       });
     }
     viewer.setItems(items);
-    // Scroll to current file
     if (items.length > 0) {
       viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
     }
