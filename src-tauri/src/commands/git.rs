@@ -42,6 +42,15 @@ pub fn get_file_patch(
 }
 
 #[tauri::command]
+pub fn get_all_file_patches(
+    repo_path: String,
+    base_branch: String,
+    files: Vec<(String, Option<String>)>,
+) -> Result<Vec<String>, String> {
+    git::get_all_file_patches(&repo_path, &base_branch, &files)
+}
+
+#[tauri::command]
 pub fn detect_default_branch(repo_path: String) -> Result<String, String> {
     git::detect_default_branch(&repo_path)
 }

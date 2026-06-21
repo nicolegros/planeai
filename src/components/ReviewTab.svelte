@@ -99,13 +99,14 @@
     // Use preloaded patches if available (populated when agent finishes)
     const preloaded = getPreloadedPatches(sessionId);
 
-    const patches = await Promise.all(
-      files.map(async (f) => {
-        const cached = preloaded?.get(f.path);
-        if (cached) return cached;
-        return git.getFilePatch(repoPath, baseBranch, f.path, f.old_path ?? null).catch(() => "");
-      })
-    );
+    let patches: string[];
+    if (preloaded && preloaded.size >= files.length) {
+      patches = files.map((f) => preloaded.get(f.path) ?? "");
+    } else {
+      // Single batch IPC call — one invoke, one deserialization
+      const fileArgs: [string, string | null][] = files.map((f) => [f.path, f.old_path ?? null]);
+      patches = await git.getAllFilePatches(repoPath, baseBranch, fileArgs);
+    }
 
     if (preloaded) clearPreloadedPatches(sessionId);
 

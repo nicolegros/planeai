@@ -365,6 +365,19 @@ pub fn get_file_patch(
     Ok(patch)
 }
 
+/// Get unified diff patches for all given files in one call.
+/// Returns a vec of patch strings in the same order as the input paths.
+pub fn get_all_file_patches(
+    repo_path: &str,
+    base_branch: &str,
+    files: &[(String, Option<String>)],
+) -> Result<Vec<String>, String> {
+    files
+        .iter()
+        .map(|(path, old_path)| get_file_patch(repo_path, base_branch, path, old_path.as_deref()))
+        .collect()
+}
+
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
