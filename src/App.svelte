@@ -9,7 +9,8 @@
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
-  import { getCycleState, startCycle, startCycleOrdered, advance, commit, cancel } from "./lib/tab-switcher.svelte";
+  import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
+  import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -156,6 +157,7 @@
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
+          if (navCycle.isCycling()) navCycle.cancel();
           showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
@@ -165,13 +167,11 @@
         else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
         else if (action.type === "next_session") {
-          const sw = getCycleState();
-          if (!sw.isCycling) startCycleOrdered(sidebarSessionOrder, activeSessionId ?? undefined, 1);
-          else advance(1);
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, 1);
+          else navCycle.advance(1);
         } else if (action.type === "prev_session") {
-          const sw = getCycleState();
-          if (!sw.isCycling) startCycleOrdered(sidebarSessionOrder, activeSessionId ?? undefined, -1);
-          else advance(-1);
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, -1);
+          else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
@@ -181,16 +181,17 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling,
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId])
     );
 
     function onKeyUp(e: KeyboardEvent) {
-      if (!getCycleState().isCycling) return;
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
-      if (isModRelease) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      if (!isModRelease) return;
+      if (getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
     }
-    function onBlur() { setTimeout(() => { if (!document.hasFocus() && getCycleState().isCycling) cancel(); }, 0); }
+    function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
@@ -262,7 +263,7 @@
       </Dialog.Portal>
     </Dialog.Root>
 
-    {#if getCycleState().isVisible && getCycleState().mode === "overlay"}
+    {#if getCycleState().isVisible}
       <TabSwitcher mruSessionIds={getCycleState().cycleList} selectedIndex={getCycleState().index} />
     {/if}
 

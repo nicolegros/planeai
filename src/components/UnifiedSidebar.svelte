@@ -9,7 +9,7 @@
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
-  import { getCycleState } from "../lib/tab-switcher.svelte";
+  import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -112,10 +112,7 @@
     projects.map(p => ({ project: p, sessions: orphanSessions.filter(s => s.project_id === p.id) })).filter(g => g.sessions.length > 0)
   );
 
-  const previewSessionId = $derived.by(() => {
-    const state = getCycleState();
-    return state.mode === "sidebar" && state.isCycling ? state.cycleList[state.index] ?? null : null;
-  });
+  const previewSessionId = $derived(getPreviewId());
 
   function sessionForTask(key: string): Session | undefined {
     return sessions.find(s => s.task_key === key);
