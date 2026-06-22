@@ -193,7 +193,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div bind:this={wrapperEl} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none">
+<div bind:this={wrapperEl} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form bind:this={formEl} class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
   <!-- Mode toggle -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->

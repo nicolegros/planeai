@@ -369,7 +369,7 @@
   <div class="w-[36rem] p-6 rounded-lg border border-border bg-panel shadow-lg">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none">
+  <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none" data-form-keyboard>
   <form
     class="space-y-4"
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}

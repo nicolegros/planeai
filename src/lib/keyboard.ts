@@ -222,6 +222,11 @@ export function installKeyboardRouter(
         return;
       }
 
+      // If Escape and focus is inside a form with its own keyboard controller, let it handle
+      if (action.type === "focus_terminal" && document.activeElement?.closest("[data-form-keyboard]")) {
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
 
