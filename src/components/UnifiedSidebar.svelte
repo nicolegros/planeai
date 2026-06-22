@@ -375,7 +375,7 @@
 
           <!-- Orphan sessions at top -->
           {#if projectOrphans.length > 0}
-            <ul class="space-y-0.5 ml-1 mb-1">
+            <ul class="space-y-0.5 mb-1">
               {#each projectOrphans as session (session.id)}
                 {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
                 {@const isActive = session.id === activeSessionId}
@@ -426,7 +426,7 @@
               {@const sectionKey = `${project.path}:${status}`}
               {@const statusNavIdx = flatNavIndex.get(`status:${project.path}:${status}`) ?? -1}
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
-              <div class="ml-1">
+              <div>
                 <button
                   class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? '[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
                   onclick={() => toggleSection(sectionKey)}
@@ -437,7 +437,7 @@
                   {#if collapsedSections[sectionKey]}<ChevronRight class="size-3 ml-auto text-t3" />{:else}<ChevronDown class="size-3 ml-auto text-t3" />{/if}
                 </button>
                 {#if !collapsedSections[sectionKey]}
-                  <ul class="space-y-0.5 ml-1">
+                  <ul class="space-y-0.5">
                     {#each items as task (task.key)}
                       {@const linked = sessionForTask(task.key)}
                       {@const isActive = linked?.id === activeSessionId}
@@ -449,7 +449,7 @@
                         <div class="flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
-                            class="flex-1 min-w-0 text-left py-[6px] pl-[19px] pr-2 flex items-center gap-1.5 transition-colors rounded-lg
+                            class="flex-1 min-w-0 text-left py-[6px] px-2 flex items-center gap-1.5 transition-colors rounded-lg
                               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                               {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? '[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
                             onclick={() => handleTaskClick(task, project.path)}
