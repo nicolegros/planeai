@@ -420,18 +420,32 @@ fn parse_merge_settings(raw: &str) -> Result<Vec<String>, String> {
     Ok(strategies)
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeStrategy {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeStrategy {
+    fn as_gh_flag(&self) -> &'static str {
+        match self {
+            Self::Squash => "--squash",
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn merge_pr(
     session_id: String,
-    strategy: String,
+    strategy: MergeStrategy,
     app: tauri::AppHandle,
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
 ) -> Result<(), String> {
-    if !["squash", "merge", "rebase"].contains(&strategy.as_str()) {
-        return Err(format!("invalid merge strategy: {strategy}"));
-    }
-
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
     let output = tokio::process::Command::new("gh")
@@ -439,7 +453,7 @@ pub async fn merge_pr(
             "pr",
             "merge",
             &ctx.branch,
-            &format!("--{strategy}"),
+            strategy.as_gh_flag(),
             "--delete-branch",
         ])
         .current_dir(&ctx.cwd)
@@ -715,12 +729,13 @@ mod tests {
     }
 
     #[test]
-    fn merge_strategy_validation() {
-        let valid = ["squash", "merge", "rebase"];
-        assert!(valid.contains(&"squash"));
-        assert!(valid.contains(&"merge"));
-        assert!(valid.contains(&"rebase"));
-        assert!(!valid.contains(&"fast-forward"));
-        assert!(!valid.contains(&""));
+    fn merge_strategy_deserializes() {
+        let s: MergeStrategy = serde_json::from_str("\"squash\"").unwrap();
+        assert_eq!(s.as_gh_flag(), "--squash");
+        let m: MergeStrategy = serde_json::from_str("\"merge\"").unwrap();
+        assert_eq!(m.as_gh_flag(), "--merge");
+        let r: MergeStrategy = serde_json::from_str("\"rebase\"").unwrap();
+        assert_eq!(r.as_gh_flag(), "--rebase");
+        assert!(serde_json::from_str::<MergeStrategy>("\"fast-forward\"").is_err());
     }
 }
