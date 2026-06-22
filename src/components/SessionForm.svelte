@@ -149,6 +149,8 @@
     { wrapper: () => wrapperEl, onDismiss: onCancel },
   );
 
+  const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
+
   function metaEnter(e: KeyboardEvent) {
     if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
   }
@@ -213,7 +215,7 @@
   </div>
 
   <div class="space-y-1" data-field="project">
-    <Label>Project <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">R</span></Label>
+    <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
     <Select items={projectItems} bind:value={projectValue} onkeydown={metaEnter} placeholder="Search project..." emptyText="No projects found" />
   </div>
 
@@ -233,7 +235,7 @@
   {/if}
 
   <div class="space-y-1" data-field="name">
-    <Label>Name <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">S</span></Label>
+    <Label>Name <span class="font-mono text-[10px] px-1 rounded {badge}">S</span></Label>
     <Input
       bind:value={sessionName}
       onkeydown={metaEnter}
@@ -249,27 +251,27 @@
   >
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
-      <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">W</span>
+      <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
       <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
-      <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span>
+      <span class="font-mono text-[10px] px-1 rounded {badge}">A</span>
     </div>
     {#if providerKeys.length > 1}
       <div class="flex items-center gap-2">
         <span class="text-[11px] text-t3">Provider</span>
         <span class="text-[12px] text-t1 font-medium">{selectedProvider || config.default_provider}</span>
-        <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">P</span>
+        <span class="font-mono text-[10px] px-1 rounded {badge}">P</span>
       </div>
     {/if}
   </div>
 
   {#if useWorktree}
     <div class="space-y-1" data-field="base">
-      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
+      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
       <Select items={branches} bind:value={baseBranchValue} onkeydown={metaEnter} placeholder="main" emptyText="No branches found" />
     </div>
 
     <div class="space-y-1" data-field="branch">
-      <Label>New branch name <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">N</span></Label>
+      <Label>New branch name <span class="font-mono text-[10px] px-1 rounded {badge}">N</span></Label>
       <Input
         bind:value={newBranchName}
         onkeydown={metaEnter}
@@ -281,13 +283,13 @@
     </div>
   {:else}
     <div class="space-y-1" data-field="branch">
-      <Label>Branch <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">N</span></Label>
+      <Label>Branch <span class="font-mono text-[10px] px-1 rounded {badge}">N</span></Label>
       <Select items={branches} bind:value={branchValue} onInput={(s) => { branchSearch = s; }} onkeydown={metaEnter} placeholder="main, feat/new-feature..." emptyText="No branches found" />
     </div>
 
     {#if isNewBranch && branch}
       <div class="space-y-1" data-field="base">
-        <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
+        <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
         <Select items={branches} bind:value={baseBranchValue} onkeydown={metaEnter} placeholder="main" emptyText="No branches found" />
       </div>
       <p class="text-xs text-t3">Will create new branch: <span class="font-medium font-mono text-t1">{branch}</span> from <span class="font-medium font-mono text-t1">{baseBranch}</span></p>

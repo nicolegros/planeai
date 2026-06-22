@@ -56,6 +56,8 @@
     { wrapper: () => taskFormWrapper, onDismiss: () => { modalMode = null; focusTerminal(); } },
   );
 
+  const taskBadge = $derived(taskFk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
+
   // Context menu
   let contextMenu = $state<{ x: number; y: number; task: TaskItem } | null>(null);
 
@@ -389,12 +391,12 @@
     {/if}
 
     <div class="space-y-1" data-field="title">
-      <Label>Title <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></Label>
+      <Label>Title <span class="font-mono text-[10px] px-1 rounded {taskBadge}">T</span></Label>
       <Input bind:value={formTitle} placeholder="Task title" />
     </div>
 
     <div class="space-y-1" data-field="desc">
-      <Label>Description <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span></Label>
+      <Label>Description <span class="font-mono text-[10px] px-1 rounded {taskBadge}">D</span></Label>
       <textarea
         bind:value={formDescription}
         placeholder="Optional description"
@@ -406,12 +408,12 @@
     </div>
 
     <div class="space-y-1" data-field="priority">
-      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">P</span></Label>
+      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {taskBadge}">P</span></Label>
       <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
     <div class="space-y-1" data-field="base">
-      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
+      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {taskBadge}">B</span></Label>
       <Input bind:value={formBaseBranch} placeholder="main" />
     </div>
 
