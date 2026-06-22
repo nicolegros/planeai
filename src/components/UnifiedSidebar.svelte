@@ -325,7 +325,7 @@
   {/if}
 {/snippet}
 
-<aside class="relative shrink-0 flex flex-col border-r border-border bg-sidebar" style:width="{sidebarWidth}px" style:box-shadow="{zone === 'sidebar' ? 'inset 2px 0 0 0 var(--theme-accent)' : 'none'}">
+<aside class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
   <!-- Header: new session button -->
