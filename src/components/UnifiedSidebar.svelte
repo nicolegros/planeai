@@ -12,6 +12,7 @@
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import { getCiStatus } from "../lib/ci-checks.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -386,11 +387,11 @@
                         {#if orchestrator.getReviewReady()[session.id]}
                           <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
                         {/if}
-                        {#if orchestrator.getCiStatus(session.id) === 'passing'}
+                        {#if getCiStatus(session.id) === 'passing'}
                           <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
-                        {:else if orchestrator.getCiStatus(session.id) === 'failing'}
+                        {:else if getCiStatus(session.id) === 'failing'}
                           <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
-                        {:else if orchestrator.getCiStatus(session.id) === 'running'}
+                        {:else if getCiStatus(session.id) === 'running'}
                           <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
                         {/if}
                         {#if session.pr_url}
@@ -464,11 +465,11 @@
                               {:else if agentStates[linked.id] === 'Idle'}
                                 <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
                               {/if}
-                              {#if orchestrator.getCiStatus(linked.id) === 'passing'}
+                              {#if getCiStatus(linked.id) === 'passing'}
                                 <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
-                              {:else if orchestrator.getCiStatus(linked.id) === 'failing'}
+                              {:else if getCiStatus(linked.id) === 'failing'}
                                 <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
-                              {:else if orchestrator.getCiStatus(linked.id) === 'running'}
+                              {:else if getCiStatus(linked.id) === 'running'}
                                 <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
                               {/if}
                               {#if linked.pr_url}

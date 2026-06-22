@@ -14,6 +14,7 @@
   import { computeSidebarSessionOrder } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { loadTheme } from "./lib/theme-loader";
+  import { startPolling as startCiPolling } from "./lib/ci-checks.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -156,7 +157,7 @@
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
-    const cleanupCi = orchestrator.startCiPolling();
+    const cleanupCi = startCiPolling(orchestrator.getSessions());
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 

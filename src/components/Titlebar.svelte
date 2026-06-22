@@ -2,8 +2,7 @@
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { GitPullRequest, Zap, RefreshCw, ChevronDown } from "@lucide/svelte";
-  import { onDestroy } from "svelte";
-  import { getCiChecks, classifyCheck, startPolling, stopPolling, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
+  import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -29,7 +28,7 @@
 
   let ciExpanded = $state(false);
 
-  let checks = $derived(getCiChecks());
+  let checks = $derived(sessionId ? getCiChecks(sessionId) : []);
   let passedCount = $derived(checks.filter((c) => classifyCheck(c) === "pass").length);
   let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
   let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
@@ -51,12 +50,6 @@
     if (c === "fail") return { char: "✗", color: "text-red-600 dark:text-red-400" };
     return { char: "◌", color: "text-yellow-500 animate-pulse" };
   }
-
-  $effect(() => {
-    startPolling(sessionId, prUrl);
-  });
-
-  onDestroy(() => stopPolling());
 
   function handleClickOutside(e: MouseEvent) {
     if (ciExpanded) ciExpanded = false;
@@ -123,7 +116,7 @@
           class="ml-0.5 p-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
           tabindex="-1"
           title="Refresh checks"
-          onclick={() => refreshCiChecks()}
+          onclick={() => refreshCiChecks(sessionId!)}
         >
           <RefreshCw size={11} />
         </button>
