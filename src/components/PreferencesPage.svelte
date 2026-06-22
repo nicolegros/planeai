@@ -193,7 +193,7 @@
     <!-- Appearance Mode -->
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Appearance</h2>
-      <div class="flex gap-1 rounded-lg bg-panel-hi p-0.5">
+      <div class="inline-flex gap-1 rounded-lg bg-panel-hi p-0.5">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
             class="px-4 py-2 rounded-md text-[12px] font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
