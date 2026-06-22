@@ -238,15 +238,6 @@ pub async fn create_pr(
         return Err(format!("git push failed: {stderr}"));
     }
 
-    // Check gh is available
-    let gh_check = tokio::process::Command::new("gh")
-        .args(["--version"])
-        .output()
-        .await;
-    if gh_check.is_err() {
-        return Err("GitHub CLI (gh) not found. Install from https://cli.github.com/".to_string());
-    }
-
     // Create PR
     let mut args = vec![
         "pr".to_string(),
@@ -322,14 +313,10 @@ pub async fn get_ci_checks(
     tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_ci_checks called");
 
     // Only run for GitHub-hosted repos
-    let repo = match resolve_github_repo(&ctx.cwd).await? {
-        Some(r) => r,
-        None => {
-            tracing::debug!("not a GitHub remote, skipping CI checks");
-            return Ok(vec![]);
-        }
-    };
-    let _ = repo; // used only as guard
+    if resolve_github_repo(&ctx.cwd).await?.is_none() {
+        tracing::debug!("not a GitHub remote, skipping CI checks");
+        return Ok(vec![]);
+    }
 
     let output = tokio::process::Command::new("gh")
         .args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
