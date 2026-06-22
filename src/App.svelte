@@ -281,7 +281,7 @@
 
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40 bg-scrim" />
+        <Dialog.Overlay class="fixed inset-0 z-40" />
         <Dialog.Content class="fixed left-1/2 top-0 z-50 w-[452px] -translate-x-1/2 mt-[70px] rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
           <Dialog.Title class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</Dialog.Title>
           <SessionForm

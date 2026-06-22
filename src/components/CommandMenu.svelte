@@ -136,7 +136,7 @@
 
 <Dialog.Root {open} onOpenChange={(v) => { if (!v) close(); else onOpenChange(v); }}>
   <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-black/55 dark:bg-[rgba(25,25,30,0.55)]" />
+    <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content
       class="fixed left-1/2 top-[88px] z-50 w-[600px] -translate-x-1/2 rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden"
     >
