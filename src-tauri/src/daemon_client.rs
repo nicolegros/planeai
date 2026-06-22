@@ -210,18 +210,24 @@ pub async fn ensure_daemon_running(
     // Spawn detached daemon process
     spawn_detached(sidecar_path, socket_path, scrollback_bytes)?;
 
-    // Retry with exponential backoff: 50, 100, 200, 400, 800ms (total ~1.5s)
-    let delays = [50, 100, 200, 400, 800];
-    for delay in delays {
-        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    // Retry with capped exponential backoff.
+    // Windows needs a longer budget due to slower process creation.
+    #[cfg(windows)]
+    const DELAYS_MS: &[u64] = &[100, 200, 400, 800, 800, 800];
+    #[cfg(not(windows))]
+    const DELAYS_MS: &[u64] = &[50, 100, 200, 400, 800];
+
+    for delay in DELAYS_MS {
+        tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
         if try_connect(socket_path).await {
             tracing::info!("daemon started successfully");
             return Ok(());
         }
     }
 
-    tracing::error!("daemon did not start within 2s");
-    Err("daemon did not start within 2s".to_string())
+    let budget_ms: u64 = DELAYS_MS.iter().sum();
+    tracing::error!(budget_ms, "daemon did not start in time");
+    Err(format!("daemon did not start within {budget_ms}ms"))
 }
 
 async fn try_connect(socket_path: &Path) -> bool {

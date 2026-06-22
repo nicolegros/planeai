@@ -35,19 +35,15 @@ pub fn run() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let socket_path = cli.socket_path.unwrap_or_else(default_socket_path);
-    let pid_path = socket_path.with_file_name("daemon.pid");
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let listener = DaemonListener::bind(&socket_path)?;
         tracing::info!("listening on {}", socket_path.display());
 
-        std::fs::write(&pid_path, std::process::id().to_string())?;
-
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
 
         let socket_cleanup = socket_path.clone();
-        let pid_cleanup = pid_path.clone();
         tokio::spawn(async move {
             #[cfg(unix)]
             {
@@ -66,15 +62,12 @@ pub fn run() -> anyhow::Result<()> {
             tracing::info!("shutting down");
             let _ = shutdown_tx.send(());
             let _ = std::fs::remove_file(&socket_cleanup);
-            let _ = std::fs::remove_file(&pid_cleanup);
         });
 
         let server = Arc::new(DaemonServer::new(cli.scrollback_bytes));
         server.run(listener, shutdown_rx).await;
 
         let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(&pid_path);
-
         Ok(())
     })
 }
