@@ -7,6 +7,7 @@
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
+  import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -43,6 +44,17 @@
   let formKey = $state("");
   let formProjectPath = $state("");
   let formBaseBranch = $state("main");
+  let taskFormWrapper = $state<HTMLDivElement | null>(null);
+
+  const taskFk = createFormKeyboardController(
+    () => [
+      { key: "t", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
+      { key: "d", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
+      { key: "p", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
+      { key: "b", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
+    ],
+    { wrapper: () => taskFormWrapper, onDismiss: () => { modalMode = null; focusTerminal(); } },
+  );
 
   // Context menu
   let contextMenu = $state<{ x: number; y: number; task: TaskItem } | null>(null);
@@ -354,11 +366,12 @@
 <!-- Modal for create/edit -->
 <Dialog open={modalMode !== null} onOpenChange={(v) => { if (!v) { modalMode = null; focusTerminal(); } }} title={modalMode === "create" ? "Create Task" : "Edit Task"} class="w-[36rem] p-6">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none">
   <form
     class="space-y-4"
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-    onkeydown={(e) => { if (e.key === "Escape") { e.stopPropagation(); modalMode = null; focusTerminal(); } if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
-    use:autofocusForm
+    onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
   >
     <h2 class="text-lg font-semibold text-t1">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
 
@@ -373,13 +386,13 @@
       </div>
     {/if}
 
-    <div class="space-y-1">
-      <Label>Title</Label>
+    <div class="space-y-1" data-field="title">
+      <Label>Title <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></Label>
       <Input bind:value={formTitle} placeholder="Task title" />
     </div>
 
-    <div class="space-y-1">
-      <Label>Description</Label>
+    <div class="space-y-1" data-field="desc">
+      <Label>Description <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span></Label>
       <textarea
         bind:value={formDescription}
         placeholder="Optional description"
@@ -390,19 +403,32 @@
       ></textarea>
     </div>
 
-    <div class="space-y-1">
-      <Label>Priority</Label>
+    <div class="space-y-1" data-field="priority">
+      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">P</span></Label>
       <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
-    <div class="space-y-1">
-      <Label>Base branch</Label>
+    <div class="space-y-1" data-field="base">
+      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {taskFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
       <Input bind:value={formBaseBranch} placeholder="main" />
     </div>
 
-    <div class="flex justify-end gap-2">
-      <Button type="button" onclick={() => { modalMode = null; focusTerminal(); }}>Cancel</Button>
-      <Button type="submit" variant="primary" disabled={!formTitle.trim()}>{modalMode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+    <!-- Footer with mode indicator -->
+    <div class="flex items-center justify-between pt-2 border-t border-border">
+      <div class="flex items-center gap-2">
+        {#if taskFk.mode === "insert"}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+          <span class="text-[10px] text-t3">esc → normal mode</span>
+        {:else}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
+          <span class="text-[10px] text-t3">press a key to focus field</span>
+        {/if}
+      </div>
+      <div class="flex gap-2">
+        <Button type="button" onclick={() => { modalMode = null; focusTerminal(); }}>Cancel</Button>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>{modalMode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+      </div>
     </div>
   </form>
+  </div>
 </Dialog>

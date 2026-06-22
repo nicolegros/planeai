@@ -3,8 +3,9 @@
  *
  * Normal mode: mnemonic keys focus fields; toggle keys flip switches.
  * Insert mode: entered when a text field is focused; typing edits text.
- * Esc returns to normal mode (blurs active field).
- * Tab/Shift-Tab cycles fields in either mode.
+ * Esc in insert → normal (blurs active field, returns focus to wrapper).
+ * Esc in normal → calls onDismiss (close form).
+ * Tab/Shift-Tab cycles fields naturally; focusin auto-detects insert.
  */
 
 export type FormMode = "normal" | "insert";
@@ -13,21 +14,15 @@ export interface FieldBinding {
   /** The mnemonic key (lowercase) that activates this field */
   key: string;
   /** Reference to the focusable element */
-  ref: () => HTMLElement | null;
+  ref?: () => HTMLElement | null;
   /** If true, pressing the key toggles a value instead of focusing */
   toggle?: () => void;
 }
 
-export interface FormKeyboardController {
-  mode: FormMode;
-  handleKeydown: (e: KeyboardEvent) => void;
-  destroy: () => void;
-}
-
 export function createFormKeyboardController(
   bindings: () => FieldBinding[],
-  onModeChange?: (mode: FormMode) => void,
-): FormKeyboardController {
+  opts: { wrapper: () => HTMLElement | null; onDismiss?: () => void },
+) {
   let mode: FormMode = $state("normal");
 
   function isTextField(el: Element | null): boolean {
@@ -39,35 +34,28 @@ export function createFormKeyboardController(
   }
 
   function enterInsert() {
-    if (mode === "insert") return;
     mode = "insert";
-    onModeChange?.("insert");
   }
 
   function enterNormal() {
-    if (mode === "normal") return;
     mode = "normal";
-    onModeChange?.("normal");
     (document.activeElement as HTMLElement)?.blur?.();
+    opts.wrapper()?.focus();
   }
-
-  // Listen for focus events to auto-detect insert mode
-  function onFocusIn(e: FocusEvent) {
-    if (isTextField(e.target as Element)) enterInsert();
-  }
-
-  function onFocusOut(e: FocusEvent) {
-    // If nothing is focused after this event, stay in current mode
-    // (the handleKeydown Esc will handle explicit exit)
-  }
-
-  document.addEventListener("focusin", onFocusIn);
 
   function handleKeydown(e: KeyboardEvent) {
-    // Esc always returns to normal
-    if (e.key === "Escape" && mode === "insert") {
+    // ⌘Enter — let it bubble for submit
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return;
+
+    // Esc
+    if (e.key === "Escape") {
       e.preventDefault();
-      enterNormal();
+      e.stopPropagation();
+      if (mode === "insert") {
+        enterNormal();
+      } else {
+        opts.onDismiss?.();
+      }
       return;
     }
 
@@ -75,31 +63,26 @@ export function createFormKeyboardController(
     if (mode === "insert") return;
 
     // Normal mode: check mnemonic bindings
-    const fields = bindings();
     const key = e.key.toLowerCase();
-    const binding = fields.find(b => b.key === key);
-
+    const binding = bindings().find(b => b.key === key);
     if (binding) {
       e.preventDefault();
       if (binding.toggle) {
         binding.toggle();
-      } else {
+      } else if (binding.ref) {
         const el = binding.ref();
-        if (el) {
-          el.focus();
-          // Focus will trigger focusin → enterInsert if it's a text field
-        }
+        if (el) el.focus();
       }
     }
   }
 
-  function destroy() {
-    document.removeEventListener("focusin", onFocusIn);
+  function handleFocusin(e: FocusEvent) {
+    if (isTextField(e.target as Element)) enterInsert();
   }
 
   return {
     get mode() { return mode; },
     handleKeydown,
-    destroy,
+    handleFocusin,
   };
 }
