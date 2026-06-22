@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::config;
 use crate::db;
@@ -7,6 +7,37 @@ use crate::pr;
 use crate::state::{ConfigState, DbState};
 
 use crate::commands::sessions::helpers::{resolve_task_manager, session_cwd};
+
+/// Common session context needed by PR commands.
+struct SessionContext {
+    cwd: String,
+    branch: String,
+    pr_url: Option<String>,
+    task_key: Option<String>,
+    base_branch: Option<String>,
+    name: String,
+}
+
+/// Resolve session from DB, returning the fields PR commands need.
+/// Locks and releases the DB mutex immediately.
+fn resolve_session_context(
+    db_state: &State<'_, DbState>,
+    session_id: &str,
+) -> Result<SessionContext, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+    Ok(SessionContext {
+        cwd,
+        branch: session.branch.clone(),
+        pr_url: session.pr_url.clone(),
+        task_key: session.task_key.clone(),
+        base_branch: session.base_branch.clone(),
+        name: session.name.clone(),
+    })
+}
 
 /// Check PR status for a single session and handle transitions.
 pub(crate) fn poll_pr_for_session(
@@ -68,6 +99,18 @@ fn parse_github_repo(url: &str) -> Option<String> {
     Some(path.trim_end_matches(".git").to_string())
 }
 
+/// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
+async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let remote_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(parse_github_repo(&remote_url))
+}
+
 fn fetch_pr_url_inner(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
@@ -114,35 +157,23 @@ pub async fn generate_pr_defaults(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<PrDefaults, String> {
-    let (cwd, session_name, task_key, base) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (
-            cwd,
-            session.name.clone(),
-            session.task_key.clone(),
-            session.base_branch.clone(),
-        )
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let title = match &task_key {
+    let title = match &ctx.task_key {
         Some(key) => {
             let prefix = format!("{}: ", key);
-            let name = session_name.strip_prefix(&prefix).unwrap_or(&session_name);
+            let name = ctx.name.strip_prefix(&prefix).unwrap_or(&ctx.name);
             format!("{} [{}]", name, key)
         }
-        None => session_name,
+        None => ctx.name,
     };
 
-    let base_ref = base.as_deref().unwrap_or("main");
+    let base_ref = ctx.base_branch.as_deref().unwrap_or("main");
 
     // Diff stats for body
     let diff_output = tokio::process::Command::new("git")
         .args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .ok()
@@ -156,9 +187,9 @@ pub async fn generate_pr_defaults(
         format!("## Changes\n\n```\n{diff_output}\n```")
     };
 
-    let base_branch = match base {
+    let base_branch = match ctx.base_branch {
         Some(b) => b,
-        None => detect_default_branch_async(&cwd).await,
+        None => detect_default_branch_async(&ctx.cwd).await,
     };
 
     Ok(PrDefaults {
@@ -193,34 +224,18 @@ pub async fn create_pr(
     db_state: State<'_, DbState>,
     _config_state: State<'_, ConfigState>,
 ) -> Result<String, String> {
-    let (cwd, branch) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (cwd, session.branch.clone())
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
     // Push branch
     let push = tokio::process::Command::new("git")
-        .args(["push", "-u", "origin", &branch])
-        .current_dir(&cwd)
+        .args(["push", "-u", "origin", &ctx.branch])
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run git push: {e}"))?;
     if !push.status.success() {
         let stderr = String::from_utf8_lossy(&push.stderr);
         return Err(format!("git push failed: {stderr}"));
-    }
-
-    // Check gh is available
-    let gh_check = tokio::process::Command::new("gh")
-        .args(["--version"])
-        .output()
-        .await;
-    if gh_check.is_err() {
-        return Err("GitHub CLI (gh) not found. Install from https://cli.github.com/".to_string());
     }
 
     // Create PR
@@ -239,7 +254,7 @@ pub async fn create_pr(
     }
     let pr_output = tokio::process::Command::new("gh")
         .args(&args)
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -293,35 +308,19 @@ pub async fn get_ci_checks(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<Vec<CiCheck>, String> {
-    let (cwd, branch) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (cwd, session.branch.clone())
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    tracing::debug!(session_id = %session_id, branch = %branch, "get_ci_checks called");
+    tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_ci_checks called");
 
     // Only run for GitHub-hosted repos
-    let remote_output = tokio::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(&cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to get remote: {e}"))?;
-    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
-        .trim()
-        .to_string();
-    if parse_github_repo(&remote_url).is_none() {
-        tracing::debug!(remote_url = %remote_url, "not a GitHub remote, skipping CI checks");
+    if resolve_github_repo(&ctx.cwd).await?.is_none() {
+        tracing::debug!("not a GitHub remote, skipping CI checks");
         return Ok(vec![]);
     }
 
     let output = tokio::process::Command::new("gh")
-        .args(["pr", "view", &branch, "--json", "statusCheckRollup"])
-        .current_dir(&cwd)
+        .args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -352,6 +351,167 @@ pub async fn get_ci_checks(
         .collect();
 
     Ok(checks)
+}
+
+#[tauri::command]
+pub async fn get_allowed_merge_strategies(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<String>, String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    let repo = resolve_github_repo(&ctx.cwd)
+        .await?
+        .ok_or("not a GitHub repo")?;
+
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{repo}"),
+            "--jq",
+            "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
+        ])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        return Err("failed to fetch repo merge settings".to_string());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_merge_settings(&raw)
+}
+
+#[derive(Deserialize)]
+struct RepoMergeSettings {
+    squash: bool,
+    merge: bool,
+    rebase: bool,
+}
+
+fn parse_merge_settings(raw: &str) -> Result<Vec<String>, String> {
+    let settings: RepoMergeSettings =
+        serde_json::from_str(raw).map_err(|e| format!("failed to parse merge settings: {e}"))?;
+    let mut strategies = Vec::new();
+    if settings.squash {
+        strategies.push("squash".to_string());
+    }
+    if settings.merge {
+        strategies.push("merge".to_string());
+    }
+    if settings.rebase {
+        strategies.push("rebase".to_string());
+    }
+    Ok(strategies)
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeStrategy {
+    Squash,
+    Merge,
+    Rebase,
+}
+
+impl MergeStrategy {
+    fn as_gh_flag(&self) -> &'static str {
+        match self {
+            Self::Squash => "--squash",
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn merge_pr(
+    session_id: String,
+    strategy: MergeStrategy,
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+) -> Result<(), String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "merge",
+            &ctx.branch,
+            strategy.as_gh_flag(),
+            "--delete-branch",
+        ])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("merge failed: {stderr}"));
+    }
+
+    // Update DB state
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let pr_url = ctx.pr_url.as_deref().unwrap_or_default();
+        let _ = db::update_pr_state(&conn, &session_id, pr_url, "merged");
+    }
+
+    // Fire task hook
+    {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(ref key) = ctx.task_key {
+            if let Ok(tm) = resolve_task_manager(&cfg) {
+                pr::fire_pr_hook(
+                    tm,
+                    &pr::PrTransition::Merged,
+                    key,
+                    std::path::Path::new(&ctx.cwd),
+                );
+            }
+        }
+    }
+
+    // Emit pr-merged event
+    let _ = app.emit("pr-merged", serde_json::json!({ "session_id": session_id }));
+    // Also refresh sessions so UI picks up new pr_state
+    let _ = app.emit("sessions-changed", ());
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mark_pr_ready(
+    session_id: String,
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<(), String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    let output = tokio::process::Command::new("gh")
+        .args(["pr", "ready", &ctx.branch])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("failed to mark PR ready: {stderr}"));
+    }
+
+    // Update DB state
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let pr_url = ctx.pr_url.as_deref().unwrap_or_default();
+        let _ = db::update_pr_state(&conn, &session_id, pr_url, "open");
+    }
+
+    let _ = app.emit("sessions-changed", ());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -564,5 +724,41 @@ mod tests {
         let json = serde_json::to_string(&defaults).unwrap();
         assert!(json.contains("feat: add login"));
         assert!(json.contains("base_branch"));
+    }
+
+    #[test]
+    fn parse_merge_strategies_all_enabled() {
+        let result = parse_merge_settings(r#"{"squash":true,"merge":true,"rebase":true}"#).unwrap();
+        assert_eq!(result, vec!["squash", "merge", "rebase"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_only_squash() {
+        let result =
+            parse_merge_settings(r#"{"squash":true,"merge":false,"rebase":false}"#).unwrap();
+        assert_eq!(result, vec!["squash"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_partial() {
+        let result =
+            parse_merge_settings(r#"{"squash":true,"merge":false,"rebase":true}"#).unwrap();
+        assert_eq!(result, vec!["squash", "rebase"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_invalid_json() {
+        assert!(parse_merge_settings("not json").is_err());
+    }
+
+    #[test]
+    fn merge_strategy_deserializes() {
+        let s: MergeStrategy = serde_json::from_str("\"squash\"").unwrap();
+        assert_eq!(s.as_gh_flag(), "--squash");
+        let m: MergeStrategy = serde_json::from_str("\"merge\"").unwrap();
+        assert_eq!(m.as_gh_flag(), "--merge");
+        let r: MergeStrategy = serde_json::from_str("\"rebase\"").unwrap();
+        assert_eq!(r.as_gh_flag(), "--rebase");
+        assert!(serde_json::from_str::<MergeStrategy>("\"fast-forward\"").is_err());
     }
 }

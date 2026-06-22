@@ -230,6 +230,7 @@
     sessionName={activeSessionName}
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
+    prState={sessions.find(s => s.id === activeSessionId)?.pr_state ?? null}
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={titlebarTabs}
