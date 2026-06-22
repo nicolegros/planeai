@@ -1,54 +1,31 @@
 /* Dracula */
 
 :root {
-  /* Light mode — Dracula-inspired light variant */
-  --color-surface-50: #ffffff;
-  --color-surface-100: #f8f8f2;
-  --color-surface-200: #eee8e2;
-  --color-surface-300: #d6d0ca;
-  --color-surface-400: #a8a4a0;
-  --color-surface-500: #6e6a66;
-  --color-surface-600: #504c48;
-  --color-surface-700: #3c3a38;
-  --color-surface-800: #2a2a2a;
-  --color-surface-900: #21222c;
-  --color-surface-950: #15151e;
-
-  --color-primary-50: #f5f0ff;
-  --color-primary-100: #e8dbff;
-  --color-primary-200: #d6bfff;
-  --color-primary-300: #c4a3ff;
-  --color-primary-400: #bd93f9;
-  --color-primary-500: #9b6edc;
-  --color-primary-600: #7c4fc0;
-  --color-primary-700: #5e3899;
-  --color-primary-800: #452878;
-  --color-primary-900: #2e1a55;
-  --color-primary-950: #180d33;
-
-  --color-error-50: #fff0f0;
-  --color-error-100: #ffd6d6;
-  --color-error-200: #ffaaaa;
-  --color-error-300: #ff7777;
-  --color-error-400: #ff5555;
-  --color-error-500: #e04040;
-  --color-error-600: #b83030;
-  --color-error-700: #902020;
-  --color-error-800: #681515;
-  --color-error-900: #400b0b;
-  --color-error-950: #200505;
-
-  --color-warning-50: #fffff0;
-  --color-warning-100: #ffffc8;
-  --color-warning-200: #f8f89a;
-  --color-warning-300: #f1fa8c;
-  --color-warning-400: #d6d870;
-  --color-warning-500: #aab050;
+  /* ── Role tokens (Dracula light) ── */
+  --color-canvas: #f8f8f2;
+  --color-chrome: #f8f8f2;
+  --color-sidebar: #f8f8f2;
+  --color-main: #ffffff;
+  --color-panel: #ffffff;
+  --color-panel-hi: #eee8e2;
+  --color-t1: #21222c;
+  --color-t2: #504c48;
+  --color-t3: #6e6a66;
+  --color-border: rgba(33,34,44,0.08);
+  --color-border-s: rgba(33,34,44,0.14);
+  --color-accent: #bd93f9;
+  --color-on-accent: #ffffff;
+  --color-accent-bg: rgba(189,147,249,0.10);
+  --color-scrim: rgba(33,34,44,0.30);
+  --color-status-running: #50fa7b;
+  --color-status-review: #f1fa8c;
+  --color-status-exited: #ff5555;
+  --color-status-idle: #a8a4a0;
 
   --radius-base: 0.375rem;
   --radius-container: 0.75rem;
 
-  /* Terminal — light (inverted Dracula-ish) */
+  /* ── Terminal (Dracula light) ── */
   --terminal-background: #f8f8f2;
   --terminal-foreground: #282a36;
   --terminal-cursor: #6272a4;
@@ -70,7 +47,13 @@
   --terminal-bright-cyan: #a4ffff;
   --terminal-bright-white: #ffffff;
 
-  /* Editor */
+  /* ── Diff ── */
+  --diff-add-bg: #d4f8db;
+  --diff-del-bg: #fdd8d8;
+  --diff-add-color: #50fa7b;
+  --diff-del-color: #ff5555;
+
+  /* ── Editor ── */
   --editor-background: #f8f8f2;
   --editor-foreground: #282a36;
   --editor-selection: #e2e4e8;
@@ -93,31 +76,28 @@
 }
 
 .dark {
-  --color-surface-50: #f8f8f2;
-  --color-surface-100: #d0d0cc;
-  --color-surface-200: #a8a8a4;
-  --color-surface-300: #6272a4;
-  --color-surface-400: #44475a;
-  --color-surface-500: #3a3d50;
-  --color-surface-600: #313445;
-  --color-surface-700: #282a36;
-  --color-surface-800: #21222c;
-  --color-surface-900: #1a1b25;
-  --color-surface-950: #13141c;
+  /* ── Role tokens (Dracula dark) ── */
+  --color-canvas: #1a1b25;
+  --color-chrome: #1a1b25;
+  --color-sidebar: #1a1b25;
+  --color-main: #21222c;
+  --color-panel: #282a36;
+  --color-panel-hi: #313445;
+  --color-t1: #f8f8f2;
+  --color-t2: #a8a8a4;
+  --color-t3: #6272a4;
+  --color-border: rgba(248,248,242,0.08);
+  --color-border-s: rgba(248,248,242,0.14);
+  --color-accent: #bd93f9;
+  --color-on-accent: #21222c;
+  --color-accent-bg: rgba(189,147,249,0.12);
+  --color-scrim: rgba(0,0,0,0.55);
+  --color-status-running: #50fa7b;
+  --color-status-review: #f1fa8c;
+  --color-status-exited: #ff5555;
+  --color-status-idle: #44475a;
 
-  --color-primary-50: #13141c;
-  --color-primary-100: #1a1b25;
-  --color-primary-200: #44475a;
-  --color-primary-300: #6272a4;
-  --color-primary-400: #d6acff;
-  --color-primary-500: #bd93f9;
-  --color-primary-600: #bd93f9;
-  --color-primary-700: #bd93f9;
-  --color-primary-800: #bd93f9;
-  --color-primary-900: #bd93f9;
-  --color-primary-950: #bd93f9;
-
-  /* Terminal — Dracula (from iTerm2-Color-Schemes) */
+  /* ── Terminal (Dracula dark) ── */
   --terminal-background: #282a36;
   --terminal-foreground: #f8f8f2;
   --terminal-cursor: #f8f8f2;
@@ -139,7 +119,13 @@
   --terminal-bright-cyan: #a4ffff;
   --terminal-bright-white: #ffffff;
 
-  /* Editor */
+  /* ── Diff ── */
+  --diff-add-bg: #1a3d2a;
+  --diff-del-bg: #3d1a1a;
+  --diff-add-color: #50fa7b;
+  --diff-del-color: #ff5555;
+
+  /* ── Editor ── */
   --editor-background: #282a36;
   --editor-foreground: #f8f8f2;
   --editor-selection: #44475a;

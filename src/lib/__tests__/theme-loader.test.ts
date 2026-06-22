@@ -11,7 +11,8 @@ describe("injectTheme", () => {
 
     const style = document.getElementById("planeai-theme") as HTMLStyleElement;
     expect(style).not.toBeNull();
-    expect(style.textContent).toBe(":root { --color-surface-50: #fff; }");
+    expect(style.textContent).toContain(DEFAULT_THEME_CSS);
+    expect(style.textContent).toContain(":root { --color-surface-50: #fff; }");
   });
 
   it("replaces existing theme style on re-inject", () => {
@@ -20,7 +21,8 @@ describe("injectTheme", () => {
 
     const styles = document.querySelectorAll("#planeai-theme");
     expect(styles.length).toBe(1);
-    expect(styles[0].textContent).toBe(":root { --color-surface-50: #000; }");
+    expect(styles[0].textContent).toContain(":root { --color-surface-50: #000; }");
+    expect(styles[0].textContent).not.toContain(":root { --color-surface-50: #fff; }");
   });
 });
 
@@ -83,7 +85,38 @@ describe("injectTheme fallback", () => {
 
     const style = document.getElementById("planeai-theme") as HTMLStyleElement;
     expect(style).not.toBeNull();
-    expect(style.textContent).toBe(DEFAULT_THEME_CSS);
+    expect(style.textContent).toContain("--color-panel:");
     expect(style.textContent!.length).toBeGreaterThan(0);
+  });
+});
+
+describe("injectTheme with custom theme CSS", () => {
+  beforeEach(() => {
+    document.head.innerHTML = "";
+  });
+
+  it("preserves default dark-mode tokens when custom theme is injected", () => {
+    // Simulate a legacy theme file that only has old tokens
+    const legacyTheme = `:root { --color-surface-50: #fff; }\n.dark { --color-surface-50: #000; }`;
+    injectTheme(legacyTheme);
+
+    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
+    // The injected CSS must still contain the new design tokens for dark mode
+    expect(style.textContent).toContain("--color-panel:");
+    expect(style.textContent).toContain("--color-t1:");
+    expect(style.textContent).toContain("--color-t2:");
+    expect(style.textContent).toContain("--color-accent:");
+  });
+
+  it("custom theme overrides come after defaults so they take precedence", () => {
+    const customTheme = `:root { --color-panel: #ff0000; }`;
+    injectTheme(customTheme);
+
+    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
+    // Custom values should appear after the defaults
+    const content = style.textContent!;
+    const defaultPanelIdx = content.indexOf("--color-panel:");
+    const customPanelIdx = content.lastIndexOf("--color-panel: #ff0000");
+    expect(customPanelIdx).toBeGreaterThan(defaultPanelIdx);
   });
 });

@@ -218,7 +218,7 @@ export function injectTheme(css: string): void {
     el.id = STYLE_ID;
     document.head.appendChild(el);
   }
-  el.textContent = css || DEFAULT_THEME_CSS;
+  el.textContent = css ? `${DEFAULT_THEME_CSS}\n${css}` : DEFAULT_THEME_CSS;
 }
 
 export function extractTerminalTheme(): ITheme {

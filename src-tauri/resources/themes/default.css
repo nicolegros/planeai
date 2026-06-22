@@ -1,133 +1,108 @@
-/* planeai default theme — matches bits-ui documentation style */
+/* planeai default theme — monochrome design system */
 
 :root {
-  /* Surface — near-pure neutral with hint of blue on mids */
-  --color-surface-50: hsl(0 0% 100%);
-  --color-surface-100: hsl(240 5% 96%);
-  --color-surface-200: hsl(240 5% 92%);
-  --color-surface-300: hsl(240 4% 85%);
-  --color-surface-400: hsl(240 4% 70%);
-  --color-surface-500: hsl(240 3% 55%);
-  --color-surface-600: hsl(240 3% 42%);
-  --color-surface-700: hsl(240 4% 32%);
-  --color-surface-800: hsl(240 5% 20%);
-  --color-surface-900: hsl(240 6% 10%);
-  --color-surface-950: hsl(0 0% 5%);
+  /* ── Role tokens (light) ── */
+  --color-canvas: #f4f4f6;
+  --color-chrome: #f4f4f6;
+  --color-sidebar: #f4f4f6;
+  --color-main: #ffffff;
+  --color-panel: #ffffff;
+  --color-panel-hi: #e9e9ed;
+  --color-t1: #18181d;
+  --color-t2: #686870;
+  --color-t3: #88888f;
+  --color-border: rgba(0,0,0,0.06);
+  --color-border-s: rgba(0,0,0,0.10);
+  --color-accent: #18181d;
+  --color-on-accent: #ffffff;
+  --color-accent-bg: rgba(24,24,29,0.07);
+  --color-scrim: rgba(25,25,30,0.30);
+  --color-status-running: #1a7f37;
+  --color-status-review: #9a6700;
+  --color-status-exited: #cf222e;
+  --color-status-idle: #aeaeb5;
 
-  /* Primary — near-black (bits-ui uses dark/contrast as primary action) */
-  --color-primary-50: hsl(240 5% 96%);
-  --color-primary-100: hsl(240 5% 90%);
-  --color-primary-200: hsl(240 5% 82%);
-  --color-primary-300: hsl(240 5% 70%);
-  --color-primary-400: hsl(240 5% 55%);
-  --color-primary-500: hsl(240 6% 10%);
-  --color-primary-600: hsl(240 6% 8%);
-  --color-primary-700: hsl(240 6% 6%);
-  --color-primary-800: hsl(0 0% 4%);
-  --color-primary-900: hsl(0 0% 2%);
-  --color-primary-950: hsl(0 0% 0%);
-
-  /* Error — red-pink (bits-ui destructive) */
-  --color-error-50: hsl(347 77% 95%);
-  --color-error-100: hsl(347 77% 88%);
-  --color-error-200: hsl(347 77% 78%);
-  --color-error-300: hsl(347 77% 68%);
-  --color-error-400: hsl(347 77% 58%);
-  --color-error-500: hsl(347 77% 50%);
-  --color-error-600: hsl(347 77% 42%);
-  --color-error-700: hsl(347 70% 35%);
-  --color-error-800: hsl(347 65% 28%);
-  --color-error-900: hsl(347 60% 22%);
-  --color-error-950: hsl(347 55% 15%);
-
-  /* Warning — amber/gold (bits-ui tertiary) */
-  --color-warning-50: hsl(38 92% 95%);
-  --color-warning-100: hsl(38 92% 85%);
-  --color-warning-200: hsl(38 92% 72%);
-  --color-warning-300: hsl(38 92% 60%);
-  --color-warning-400: hsl(38 92% 50%);
-  --color-warning-500: hsl(38 80% 42%);
-
-  /* Radii */
+  /* ── Radii ── */
   --radius-base: 0.375rem;
   --radius-container: 0.75rem;
 
-  /* Terminal — light */
+  /* ── Terminal (GitHub light) ── */
   --terminal-background: #ffffff;
   --terminal-foreground: #171717;
-  --terminal-cursor: #0969da;
-  --terminal-selection: #dbe9f9;
-  --terminal-black: #24292f;
+  --terminal-cursor: #18181d;
+  --terminal-selection: rgba(24,24,29,0.12);
+  --terminal-black: #171717;
   --terminal-red: #cf222e;
   --terminal-green: #116329;
-  --terminal-yellow: #4d2d00;
+  --terminal-yellow: #9a6700;
   --terminal-blue: #0550ae;
   --terminal-magenta: #8250df;
   --terminal-cyan: #1b7c83;
   --terminal-white: #6e7781;
-  --terminal-bright-black: #57606a;
-  --terminal-bright-red: #a40e26;
+  --terminal-bright-black: #6e7781;
+  --terminal-bright-red: #cf222e;
   --terminal-bright-green: #1a7f37;
-  --terminal-bright-yellow: #633c01;
-  --terminal-bright-blue: #0969da;
-  --terminal-bright-magenta: #6639ba;
-  --terminal-bright-cyan: #3192aa;
-  --terminal-bright-white: #8c959f;
+  --terminal-bright-yellow: #9a6700;
+  --terminal-bright-blue: #0550ae;
+  --terminal-bright-magenta: #8250df;
+  --terminal-bright-cyan: #1b7c83;
+  --terminal-bright-white: #171717;
 
-  /* Editor */
+  /* ── Diff ── */
+  --diff-add-bg: #d4f8db;
+  --diff-del-bg: #fdd8d8;
+  --diff-add-color: #1a7f37;
+  --diff-del-color: #cf222e;
+
+  /* ── Editor ── */
   --editor-background: #ffffff;
   --editor-foreground: #171717;
-  --editor-selection: #dbe9f9;
-  --editor-line-number: #6e7781;
+  --editor-selection: rgba(24,24,29,0.12);
+  --editor-line-number: #88888f;
   --editor-added: #116329;
   --editor-deleted: #cf222e;
   --editor-added-bg: #d4f8db;
   --editor-deleted-bg: #fdd8d8;
-  --editor-keyword: #cf222e;
-  --editor-string: #0a3069;
+  --editor-keyword: #0550ae;
+  --editor-string: #1b7c83;
   --editor-comment: #6e7781;
-  --editor-number: #0550ae;
-  --editor-variable: #24292f;
+  --editor-number: #9a6700;
+  --editor-variable: #171717;
   --editor-type: #8250df;
   --editor-function: #8250df;
   --editor-property: #0550ae;
   --editor-operator: #cf222e;
-  --editor-punctuation: #24292f;
+  --editor-punctuation: #171717;
   --editor-meta: #1b7c83;
 }
 
 .dark {
-  /* Surface — dark palette (50 still lightest, 950 still darkest) */
-  --color-surface-50: hsl(0 0% 95%);
-  --color-surface-100: hsl(0 0% 88%);
-  --color-surface-200: hsl(0 0% 75%);
-  --color-surface-300: hsl(0 0% 62%);
-  --color-surface-400: hsl(240 3% 49%);
-  --color-surface-500: hsl(240 3% 37%);
-  --color-surface-600: hsl(240 3% 26%);
-  --color-surface-700: hsl(240 4% 18%);
-  --color-surface-800: hsl(240 4% 13%);
-  --color-surface-900: hsl(0 0% 9%);
-  --color-surface-950: hsl(0 0% 4%);
+  /* ── Role tokens (dark) ── */
+  --color-canvas: #171717;
+  --color-chrome: #171717;
+  --color-sidebar: #171717;
+  --color-main: #0a0a0a;
+  --color-panel: #1f1f23;
+  --color-panel-hi: #2c2c31;
+  --color-t1: #f2f2f2;
+  --color-t2: #9e9e9e;
+  --color-t3: #5b5b61;
+  --color-border: rgba(255,255,255,0.08);
+  --color-border-s: rgba(255,255,255,0.14);
+  --color-accent: #f5f5f5;
+  --color-on-accent: #0a0a0a;
+  --color-accent-bg: rgba(245,245,245,0.12);
+  --color-scrim: rgba(0,0,0,0.55);
+  --color-status-running: #3fb950;
+  --color-status-review: #d29922;
+  --color-status-exited: #ff7b72;
+  --color-status-idle: #5b5b61;
 
-  /* Primary — white in dark mode (bits-ui --contrast) */
-  --color-primary-50: hsl(0 0% 4%);
-  --color-primary-100: hsl(0 0% 10%);
-  --color-primary-200: hsl(0 0% 20%);
-  --color-primary-300: hsl(0 0% 35%);
-  --color-primary-400: hsl(0 0% 50%);
-  --color-primary-500: hsl(0 0% 96%);
-  --color-primary-600: hsl(0 0% 92%);
-  --color-primary-700: hsl(0 0% 88%);
-  --color-primary-800: hsl(0 0% 95%);
-  --color-primary-900: hsl(0 0% 98%);
-  --color-primary-950: hsl(0 0% 100%);
-
-  /* Terminal — dark */
+  /* ── Terminal (GitHub dark) ── */
   --terminal-background: #0d0d0d;
   --terminal-foreground: #f2f2f2;
-  --terminal-cursor: #58a6ff;
-  --terminal-selection: #264f78;
+  --terminal-cursor: #f5f5f5;
+  --terminal-selection: rgba(245,245,245,0.18);
   --terminal-black: #484f58;
   --terminal-red: #ff7b72;
   --terminal-green: #3fb950;
@@ -135,34 +110,40 @@
   --terminal-blue: #58a6ff;
   --terminal-magenta: #bc8cff;
   --terminal-cyan: #39c5cf;
-  --terminal-white: #b1bac4;
+  --terminal-white: #f2f2f2;
   --terminal-bright-black: #6e7681;
-  --terminal-bright-red: #ffa198;
-  --terminal-bright-green: #56d364;
-  --terminal-bright-yellow: #e3b341;
-  --terminal-bright-blue: #79c0ff;
-  --terminal-bright-magenta: #d2a8ff;
-  --terminal-bright-cyan: #56d4dd;
-  --terminal-bright-white: #f0f6fc;
+  --terminal-bright-red: #ff7b72;
+  --terminal-bright-green: #3fb950;
+  --terminal-bright-yellow: #d29922;
+  --terminal-bright-blue: #58a6ff;
+  --terminal-bright-magenta: #bc8cff;
+  --terminal-bright-cyan: #39c5cf;
+  --terminal-bright-white: #f2f2f2;
 
-  /* Editor — dark */
-  --editor-background: #0d0d0d;
+  /* ── Diff ── */
+  --diff-add-bg: #1a3d2a;
+  --diff-del-bg: #3d1a1a;
+  --diff-add-color: #3fb950;
+  --diff-del-color: #ff7b72;
+
+  /* ── Editor ── */
+  --editor-background: #0a0a0a;
   --editor-foreground: #f2f2f2;
-  --editor-selection: #264f78;
-  --editor-line-number: #6e7681;
+  --editor-selection: rgba(245,245,245,0.18);
+  --editor-line-number: #5b5b61;
   --editor-added: #3fb950;
   --editor-deleted: #ff7b72;
   --editor-added-bg: #1a3d2a;
   --editor-deleted-bg: #3d1a1a;
   --editor-keyword: #ff7b72;
-  --editor-string: #a5d6ff;
-  --editor-comment: #8b949e;
-  --editor-number: #79c0ff;
+  --editor-string: #39c5cf;
+  --editor-comment: #6e7681;
+  --editor-number: #d29922;
   --editor-variable: #f2f2f2;
-  --editor-type: #d2a8ff;
-  --editor-function: #d2a8ff;
-  --editor-property: #79c0ff;
+  --editor-type: #bc8cff;
+  --editor-function: #bc8cff;
+  --editor-property: #58a6ff;
   --editor-operator: #ff7b72;
   --editor-punctuation: #f2f2f2;
-  --editor-meta: #56d4dd;
+  --editor-meta: #39c5cf;
 }

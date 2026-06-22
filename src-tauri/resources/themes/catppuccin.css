@@ -1,57 +1,31 @@
 /* Catppuccin (Latte / Macchiato) */
 
 :root {
-  /* Surface — Latte palette */
-  --color-surface-50: #eff1f5; /* Base */
-  --color-surface-100: #e6e9ef; /* Mantle */
-  --color-surface-200: #dce0e8; /* Crust */
-  --color-surface-300: #ccd0da; /* Surface 0 */
-  --color-surface-400: #bcc0cc; /* Surface 1 */
-  --color-surface-500: #acb0be; /* Surface 2 */
-  --color-surface-600: #9ca0b0; /* Overlay 0 */
-  --color-surface-700: #7c7f93; /* Overlay 2 */
-  --color-surface-800: #5c5f77; /* Subtext 1 */
-  --color-surface-900: #4c4f69; /* Text */
-  --color-surface-950: #4c4f69; /* Text */
-
-  /* Primary — Blue */
-  --color-primary-50: #eff1f5;
-  --color-primary-100: #dce0e8;
-  --color-primary-200: #bcc0cc;
-  --color-primary-300: #8c8fa1;
-  --color-primary-400: #7287fd; /* Lavender */
-  --color-primary-500: #1e66f5; /* Blue */
-  --color-primary-600: #1e66f5;
-  --color-primary-700: #1e66f5;
-  --color-primary-800: #1e66f5;
-  --color-primary-900: #1e66f5;
-  --color-primary-950: #1e66f5;
-
-  /* Error — Red */
-  --color-error-50: #eff1f5;
-  --color-error-100: #e6e9ef;
-  --color-error-200: #e64553; /* Maroon */
-  --color-error-300: #d20f39; /* Red */
-  --color-error-400: #d20f39;
-  --color-error-500: #d20f39;
-  --color-error-600: #d20f39;
-  --color-error-700: #d20f39;
-  --color-error-800: #d20f39;
-  --color-error-900: #d20f39;
-  --color-error-950: #d20f39;
-
-  /* Warning — Yellow */
-  --color-warning-50: #eff1f5;
-  --color-warning-100: #e6e9ef;
-  --color-warning-200: #df8e1d;
-  --color-warning-300: #df8e1d;
-  --color-warning-400: #df8e1d;
-  --color-warning-500: #df8e1d;
+  /* ── Role tokens (Latte) ── */
+  --color-canvas: #e6e9ef;
+  --color-chrome: #e6e9ef;
+  --color-sidebar: #e6e9ef;
+  --color-main: #eff1f5;
+  --color-panel: #eff1f5;
+  --color-panel-hi: #dce0e8;
+  --color-t1: #4c4f69;
+  --color-t2: #6c6f85;
+  --color-t3: #8c8fa1;
+  --color-border: rgba(76,79,105,0.08);
+  --color-border-s: rgba(76,79,105,0.15);
+  --color-accent: #1e66f5;
+  --color-on-accent: #eff1f5;
+  --color-accent-bg: rgba(30,102,245,0.10);
+  --color-scrim: rgba(76,79,105,0.30);
+  --color-status-running: #40a02b;
+  --color-status-review: #df8e1d;
+  --color-status-exited: #d20f39;
+  --color-status-idle: #9ca0b0;
 
   --radius-base: 0.5rem;
   --radius-container: 1rem;
 
-  /* Terminal — Latte */
+  /* ── Terminal (Latte) ── */
   --terminal-background: #eff1f5;
   --terminal-foreground: #4c4f69;
   --terminal-cursor: #dc8a78;
@@ -73,7 +47,13 @@
   --terminal-bright-cyan: #179299;
   --terminal-bright-white: #bcc0cc;
 
-  /* Editor — Latte */
+  /* ── Diff ── */
+  --diff-add-bg: #d2f0cd;
+  --diff-del-bg: #f5d0d6;
+  --diff-add-color: #40a02b;
+  --diff-del-color: #d20f39;
+
+  /* ── Editor (Latte) ── */
   --editor-background: #eff1f5;
   --editor-foreground: #4c4f69;
   --editor-selection: #ccd0da;
@@ -96,32 +76,28 @@
 }
 
 .dark {
-  --color-surface-50: #cad3f5; /* Text */
-  --color-surface-100: #b8c0e0; /* Subtext 1 */
-  --color-surface-200: #a5adcb; /* Subtext 0 */
-  --color-surface-300: #939ab7; /* Overlay 2 */
-  --color-surface-400: #6e738d; /* Overlay 0 */
-  --color-surface-500: #5b6078; /* Surface 2 */
-  --color-surface-600: #494d64; /* Surface 1 */
-  --color-surface-700: #363a4f; /* Surface 0 */
-  --color-surface-800: #1e2030; /* Mantle */
-  --color-surface-900: #24273a; /* Base */
-  --color-surface-950: #181926; /* Crust */
+  /* ── Role tokens (Macchiato) ── */
+  --color-canvas: #1e2030;
+  --color-chrome: #1e2030;
+  --color-sidebar: #1e2030;
+  --color-main: #24273a;
+  --color-panel: #24273a;
+  --color-panel-hi: #363a4f;
+  --color-t1: #cad3f5;
+  --color-t2: #a5adcb;
+  --color-t3: #6e738d;
+  --color-border: rgba(202,211,245,0.08);
+  --color-border-s: rgba(202,211,245,0.14);
+  --color-accent: #8aadf4;
+  --color-on-accent: #24273a;
+  --color-accent-bg: rgba(138,173,244,0.12);
+  --color-scrim: rgba(0,0,0,0.55);
+  --color-status-running: #a6da95;
+  --color-status-review: #eed49f;
+  --color-status-exited: #ed8796;
+  --color-status-idle: #5b6078;
 
-  /* Primary — Blue (Macchiato) */
-  --color-primary-50: #181926;
-  --color-primary-100: #24273a;
-  --color-primary-200: #494d64;
-  --color-primary-300: #8087a2;
-  --color-primary-400: #b7bdf8; /* Lavender */
-  --color-primary-500: #8aadf4; /* Blue */
-  --color-primary-600: #8aadf4;
-  --color-primary-700: #8aadf4;
-  --color-primary-800: #8aadf4;
-  --color-primary-900: #8aadf4;
-  --color-primary-950: #8aadf4;
-
-  /* Terminal — Macchiato */
+  /* ── Terminal (Macchiato) ── */
   --terminal-background: #24273a;
   --terminal-foreground: #cad3f5;
   --terminal-cursor: #f4dbd6;
@@ -143,7 +119,13 @@
   --terminal-bright-cyan: #8bd5ca;
   --terminal-bright-white: #a5adcb;
 
-  /* Editor — Macchiato */
+  /* ── Diff ── */
+  --diff-add-bg: #2a3f2a;
+  --diff-del-bg: #3f2a2e;
+  --diff-add-color: #a6da95;
+  --diff-del-color: #ed8796;
+
+  /* ── Editor (Macchiato) ── */
   --editor-background: #24273a;
   --editor-foreground: #cad3f5;
   --editor-selection: #363a4f;
