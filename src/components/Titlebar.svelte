@@ -165,10 +165,10 @@
       <div class="relative flex items-center" role="presentation" onclick={(e) => e.stopPropagation()}>
         <button
           class="flex items-center gap-[7px] h-[25px] px-[9px] rounded-[7px] text-[11.5px] font-medium
-            {isMerged ? 'bg-[rgba(188,140,255,0.18)] text-[#bc8cff]' : 'bg-[rgba(63,185,80,0.18)] text-status-running'}"
+            {isMerged ? 'bg-[rgba(188,140,255,0.18)] text-[#bc8cff]' : isDraft ? 'bg-panel-hi text-t2' : prState === 'closed' ? 'bg-status-exited/15 text-status-exited' : 'bg-[rgba(63,185,80,0.18)] text-status-running'}"
           onclick={() => (prPanelOpen = !prPanelOpen)}
         >
-          <span class="size-[7px] rounded-full {isMerged ? 'bg-[#bc8cff]' : 'bg-status-running'}"></span>
+          <span class="size-[7px] rounded-full {isMerged ? 'bg-[#bc8cff]' : isDraft ? 'bg-t3' : prState === 'closed' ? 'bg-status-exited' : 'bg-status-running'}"></span>
           PR{prUrl?.match(/#(\d+)/)?.[0] ?? ''}
           {#if checks.length > 0}
             <span class="size-[5px] rounded-full {failedCount > 0 ? 'bg-status-exited' : allConcluded ? 'bg-status-running' : 'bg-status-review animate-pulse'}"></span>
