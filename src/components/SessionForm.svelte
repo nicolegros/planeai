@@ -197,7 +197,7 @@
 <form bind:this={formEl} class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
   <!-- Mode toggle -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="flex rounded-lg bg-panel-hi p-0.5" role="toolbar" tabindex="-1">>
+  <div class="flex rounded-lg bg-panel-hi p-0.5" role="toolbar" tabindex="-1">
     <button
       type="button"
       tabindex={-1}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
@@ -291,7 +291,7 @@
           {taskPrefill}
           currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
           onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
-          onCancel={() => { showSessionForm = false; taskPrefill = null; }}
+          onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => document.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.focus()); }}
         />
       </div>
     </div>
