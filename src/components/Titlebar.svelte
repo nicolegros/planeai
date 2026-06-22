@@ -125,7 +125,7 @@
           <div class="absolute top-full right-0 mt-1 z-50 w-64 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-2">
             <div class="text-[10px] text-surface-500 uppercase tracking-wide mb-1">CI Checks</div>
             <ul class="space-y-0.5">
-              {#each checks as check (check.name)}
+              {#each checks as check, i (i)}
                 {@const ic = iconFor(classifyCheck(check))}
                 <li class="flex items-center gap-1.5 text-xs">
                   <span class={ic.color}>{ic.char}</span>
