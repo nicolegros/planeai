@@ -132,12 +132,15 @@
   {#if prUrl}
     <div class="ml-2 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
       <button
-        class="flex items-center gap-1.5 px-2 py-1 rounded text-xs hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors {isMerged ? 'text-purple-600 dark:text-purple-400' : prState === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
+        class="relative flex items-center gap-1.5 px-2 py-1 rounded text-xs hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors {isMerged ? 'text-purple-600 dark:text-purple-400' : prState === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
         title="Pull request ({prState ?? 'open'})"
         tabindex="-1"
         onclick={() => (prPanelOpen = !prPanelOpen)}
       >
         {#if isMerged}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
+        {#if checks.length > 0}
+          <span class="absolute top-0.5 right-0.5 size-2 rounded-full border border-surface-100 dark:border-surface-900 {failedCount > 0 ? 'bg-red-500' : allConcluded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}"></span>
+        {/if}
       </button>
 
       {#if prPanelOpen}
