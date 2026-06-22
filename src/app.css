@@ -40,6 +40,13 @@
   :focus-visible {
     outline-color: var(--color-accent);
   }
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  button:focus-visible,
+  [role="combobox"]:focus-visible {
+    outline: none;
+  }
 }
 
 /* Border color override is in overrides.css (imported after tailwind processing) */

@@ -280,22 +280,17 @@
       </div>
     {/if}
 
-    <Dialog.Root bind:open={showSessionForm}>
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40" />
-        <Dialog.Content class="fixed left-1/2 top-0 z-50 w-[452px] -translate-x-1/2 mt-[70px] rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
-          <Dialog.Title class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</Dialog.Title>
-          <SessionForm
-            {projects}
-            {sessions}
-            {taskPrefill}
-            currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-            onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
-            onCancel={() => { showSessionForm = false; taskPrefill = null; }}
-          />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <SharedDialog open={showSessionForm} onOpenChange={(v) => { if (!v) showSessionForm = false; }} title="New Session" class="w-[452px] rounded-xl border-border-s shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
+      <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
+      <SessionForm
+        {projects}
+        {sessions}
+        {taskPrefill}
+        currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
+        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onCancel={() => { showSessionForm = false; taskPrefill = null; }}
+      />
+    </SharedDialog>
 
     {#if getCycleState().isVisible}
       <TabSwitcher mruSessionIds={getCycleState().cycleList} selectedIndex={getCycleState().index} />
