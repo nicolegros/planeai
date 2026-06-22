@@ -187,6 +187,7 @@ export function installKeyboardRouter(
   onAction: ActionHandler,
   shouldPassEscape?: () => boolean,
   isEditorFocused?: () => boolean,
+  shouldYieldEscape?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
@@ -222,8 +223,8 @@ export function installKeyboardRouter(
         return;
       }
 
-      // If Escape and focus is inside a form with its own keyboard controller, let it handle
-      if (action.type === "focus_terminal" && document.activeElement?.closest("[data-form-keyboard]")) {
+      // If Escape and a form controller is active, let it handle
+      if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
         return;
       }
 

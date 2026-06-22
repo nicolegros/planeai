@@ -209,7 +209,8 @@
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling && !navCycle.isCycling(),
-      () => !!(activeSessionId && editorTabActive[activeSessionId])
+      () => !!(activeSessionId && editorTabActive[activeSessionId]),
+      () => showSessionForm,
     );
 
     function onKeyUp(e: KeyboardEvent) {
