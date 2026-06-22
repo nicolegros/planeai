@@ -1,7 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest, GitMerge, RefreshCw } from "@lucide/svelte";
+  import { GitPullRequest, GitMerge, RefreshCw, Bot, Terminal, GitCompare, FileCode } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -46,7 +46,7 @@
   let isDraft = $derived(prState === "draft");
   let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging);
 
-  const TAB_ICONS: Record<string, string> = { bot: "›_", "git-compare": "⇄", file: "{ }", terminal: "›_" };
+  const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
   function iconFor(c: CiConclusion): { char: string; color: string } {
     if (c === "pass") return { char: "✓", color: "text-status-running" };
@@ -135,6 +135,7 @@
   <!-- Inline tabs -->
   <div class="flex items-stretch h-[38px]" role="tablist">
     {#each tabs as tab (tab.index)}
+      {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
       <button
         role="tab"
         aria-selected={tab.index === activeTabIndex}
@@ -142,7 +143,7 @@
           {tab.index === activeTabIndex ? 'border-accent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
         onclick={() => onSelectTab(tab.index)}
       >
-        <span class="font-mono text-[10px] {tab.index === activeTabIndex ? 'text-accent' : 'text-t3'}">{TAB_ICONS[tab.icon ?? 'terminal'] ?? '›_'}</span>
+        <Icon size={13} class="{tab.index === activeTabIndex ? 'text-accent' : 'text-t3'}" />
         {tab.label}
       </button>
     {/each}
