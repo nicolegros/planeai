@@ -3,8 +3,9 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { GitPullRequest, GitMerge, Zap, RefreshCw } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
-  import { pr } from "../lib/api";
+  import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import TabBar from "./TabBar.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
@@ -48,6 +49,30 @@
     if (c === "pass") return { char: "✓", color: "text-green-600 dark:text-green-400" };
     if (c === "fail") return { char: "✗", color: "text-red-600 dark:text-red-400" };
     return { char: "◌", color: "text-yellow-500 animate-pulse" };
+  }
+
+  let sessionExited = $derived(getActiveSession()?.status === "exited");
+
+  async function sendFailuresToAgent() {
+    if (!sessionId || sessionExited) return;
+    try {
+      let msg: string;
+      try {
+        msg = await pr.getCiFailureLogs(sessionId);
+      } catch {
+        const lines = checks.map((c) => {
+          const cls = classifyCheck(c);
+          const icon = cls === "fail" ? "❌" : cls === "pass" ? "✓" : "◌";
+          return `${icon} ${c.name} (${c.conclusion ?? "pending"})`;
+        });
+        msg = `CI checks failed for this PR. Please fix the following:\n\n${lines.join("\n")}`;
+      }
+      const bytes = Array.from(new TextEncoder().encode(msg + "\r"));
+      await pty.write(sessionId, bytes);
+      showSnackbar("CI failures sent to agent", "success");
+    } catch (e: any) {
+      showSnackbar(e.toString());
+    }
   }
 
   function mergeDisabledReason(): string | null {
@@ -199,6 +224,16 @@
                   {/if}
                 </div>
               {/each}
+              {#if failedCount > 0}
+                <button
+                  class="mt-2 w-full text-xs px-2 py-1 rounded bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={sessionExited}
+                  title={sessionExited ? "Agent is not running" : "Send failures to agent"}
+                  onclick={sendFailuresToAgent}
+                >
+                  Send failures to agent
+                </button>
+              {/if}
             </div>
           {/if}
 

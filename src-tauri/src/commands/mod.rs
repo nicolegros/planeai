@@ -1,3 +1,4 @@
+pub mod ci;
 pub mod cli;
 pub mod config;
 pub mod file_explorer;
@@ -10,6 +11,7 @@ pub mod sessions;
 pub mod symphony;
 pub mod tasks;
 
+pub use ci::get_ci_failure_logs;
 pub use cli::*;
 pub use config::*;
 pub use file_explorer::*;
