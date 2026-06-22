@@ -41,7 +41,8 @@
   let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
   let checksPassing = $derived(checks.length === 0 || (allConcluded && failedCount === 0));
   let isMerged = $derived(prState === "merged");
-  let canMerge = $derived(prUrl && !isMerged && checksPassing && !merging);
+  let isDraft = $derived(prState === "draft");
+  let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging);
 
   function iconFor(c: CiConclusion): { char: string; color: string } {
     if (c === "pass") return { char: "✓", color: "text-green-600 dark:text-green-400" };
@@ -51,6 +52,7 @@
 
   function mergeDisabledReason(): string | null {
     if (isMerged) return "PR already merged";
+    if (isDraft) return "PR is still a draft";
     if (merging) return "Merging…";
     if (failedCount > 0) return "CI checks failing";
     if (checks.length > 0 && !allConcluded) return "CI checks pending";
@@ -83,6 +85,16 @@
       showSnackbar(String(e), "error");
     } finally {
       merging = false;
+    }
+  }
+
+  async function markReady() {
+    if (!sessionId) return;
+    try {
+      await pr.markReady(sessionId);
+      showSnackbar("PR marked as ready", "success");
+    } catch (e) {
+      showSnackbar(String(e), "error");
     }
   }
 
@@ -147,12 +159,22 @@
         {@const disabledReason = mergeDisabledReason()}
         <div class="absolute top-full right-0 mt-1 z-50 w-72 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-xl p-4 space-y-3">
           <!-- PR link -->
-          <div class="flex items-center justify-between">
-            <button class="text-xs text-primary-600 dark:text-primary-400 hover:underline font-medium" onclick={() => openUrl(prUrl!)}>
-              Open PR ↗
+          <div class="flex items-center justify-between gap-2">
+            <button class="text-xs text-primary-600 dark:text-primary-400 hover:underline font-medium truncate" onclick={() => openUrl(prUrl!)}>
+              {sessionName ?? "Open PR"} ↗
             </button>
-            <span class="text-[10px] text-surface-400">{isMerged ? "merged" : prState ?? "open"}</span>
+            <span class="text-[10px] text-surface-400 shrink-0">{isMerged ? "merged" : prState ?? "open"}</span>
           </div>
+
+          <!-- Mark as ready -->
+          {#if isDraft}
+            <button
+              class="w-full px-2 py-1.5 text-xs rounded border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30 font-medium"
+              onclick={markReady}
+            >
+              Mark as ready
+            </button>
+          {/if}
 
           <!-- CI Checks -->
           {#if checks.length > 0}

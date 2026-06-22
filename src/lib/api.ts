@@ -133,6 +133,7 @@ export const pr = {
   getAllowedStrategies: (sessionId: string) =>
     invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
   merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
+  markReady: (sessionId: string) => invoke("mark_pr_ready", { sessionId }),
 };
 
 export const notify = {

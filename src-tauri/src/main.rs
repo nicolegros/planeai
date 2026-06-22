@@ -339,6 +339,7 @@ fn main() {
             get_ci_checks,
             get_allowed_merge_strategies,
             merge_pr,
+            mark_pr_ready,
             check_cli_installed,
             install_cli,
             get_symphony_status,

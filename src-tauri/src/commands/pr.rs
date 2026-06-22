@@ -483,6 +483,37 @@ pub async fn merge_pr(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn mark_pr_ready(
+    session_id: String,
+    app: tauri::AppHandle,
+    db_state: State<'_, DbState>,
+) -> Result<(), String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    let output = tokio::process::Command::new("gh")
+        .args(["pr", "ready", &ctx.branch])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("failed to mark PR ready: {stderr}"));
+    }
+
+    // Update DB state
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        let pr_url = ctx.pr_url.as_deref().unwrap_or_default();
+        let _ = db::update_pr_state(&conn, &session_id, pr_url, "open");
+    }
+
+    let _ = app.emit("sessions-changed", ());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

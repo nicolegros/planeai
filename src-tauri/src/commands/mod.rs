@@ -18,7 +18,7 @@ pub use git::*;
 pub use notify::*;
 pub use pr::{
     create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,
-    merge_pr,
+    mark_pr_ready, merge_pr,
 };
 pub use projects::*;
 pub use sessions::*;
