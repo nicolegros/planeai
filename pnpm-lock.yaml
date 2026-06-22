@@ -29,6 +29,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.0
         version: 6.43.0
+      '@fontsource-variable/ibm-plex-sans':
+        specifier: 5.2.8
+        version: 5.2.8
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -465,6 +468,9 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@fontsource-variable/ibm-plex-sans@5.2.8':
+    resolution: {integrity: sha512-n5PF2iFa0CZT0QYTPzxvZ39opC9LnU0zdoRccoADbs+Dtsd+lbXOZF7RNuIPHcQX1dKjF63sxnRImQIB5eD0Ag==}
 
   '@hutson/parse-repository-url@3.0.2':
     resolution: {integrity: sha512-H9XAx3hc0BQHY6l+IFSWHDySypcXsvsuLhgYLUGywmJ5pswRVQJUHpOsobnLYp2ZUaUlKiKDrgWWhosOwAEM8Q==}
@@ -4141,6 +4147,8 @@ snapshots:
       '@floating-ui/utils': 0.2.11
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@fontsource-variable/ibm-plex-sans@5.2.8': {}
 
   '@hutson/parse-repository-url@3.0.2': {}
 

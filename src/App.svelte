@@ -235,6 +235,8 @@
     sessionId={activeSessionId}
     tabs={titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
+    runningCount={sessions.filter(s => s.status === 'active').length}
+    activeProvider={activeSession?.provider ?? null}
     onSelectTab={orchestrator.selectUnifiedTab}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
@@ -268,7 +270,8 @@
       />
   {/if}
 
-  <section class="flex-1 relative p-4 pr-0 bg-surface-50 dark:bg-surface-950 overflow-hidden">
+  <section class="flex-1 flex flex-col relative bg-surface-50 dark:bg-surface-950 overflow-hidden">
+    <div class="flex-1 relative p-4 pr-0 overflow-hidden">
     {#if showProjectForm}
       <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
         <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); }} onCancel={() => (showProjectForm = false)} />
@@ -277,9 +280,9 @@
 
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40" />
-        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-96 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 shadow-lg dark:border-surface-700 dark:bg-surface-900">
-          <Dialog.Title class="text-lg font-semibold mb-4">New Session</Dialog.Title>
+        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/55 dark:bg-[rgba(25,25,30,0.55)]" />
+        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[452px] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border-strong bg-surface-50 dark:bg-surface-700 shadow-[0_26px_70px_-16px_rgba(0,0,0,0.5)] overflow-hidden">
+          <Dialog.Title class="px-5 pt-5 pb-3 text-[13px] font-semibold text-text-1">New Session</Dialog.Title>
           <SessionForm
             {projects}
             {sessions}
@@ -463,6 +466,16 @@
         <LogViewer onClose={() => { showLogViewer = false; }} />
       </div>
     {/if}
+    </div>
+    <!-- Keyboard helper bar -->
+    <div class="h-[34px] shrink-0 flex items-center gap-4 px-4 bg-surface-100 dark:bg-surface-800 border-t border-border text-[11px] text-text-3 select-none">
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘K</kbd> Command</span>
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘N</kbd> New</span>
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘B</kbd> Sidebar</span>
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌃⇥</kbd> Switch</span>
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘1–9</kbd> Jump</span>
+      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘\</kbd> Diff</span>
+    </div>
   </section>
 
   {#if fileExplorerVisible && activeSessionId}

@@ -15,21 +15,21 @@
   const icons: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompareArrows, file: FileText, terminal: Terminal };
 </script>
 
-<div class="flex items-center gap-0.5 w-full" role="tablist">
+<div class="flex items-center gap-0 h-full" role="tablist">
   {#each tabs as tab (tab.index)}
     <button
       role="tab"
       aria-selected={tab.index === activeTabIndex}
-      class="flex-1 relative flex items-center justify-center gap-1.5 px-3 h-6 rounded text-xs select-none transition-colors group
+      class="relative flex items-center gap-1.5 px-3 h-full text-[12.5px] select-none transition-colors group
         {tab.index === activeTabIndex
-          ? 'bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-50 shadow-sm'
-          : 'text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50'}"
+          ? 'text-text-1'
+          : 'text-text-3 hover:text-text-2'}"
       onclick={() => onSelect(tab.index)}
     >
       {#if tab.index !== 0}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <span
-          class="absolute left-1 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-300 dark:hover:bg-surface-600 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
+          class="absolute left-0.5 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded hover:bg-surface-200 dark:hover:bg-surface-600 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
           role="button"
           tabindex="-1"
           aria-label="Close {tab.label}"
@@ -38,15 +38,20 @@
       {/if}
       {#if tab.icon && icons[tab.icon]}
         {@const Icon = icons[tab.icon]}
-        <Icon size={12} />
+        <Icon size={12} class={tab.index === activeTabIndex ? 'text-primary-500' : ''} />
+      {:else}
+        <Terminal size={12} class={tab.index === activeTabIndex ? 'text-primary-500' : ''} />
       {/if}
-      <span class="truncate">{tab.label}</span>
-      {#if tab.modified}<span class="w-2 h-2 rounded-full bg-surface-400 dark:bg-surface-500 shrink-0"></span>{/if}
+      <span class="truncate font-medium">{tab.label}</span>
+      {#if tab.modified}<span class="w-1.5 h-1.5 rounded-full bg-warning-400 shrink-0"></span>{/if}
+      {#if tab.index === activeTabIndex}
+        <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-primary-500 rounded-full"></span>
+      {/if}
     </button>
   {/each}
   <button
     aria-label="New tab"
-    class="flex items-center justify-center w-6 h-6 rounded text-xs text-surface-600 dark:text-surface-400 hover:bg-surface-200/50 dark:hover:bg-surface-700/50 transition-colors"
+    class="flex items-center justify-center w-7 h-full text-xs text-text-3 hover:text-text-2 transition-colors"
     onclick={onAdd}
   >+</button>
 </div>

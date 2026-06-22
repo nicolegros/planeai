@@ -5,7 +5,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap, GitFork, GitPullRequest, GitMerge, Plus, Settings, CheckCircle2, XCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -44,13 +44,14 @@
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
 
-  let sidebarWidth = $state(getLayoutWidth("sidebar", 224));
+  let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
   let renameValue = $state("");
+  let searchQuery = $state("");
 
-  const statusOrder = ["in_progress", "in_review", "todo", "done"];
-  const statusLabels: Record<string, string> = { in_progress: "In Progress", in_review: "In Review", todo: "Todo", done: "Done" };
-  const statusColors: Record<string, string> = { todo: "text-blue-500 dark:text-blue-400", in_progress: "text-amber-500 dark:text-amber-400", in_review: "text-green-500 dark:text-green-400", done: "text-purple-500 dark:text-purple-400" };
+  const statusOrder = ["running", "needs_review", "idle", "todo", "done", "exited"];
+  const statusLabels: Record<string, string> = { running: "Running", needs_review: "Needs review", idle: "Idle", todo: "To do", done: "Done", exited: "Exited" };
+  const statusDotColors: Record<string, string> = { running: "bg-status-running", needs_review: "bg-status-review", idle: "bg-status-idle", todo: "bg-text-3", done: "bg-status-running", exited: "bg-status-exited" };
 
   // Auto-mode per project
   let projectAutoMode = $state<Record<string, boolean>>({});
@@ -126,7 +127,10 @@
   function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
     const groups: Record<string, TaskItem[]> = {};
     for (const s of statusOrder) groups[s] = [];
-    for (const t of items) (groups[t.status] ?? (groups["todo"] ??= [])).push(t);
+    for (const t of items) {
+      const bucket = t.status === "in_progress" ? "running" : t.status === "in_review" ? "needs_review" : t.status === "done" ? "done" : "todo";
+      (groups[bucket] ?? (groups["todo"] ??= [])).push(t);
+    }
     for (const s of statusOrder) groups[s]?.sort((a, b) => b.priority - a.priority);
     return groups;
   }
@@ -313,35 +317,44 @@
 {#snippet ciBadge(id: string)}
   {@const ci = getCiStatus(id)}
   {#if ci === 'passing'}
-    <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
+    <CheckCircle2 class="size-3 text-status-running" title="CI passing" />
   {:else if ci === 'failing'}
-    <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
+    <XCircle class="size-3 text-error-400" title="CI failing" />
   {:else if ci === 'running'}
-    <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
+    <LoaderCircle class="size-3 animate-spin text-warning-400" title="CI running" />
   {/if}
 {/snippet}
 
-<aside class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
+<aside class="relative shrink-0 flex flex-col border-r border-border bg-surface-100 dark:bg-surface-800 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
-  <!-- Header -->
-  <div class="flex items-center justify-between px-3 py-2 border-b border-surface-200 dark:border-surface-800">
-    <span class="text-xs font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider">Workspace</span>
+  <!-- Header: search + new -->
+  <div class="flex items-center gap-2 px-3 py-2.5">
+    <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-surface-200 dark:bg-surface-600 text-text-3 text-[12px]">
+      <span class="text-[11px]">⌕</span>
+      <input
+        type="text"
+        placeholder="Search…"
+        class="flex-1 bg-transparent outline-none text-text-1 placeholder:text-text-3"
+        bind:value={searchQuery}
+      />
+      <span class="font-mono text-[10px] opacity-60">⌘P</span>
+    </div>
     <button
       onclick={() => onCreateSession?.()}
       title="New… ({MOD_LABEL}N)"
-      class="size-6 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors"
+      class="size-7 flex items-center justify-center rounded-lg text-text-3 hover:text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600 transition-colors"
     >
       <Plus class="size-4" />
     </button>
   </div>
 
   <!-- Main content -->
-  <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3">
+  <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3 scrollbar-hide">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
-        <p class="text-xs text-surface-600 dark:text-surface-400">No projects yet</p>
-        <button onclick={onAddProject} class="text-xs text-primary-600 dark:text-primary-400 hover:underline">Add a project →</button>
+        <p class="text-xs text-text-3">No projects yet</p>
+        <button onclick={onAddProject} class="text-xs text-primary-500 hover:underline">Add a project →</button>
       </div>
     {:else}
       {#each projects as project (project.id)}
@@ -354,14 +367,14 @@
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
           <button
-            class="w-full px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1 rounded-md py-0.5 hover:bg-surface-200 dark:hover:bg-surface-800 {isProjectSelected ? 'ring-1 ring-primary-500/50' : ''}"
+            class="w-full px-2 mb-1 text-[11px] font-semibold text-text-3 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-surface-200 dark:hover:bg-surface-600 {isProjectSelected ? 'ring-1 ring-primary-500/50' : ''}"
             title={project.path}
             onclick={() => toggleSection(projectKey)}
             oncontextmenu={(e) => onProjectContextMenu(e, project)}
           >
             {#if projectCollapsed}<ChevronRight class="size-3 shrink-0" />{:else}<ChevronDown class="size-3 shrink-0" />{/if}
             {project.name}
-            {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-amber-500" />{/if}
+            {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-warning-400" />{/if}
           </button>
 
           {#if !projectCollapsed}
@@ -384,41 +397,30 @@
                       onblur={() => commitRename(session.id)}
                     />
                   {:else}
-                    <button
-                      class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
-                        {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                        {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}
-                        {session.status === 'exited' ? 'opacity-60' : ''}"
-                      onclick={() => handleOrphanClick(session)}
-                      oncontextmenu={(e) => onContextMenu(e, session)}
-                    >
-                      {#if session.worktree_path}<GitFork class="size-3 shrink-0 text-surface-600 dark:text-surface-400" />{/if}
-                      <span class="truncate">{session.name || session.branch}</span>
-                      <span class="ml-auto shrink-0 flex items-center gap-1">
+                    <div class="flex items-center gap-1">
+                      <span class="w-0.5 self-stretch rounded-full transition-opacity {isActive ? 'bg-primary-500 opacity-100' : 'opacity-0'}"></span>
+                      <button
+                        class="flex-1 text-left py-[7px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
+                          {isActive ? 'bg-primary-500/15' : 'hover:bg-surface-200 dark:hover:bg-surface-600'}
+                          {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}
+                          {session.status === 'exited' ? 'opacity-50' : ''}"
+                        onclick={() => handleOrphanClick(session)}
+                        oncontextmenu={(e) => onContextMenu(e, session)}
+                      >
+                      <span class="truncate font-medium text-text-1">{session.name || session.branch}</span>
+                      <span class="ml-auto shrink-0 flex items-center gap-1.5">
                         {#if orchestrator.getReviewReady()[session.id]}
-                          <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
+                          <span class="size-2 rounded-full bg-status-review" title="Ready for review"></span>
                         {/if}
                         {@render ciBadge(session.id)}
-                        {#if session.pr_url}
-                          <button
-                            class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
-                            title="Open PR ({session.pr_state})"
-                            tabindex="-1"
-                            onmousedown={(e) => e.preventDefault()}
-                            onclick={(e) => { e.stopPropagation(); openUrl(session.pr_url!); }}
-                          >
-                            {#if session.pr_state === "merged"}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
-                          </button>
-                        {/if}
                         {#if session.status === 'exited'}
-                          <span class="text-[10px] font-medium text-surface-500 bg-surface-200 dark:bg-surface-800 rounded px-1">exited</span>
+                          <span class="text-[10px] font-mono text-status-exited">exited</span>
                         {:else if agentStates[session.id] === 'Busy'}
-                          <LoaderCircle class="size-3.5 animate-spin text-surface-500" />
-                        {:else if agentStates[session.id] === 'Idle'}
-                          <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
+                          <LoaderCircle class="size-3 animate-spin text-text-3" />
                         {/if}
                       </span>
                     </button>
+                    </div>
                   {/if}
                 </li>
               {/each}
@@ -434,12 +436,13 @@
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div class="ml-1">
                 <button
-                  class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status]} hover:opacity-80 rounded-md {isStatusSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-text-3 uppercase tracking-[.06em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-1 ring-primary-500/50' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
-                  {#if collapsedSections[sectionKey]}<ChevronRight class="size-3" />{:else}<ChevronDown class="size-3" />{/if}
+                  <span class="size-1.5 rounded-full {statusDotColors[status]}"></span>
                   {statusLabels[status]}
-                  <span class="font-normal ml-0.5">({items.length})</span>
+                  <span class="font-normal text-text-3 ml-0.5">{items.length}</span>
+                  {#if collapsedSections[sectionKey]}<ChevronRight class="size-3 ml-auto" />{:else}<ChevronDown class="size-3 ml-auto" />{/if}
                 </button>
                 {#if !collapsedSections[sectionKey]}
                   <ul class="space-y-0.5 ml-1">
@@ -451,39 +454,27 @@
                       {@const isParent = isParentTask(task, projectTasks)}
                       {@const isPreviewing = linked && linked.id === previewSessionId}
                       <li>
-                        <button
-                          class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors
-                            {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                            {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}"
-                          onclick={() => handleTaskClick(task, project.path)}
-                          oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
-                        >
-                          {#if task.parent_key}
-                            <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
-                          {/if}
-                          <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
-                          <span class="truncate">{task.title}</span>
+                        <div class="flex items-center gap-1">
+                          <span class="w-0.5 self-stretch rounded-full transition-opacity {isActive ? 'bg-primary-500 opacity-100' : 'opacity-0'}"></span>
+                          <button
+                            class="flex-1 text-left py-[7px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
+                              {isActive ? 'bg-primary-500/15' : 'hover:bg-surface-200 dark:hover:bg-surface-600'}
+                              {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                            onclick={() => handleTaskClick(task, project.path)}
+                            oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
+                          >
+                          <span class="shrink-0 text-[10px] font-mono text-text-3">{task.key}</span>
+                          <span class="truncate text-text-1 {task.status === 'done' ? 'line-through opacity-60' : ''}">{task.title}</span>
                           {#if linked}
-                            <span class="ml-auto shrink-0 flex items-center gap-1">
+                            <span class="ml-auto shrink-0 flex items-center gap-1.5">
                               {#if agentStates[linked.id] === 'Busy'}
-                                <LoaderCircle class="size-3.5 animate-spin text-surface-500" />
-                              {:else if agentStates[linked.id] === 'Idle'}
-                                <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
+                                <LoaderCircle class="size-3 animate-spin text-text-3" />
                               {/if}
                               {@render ciBadge(linked.id)}
-                              {#if linked.pr_url}
-                                <button
-                                  class="shrink-0 size-3.5 {linked.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : 'text-green-600 dark:text-green-400'}"
-                                  tabindex="-1"
-                                  onmousedown={(e) => e.preventDefault()}
-                                  onclick={(e) => { e.stopPropagation(); openUrl(linked.pr_url!); }}
-                                >
-                                  {#if linked.pr_state === "merged"}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
-                                </button>
-                              {/if}
                             </span>
                           {/if}
                         </button>
+                        </div>
                       </li>
                     {/each}
                   </ul>
@@ -493,7 +484,7 @@
           {/each}
 
           {#if projectOrphans.length === 0 && projectTasks.length === 0}
-            <p class="px-3 py-1 text-xs text-surface-600 dark:text-surface-400 italic">No sessions or tasks</p>
+            <p class="px-3 py-1 text-xs text-text-3 italic">No sessions or tasks</p>
           {/if}
           {/if}
         </div>
@@ -501,12 +492,7 @@
     {/if}
   </nav>
 
-  <!-- Settings -->
-  <div class="px-3 py-2 border-t border-surface-200 dark:border-surface-800">
-    <button onclick={onOpenPreferences} title="Preferences ({MOD_LABEL},)" class="size-7 flex items-center justify-center rounded text-surface-600 hover:text-surface-700 hover:bg-surface-200 dark:text-surface-300 dark:hover:text-surface-200 dark:hover:bg-surface-800 transition-colors">
-      <Settings class="size-4" />
-    </button>
-  </div>
+  <!-- No footer in new design -->
 </aside>
 
 <!-- Hidden TaskPanel for create dialog -->

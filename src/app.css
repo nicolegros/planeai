@@ -40,20 +40,32 @@
   --color-warning-300: var(--color-warning-300);
   --color-warning-400: var(--color-warning-400);
   --color-warning-500: var(--color-warning-500);
+  --color-border: var(--theme-border);
+  --color-border-strong: var(--theme-border-strong);
+  --color-text-1: var(--theme-text-1);
+  --color-text-2: var(--theme-text-2);
+  --color-text-3: var(--theme-text-3);
+  --color-accent-bg: var(--theme-accent-bg);
+  --color-status-running: var(--theme-status-running);
+  --color-status-review: var(--theme-status-review);
+  --color-status-exited: var(--theme-status-exited);
+  --color-status-idle: var(--theme-status-idle);
   --radius-base: var(--radius-base);
   --radius-container: var(--radius-container);
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   body {
-    background-color: var(--color-surface-50);
-    color: var(--color-surface-900);
+    background-color: var(--color-surface-950);
+    color: var(--color-text-1);
+    font-family: var(--font-sans);
   }
   .dark body {
-    background-color: var(--color-surface-950);
-    color: var(--color-surface-50);
+    background-color: var(--color-surface-900);
+    color: var(--color-text-1);
   }
 }
 

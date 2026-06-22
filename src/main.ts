@@ -1,4 +1,5 @@
 import { mount } from "svelte";
+import "@fontsource-variable/ibm-plex-sans";
 import "./app.css";
 import { injectTheme } from "./lib/theme-loader";
 

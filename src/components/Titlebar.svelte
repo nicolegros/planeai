@@ -20,13 +20,15 @@
     hasChanges: boolean;
     sessionId: string | null;
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
+    runningCount: number;
+    activeProvider: string | null;
     onSelectTab: (index: number) => void;
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
     onCreatePr?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
   const STORAGE_KEY = "planeai:merge-strategy";
@@ -46,9 +48,9 @@
   let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging);
 
   function iconFor(c: CiConclusion): { char: string; color: string } {
-    if (c === "pass") return { char: "✓", color: "text-green-600 dark:text-green-400" };
-    if (c === "fail") return { char: "✗", color: "text-red-600 dark:text-red-400" };
-    return { char: "◌", color: "text-yellow-500 animate-pulse" };
+    if (c === "pass") return { char: "✓", color: "text-status-running" };
+    if (c === "fail") return { char: "✗", color: "text-error-400" };
+    return { char: "◌", color: "text-warning-400 animate-pulse" };
   }
 
   let sessionExited = $derived(getActiveSession()?.status === "exited");
@@ -138,147 +140,162 @@
 
 <header
   data-tauri-drag-region
-  class="h-10 flex items-center {platformPadding} shrink-0 bg-surface-100 dark:bg-surface-900 border-b border-surface-200 dark:border-surface-800"
+  class="h-[38px] flex items-center {platformPadding} shrink-0 bg-surface-100 dark:bg-surface-800 border-b border-border"
 >
   {#if projectName || sessionName}
-    <span class="text-xs text-surface-700 dark:text-surface-200 select-none pointer-events-none whitespace-nowrap mr-3">
-      {#if projectName}<span>{projectName}</span>{/if}
-      {#if projectName && sessionName}<span class="mx-1.5">/</span>{/if}
-      {#if sessionName}<span>{sessionName}</span>{/if}
+    <span class="text-[12.5px] select-none pointer-events-none whitespace-nowrap mr-3 flex items-center gap-1">
+      {#if projectName}<span class="text-text-2">{projectName}</span>{/if}
+      {#if projectName && sessionName}<span class="text-text-3 mx-0.5">/</span>{/if}
+      {#if sessionName}<span class="text-text-1 font-medium">{sessionName}</span>{/if}
     </span>
-    <span class="w-px h-4 bg-surface-300 dark:bg-surface-700 shrink-0 mr-3"></span>
+    {#if activeProvider}
+      <span class="font-mono text-[10px] px-1.5 py-0.5 rounded border border-border-strong text-text-3 mr-2 select-none">{activeProvider.toUpperCase()}</span>
+    {/if}
+    <span class="w-px h-4 bg-border-strong shrink-0 mr-2"></span>
   {/if}
 
-  <div class="flex-1 min-w-0 relative">
-    <div class="overflow-x-auto scrollbar-hide">
-      <TabBar {tabs} {activeTabIndex} onSelect={onSelectTab} onClose={onCloseTab} onAdd={onAddTab} />
-    </div>
-    <div class="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-surface-100 dark:from-surface-900 to-transparent"></div>
+  <div class="flex-1 min-w-0 h-full">
+    <TabBar {tabs} {activeTabIndex} onSelect={onSelectTab} onClose={onCloseTab} onAdd={onAddTab} />
   </div>
 
-  {#if symphonyStatus?.active}
-    <span
-      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30"
-      title="Orchestrator running"
-    >
-      <Zap class="size-3" />
-      <span>{symphonyStatus.slots_used}/{symphonyStatus.max_concurrent}</span>
-    </span>
-  {/if}
+  <!-- Right cluster -->
+  <div class="flex items-center gap-2 ml-2 shrink-0">
+    {#if runningCount > 0}
+      <span class="flex items-center gap-1.5 text-[11px] text-status-running select-none">
+        <span class="size-2 rounded-full bg-status-running animate-pulse"></span>
+        <span class="font-medium">{runningCount} running</span>
+      </span>
+    {/if}
 
-  {#if prUrl}
-    <div class="ml-2 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
-      <button
-        class="relative flex items-center gap-1.5 px-2 py-1 rounded text-xs hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors {isMerged ? 'text-purple-600 dark:text-purple-400' : prState === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
-        title="Pull request ({prState ?? 'open'})"
-        tabindex="-1"
-        onclick={() => (prPanelOpen = !prPanelOpen)}
+    {#if symphonyStatus?.active}
+      <span
+        class="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-warning-400 bg-warning-50 dark:bg-warning-50/10"
+        title="Orchestrator running"
       >
-        {#if isMerged}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
-        {#if checks.length > 0}
-          <span class="absolute top-0.5 right-0.5 size-2 rounded-full border border-surface-100 dark:border-surface-900 {failedCount > 0 ? 'bg-red-500' : allConcluded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}"></span>
-        {/if}
-      </button>
+        <Zap class="size-3" />
+        <span>{symphonyStatus.slots_used}/{symphonyStatus.max_concurrent}</span>
+      </span>
+    {/if}
 
-      {#if prPanelOpen}
-        {@const disabledReason = mergeDisabledReason()}
-        <div class="absolute top-full right-0 mt-1 z-50 w-72 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-xl p-4 space-y-3">
-          <!-- PR link -->
-          <div class="flex items-center justify-between gap-2">
-            <button class="text-xs text-primary-600 dark:text-primary-400 hover:underline font-medium truncate" onclick={() => openUrl(prUrl!)}>
-              {sessionName ?? "Open PR"} ↗
-            </button>
-            <span class="text-[10px] text-surface-400 shrink-0">{isMerged ? "merged" : prState ?? "open"}</span>
-          </div>
-
-          <!-- Mark as ready -->
-          {#if isDraft}
-            <button
-              class="w-full px-2 py-1.5 text-xs rounded border border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-950/30 font-medium"
-              onclick={markReady}
-            >
-              Mark as ready
-            </button>
-          {/if}
-
-          <!-- CI Checks -->
+    {#if prUrl}
+      <div class="relative flex items-center" onclick={(e) => e.stopPropagation()}>
+        <button
+          class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium transition-colors
+            {isMerged ? 'text-purple-500 bg-purple-500/10' : prState === 'draft' ? 'text-text-3 bg-surface-200 dark:bg-surface-600' : 'text-status-running bg-status-running/10'}"
+          title="Pull request ({prState ?? 'open'})"
+          tabindex="-1"
+          onclick={() => (prPanelOpen = !prPanelOpen)}
+        >
+          {#if isMerged}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
+          <span>PR</span>
           {#if checks.length > 0}
-            <div class="border-t border-surface-200 dark:border-surface-700 pt-2 space-y-1">
-              <div class="flex items-center justify-between">
-                <span class="text-[10px] text-surface-500 uppercase tracking-wide">Checks</span>
-                <button
-                  class="text-[10px] text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
-                  onclick={() => refreshCiChecks(sessionId!)}
-                >
-                  <RefreshCw size={10} />
-                </button>
-              </div>
-              {#each checks as check, i (i)}
-                {@const ic = iconFor(classifyCheck(check))}
-                <div class="flex items-center gap-1.5 text-xs">
-                  <span class={ic.color}>{ic.char}</span>
-                  {#if check.url}
-                    <button class="text-surface-700 dark:text-surface-300 hover:underline truncate text-left" onclick={() => openUrl(check.url!)}>{check.name}</button>
-                  {:else}
-                    <span class="text-surface-700 dark:text-surface-300 truncate">{check.name}</span>
-                  {/if}
-                </div>
-              {/each}
-              {#if failedCount > 0}
-                <button
-                  class="mt-2 w-full text-xs px-2 py-1 rounded bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={sessionExited}
-                  title={sessionExited ? "Agent is not running" : "Send failures to agent"}
-                  onclick={sendFailuresToAgent}
-                >
-                  Send failures to agent
-                </button>
-              {/if}
-            </div>
+            <span class="size-2 rounded-full {failedCount > 0 ? 'bg-error-400' : allConcluded ? 'bg-status-running' : 'bg-warning-400 animate-pulse'}"></span>
           {/if}
+        </button>
 
-          <!-- Merge -->
-          {#if !isMerged}
-            <div class="border-t border-surface-200 dark:border-surface-700 pt-2">
-              <div class="text-[10px] text-surface-500 uppercase tracking-wide mb-1.5">Merge</div>
-              <div class="flex gap-1">
-                {#each allowedStrategies as strat (strat)}
-                  <button
-                    class="flex-1 px-2 py-1.5 text-xs rounded capitalize {strat === selectedStrategy ? 'bg-purple-600 text-white' : 'bg-surface-200 dark:bg-surface-700 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-600'}"
-                    onclick={() => { selectedStrategy = strat; localStorage.setItem(STORAGE_KEY, strat); }}
-                  >
-                    {strat}
-                  </button>
-                {/each}
-              </div>
-              <button
-                class="w-full mt-2 px-2 py-1.5 text-xs rounded bg-purple-600 text-white hover:bg-purple-700 font-medium disabled:opacity-50 disabled:pointer-events-none"
-                disabled={!canMerge}
-                title={disabledReason ?? ""}
-                onclick={() => doMerge(selectedStrategy)}
-              >
-                {merging ? "Merging…" : `Merge with ${selectedStrategy}`}
+        {#if prPanelOpen}
+          {@const disabledReason = mergeDisabledReason()}
+          <div class="absolute top-full right-0 mt-1.5 z-50 w-[282px] rounded-xl border border-border-strong bg-surface-50 dark:bg-surface-700 shadow-[0_18px_50px_-12px_rgba(0,0,0,0.45)] p-4 space-y-3">
+            <!-- PR link -->
+            <div class="flex items-center justify-between gap-2">
+              <button class="text-xs text-primary-500 hover:underline font-medium truncate font-mono" onclick={() => openUrl(prUrl!)}>
+                {sessionName ?? "Open PR"} ↗
               </button>
-              {#if disabledReason && !merging}
-                <p class="text-[10px] text-surface-400 mt-1">{disabledReason}</p>
-              {/if}
+              <span class="text-[10px] text-text-3 shrink-0">{isMerged ? "merged" : prState ?? "open"}</span>
             </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  {:else if hasChanges && onCreatePr}
-    <button
-      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-      title="Create pull request"
-      tabindex="-1"
-      onmousedown={(e: MouseEvent) => e.preventDefault()}
-      onclick={onCreatePr}
-    >
-      <GitPullRequest class="size-3.5" />
-      <span>Create PR</span>
-    </button>
-  {/if}
 
-  <div class="w-3 shrink-0"></div>
+            <!-- Mark as ready -->
+            {#if isDraft}
+              <button
+                class="w-full px-2 py-1.5 text-xs rounded-lg border border-status-running/40 text-status-running hover:bg-status-running/10 font-medium"
+                onclick={markReady}
+              >
+                Mark as ready
+              </button>
+            {/if}
+
+            <!-- CI Checks -->
+            {#if checks.length > 0}
+              <div class="border-t border-border pt-3 space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <span class="text-[10px] text-text-3 uppercase tracking-wide font-semibold">Checks</span>
+                  <button
+                    class="text-text-3 hover:text-text-2"
+                    onclick={() => refreshCiChecks(sessionId!)}
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                </div>
+                {#each checks as check, i (i)}
+                  {@const ic = iconFor(classifyCheck(check))}
+                  <div class="flex items-center gap-1.5 text-xs">
+                    <span class={ic.color}>{ic.char}</span>
+                    {#if check.url}
+                      <button class="text-text-1 hover:underline truncate text-left" onclick={() => openUrl(check.url!)}>{check.name}</button>
+                    {:else}
+                      <span class="text-text-1 truncate">{check.name}</span>
+                    {/if}
+                  </div>
+                {/each}
+                <p class="text-[10px] text-text-3">{checks.filter(c => classifyCheck(c) === 'pass').length} passed</p>
+                {#if failedCount > 0}
+                  <button
+                    class="mt-1 w-full text-xs px-2 py-1.5 rounded-lg bg-error-400/10 text-error-400 hover:bg-error-400/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={sessionExited}
+                    title={sessionExited ? "Agent is not running" : "Send failures to agent"}
+                    onclick={sendFailuresToAgent}
+                  >
+                    Send failures to agent
+                  </button>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Merge -->
+            {#if !isMerged}
+              <div class="border-t border-border pt-3">
+                <div class="text-[10px] text-text-3 uppercase tracking-wide font-semibold mb-2">Merge</div>
+                <div class="flex gap-0.5 rounded-lg bg-surface-200 dark:bg-surface-600 p-0.5">
+                  {#each allowedStrategies as strat (strat)}
+                    <button
+                      class="flex-1 px-2 py-1.5 text-[11px] rounded-md capitalize transition-colors {strat === selectedStrategy ? 'bg-primary-500 text-white' : 'text-text-2 hover:text-text-1'}"
+                      onclick={() => { selectedStrategy = strat; localStorage.setItem(STORAGE_KEY, strat); }}
+                    >
+                      {strat}
+                    </button>
+                  {/each}
+                </div>
+                <button
+                  class="w-full mt-2 px-2 py-2 text-xs rounded-lg bg-primary-500 text-white hover:bg-primary-600 font-medium disabled:opacity-50 disabled:pointer-events-none"
+                  disabled={!canMerge}
+                  title={disabledReason ?? ""}
+                  onclick={() => doMerge(selectedStrategy)}
+                >
+                  {merging ? "Merging…" : `Merge with ${selectedStrategy} ⌘↵`}
+                </button>
+                {#if disabledReason && !merging}
+                  <p class="text-[10px] text-text-3 mt-1">{disabledReason}</p>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {:else if hasChanges && onCreatePr}
+      <button
+        class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-2 border border-border-strong hover:bg-surface-200 dark:hover:bg-surface-600 transition-colors"
+        title="Create pull request"
+        tabindex="-1"
+        onmousedown={(e: MouseEvent) => e.preventDefault()}
+        onclick={onCreatePr}
+      >
+        <GitPullRequest class="size-3.5" />
+        <span>Create PR</span>
+      </button>
+    {/if}
+
+    <span class="font-mono text-[10px] px-1.5 py-0.5 rounded-md bg-surface-200 dark:bg-surface-600 text-text-3 select-none">⌘K</span>
+  </div>
+
+  <div class="w-2 shrink-0"></div>
 </header>
