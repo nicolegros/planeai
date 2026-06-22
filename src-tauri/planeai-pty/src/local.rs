@@ -34,13 +34,12 @@ impl LocalPtySession {
         })?;
 
         let mut cmd = if let Some(ref cmd_str) = config.command {
-            let mut c = CommandBuilder::new("bash");
-            c.args(["-c", cmd_str]);
-            c
+            crate::platform::build_command(cmd_str)
         } else {
-            let shell = config.shell.clone().unwrap_or_else(|| {
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
-            });
+            let shell = config
+                .shell
+                .clone()
+                .unwrap_or_else(crate::platform::default_shell);
             CommandBuilder::new(&shell)
         };
         cmd.env("TERM", "xterm-256color");

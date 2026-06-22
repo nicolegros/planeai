@@ -1,108 +1,24 @@
 use crate::buffer::RingBuffer;
 use planeai_pty::{LocalPtyConfig, LocalPtySession, PipelineDiagnostics, PtyEvent, PtyEventSink};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
-/// Internal PTY implementation — either legacy portable-pty or planeai-pty.
-enum PtyInner {
-    Legacy {
-        writer: Arc<Mutex<Box<dyn Write + Send>>>,
-        master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
-        child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    },
-    PlaneaiPty {
-        session: LocalPtySession,
-    },
-}
-
 pub struct DaemonSession {
     session_id: String,
     buffer: Arc<Mutex<RingBuffer>>,
     alive: Arc<AtomicBool>,
-    inner: PtyInner,
+    session: LocalPtySession,
     tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl DaemonSession {
+    /// Spawn a daemon session using planeai-pty.
     pub fn spawn(
-        session_id: impl Into<String>,
-        command: &str,
-        args: &[&str],
-        cwd: Option<&str>,
-        env: Option<&HashMap<String, String>>,
-        buffer_capacity: usize,
-    ) -> anyhow::Result<Self> {
-        let session_id = session_id.into();
-        let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-
-        let mut cmd = CommandBuilder::new(command);
-        cmd.args(args);
-        if let Some(dir) = cwd {
-            cmd.cwd(dir);
-        }
-        if let Some(env_map) = env {
-            for (k, v) in env_map {
-                cmd.env(k, v);
-            }
-        }
-
-        let child = pair.slave.spawn_command(cmd)?;
-        drop(pair.slave);
-
-        let buffer = Arc::new(Mutex::new(RingBuffer::new(buffer_capacity)));
-        let alive = Arc::new(AtomicBool::new(true));
-        let (tx, _) = broadcast::channel(64);
-
-        let writer = pair.master.take_writer()?;
-        let mut reader = pair.master.try_clone_reader()?;
-        let buf_clone = Arc::clone(&buffer);
-        let alive_clone = Arc::clone(&alive);
-        let tx_clone = tx.clone();
-
-        std::thread::spawn(move || {
-            let mut chunk = [0u8; 16384];
-            loop {
-                match reader.read(&mut chunk) {
-                    Ok(0) | Err(_) => {
-                        alive_clone.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                    Ok(n) => {
-                        let data = &chunk[..n];
-                        buf_clone.lock().unwrap().write(data);
-                        let _ = tx_clone.send(data.to_vec());
-                    }
-                }
-            }
-        });
-
-        Ok(Self {
-            session_id,
-            buffer,
-            alive,
-            inner: PtyInner::Legacy {
-                writer: Arc::new(Mutex::new(writer)),
-                master: Arc::new(Mutex::new(pair.master)),
-                child: Arc::new(Mutex::new(child)),
-            },
-            tx,
-        })
-    }
-
-    /// Spawn using planeai-pty crate. Output flows through the same buffer/broadcast.
-    pub fn spawn_planeai_pty(
         session_id: impl Into<String>,
         command: &str,
         args: &[&str],
@@ -132,17 +48,15 @@ impl DaemonSession {
         };
 
         // If the caller already wrapped in a shell (e.g. /bin/sh -c "real command"),
-        // extract the real command to avoid double-wrapping since LocalPty adds bash -c.
-        let full_cmd = if (command == "/bin/sh" || command == "sh" || command == "bash")
-            && args.len() == 2
-            && args[0] == "-c"
-        {
-            args[1].to_string()
-        } else if args.is_empty() {
-            command.to_string()
-        } else {
-            format!("{} {}", command, args.join(" "))
-        };
+        // extract the real command to avoid double-wrapping.
+        let full_cmd =
+            if let Some(inner) = planeai_pty::platform::unwrap_shell_command(command, args) {
+                inner
+            } else if args.is_empty() {
+                command.to_string()
+            } else {
+                format!("{} {}", command, args.join(" "))
+            };
 
         let mut env_vec: Vec<(String, String)> =
             vec![("TERM".to_string(), "xterm-256color".to_string())];
@@ -164,12 +78,11 @@ impl DaemonSession {
 
         tracing::info!(
             session_id = %session_id,
-            pty_core = "planeai-pty",
             command,
             cwd = cwd.unwrap_or("(none)"),
             cols = 80,
             rows = 24,
-            "daemon session spawn (planeai-pty)"
+            "daemon session spawn"
         );
 
         let session = LocalPtySession::spawn(config, sink)?;
@@ -178,38 +91,17 @@ impl DaemonSession {
             session_id,
             buffer,
             alive,
-            inner: PtyInner::PlaneaiPty { session },
+            session,
             tx,
         })
     }
 
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
-        match &self.inner {
-            PtyInner::Legacy { writer, .. } => {
-                writer.lock().unwrap().write_all(data)?;
-            }
-            PtyInner::PlaneaiPty { session } => {
-                session.write(data)?;
-            }
-        }
-        Ok(())
+        self.session.write(data)
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        match &self.inner {
-            PtyInner::Legacy { master, .. } => {
-                master.lock().unwrap().resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })?;
-            }
-            PtyInner::PlaneaiPty { session } => {
-                session.resize(cols, rows)?;
-            }
-        }
-        Ok(())
+        self.session.resize(cols, rows)
     }
 
     pub fn is_alive(&self) -> bool {
@@ -217,14 +109,7 @@ impl DaemonSession {
     }
 
     pub fn kill(&self) -> anyhow::Result<()> {
-        match &self.inner {
-            PtyInner::Legacy { child, .. } => {
-                child.lock().unwrap().kill()?;
-            }
-            PtyInner::PlaneaiPty { session } => {
-                session.kill()?;
-            }
-        }
+        self.session.kill()?;
         self.alive.store(false, Ordering::SeqCst);
         Ok(())
     }
@@ -241,11 +126,8 @@ impl DaemonSession {
         &self.session_id
     }
 
-    pub fn diagnostics(&self) -> Option<&Arc<PipelineDiagnostics>> {
-        match &self.inner {
-            PtyInner::PlaneaiPty { session } => Some(session.diagnostics()),
-            PtyInner::Legacy { .. } => None,
-        }
+    pub fn diagnostics(&self) -> &Arc<PipelineDiagnostics> {
+        self.session.diagnostics()
     }
 }
 
@@ -400,20 +282,5 @@ impl DurableLogSink {
             PtyEvent::Error { .. } => {}
         }
         Ok(())
-    }
-}
-
-// ─── PTY Core Selection ──────────────────────────────────────────────────────
-
-/// Returns true if PLANEAI_DAEMON_PTY_CORE=planeai-pty.
-pub fn use_planeai_pty_core() -> bool {
-    match std::env::var("PLANEAI_DAEMON_PTY_CORE") {
-        Ok(val) if val == "planeai-pty" => true,
-        Ok(val) if val == "legacy" || val.is_empty() => false,
-        Ok(val) => {
-            tracing::warn!("invalid PLANEAI_DAEMON_PTY_CORE={val:?}, falling back to legacy");
-            false
-        }
-        Err(_) => false,
     }
 }

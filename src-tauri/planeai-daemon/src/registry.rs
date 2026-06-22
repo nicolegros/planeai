@@ -33,12 +33,7 @@ impl SessionRegistry {
         buffer_capacity: usize,
     ) -> anyhow::Result<()> {
         let id: String = session_id.into();
-        let use_planeai_pty = crate::session::use_planeai_pty_core();
-        let session = if use_planeai_pty {
-            DaemonSession::spawn_planeai_pty(&id, command, args, cwd, env, buffer_capacity)?
-        } else {
-            DaemonSession::spawn(&id, command, args, cwd, env, buffer_capacity)?
-        };
+        let session = DaemonSession::spawn(&id, command, args, cwd, env, buffer_capacity)?;
         self.sessions.insert(id, session);
         Ok(())
     }
