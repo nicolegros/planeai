@@ -1,7 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest, Zap, RefreshCw, ChevronDown, GitMerge } from "@lucide/svelte";
+  import { GitPullRequest, Zap, RefreshCw, ChevronDown } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { pr } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -145,16 +145,42 @@
   {/if}
 
   {#if prUrl}
-    <button
-      class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-      title="Open pull request"
-      tabindex="-1"
-      onmousedown={(e: MouseEvent) => e.preventDefault()}
-      onclick={() => openUrl(prUrl!)}
-    >
-      <GitPullRequest class="size-3.5" />
-      <span>View PR</span>
-    </button>
+    <div class="ml-2 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
+      <button
+        class="flex items-center gap-1 px-2 py-1 rounded-l text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+        title="Open pull request"
+        tabindex="-1"
+        onmousedown={(e: MouseEvent) => e.preventDefault()}
+        onclick={() => openUrl(prUrl!)}
+      >
+        <GitPullRequest class="size-3.5" />
+        <span>View PR</span>
+      </button>
+      <button
+        class="px-1 py-1 rounded-r text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 border-l border-surface-300 dark:border-surface-600 transition-colors"
+        tabindex="-1"
+        onclick={() => (mergeExpanded = !mergeExpanded)}
+      >
+        <ChevronDown class="size-3" />
+      </button>
+
+      {#if mergeExpanded}
+        {@const disabledReason = mergeDisabledReason()}
+        <div class="absolute top-full right-0 mt-1 z-50 w-44 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-1">
+          <div class="text-[10px] text-surface-500 uppercase tracking-wide px-3 py-1">Merge</div>
+          {#each allowedStrategies as strat (strat)}
+            <button
+              class="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-surface-200 dark:hover:bg-surface-700 capitalize disabled:opacity-50 disabled:pointer-events-none {strat === selectedStrategy ? 'text-purple-600 dark:text-purple-400 font-medium' : 'text-surface-700 dark:text-surface-300'}"
+              disabled={!canMerge}
+              title={disabledReason ?? ""}
+              onclick={() => doMerge(strat)}
+            >
+              {strat}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
     <!-- CI Checks summary -->
     {#if checks.length > 0}
@@ -193,44 +219,6 @@
                 </li>
               {/each}
             </ul>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Merge button -->
-    {#if !isMerged}
-      {@const disabledReason = mergeDisabledReason()}
-      <div class="ml-1 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
-        <button
-          class="flex items-center gap-1 px-2 py-1 rounded-l text-xs text-purple-600 dark:text-purple-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          title={disabledReason ?? `Merge (${selectedStrategy})`}
-          tabindex="-1"
-          disabled={!canMerge}
-          onclick={() => doMerge(selectedStrategy)}
-        >
-          <GitMerge class="size-3.5" />
-          <span class="capitalize">{selectedStrategy}</span>
-        </button>
-        <button
-          class="px-1 py-1 rounded-r text-xs text-purple-600 dark:text-purple-400 hover:bg-surface-200 dark:hover:bg-surface-800 border-l border-surface-300 dark:border-surface-600 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          tabindex="-1"
-          disabled={!canMerge}
-          onclick={() => (mergeExpanded = !mergeExpanded)}
-        >
-          <ChevronDown class="size-3" />
-        </button>
-
-        {#if mergeExpanded}
-          <div class="absolute top-full right-0 mt-1 z-50 w-40 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-1">
-            {#each allowedStrategies as strat (strat)}
-              <button
-                class="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-surface-200 dark:hover:bg-surface-700 capitalize {strat === selectedStrategy ? 'text-purple-600 dark:text-purple-400 font-medium' : 'text-surface-700 dark:text-surface-300'}"
-                onclick={() => doMerge(strat)}
-              >
-                {strat}
-              </button>
-            {/each}
           </div>
         {/if}
       </div>
