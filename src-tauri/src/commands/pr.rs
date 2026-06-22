@@ -99,6 +99,18 @@ fn parse_github_repo(url: &str) -> Option<String> {
     Some(path.trim_end_matches(".git").to_string())
 }
 
+/// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
+async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let remote_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(parse_github_repo(&remote_url))
+}
+
 fn fetch_pr_url_inner(
     conn: &rusqlite::Connection,
     cfg: &config::Config,
@@ -310,19 +322,14 @@ pub async fn get_ci_checks(
     tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_ci_checks called");
 
     // Only run for GitHub-hosted repos
-    let remote_output = tokio::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(&ctx.cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to get remote: {e}"))?;
-    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
-        .trim()
-        .to_string();
-    if parse_github_repo(&remote_url).is_none() {
-        tracing::debug!(remote_url = %remote_url, "not a GitHub remote, skipping CI checks");
-        return Ok(vec![]);
-    }
+    let repo = match resolve_github_repo(&ctx.cwd).await? {
+        Some(r) => r,
+        None => {
+            tracing::debug!("not a GitHub remote, skipping CI checks");
+            return Ok(vec![]);
+        }
+    };
+    let _ = repo; // used only as guard
 
     let output = tokio::process::Command::new("gh")
         .args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
@@ -366,16 +373,9 @@ pub async fn get_allowed_merge_strategies(
 ) -> Result<Vec<String>, String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let remote_output = tokio::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(&ctx.cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to get remote: {e}"))?;
-    let remote_url = String::from_utf8_lossy(&remote_output.stdout)
-        .trim()
-        .to_string();
-    let repo = parse_github_repo(&remote_url).ok_or("not a GitHub repo")?;
+    let repo = resolve_github_repo(&ctx.cwd)
+        .await?
+        .ok_or("not a GitHub repo")?;
 
     let output = tokio::process::Command::new("gh")
         .args([
