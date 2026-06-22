@@ -81,6 +81,10 @@ impl AsyncWrite for AsyncIpcStream {
 
 impl AsyncIpcStream {
     /// Connect to a Unix socket / named pipe at the given path.
+    ///
+    /// On Windows, retries with exponential backoff when the pipe returns
+    /// ERROR_PIPE_BUSY (os error 231), which occurs transiently between
+    /// the server accepting one connection and creating the next pipe instance.
     pub async fn connect(path: &Path) -> std::io::Result<Self> {
         #[cfg(unix)]
         {
@@ -92,8 +96,29 @@ impl AsyncIpcStream {
         #[cfg(windows)]
         {
             use tokio::net::windows::named_pipe::ClientOptions;
+
+            const ERROR_PIPE_BUSY: i32 = 231;
+            const RETRY_DELAYS_MS: &[u64] = &[10, 20, 50, 100, 200];
+
             let pipe_name = path.to_string_lossy();
-            let client = ClientOptions::new().open(&*pipe_name)?;
+            let opts = ClientOptions::new();
+
+            for delay in RETRY_DELAYS_MS {
+                match opts.open(&*pipe_name) {
+                    Ok(client) => {
+                        return Ok(Self {
+                            inner: InnerStream::NamedPipe(client),
+                        });
+                    }
+                    Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(*delay)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+
+            // Final attempt after all retries exhausted
+            let client = opts.open(&*pipe_name)?;
             Ok(Self {
                 inner: InnerStream::NamedPipe(client),
             })
