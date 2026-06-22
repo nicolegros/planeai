@@ -101,19 +101,19 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none"
+      class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-lg outline-none"
     >
-      <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Keyboard Shortcuts</Dialog.Title>
+      <Dialog.Title class="text-sm font-medium text-t1 mb-4">Keyboard Shortcuts</Dialog.Title>
       <Dialog.Description class="sr-only">List of keyboard shortcuts available in planeai.</Dialog.Description>
       <div class="grid grid-cols-2 gap-x-6 gap-y-4">
         {#each visibleShortcuts as group}
           <div>
-            <h3 class="text-xs font-medium text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-1.5">{group.section}</h3>
+            <h3 class="text-xs font-medium text-t3 uppercase tracking-wide mb-1.5">{group.section}</h3>
             <div class="space-y-1">
               {#each group.items as shortcut}
                 <div class="flex items-center justify-between py-1">
-                  <span class="text-sm text-surface-700 dark:text-surface-300">{shortcut.description}</span>
-                  <kbd class="rounded border border-surface-300 dark:border-surface-600 bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 text-xs text-surface-600 dark:text-surface-400 font-mono">{shortcut.keys}</kbd>
+                  <span class="text-sm text-t2">{shortcut.description}</span>
+                  <kbd class="rounded border border-border bg-panel-hi px-1.5 py-0.5 text-xs text-t2 font-mono">{shortcut.keys}</kbd>
                 </div>
               {/each}
             </div>
