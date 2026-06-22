@@ -81,6 +81,9 @@ impl AsyncWrite for AsyncIpcStream {
 
 impl AsyncIpcStream {
     /// Connect to a Unix socket / named pipe at the given path.
+    ///
+    /// On Windows, retries with backoff when the pipe returns ERROR_PIPE_BUSY,
+    /// which occurs transiently between server accept() calls.
     pub async fn connect(path: &Path) -> std::io::Result<Self> {
         #[cfg(unix)]
         {
@@ -92,11 +95,28 @@ impl AsyncIpcStream {
         #[cfg(windows)]
         {
             use tokio::net::windows::named_pipe::ClientOptions;
+
+            const ERROR_PIPE_BUSY: i32 = 231;
+            const MAX_RETRIES: u32 = 5;
+            const BASE_DELAY_MS: u64 = 50;
+
             let pipe_name = path.to_string_lossy();
-            let client = ClientOptions::new().open(&*pipe_name)?;
-            Ok(Self {
-                inner: InnerStream::NamedPipe(client),
-            })
+            let mut attempt = 0;
+            loop {
+                match ClientOptions::new().open(&*pipe_name) {
+                    Ok(client) => {
+                        return Ok(Self {
+                            inner: InnerStream::NamedPipe(client),
+                        });
+                    }
+                    Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && attempt < MAX_RETRIES => {
+                        attempt += 1;
+                        let delay = BASE_DELAY_MS * (1 << attempt);
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
         }
     }
 }

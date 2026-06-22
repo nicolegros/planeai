@@ -1,4 +1,40 @@
 #[cfg(unix)]
+mod pipe_busy_regression {
+    use planeai_daemon::server::DaemonServer;
+    use planeai_daemon::transport::{DaemonListener, DaemonStream};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+
+    /// Regression test for PLA-139: rapid sequential connects must not fail.
+    /// On Windows this triggers ERROR_PIPE_BUSY (os error 231) if the client
+    /// doesn't retry. On Unix this validates the same code path works under load.
+    #[tokio::test]
+    async fn rapid_sequential_connects_succeed() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+
+        let listener = DaemonListener::bind(&sock).unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+        let server = Arc::new(DaemonServer::new(4096));
+        tokio::spawn(async move { server.run(listener, shutdown_rx).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Rapidly open 10 connections using AsyncIpcStream::connect (the fixed path)
+        for i in 0..10 {
+            let mut stream = DaemonStream::connect(&sock).await.unwrap_or_else(|e| {
+                panic!("connect #{i} failed: {e}");
+            });
+            // Send control byte to prove it's a working connection
+            stream.write_all(&[0x00]).await.unwrap();
+            drop(stream);
+        }
+
+        drop(shutdown_tx);
+    }
+}
+
+#[cfg(unix)]
 mod socket_tests {
     use planeai_daemon::server::DaemonServer;
     use planeai_daemon::transport::DaemonListener;
