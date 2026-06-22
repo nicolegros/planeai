@@ -196,7 +196,7 @@
       <div class="flex gap-1 rounded-lg bg-panel-hi p-0.5">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
-            class="px-4 py-2 rounded-md text-[12px] font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-accent text-on-accent' : 'text-text-2 hover:text-t1'}"
+            class="px-4 py-2 rounded-md text-[12px] font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
             onclick={() => setAppearance(mode as AppearanceMode)}
           >{mode}</button>
         {/each}
@@ -209,7 +209,7 @@
       <div class="flex flex-wrap gap-2">
         {#each availableThemes as themeName (themeName)}
           <button
-            class="px-3 py-1.5 rounded-lg text-[12px] font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-accent/15 text-accent ring-1 ring-accent/30' : 'bg-panel-hi text-text-2 hover:text-t1'}"
+            class="px-3 py-1.5 rounded-lg text-[12px] font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-accent/15 text-accent ring-1 ring-accent/30' : 'bg-panel-hi text-t2 hover:text-t1'}"
             onclick={() => updateSettings({ appearance: { ...config.appearance, theme: themeName } })}
           >{themeName}</button>
         {/each}
@@ -223,12 +223,12 @@
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Font Size</h2>
       <div class="flex items-center gap-3">
         <button
-          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi "
+          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi"
           onclick={() => setFontSize(config.terminal.font_size - 1)}
         >−</button>
         <span class="text-lg font-mono text-t1 w-8 text-center">{config.terminal.font_size}</span>
         <button
-          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi "
+          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi"
           onclick={() => setFontSize(config.terminal.font_size + 1)}
         >+</button>
         <span class="text-xs text-t1">px (8–32)</span>
@@ -271,7 +271,7 @@
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Providers</h2>
       <div class="space-y-3">
         {#each Object.entries(config.providers) as [key, provider] (key)}
-          <div class="rounded-lg border border-border p-4 space-y-2">
+          <div class="rounded-lg border border-border p-4 space-y-3">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-t1">{key}</span>
@@ -292,7 +292,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2">Command</label>
+              <label class="text-xs text-t2">Command</label>
               <Input
                 value={provider.command}
                 onchange={(e) => updateProvider(key, "command", e.currentTarget.value)}
@@ -301,7 +301,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2">Yolo flag (optional)</label>
+              <label class="text-xs text-t2">Yolo flag (optional)</label>
               <Input
                 value={provider.yolo_flag || ""}
                 onchange={(e) => updateProvider(key, "yolo_flag", e.currentTarget.value)}
@@ -311,7 +311,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
               <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
@@ -321,7 +321,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
               <Input
                 value={provider.autonomous_prompt_template || ""}
                 onchange={(e) => updateProvider(key, "autonomous_prompt_template", e.currentTarget.value)}
@@ -337,7 +337,7 @@
         <div class="rounded-lg border border-accent p-4 space-y-2">
           <div class="space-y-1">
             <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-text-2">Name</label>
+            <label class="text-xs text-t2">Name</label>
             <Input
               bind:value={newProviderName}
               placeholder="e.g. claude-code"
@@ -345,7 +345,7 @@
           </div>
           <div class="space-y-1">
             <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-text-2">Command</label>
+            <label class="text-xs text-t2">Command</label>
             <Input
               bind:value={newProviderCommand}
               class="font-mono"
@@ -354,7 +354,7 @@
           </div>
           <div class="space-y-1">
             <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-text-2">Yolo flag (optional)</label>
+            <label class="text-xs text-t2">Yolo flag (optional)</label>
             <Input
               bind:value={newProviderYoloFlag}
               class="font-mono"
@@ -368,14 +368,14 @@
               disabled={!newProviderName || !newProviderCommand}
             >Add</button>
             <button
-              class="px-3 py-1.5 rounded text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi "
+              class="px-3 py-1.5 rounded text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi"
               onclick={() => { showAddProvider = false; }}
             >Cancel</button>
           </div>
         </div>
       {:else}
         <button
-          class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi "
+          class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi"
           onclick={() => { showAddProvider = true; }}
         >+ Add Provider</button>
       {/if}
@@ -389,7 +389,7 @@
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Pull Request Integration</h2>
       <div class="space-y-1">
         <!-- svelte-ignore a11y_label_has_associated_control -->
-        <label class="text-xs text-text-2 flex items-center gap-1">PR status command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Command to check PR status for a branch. Must output JSON with "url" and "state" (open/merged/closed). Non-zero exit = no PR. Variable: {"{branch}"}</span></span></label>
+        <label class="text-xs text-t2 flex items-center gap-1">PR status command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Command to check PR status for a branch. Must output JSON with "url" and "state" (open/merged/closed). Non-zero exit = no PR. Variable: {"{branch}"}</span></span></label>
         <Input value={config.pr_status || ""} onchange={(e) => updateSettings({ pr_status: e.currentTarget.value || null } as Partial<AppConfig>)} class="font-mono" placeholder={"gh pr view {branch} --json url,state,isDraft"} />
       </div>
     </section>
@@ -402,28 +402,32 @@
             <!-- Templates -->
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate("branch", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate("name", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate("prompt", e.currentTarget.value)} class="font-mono" />
             </div>
 
             <!-- Lifecycle hooks -->
-            {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."], ["on_pr_open", "On PR open", "in_review", "Fires when a pull request is opened for this session's branch."], ["on_pr_merge", "On PR merge", "done", "Fires when the pull request is merged."]] as [hookKey, label, defaultVal, desc]}
-              <div class="space-y-1">
-                <!-- svelte-ignore a11y_label_has_associated_control -->
-                <label class="text-xs text-text-2 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">{desc}</span></span></label>
-                <Input value={(taskManagement as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value)} class="font-mono" />
-              </div>
-            {/each}
+            <div class="space-y-2 pt-2 mt-2 border-t border-border">
+              <span class="text-[10px] font-semibold text-t3 uppercase tracking-wider">Lifecycle Hooks</span>
+              {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."], ["on_pr_open", "On PR open", "in_review", "Fires when a pull request is opened for this session's branch."], ["on_pr_merge", "On PR merge", "done", "Fires when the pull request is merged."]] as [hookKey, label, defaultVal, desc]}
+                <div class="flex items-center gap-2">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
+                  <label class="text-xs text-t2 w-24 shrink-0 flex items-center gap-1">{label} <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">{desc}</span></span></label>
+                  <span class="text-xs text-t3">→</span>
+                  <Input value={(taskManagement as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value)} class="font-mono flex-1" />
+                </div>
+              {/each}
+            </div>
 
             <!-- Auto-dispatch -->
             <div class="mt-3 pt-3 border-t border-border space-y-2">
@@ -446,14 +450,14 @@
                 <div class="grid grid-cols-2 gap-2">
                   <div class="space-y-1">
                     <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label class="text-xs text-text-2">Poll interval (ms)</label>
+                    <label class="text-xs text-t2">Poll interval (ms)</label>
                     <Input value={String(taskManagement.auto_dispatch.poll_interval_ms ?? 30000)} onchange={(e) => {
                       updateAutoDispatch({ poll_interval_ms: parseInt(e.currentTarget.value) || 30000 });
                     }} class="font-mono" />
                   </div>
                   <div class="space-y-1">
                     <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label class="text-xs text-text-2">Max concurrent</label>
+                    <label class="text-xs text-t2">Max concurrent</label>
                     <Input value={String(taskManagement.auto_dispatch.max_concurrent ?? 3)} onchange={(e) => {
                       updateAutoDispatch({ max_concurrent: parseInt(e.currentTarget.value) || 3 });
                     }} class="font-mono" />
@@ -461,14 +465,14 @@
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
-                  <label class="text-xs text-text-2 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
+                  <label class="text-xs text-t2 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
                   <Input value={taskManagement.auto_dispatch.provider || ""} onchange={(e) => {
                     updateAutoDispatch({ provider: e.currentTarget.value || undefined });
                   }} class="font-mono" placeholder={config.default_provider} />
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
-                  <label class="text-xs text-text-2 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
+                  <label class="text-xs text-t2 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
                   <Input value={(taskManagement.auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
                     updateAutoDispatch({ terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) });
                   }} class="font-mono" placeholder="done, cancelled" />
@@ -477,9 +481,9 @@
             </div>
           </div>
 
-          <button class="px-4 py-2 rounded-md text-sm font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50" onclick={() => updateSettings({ task_management: null } as Partial<AppConfig>)}>Disable Task Management</button>
+          <button class="px-4 py-2 rounded-md text-sm font-medium bg-red-500/10 text-red-600 hover:bg-red-500/20" onclick={() => updateSettings({ task_management: null } as Partial<AppConfig>)}>Disable Task Management</button>
       {:else}
-        <button class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi " onclick={enableTaskManagement}>Enable Task Management</button>
+        <button class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi" onclick={enableTaskManagement}>Enable Task Management</button>
       {/if}
     </section>
     {/if}
@@ -496,9 +500,9 @@
         {/each}
       </div>
       {#if backendValue === "tmux" && !tmuxAvailable}
-        <p class="text-xs text-amber-600 dark:text-amber-400">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
+        <p class="text-xs text-amber-600">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
       {/if}
-      <p class="text-xs text-text-2">
+      <p class="text-xs text-t2">
         {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise daemon.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
         {:else}Sessions persist after quitting (built-in daemon).
