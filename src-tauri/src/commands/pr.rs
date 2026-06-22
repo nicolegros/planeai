@@ -478,7 +478,12 @@ pub async fn merge_pr(
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         if let Some(ref key) = ctx.task_key {
             if let Ok(tm) = resolve_task_manager(&cfg) {
-                pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, std::path::Path::new(&ctx.cwd));
+                pr::fire_pr_hook(
+                    tm,
+                    &pr::PrTransition::Merged,
+                    key,
+                    std::path::Path::new(&ctx.cwd),
+                );
             }
         }
     }
