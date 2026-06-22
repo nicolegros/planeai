@@ -48,7 +48,13 @@ export function startPolling(sessions: Session[]): () => void {
   activeSessions = sessions;
   pollAll();
   pollTimer = setInterval(pollAll, 60_000);
-  const onFocus = () => pollAll();
+  let lastFocusPoll = 0;
+  const onFocus = () => {
+    const now = Date.now();
+    if (now - lastFocusPoll < 5_000) return;
+    lastFocusPoll = now;
+    pollAll();
+  };
   window.addEventListener("focus", onFocus);
   return () => {
     stopPolling();

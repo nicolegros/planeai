@@ -311,11 +311,12 @@
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
 {#snippet ciBadge(id: string)}
-  {#if getCiStatus(id) === 'passing'}
+  {@const ci = getCiStatus(id)}
+  {#if ci === 'passing'}
     <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
-  {:else if getCiStatus(id) === 'failing'}
+  {:else if ci === 'failing'}
     <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
-  {:else if getCiStatus(id) === 'running'}
+  {:else if ci === 'running'}
     <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
   {/if}
 {/snippet}
