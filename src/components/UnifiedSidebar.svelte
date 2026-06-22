@@ -5,7 +5,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -51,7 +51,7 @@
 
   const statusOrder = ["running", "needs_review", "idle", "todo", "done", "exited"];
   const statusLabels: Record<string, string> = { running: "Running", needs_review: "Needs review", idle: "Idle", todo: "To do", done: "Done", exited: "Exited" };
-  const statusDotColors: Record<string, string> = { running: "bg-status-running", needs_review: "bg-status-review", idle: "bg-status-idle", todo: "bg-text-3", done: "bg-status-running", exited: "bg-status-exited" };
+  const statusDotColors: Record<string, string> = { running: "bg-status-running", needs_review: "bg-status-review", idle: "bg-status-idle", todo: "bg-t3", done: "bg-status-running", exited: "bg-status-exited" };
 
   // Auto-mode per project
   let projectAutoMode = $state<Record<string, boolean>>({});
@@ -319,42 +319,35 @@
   {#if ci === 'passing'}
     <CheckCircle2 class="size-3 text-status-running" title="CI passing" />
   {:else if ci === 'failing'}
-    <XCircle class="size-3 text-error-400" title="CI failing" />
+    <XCircle class="size-3 text-status-exited" title="CI failing" />
   {:else if ci === 'running'}
-    <LoaderCircle class="size-3 animate-spin text-warning-400" title="CI running" />
+    <LoaderCircle class="size-3 animate-spin text-t3" title="CI running" />
   {/if}
 {/snippet}
 
-<aside class="relative shrink-0 flex flex-col border-r border-border bg-surface-100 dark:bg-surface-800 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
-  <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
+<aside class="relative shrink-0 flex flex-col border-r border-border bg-sidebar" style:width="{sidebarWidth}px" style:box-shadow="{zone === 'sidebar' ? 'inset 0 0 0 2px color-mix(in srgb, var(--theme-accent) 50%, transparent)' : 'none'}">
+  <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
-  <!-- Header: search + new -->
-  <div class="flex items-center gap-2 px-3 py-2.5">
-    <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-surface-200 dark:bg-surface-600 text-text-3 text-[12px]">
-      <span class="text-[11px]">⌕</span>
-      <input
-        type="text"
-        placeholder="Search…"
-        class="flex-1 bg-transparent outline-none text-text-1 placeholder:text-text-3"
-        bind:value={searchQuery}
-      />
-      <span class="font-mono text-[10px] opacity-60">⌘P</span>
-    </div>
+  <!-- Header: new session button -->
+  <div class="px-3 pt-3 pb-2">
     <button
       onclick={() => onCreateSession?.()}
-      title="New… ({MOD_LABEL}N)"
-      class="size-7 flex items-center justify-center rounded-lg text-text-3 hover:text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600 transition-colors"
+      class="w-full h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity"
     >
-      <Plus class="size-4" />
+      <span class="flex items-center gap-1.5">
+        <Plus class="size-3.5" />
+        New session
+      </span>
+      <span class="font-mono text-[10px] text-t3">{MOD_LABEL}N</span>
     </button>
   </div>
 
   <!-- Main content -->
-  <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3 scrollbar-hide">
+  <nav class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
-        <p class="text-xs text-text-3">No projects yet</p>
-        <button onclick={onAddProject} class="text-xs text-primary-500 hover:underline">Add a project →</button>
+        <p class="text-xs text-t3">No projects yet</p>
+        <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
     {:else}
       {#each projects as project (project.id)}
@@ -367,14 +360,15 @@
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
           <button
-            class="w-full px-2 mb-1 text-[11px] font-semibold text-text-3 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-surface-200 dark:hover:bg-surface-600 {isProjectSelected ? 'ring-1 ring-primary-500/50' : ''}"
+            class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isProjectSelected ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
             title={project.path}
             onclick={() => toggleSection(projectKey)}
             oncontextmenu={(e) => onProjectContextMenu(e, project)}
           >
-            {#if projectCollapsed}<ChevronRight class="size-3 shrink-0" />{:else}<ChevronDown class="size-3 shrink-0" />{/if}
+            {#if projectCollapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
             {project.name}
-            {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-warning-400" />{/if}
+            <span class="ml-auto font-normal text-t3">{(projectOrphans.length) + (projectTasks.length)}</span>
+            {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-status-running" />{/if}
           </button>
 
           {#if !projectCollapsed}
@@ -391,33 +385,31 @@
                   {#if renamingSessionId === session.id}
                     <input
                       use:autofocus
-                      class="w-full px-2 py-1.5 rounded-md text-sm bg-surface-50 dark:bg-surface-800 border border-primary-500 outline-none"
+                      class="w-full px-2 py-1.5 rounded-md text-sm bg-panel border border-accent outline-none text-t1"
                       bind:value={renameValue}
                       onkeydown={(e) => { if (e.key === 'Enter') commitRename(session.id); if (e.key === 'Escape') onStartRename(""); }}
                       onblur={() => commitRename(session.id)}
                     />
                   {:else}
-                    <div class="flex items-center gap-1">
-                      <span class="w-0.5 self-stretch rounded-full transition-opacity {isActive ? 'bg-primary-500 opacity-100' : 'opacity-0'}"></span>
+                    <div class="flex items-center gap-1.5">
+                      <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                       <button
-                        class="flex-1 text-left py-[7px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
-                          {isActive ? 'bg-primary-500/15' : 'hover:bg-surface-200 dark:hover:bg-surface-600'}
-                          {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}
-                          {session.status === 'exited' ? 'opacity-50' : ''}"
+                        class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
+                          {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                          {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? '[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
                         onclick={() => handleOrphanClick(session)}
                         oncontextmenu={(e) => onContextMenu(e, session)}
                       >
-                      <span class="truncate font-medium text-text-1">{session.name || session.branch}</span>
+                      <span class="truncate font-medium text-t1">{session.name || session.branch}</span>
                       <span class="ml-auto shrink-0 flex items-center gap-1.5">
                         {#if orchestrator.getReviewReady()[session.id]}
-                          <span class="size-2 rounded-full bg-status-review" title="Ready for review"></span>
+                          <Lightbulb class="size-3.5 text-status-review animate-pulse" />
+                        {:else if session.status === 'exited'}
+                          <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
+                        {:else if agentStates[session.id] === 'Busy'}
+                          <LoaderCircle class="size-3 animate-spin text-t2" />
                         {/if}
                         {@render ciBadge(session.id)}
-                        {#if session.status === 'exited'}
-                          <span class="text-[10px] font-mono text-status-exited">exited</span>
-                        {:else if agentStates[session.id] === 'Busy'}
-                          <LoaderCircle class="size-3 animate-spin text-text-3" />
-                        {/if}
                       </span>
                     </button>
                     </div>
@@ -436,13 +428,13 @@
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div class="ml-1">
                 <button
-                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-text-3 uppercase tracking-[.06em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? '[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
                   <span class="size-1.5 rounded-full {statusDotColors[status]}"></span>
                   {statusLabels[status]}
-                  <span class="font-normal text-text-3 ml-0.5">{items.length}</span>
-                  {#if collapsedSections[sectionKey]}<ChevronRight class="size-3 ml-auto" />{:else}<ChevronDown class="size-3 ml-auto" />{/if}
+                  <span class="font-normal text-t3 ml-0.5">{items.length}</span>
+                  {#if collapsedSections[sectionKey]}<ChevronRight class="size-3 ml-auto text-t3" />{:else}<ChevronDown class="size-3 ml-auto text-t3" />{/if}
                 </button>
                 {#if !collapsedSections[sectionKey]}
                   <ul class="space-y-0.5 ml-1">
@@ -454,21 +446,26 @@
                       {@const isParent = isParentTask(task, projectTasks)}
                       {@const isPreviewing = linked && linked.id === previewSessionId}
                       <li>
-                        <div class="flex items-center gap-1">
-                          <span class="w-0.5 self-stretch rounded-full transition-opacity {isActive ? 'bg-primary-500 opacity-100' : 'opacity-0'}"></span>
+                        <div class="flex items-center gap-1.5">
+                          <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
-                            class="flex-1 text-left py-[7px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
-                              {isActive ? 'bg-primary-500/15' : 'hover:bg-surface-200 dark:hover:bg-surface-600'}
-                              {isPreviewing ? 'ring-2 ring-primary-500' : isSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                            class="flex-1 min-w-0 text-left py-[6px] pl-[19px] pr-2 flex items-center gap-1.5 transition-colors rounded-lg
+                              {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                              {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? '[box-shadow:inset_0_0_0_1px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : ''}"
                             onclick={() => handleTaskClick(task, project.path)}
                             oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                           >
-                          <span class="shrink-0 text-[10px] font-mono text-text-3">{task.key}</span>
-                          <span class="truncate text-text-1 {task.status === 'done' ? 'line-through opacity-60' : ''}">{task.title}</span>
+                          {#if task.parent_key}<span class="shrink-0 font-mono text-[10px] text-t3">{task.parent_key} ›</span>{/if}
+                          <span class="shrink-0 font-mono text-[10px] text-t3">{task.key}</span>
+                          <span class="truncate text-[12.5px] {task.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{task.title}</span>
                           {#if linked}
                             <span class="ml-auto shrink-0 flex items-center gap-1.5">
                               {#if agentStates[linked.id] === 'Busy'}
-                                <LoaderCircle class="size-3 animate-spin text-text-3" />
+                                <LoaderCircle class="size-3 animate-spin text-t2" />
+                              {:else if orchestrator.getReviewReady()[linked.id]}
+                                <Lightbulb class="size-3.5 text-status-review animate-pulse" />
+                              {:else if linked.status === 'exited'}
+                                <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
                               {/if}
                               {@render ciBadge(linked.id)}
                             </span>
@@ -484,7 +481,7 @@
           {/each}
 
           {#if projectOrphans.length === 0 && projectTasks.length === 0}
-            <p class="px-3 py-1 text-xs text-text-3 italic">No sessions or tasks</p>
+            <p class="px-3 py-1 text-xs text-t3 italic">No sessions or tasks</p>
           {/if}
           {/if}
         </div>
@@ -492,7 +489,15 @@
     {/if}
   </nav>
 
-  <!-- No footer in new design -->
+  <!-- Preferences footer -->
+  <button
+    onclick={onOpenPreferences}
+    class="flex items-center gap-2 px-3 py-2.5 border-t border-border text-t2 text-[12px] hover:bg-panel-hi transition-colors"
+  >
+    <Settings class="size-3.5" />
+    <span>Preferences</span>
+    <span class="ml-auto font-mono text-[10px] text-t3">{MOD_LABEL},</span>
+  </button>
 </aside>
 
 <!-- Hidden TaskPanel for create dialog -->

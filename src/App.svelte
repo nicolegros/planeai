@@ -18,6 +18,7 @@
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
+  import KeyboardHelperBar from "./components/KeyboardHelperBar.svelte";
   import UnifiedSidebar from "./components/UnifiedSidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
@@ -132,7 +133,7 @@
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
     if (existing) { existing.setFocus(); return; }
-    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 700, height: 550, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
+    new WebviewWindow("preferences", { url: "index.html?page=preferences", title: "Preferences", width: 720, height: 680, parent: getCurrentWindow(), resizable: true, minimizable: false, maximizable: false });
   }
 
   async function doRename(id: string, name: string) {
@@ -270,19 +271,19 @@
       />
   {/if}
 
-  <section class="flex-1 flex flex-col relative bg-surface-50 dark:bg-surface-950 overflow-hidden">
+  <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
     <div class="flex-1 relative p-4 pr-0 overflow-hidden">
     {#if showProjectForm}
-      <div class="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+      <div class="absolute inset-0 flex items-center justify-center bg-scrim z-10">
         <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); }} onCancel={() => (showProjectForm = false)} />
       </div>
     {/if}
 
     <Dialog.Root bind:open={showSessionForm}>
       <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-40 bg-black/55 dark:bg-[rgba(25,25,30,0.55)]" />
-        <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[452px] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border-strong bg-surface-50 dark:bg-surface-700 shadow-[0_26px_70px_-16px_rgba(0,0,0,0.5)] overflow-hidden">
-          <Dialog.Title class="px-5 pt-5 pb-3 text-[13px] font-semibold text-text-1">New Session</Dialog.Title>
+        <Dialog.Overlay class="fixed inset-0 z-40 bg-scrim" />
+        <Dialog.Content class="fixed left-1/2 top-0 z-50 w-[452px] -translate-x-1/2 mt-[70px] rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
+          <Dialog.Title class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</Dialog.Title>
           <SessionForm
             {projects}
             {sessions}
@@ -376,7 +377,7 @@
 
     {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
       <div class="flex items-center justify-center h-full">
-        <p class="text-surface-700 dark:text-surface-300">No active session. Press <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">{MOD_LABEL}N</kbd> to create one.</p>
+        <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>
     {/if}
 
@@ -384,7 +385,7 @@
       <div class="absolute top-2 left-4 right-4 z-20 flex items-center gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 px-4 py-2.5 shadow-sm">
         <span class="text-sm text-amber-800 dark:text-amber-200">Install notification hook for instant agent-done alerts?</span>
         <button class="ml-auto rounded bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700" onclick={async () => { await notify.install(); showHookPrompt = false; }}>Install</button>
-        <button class="rounded px-2 py-1 text-xs text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200" onclick={() => (showHookPrompt = false)}>Dismiss</button>
+        <button class="rounded px-2 py-1 text-xs text-t3 hover:text-t1" onclick={() => (showHookPrompt = false)}>Dismiss</button>
       </div>
     {/if}
 
@@ -393,11 +394,11 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); } }}>
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); } }}>
             <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
             <div class="flex justify-between">
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">c</kbd> cancel</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">d</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">y</kbd> delete</span>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -411,12 +412,12 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') deleteProject(ptd); }}>
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') deleteProject(ptd); }}>
             <Dialog.Title class="text-sm">Delete project <strong>{ptd.name}</strong>?</Dialog.Title>
-            <p class="text-xs text-surface-500 dark:text-surface-400">This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.</p>
+            <p class="text-xs text-t3">This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.</p>
             <div class="flex justify-between">
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">c</kbd> cancel</span>
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">d</kbd>/<kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">y</kbd> delete</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">c</kbd> cancel</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">d</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">y</kbd> delete</span>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -427,12 +428,12 @@
         <Dialog.Portal>
           <Dialog.Overlay class="fixed inset-0 z-50" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-6 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}>
+          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}>
             <Dialog.Title class="text-sm font-medium">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</Dialog.Title>
-            <p class="text-xs text-surface-500 dark:text-surface-400">Direct sessions don't survive app quit.</p>
+            <p class="text-xs text-t3">Direct sessions don't survive app quit.</p>
             <div class="flex justify-between">
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">n</kbd> cancel</span>
-              <span class="text-sm text-surface-500 dark:text-surface-400"><kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs">q</kbd> quit</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd> cancel</span>
+              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">q</kbd> quit</span>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -442,18 +443,23 @@
     {#if showNewItemModal}
       <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }}>
         <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50" />
+          <Dialog.Overlay class="fixed inset-0 z-50 bg-scrim" />
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-64 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-5 space-y-3 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
-            <Dialog.Title class="text-sm font-semibold text-surface-900 dark:text-surface-50">New…</Dialog.Title>
-            <div class="space-y-1">
-              <button class="w-full text-left px-3 py-2 rounded-md text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800 flex items-center justify-between" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
-                Session
-                <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs text-surface-500">s</kbd>
+          <Dialog.Content class="fixed left-1/2 top-0 z-50 w-[268px] -translate-x-1/2 mt-[150px] rounded-[13px] border border-border-s bg-panel shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] outline-none overflow-hidden" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
+            <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
+              <Dialog.Title class="text-[13px] font-semibold text-t1">New…</Dialog.Title>
+              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
+            </div>
+            <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+              <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
+                <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
+                <span class="flex-1 text-[13.5px] text-t1">Session</span>
+                <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
               </button>
-              <button class="w-full text-left px-3 py-2 rounded-md text-sm text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800 flex items-center justify-between" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
-                Task
-                <kbd class="rounded border border-surface-300 dark:border-surface-600 px-1.5 py-0.5 text-xs text-surface-500">t</kbd>
+              <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
+                <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
+                <span class="flex-1 text-[13.5px] text-t1">Task</span>
+                <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
               </button>
             </div>
           </Dialog.Content>
@@ -468,14 +474,7 @@
     {/if}
     </div>
     <!-- Keyboard helper bar -->
-    <div class="h-[34px] shrink-0 flex items-center gap-4 px-4 bg-surface-100 dark:bg-surface-800 border-t border-border text-[11px] text-text-3 select-none">
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘K</kbd> Command</span>
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘N</kbd> New</span>
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘B</kbd> Sidebar</span>
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌃⇥</kbd> Switch</span>
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘1–9</kbd> Jump</span>
-      <span><kbd class="font-mono text-[10px] bg-surface-200 dark:bg-surface-600 px-1 rounded">⌘\</kbd> Diff</span>
-    </div>
+    <KeyboardHelperBar />
   </section>
 
   {#if fileExplorerVisible && activeSessionId}
@@ -502,31 +501,31 @@
   <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showPrForm = false; }}>
     <Dialog.Portal>
       <Dialog.Overlay class="fixed inset-0 z-50" />
-      <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-surface-200 bg-surface-50 p-5 shadow-lg dark:border-surface-700 dark:bg-surface-900 outline-none">
-        <Dialog.Title class="text-sm font-medium text-surface-900 dark:text-surface-50 mb-4">Create Pull Request</Dialog.Title>
+      <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-5 shadow-lg outline-none">
+        <Dialog.Title class="text-sm font-medium text-t1 mb-4">Create Pull Request</Dialog.Title>
         <div class="flex flex-col gap-3">
           <div>
-            <label for="pr-title" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Title</label>
-            <input id="pr-title" type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+            <label for="pr-title" class="text-xs font-medium text-t2 mb-1 block">Title</label>
+            <input id="pr-title" type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
           </div>
           <div>
-            <label for="pr-body" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Body</label>
-            <textarea id="pr-body" bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 resize-y focus:outline-none focus:ring-1 focus:ring-primary-500 font-mono text-xs"></textarea>
+            <label for="pr-body" class="text-xs font-medium text-t2 mb-1 block">Body</label>
+            <textarea id="pr-body" bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
           </div>
           <div>
-            <label for="pr-base" class="text-xs font-medium text-surface-600 dark:text-surface-400 mb-1 block">Base branch</label>
-            <input id="pr-base" type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+            <label for="pr-base" class="text-xs font-medium text-t2 mb-1 block">Base branch</label>
+            <input id="pr-base" type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
           </div>
-          <label class="flex items-center gap-2 text-xs text-surface-700 dark:text-surface-300">
-            <input type="checkbox" bind:checked={prDraft} class="rounded border-surface-300 dark:border-surface-600" />
+          <label class="flex items-center gap-2 text-xs text-t2">
+            <input type="checkbox" bind:checked={prDraft} class="rounded border-border" />
             Draft PR
           </label>
           {#if prError}
-            <p class="text-xs text-error-500">{prError}</p>
+            <p class="text-xs text-status-exited">{prError}</p>
           {/if}
           <div class="flex justify-end gap-2 mt-1">
-            <button class="px-2 py-1 text-xs rounded border border-surface-300 text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-800" onclick={() => (showPrForm = false)}>Cancel</button>
-            <button class="px-2 py-1 text-xs rounded bg-surface-900 text-surface-50 hover:bg-surface-800 dark:bg-surface-50 dark:text-surface-900 dark:hover:bg-surface-200 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()} onclick={submitPr}>
+            <button class="px-2 py-1 text-xs rounded border border-border text-t2 hover:bg-panel-hi" onclick={() => (showPrForm = false)}>Cancel</button>
+            <button class="px-2 py-1 text-xs rounded bg-accent text-on-accent hover:opacity-90 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()} onclick={submitPr}>
               {prSubmitting ? "Creating…" : "Create"}
             </button>
           </div>

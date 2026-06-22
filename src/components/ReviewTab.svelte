@@ -580,10 +580,10 @@
   function statusColor(status: string): string {
     switch (status) {
       case "A": return "text-status-running";
-      case "D": return "text-error-400";
-      case "M": return "text-warning-400";
-      case "R": return "text-primary-500";
-      default: return "text-text-3";
+      case "D": return "text-status-exited";
+      case "M": return "text-status-review";
+      case "R": return "text-accent";
+      default: return "text-t3";
     }
   }
 
@@ -594,19 +594,19 @@
 <div class="flex h-full w-full" class:hidden={!visible}>
   <div class="flex-1 min-w-0 relative overflow-hidden">
     <!-- Toolbar -->
-    <div class="absolute top-0 left-0 right-0 h-[42px] flex items-center px-4 gap-3 border-b border-border bg-surface-100 dark:bg-surface-800 z-10">
+    <div class="absolute top-0 left-0 right-0 h-[42px] flex items-center px-4 gap-3 border-b border-border bg-chrome z-10">
       {#if files.length > 0}
-        <span class="font-mono text-[12px] text-text-1 truncate">{files[selectedIndex]?.path ?? ''}</span>
+        <span class="font-mono text-[12px] text-t1 truncate">{files[selectedIndex]?.path ?? ''}</span>
         <span class="text-[11px] text-status-running">+{files[selectedIndex]?.additions ?? 0}</span>
-        <span class="text-[11px] text-error-400">−{files[selectedIndex]?.deletions ?? 0}</span>
+        <span class="text-[11px] text-status-exited">−{files[selectedIndex]?.deletions ?? 0}</span>
       {/if}
       <div class="flex-1"></div>
-      <div class="flex gap-0.5 rounded-lg bg-surface-200 dark:bg-surface-600 p-0.5">
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-primary-500/15 text-primary-500' : 'text-text-2 hover:text-text-1'}" onclick={() => { diffStyle = "unified"; toggleDiffStyle(); }}>Unified</button>
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-primary-500/15 text-primary-500' : 'text-text-2 hover:text-text-1'}" onclick={() => { diffStyle = "split"; toggleDiffStyle(); }}>Split</button>
+      <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5">
+        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "unified"; toggleDiffStyle(); }}>Unified</button>
+        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "split"; toggleDiffStyle(); }}>Split</button>
       </div>
       {#if files.length > 0}
-        <span class="font-mono text-[10px] text-text-3 bg-surface-200 dark:bg-surface-600 px-1.5 py-0.5 rounded">c Comment</span>
+        <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded">c Comment</span>
       {/if}
       {#if totalCount > 0}
         <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : "Send feedback (⌘Enter)"}><Send size={12} /><span class="ml-1">Send ({totalCount})</span></Button>
@@ -615,12 +615,12 @@
 
     <!-- Comment input -->
     {#if showCommentInput}
-      <div class="absolute top-[42px] left-0 right-0 z-20 p-3 border-b border-border bg-surface-100 dark:bg-surface-700">
+      <div class="absolute top-[42px] left-0 right-0 z-20 p-3 border-b border-border bg-chrome">
         {#if commentType !== "file"}
-          <div class="text-[10px] text-text-3 mb-1.5">● Review note · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
+          <div class="text-[10px] text-t3 mb-1.5">● Review note · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
         {/if}
-        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full p-2 text-[12.5px] rounded-lg border border-border-strong bg-surface-50 dark:bg-surface-700 text-text-1 resize-none focus:outline-none focus:ring-1 focus:ring-primary-500" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
-        <span class="font-mono text-[10px] text-text-3 mt-1 inline-block">r reply</span>
+        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full p-2 text-[12.5px] rounded-lg border border-border-s bg-panel text-t1 resize-none focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
+        <span class="font-mono text-[10px] text-t3 mt-1 inline-block">r reply</span>
       </div>
     {/if}
 
@@ -629,36 +629,36 @@
 
     <!-- Loading states -->
     {#if loading}
-      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-text-3 bg-surface-50 dark:bg-surface-950 z-[5]">Loading diff…</div>
+      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-t3 bg-main z-[5]">Loading diff…</div>
     {:else if files.length === 0}
-      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-text-3 bg-surface-50 dark:bg-surface-950">No changes on this branch</div>
+      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-t3 bg-main">No changes on this branch</div>
     {/if}
 
   </div>
 
   <!-- File sidebar (right) -->
-  <div class="relative shrink-0 border-l border-border bg-surface-100 dark:bg-surface-800 overflow-y-auto" style:width="{sidebarWidth}px">
+  <div class="relative shrink-0 border-l border-border bg-chrome overflow-y-auto" style:width="{sidebarWidth}px">
     <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={240} onResizeEnd={(w) => setLayoutWidth("diff-sidebar", w)} />
-    <div class="px-3 py-2.5 text-[10px] font-semibold text-text-3 uppercase tracking-[.05em] border-b border-border flex items-center justify-between">
+    <div class="px-3 py-2.5 text-[10px] font-semibold text-t3 uppercase tracking-[.05em] border-b border-border flex items-center justify-between">
       <span>Changed · {files.length}</span>
       <span class="text-status-running">+{files.reduce((a, f) => a + f.additions, 0)}</span>
-      <span class="text-error-400">−{files.reduce((a, f) => a + f.deletions, 0)}</span>
+      <span class="text-status-exited">−{files.reduce((a, f) => a + f.deletions, 0)}</span>
     </div>
     <ul class="py-1" role="listbox">
       {#each files as file, i (file.path)}
         {@const fileCount = getFileCommentCount(sessionId, file.path)}
         {@const viewed = viewedFiles.has(file.path)}
         <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
-          <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-primary-500 opacity-100' : 'opacity-0'}"></span>
-          <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-primary-500/15' : 'hover:bg-surface-200 dark:hover:bg-surface-600'}">
+          <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
+          <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
           {#if viewed}
             <button class="shrink-0 text-status-running" onclick={(e) => { e.stopPropagation(); toggleViewed(i); }} title="Mark as unviewed"><Check size={12} /></button>
           {:else}
             <span class="font-mono w-4 shrink-0 text-[10px] {statusColor(file.status)}">{file.status}</span>
           {/if}
-          <span class="truncate flex-1 font-mono" title={file.path}><span class="text-text-3 text-[9.5px]">{dirName(file.path)}</span><span class="text-text-1 text-[12px]">{fileName(file.path)}</span></span>
-          {#if fileCount > 0}<span class="flex items-center gap-0.5 text-[10px] text-primary-500"><MessageSquare size={10} />{fileCount}</span>{/if}
-          <span class="text-[10px] font-mono text-text-3">+{file.additions} −{file.deletions}</span>
+          <span class="truncate flex-1 font-mono" title={file.path}><span class="text-t3 text-[9.5px]">{dirName(file.path)}</span><span class="text-t1 text-[12px]">{fileName(file.path)}</span></span>
+          {#if fileCount > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{fileCount}</span>{/if}
+          <span class="text-[10px] font-mono text-t3">+{file.additions} −{file.deletions}</span>
           </div>
         </li>
       {/each}

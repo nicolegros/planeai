@@ -1,157 +1,73 @@
 @import "tailwindcss";
 
 @theme {
-  --color-surface-50: var(--color-surface-50);
-  --color-surface-100: var(--color-surface-100);
-  --color-surface-200: var(--color-surface-200);
-  --color-surface-300: var(--color-surface-300);
-  --color-surface-400: var(--color-surface-400);
-  --color-surface-500: var(--color-surface-500);
-  --color-surface-600: var(--color-surface-600);
-  --color-surface-700: var(--color-surface-700);
-  --color-surface-800: var(--color-surface-800);
-  --color-surface-900: var(--color-surface-900);
-  --color-surface-950: var(--color-surface-950);
-  --color-primary-50: var(--color-primary-50);
-  --color-primary-100: var(--color-primary-100);
-  --color-primary-200: var(--color-primary-200);
-  --color-primary-300: var(--color-primary-300);
-  --color-primary-400: var(--color-primary-400);
-  --color-primary-500: var(--color-primary-500);
-  --color-primary-600: var(--color-primary-600);
-  --color-primary-700: var(--color-primary-700);
-  --color-primary-800: var(--color-primary-800);
-  --color-primary-900: var(--color-primary-900);
-  --color-primary-950: var(--color-primary-950);
-  --color-error-50: var(--color-error-50);
-  --color-error-100: var(--color-error-100);
-  --color-error-200: var(--color-error-200);
-  --color-error-300: var(--color-error-300);
-  --color-error-400: var(--color-error-400);
-  --color-error-500: var(--color-error-500);
-  --color-error-600: var(--color-error-600);
-  --color-error-700: var(--color-error-700);
-  --color-error-800: var(--color-error-800);
-  --color-error-900: var(--color-error-900);
-  --color-error-950: var(--color-error-950);
-  --color-warning-50: var(--color-warning-50);
-  --color-warning-100: var(--color-warning-100);
-  --color-warning-200: var(--color-warning-200);
-  --color-warning-300: var(--color-warning-300);
-  --color-warning-400: var(--color-warning-400);
-  --color-warning-500: var(--color-warning-500);
-  --color-border: var(--theme-border);
-  --color-border-strong: var(--theme-border-strong);
-  --color-text-1: var(--theme-text-1);
-  --color-text-2: var(--theme-text-2);
-  --color-text-3: var(--theme-text-3);
-  --color-accent-bg: var(--theme-accent-bg);
-  --color-status-running: var(--theme-status-running);
-  --color-status-review: var(--theme-status-review);
-  --color-status-exited: var(--theme-status-exited);
-  --color-status-idle: var(--theme-status-idle);
+  /* ── Role-based color tokens ── */
+  --color-canvas: #f4f4f6;
+  --color-chrome: #f4f4f6;
+  --color-sidebar: #f4f4f6;
+  --color-main: #ffffff;
+  --color-panel: #ffffff;
+  --color-panel-hi: #e9e9ed;
+  --color-t1: #18181d;
+  --color-t2: #686870;
+  --color-t3: #88888f;
+  --color-border: rgba(0, 0, 0, 0.06);
+  --color-border-s: rgba(0, 0, 0, 0.10);
+  --color-accent: #18181d;
+  --color-on-accent: #ffffff;
+  --color-accent-bg: rgba(24, 24, 29, 0.07);
+  --color-scrim: rgba(25, 25, 30, 0.30);
+  --color-status-running: #1a7f37;
+  --color-status-review: #9a6700;
+  --color-status-exited: #cf222e;
+  --color-status-idle: #aeaeb5;
+  /* ── Radii ── */
   --radius-base: var(--radius-base);
   --radius-container: var(--radius-container);
+  /* ── Fonts ── */
   --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
 }
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   body {
-    background-color: var(--color-surface-950);
-    color: var(--color-text-1);
+    background-color: var(--theme-canvas);
+    color: var(--theme-text-1);
     font-family: var(--font-sans);
-  }
-  .dark body {
-    background-color: var(--color-surface-900);
-    color: var(--color-text-1);
   }
 }
 
+/* Border color override is in overrides.css (imported after tailwind processing) */
+
 /* CodeMirror syntax highlighting — classHighlighter applies .tok-* classes */
-.tok-keyword {
-  color: var(--editor-keyword, var(--editor-foreground));
-}
-.tok-atom {
-  color: var(--editor-atom, var(--editor-keyword, var(--editor-foreground)));
-}
-.tok-bool {
-  color: var(--editor-bool, var(--editor-atom, var(--editor-keyword, var(--editor-foreground))));
-}
-.tok-string {
-  color: var(--editor-string, var(--editor-foreground));
-}
-.tok-string2 {
-  color: var(--editor-string2, var(--editor-string, var(--editor-foreground)));
-}
-.tok-number {
-  color: var(--editor-number, var(--editor-foreground));
-}
-.tok-variableName {
-  color: var(--editor-variable, var(--editor-foreground));
-}
-.tok-variableName2 {
-  color: var(--editor-variable2, var(--editor-variable, var(--editor-foreground)));
-}
-.tok-typeName {
-  color: var(--editor-type, var(--editor-foreground));
-}
-.tok-className {
-  color: var(--editor-class, var(--editor-type, var(--editor-foreground)));
-}
-.tok-namespace {
-  color: var(--editor-namespace, var(--editor-type, var(--editor-foreground)));
-}
-.tok-macroName {
-  color: var(--editor-macro, var(--editor-function, var(--editor-foreground)));
-}
-.tok-propertyName {
-  color: var(--editor-property, var(--editor-foreground));
-}
-.tok-operator {
-  color: var(--editor-operator, var(--editor-foreground));
-}
-.tok-comment {
-  color: var(--editor-comment, var(--editor-foreground));
-  font-style: italic;
-}
-.tok-meta {
-  color: var(--editor-meta, var(--editor-foreground));
-}
-.tok-punctuation {
-  color: var(--editor-punctuation, var(--editor-foreground));
-}
-.tok-invalid {
-  color: var(--editor-invalid, #ff0000);
-  text-decoration: underline;
-}
-.tok-literal {
-  color: var(--editor-literal, var(--editor-string, var(--editor-foreground)));
-}
-.tok-labelName {
-  color: var(--editor-label, var(--editor-foreground));
-}
-.tok-heading {
-  color: var(--editor-heading, var(--editor-keyword, var(--editor-foreground)));
-  font-weight: bold;
-}
-.tok-emphasis {
-  font-style: italic;
-}
-.tok-strong {
-  font-weight: bold;
-}
-.tok-link {
-  color: var(--editor-link, var(--editor-string, var(--editor-foreground)));
-  text-decoration: underline;
-}
-.tok-definition {
-  font-weight: 600;
-}
-.tok-local {
-  text-decoration: underline;
-}
+.tok-keyword { color: var(--editor-keyword, var(--editor-foreground)); }
+.tok-atom { color: var(--editor-atom, var(--editor-keyword, var(--editor-foreground))); }
+.tok-bool { color: var(--editor-bool, var(--editor-atom, var(--editor-keyword, var(--editor-foreground)))); }
+.tok-string { color: var(--editor-string, var(--editor-foreground)); }
+.tok-string2 { color: var(--editor-string2, var(--editor-string, var(--editor-foreground))); }
+.tok-number { color: var(--editor-number, var(--editor-foreground)); }
+.tok-variableName { color: var(--editor-variable, var(--editor-foreground)); }
+.tok-variableName2 { color: var(--editor-variable2, var(--editor-variable, var(--editor-foreground))); }
+.tok-typeName { color: var(--editor-type, var(--editor-foreground)); }
+.tok-className { color: var(--editor-class, var(--editor-type, var(--editor-foreground))); }
+.tok-namespace { color: var(--editor-namespace, var(--editor-type, var(--editor-foreground))); }
+.tok-macroName { color: var(--editor-macro, var(--editor-function, var(--editor-foreground))); }
+.tok-propertyName { color: var(--editor-property, var(--editor-foreground)); }
+.tok-operator { color: var(--editor-operator, var(--editor-foreground)); }
+.tok-comment { color: var(--editor-comment, var(--editor-foreground)); font-style: italic; }
+.tok-meta { color: var(--editor-meta, var(--editor-foreground)); }
+.tok-punctuation { color: var(--editor-punctuation, var(--editor-foreground)); }
+.tok-invalid { color: var(--editor-invalid, #ff0000); text-decoration: underline; }
+.tok-literal { color: var(--editor-literal, var(--editor-string, var(--editor-foreground))); }
+.tok-labelName { color: var(--editor-label, var(--editor-foreground)); }
+.tok-heading { color: var(--editor-heading, var(--editor-keyword, var(--editor-foreground))); font-weight: bold; }
+.tok-emphasis { font-style: italic; }
+.tok-strong { font-weight: bold; }
+.tok-link { color: var(--editor-link, var(--editor-string, var(--editor-foreground))); text-decoration: underline; }
+.tok-definition { font-weight: 600; }
+.tok-local { text-decoration: underline; }
 
 .xterm {
   height: 100%;
@@ -159,19 +75,30 @@
   overflow: hidden;
 }
 
-.scrollbar-hide {
-  scrollbar-width: none;
-}
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
+.scrollbar-hide { scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
 
 .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-width: none;
   background-color: inherit !important;
 }
+.xterm-viewport::-webkit-scrollbar { display: none; }
 
-.xterm-viewport::-webkit-scrollbar {
-  display: none;
+/* ── @pierre/diffs theming ── */
+diffs-container {
+  --diffs-font-size: 12.5px;
+  --diffs-line-height: 1.72;
+  --diffs-dark-bg: #0a0a0a;
+  --diffs-light-bg: #ffffff;
+  --diffs-dark: #f2f2f2;
+  --diffs-light: #171717;
+  --diffs-dark-addition-color: #3fb950;
+  --diffs-dark-deletion-color: #ff7b72;
+  --diffs-light-addition-color: #1a7f37;
+  --diffs-light-deletion-color: #cf222e;
 }
+
+/* ── Animations ── */
+@keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.78); } }
+@keyframes blink-caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }

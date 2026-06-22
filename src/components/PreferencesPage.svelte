@@ -177,11 +177,11 @@
   }
 </script>
 
-<div class="h-screen flex flex-col overflow-hidden bg-surface-50 dark:bg-surface-900">
+<div class="h-screen flex flex-col overflow-hidden bg-panel">
   <nav class="flex justify-center gap-1 border-b border-border px-8 pt-4">
     {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
-        class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-primary-500 text-primary-500' : 'border-transparent text-text-3 hover:text-text-1'}"
+        class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-accent text-accent' : 'border-transparent text-t3 hover:text-t1'}"
         onclick={() => activeTab = tab.name}
       ><tab.icon size={15} />{tab.name}</button>
     {/each}
@@ -192,11 +192,11 @@
     {#if activeTab === "Appearance"}
     <!-- Appearance Mode -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Appearance</h2>
-      <div class="flex gap-1 rounded-lg bg-surface-200 dark:bg-surface-600 p-0.5">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Appearance</h2>
+      <div class="flex gap-1 rounded-lg bg-panel-hi p-0.5">
         {#each ["system", "light", "dark"] as mode (mode)}
           <button
-            class="px-4 py-2 rounded-md text-[12px] font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-primary-500 text-white' : 'text-text-2 hover:text-text-1'}"
+            class="px-4 py-2 rounded-md text-[12px] font-medium capitalize transition-colors {config.appearance.mode === mode ? 'bg-accent text-on-accent' : 'text-text-2 hover:text-t1'}"
             onclick={() => setAppearance(mode as AppearanceMode)}
           >{mode}</button>
         {/each}
@@ -205,11 +205,11 @@
 
     <!-- Theme -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Theme</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Theme</h2>
       <div class="flex flex-wrap gap-2">
         {#each availableThemes as themeName (themeName)}
           <button
-            class="px-3 py-1.5 rounded-lg text-[12px] font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-primary-500/15 text-primary-500 ring-1 ring-primary-500/30' : 'bg-surface-200 dark:bg-surface-600 text-text-2 hover:text-text-1'}"
+            class="px-3 py-1.5 rounded-lg text-[12px] font-medium capitalize transition-colors {config.appearance.theme === themeName ? 'bg-accent/15 text-accent ring-1 ring-accent/30' : 'bg-panel-hi text-text-2 hover:text-t1'}"
             onclick={() => updateSettings({ appearance: { ...config.appearance, theme: themeName } })}
           >{themeName}</button>
         {/each}
@@ -220,45 +220,45 @@
 
     <!-- Font Size -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Font Size</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Font Size</h2>
       <div class="flex items-center gap-3">
         <button
-          class="rounded border border-border px-3 py-1.5 text-sm text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600"
+          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi "
           onclick={() => setFontSize(config.terminal.font_size - 1)}
         >−</button>
-        <span class="text-lg font-mono text-text-1 w-8 text-center">{config.terminal.font_size}</span>
+        <span class="text-lg font-mono text-t1 w-8 text-center">{config.terminal.font_size}</span>
         <button
-          class="rounded border border-border px-3 py-1.5 text-sm text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600"
+          class="rounded border border-border px-3 py-1.5 text-sm text-t1 hover:bg-panel-hi "
           onclick={() => setFontSize(config.terminal.font_size + 1)}
         >+</button>
-        <span class="text-xs text-text-1">px (8–32)</span>
+        <span class="text-xs text-t1">px (8–32)</span>
       </div>
     </section>
 
     <!-- Font Family -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Font Family</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Font Family</h2>
       <Select
         items={fontDropdownItems}
         value={config.terminal.font_family}
         onValueChange={(v) => updateSettings({ terminal: { ...config.terminal, font_family: v } })}
         placeholder="Search fonts…"
       />
-      <p class="text-xs text-text-1" style="font-family: '{config.terminal.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
+      <p class="text-xs text-t1" style="font-family: '{config.terminal.font_family}', monospace">The quick brown fox jumps over the lazy dog</p>
     </section>
 
     <!-- Option as Meta (macOS only) -->
     {#if IS_MAC}
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Option as Meta</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Option as Meta</h2>
       <label class="flex items-center gap-3 cursor-pointer">
         <input
           type="checkbox"
           checked={config.terminal.option_as_meta}
           onchange={(e) => updateSettings({ terminal: { ...config.terminal, option_as_meta: e.currentTarget.checked } })}
-          class="w-4 h-4 rounded border-border text-primary-500 focus:ring-primary-500"
+          class="w-4 h-4 rounded border-border text-accent focus:ring-accent"
         />
-        <span class="text-sm text-text-1">Send Option key as Meta/Escape (required for tmux Alt-key bindings)</span>
+        <span class="text-sm text-t1">Send Option key as Meta/Escape (required for tmux Alt-key bindings)</span>
       </label>
     </section>
     {/if}
@@ -268,18 +268,18 @@
     {#if activeTab === "Models"}
     <!-- Providers -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Providers</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Providers</h2>
       <div class="space-y-3">
         {#each Object.entries(config.providers) as [key, provider] (key)}
           <div class="rounded-lg border border-border p-4 space-y-2">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
-                <span class="text-sm font-medium text-text-1">{key}</span>
+                <span class="text-sm font-medium text-t1">{key}</span>
                 {#if config.default_provider === key}
-                  <span class="text-xs bg-primary-500/20 text-primary-700 dark:text-primary-300 px-2 py-0.5 rounded">default</span>
+                  <span class="text-xs bg-accent/20 text-accent px-2 py-0.5 rounded">default</span>
                 {:else}
                   <button
-                    class="text-xs text-text-3 hover:text-primary-500"
+                    class="text-xs text-t3 hover:text-accent"
                     onclick={() => setDefaultProvider(key)}
                   >set as default</button>
                 {/if}
@@ -311,7 +311,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
+              <label class="text-xs text-text-2 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
               <Input
                 value={provider.prompt_command || ""}
                 onchange={(e) => updateProvider(key, "prompt_command", e.currentTarget.value)}
@@ -321,7 +321,7 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
+              <label class="text-xs text-text-2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
               <Input
                 value={provider.autonomous_prompt_template || ""}
                 onchange={(e) => updateProvider(key, "autonomous_prompt_template", e.currentTarget.value)}
@@ -334,7 +334,7 @@
       </div>
 
       {#if showAddProvider}
-        <div class="rounded-lg border border-primary-300 dark:border-primary-700 p-4 space-y-2">
+        <div class="rounded-lg border border-accent p-4 space-y-2">
           <div class="space-y-1">
             <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="text-xs text-text-2">Name</label>
@@ -363,19 +363,19 @@
           </div>
           <div class="flex gap-2">
             <button
-              class="px-3 py-1.5 rounded text-sm font-medium bg-primary-500 text-primary-50 hover:bg-primary-600 disabled:opacity-50"
+              class="px-3 py-1.5 rounded text-sm font-medium bg-accent text-on-accent hover:opacity-90 disabled:opacity-50"
               onclick={addProvider}
               disabled={!newProviderName || !newProviderCommand}
             >Add</button>
             <button
-              class="px-3 py-1.5 rounded text-sm font-medium bg-surface-200 dark:bg-surface-600 text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600"
+              class="px-3 py-1.5 rounded text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi "
               onclick={() => { showAddProvider = false; }}
             >Cancel</button>
           </div>
         </div>
       {:else}
         <button
-          class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-600 text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600"
+          class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi "
           onclick={() => { showAddProvider = true; }}
         >+ Add Provider</button>
       {/if}
@@ -386,33 +386,33 @@
     {#if activeTab === "Task Management"}
     <!-- PR Integration -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Pull Request Integration</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Pull Request Integration</h2>
       <div class="space-y-1">
         <!-- svelte-ignore a11y_label_has_associated_control -->
-        <label class="text-xs text-text-2 flex items-center gap-1">PR status command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Command to check PR status for a branch. Must output JSON with "url" and "state" (open/merged/closed). Non-zero exit = no PR. Variable: {"{branch}"}</span></span></label>
+        <label class="text-xs text-text-2 flex items-center gap-1">PR status command <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Command to check PR status for a branch. Must output JSON with "url" and "state" (open/merged/closed). Non-zero exit = no PR. Variable: {"{branch}"}</span></span></label>
         <Input value={config.pr_status || ""} onchange={(e) => updateSettings({ pr_status: e.currentTarget.value || null } as Partial<AppConfig>)} class="font-mono" placeholder={"gh pr view {branch} --json url,state,isDraft"} />
       </div>
     </section>
 
     <!-- Task Manager -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Task Manager</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Task Manager</h2>
       {#if taskManagement}
         <div class="rounded-lg border border-border p-4 space-y-2">
             <!-- Templates -->
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-text-2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate("branch", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-text-2 flex items-center gap-1">Session name template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Display name shown in sidebar and tab bar. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.name || "{key:upper}: {title}"} onchange={(e) => updateTmTemplate("name", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-text-2 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-text-2 flex items-center gap-1">Prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Initial prompt sent to the agent via prompt_command. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.prompt || "Implement task {key}: {title}\n\n{description}"} onchange={(e) => updateTmTemplate("prompt", e.currentTarget.value)} class="font-mono" />
             </div>
 
@@ -420,7 +420,7 @@
             {#each [["on_start", "On start", "in_progress", "Fires when a session is created from this task."], ["on_notify", "On notify", "in_review", "Fires when the agent signals idle (task complete notification)."], ["on_restart", "On restart", "in_progress", "Fires when an exited task-linked session is restarted."], ["on_complete", "On complete", "done", "Fires when a task-linked session is archived or deleted."], ["on_pr_open", "On PR open", "in_review", "Fires when a pull request is opened for this session's branch."], ["on_pr_merge", "On PR merge", "done", "Fires when the pull request is merged."]] as [hookKey, label, defaultVal, desc]}
               <div class="space-y-1">
                 <!-- svelte-ignore a11y_label_has_associated_control -->
-                <label class="text-xs text-text-2 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">{desc}</span></span></label>
+                <label class="text-xs text-text-2 flex items-center gap-1">{label} → move to <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">{desc}</span></span></label>
                 <Input value={(taskManagement as any)[hookKey]?.move_to || defaultVal} onchange={(e) => updateTmHook(hookKey, e.currentTarget.value)} class="font-mono" />
               </div>
             {/each}
@@ -428,7 +428,7 @@
             <!-- Auto-dispatch -->
             <div class="mt-3 pt-3 border-t border-border space-y-2">
               <div class="flex items-center gap-2">
-                <label class="text-xs font-medium text-text-1 flex items-center gap-1">
+                <label class="text-xs font-medium text-t1 flex items-center gap-1">
                   <input type="checkbox" class="rounded" checked={!!taskManagement.auto_dispatch} onchange={(e) => {
                     const tm = { ...config.task_management };
                     if ((e.currentTarget as HTMLInputElement).checked) {
@@ -440,7 +440,7 @@
                   }} />
                   Auto-dispatch
                 </label>
-                <span class="text-[10px] text-text-3">Automatically spawn sessions for tasks</span>
+                <span class="text-[10px] text-t3">Automatically spawn sessions for tasks</span>
               </div>
               {#if taskManagement.auto_dispatch}
                 <div class="grid grid-cols-2 gap-2">
@@ -461,14 +461,14 @@
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
-                  <label class="text-xs text-text-2 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
+                  <label class="text-xs text-text-2 flex items-center gap-1">Provider <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Which agent to use for auto-dispatched sessions. Leave empty to use default provider.</span></span></label>
                   <Input value={taskManagement.auto_dispatch.provider || ""} onchange={(e) => {
                     updateAutoDispatch({ provider: e.currentTarget.value || undefined });
                   }} class="font-mono" placeholder={config.default_provider} />
                 </div>
                 <div class="space-y-1">
                   <!-- svelte-ignore a11y_label_has_associated_control -->
-                  <label class="text-xs text-text-2 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-surface-700 dark:bg-surface-200 text-surface-50 dark:text-text-1 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
+                  <label class="text-xs text-text-2 flex items-center gap-1">Terminal states <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-56 whitespace-normal rounded bg-panel-hi dark:bg-panel-hi text-t3 dark:text-t1 px-2 py-1 text-[10px]">Comma-separated. Tasks in these states are considered finished and won't be dispatched. Running sessions are killed if their task enters a terminal state.</span></span></label>
                   <Input value={(taskManagement.auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
                     updateAutoDispatch({ terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) });
                   }} class="font-mono" placeholder="done, cancelled" />
@@ -479,18 +479,18 @@
 
           <button class="px-4 py-2 rounded-md text-sm font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-900/50" onclick={() => updateSettings({ task_management: null } as Partial<AppConfig>)}>Disable Task Management</button>
       {:else}
-        <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-600 text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600" onclick={enableTaskManagement}>Enable Task Management</button>
+        <button class="px-4 py-2 rounded-md text-sm font-medium bg-panel-hi text-t1 hover:bg-panel-hi " onclick={enableTaskManagement}>Enable Task Management</button>
       {/if}
     </section>
     {/if}
 
     {#if activeTab === "More"}
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Session Backend</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Session Backend</h2>
       <div class="flex gap-2">
         {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon" }] as opt (opt.value)}
           <button
-            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-primary-500 text-primary-50' : 'bg-surface-200 dark:bg-surface-600 text-text-1 hover:bg-surface-200 dark:hover:bg-surface-600'}"
+            class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi '}"
             onclick={() => setSessionBackend(opt.value)}
           >{opt.label}</button>
         {/each}
@@ -508,14 +508,14 @@
     </section>
 
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Vim Mode</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Vim Mode</h2>
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-text-1">Enable vim keybindings</p>
-          <p class="text-xs text-text-3">Full vim emulation in the code editor (motions, visual mode, ex commands)</p>
+          <p class="text-sm text-t1">Enable vim keybindings</p>
+          <p class="text-xs text-t3">Full vim emulation in the code editor (motions, visual mode, ex commands)</p>
         </div>
         <button
-          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-primary-500' : 'bg-surface-300 dark:bg-surface-700'}"
+          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-accent' : 'bg-panel-hi '}"
           onclick={() => setVimMode(!vimEnabled)}
           role="switch"
           aria-checked={vimEnabled}
@@ -526,14 +526,14 @@
     </section>
 
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Auto-open Review</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Auto-open Review</h2>
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-text-1">Auto-open review when agent finishes</p>
-          <p class="text-xs text-text-3">Automatically open the Review tab when the active session's agent stops and has changes.</p>
+          <p class="text-sm text-t1">Auto-open review when agent finishes</p>
+          <p class="text-xs text-t3">Automatically open the Review tab when the active session's agent stops and has changes.</p>
         </div>
         <button
-          class="w-10 h-5 rounded-full transition-colors {(config.auto_open_review ?? true) ? 'bg-primary-500' : 'bg-surface-300 dark:bg-surface-700'}"
+          class="w-10 h-5 rounded-full transition-colors {(config.auto_open_review ?? true) ? 'bg-accent' : 'bg-panel-hi '}"
           onclick={() => updateSettings({ auto_open_review: !(config.auto_open_review ?? true) } as Partial<AppConfig>)}
           role="switch"
           aria-checked={config.auto_open_review ?? true}
@@ -544,7 +544,7 @@
     </section>
 
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Projects Base Path</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Projects Base Path</h2>
       <div class="flex gap-2">
         <Input
           value={config.projects_base_path ?? ""}
@@ -554,16 +554,16 @@
         />
         <Button type="button" onclick={pickProjectsBasePath}>Browse</Button>
       </div>
-      <p class="text-xs text-text-3">Default directory for the project file picker and path pre-fill.</p>
+      <p class="text-xs text-t3">Default directory for the project file picker and path pre-fill.</p>
     </section>
 
     <!-- CLI -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">CLI</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">CLI</h2>
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-text-1">Install <code class="text-xs bg-surface-200 dark:bg-surface-700 px-1 rounded">planeai-cli</code> in PATH</p>
-          <p class="text-xs text-text-3">Creates a symlink at /usr/local/bin/planeai-cli</p>
+          <p class="text-sm text-t1">Install <code class="text-xs bg-panel-hi  px-1 rounded">planeai-cli</code> in PATH</p>
+          <p class="text-xs text-t3">Creates a symlink at /usr/local/bin/planeai-cli</p>
         </div>
         {#if cliInstalled}
           <Button type="button" onclick={installCli}>Reinstall</Button>
@@ -575,11 +575,11 @@
 
     <!-- Logs -->
     <section class="space-y-3">
-      <h2 class="text-[11px] font-semibold text-text-3 uppercase tracking-[.05em]">Logs</h2>
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Logs</h2>
       <div class="flex items-center justify-between">
         <div>
-          <p class="text-sm text-text-1">Application logs</p>
-          <p class="text-xs text-text-3">Open the folder containing log files for debugging.</p>
+          <p class="text-sm text-t1">Application logs</p>
+          <p class="text-xs text-t3">Open the folder containing log files for debugging.</p>
         </div>
         <Button type="button" onclick={openLogFolder}>Open Logs Folder</Button>
       </div>

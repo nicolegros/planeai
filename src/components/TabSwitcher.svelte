@@ -18,10 +18,10 @@
   const taskStatuses = $derived(taskStore.getTaskStatuses());
 
   const statusDotColors: Record<string, string> = {
-    todo: "bg-blue-500",
-    in_progress: "bg-amber-500",
-    in_review: "bg-green-500",
-    done: "bg-purple-500",
+    todo: "bg-t3",
+    in_progress: "bg-accent",
+    in_review: "bg-status-review",
+    done: "bg-status-running",
   };
 
   function getSession(id: string) {
@@ -34,25 +34,21 @@
 </script>
 
 <div class="absolute inset-0 flex items-center justify-center z-20">
-  <div class="rounded-lg border border-surface-200 bg-surface-100 p-2 w-[32rem] max-h-screen overflow-y-auto shadow-lg dark:border-surface-800 dark:bg-surface-950">
+  <div class="w-[512px] max-w-[84%] bg-panel border border-border-s rounded-xl shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] p-2">
     {#each mruSessionIds as id, i (id)}
       {@const session = getSession(id)}
       {#if session}
-        <div class="px-3 py-2 rounded text-sm flex items-center gap-2 {i === selectedIndex ? 'bg-primary-500 text-surface-50' : 'text-surface-700 dark:text-surface-300'}">
+        <div class="flex items-center gap-[10px] h-[38px] px-3 rounded-lg {i === selectedIndex ? 'bg-accent' : ''}">
           {#if session.task_key && taskStatuses[session.task_key]}
-            <span class="shrink-0 size-2 rounded-full {statusDotColors[taskStatuses[session.task_key]] ?? 'bg-surface-400'}"></span>
+            <span class="shrink-0 size-[6px] rounded-full {statusDotColors[taskStatuses[session.task_key]] ?? 'bg-t3'}"></span>
           {/if}
-          {#if session.task_key}<span class="shrink-0 text-[10px] font-medium {i === selectedIndex ? 'text-surface-200' : 'text-primary-600 dark:text-primary-400'}">{session.task_key}</span>{/if}
-          <span class="font-medium truncate">{session.name || session.branch}</span>
-          <span class="ml-auto shrink-0 text-xs {i === selectedIndex ? 'text-surface-200' : 'text-surface-600 dark:text-surface-400'}">{getProjectName(session.project_id)}</span>
+          {#if session.task_key}<span class="shrink-0 font-mono text-[10px] font-medium {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{session.task_key}</span>{/if}
+          <span class="text-[13px] font-medium truncate {i === selectedIndex ? 'text-on-accent' : 'text-t1'}">{session.name || session.branch}</span>
+          <span class="ml-auto shrink-0 text-[11.5px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{getProjectName(session.project_id)}</span>
           {#if agentStates[id] === 'Busy'}
-            <span class="shrink-0 size-3.5 animate-spin {i === selectedIndex ? 'text-surface-200' : 'text-surface-500'}">
-              <LoaderCircle class="size-3.5" />
-            </span>
+            <span class="shrink-0 size-3 rounded-full border-2 border-border animate-spin {i === selectedIndex ? 'border-t-on-accent' : 'border-t-t2'}"></span>
           {:else if agentStates[id] === 'Idle'}
-            <span class="shrink-0 size-3.5 animate-pulse text-amber-500">
-              <Lightbulb class="size-3.5" />
-            </span>
+            <Lightbulb class="shrink-0 size-[14px] text-status-review animate-pulse" />
           {/if}
         </div>
       {/if}

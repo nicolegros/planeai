@@ -265,16 +265,16 @@
   <!-- Task list: project > status -->
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3">
     {#if projects.length === 0}
-      <p class="text-xs text-surface-600 dark:text-surface-400 text-center mt-8">No projects</p>
+      <p class="text-xs text-t2 text-center mt-8">No projects</p>
     {:else if Object.values(tasksByProject).every(t => t.length === 0) && !loading}
-      <p class="text-xs text-surface-600 dark:text-surface-400 text-center mt-8">No tasks found</p>
+      <p class="text-xs text-t2 text-center mt-8">No tasks found</p>
     {:else}
       {#each projects as project (project.path)}
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {#if projectTasks.length > 0}
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
-            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}</h3>
+            <h3 class="px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-wider truncate flex items-center gap-1">{project.name}</h3>
             {#each statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks)) as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
@@ -283,7 +283,7 @@
                 {@const isSectionSelected = getActiveZone() === 'sidebar' && sectionNavIdx === getSelectedIndex()}
                 <div class="ml-1">
                   <button
-                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-surface-500'} hover:opacity-80 rounded-md {isSectionSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-t3'} hover:opacity-80 rounded-md {isSectionSelected ? 'ring-1 ring-accent/50' : ''}"
                     onclick={() => toggleSection(sectionKey)}
                   >
                     {#if collapsedSections[sectionKey]}
@@ -304,20 +304,20 @@
                         <li>
                           <button
                             class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors select-none
-                              {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                              {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                              {isActive ? 'bg-accent-bg text-t1 font-medium' : 'text-t1 hover:bg-panel-hi'}
+                              {isTaskSelected ? 'ring-1 ring-accent/50' : ''}"
                             onclick={() => handleClick(task, project.path)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >
                             {#if task.parent_key}
-                              <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
+                              <span class="shrink-0 text-[10px] text-t3 dark:text-t3">{task.parent_key} ›</span>
                             {/if}
-                            <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
+                            <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-t3' : 'text-accent'}">{task.key}</span>
                             <span class="truncate">{task.title}</span>
                             {#if sessionForTask(task.key)}
                               {@const linked = sessionForTask(task.key)!}
                               {#if agentStates[linked.id] === 'Busy'}
-                                <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
+                                <span class="ml-auto shrink-0 size-3.5 animate-spin text-t3" title="Agent working">
                                   <LoaderCircle class="size-3.5" />
                                 </span>
                               {:else if agentStates[linked.id] === 'Idle'}
@@ -360,7 +360,7 @@
     onkeydown={(e) => { if (e.key === "Escape") { e.stopPropagation(); modalMode = null; focusTerminal(); } if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
     use:autofocusForm
   >
-    <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
+    <h2 class="text-lg font-semibold text-t1">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
 
     {#if modalMode === "create" && projects.length > 1}
       <div class="space-y-1">
@@ -383,7 +383,7 @@
       <textarea
         bind:value={formDescription}
         placeholder="Optional description"
-        class="w-full rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 placeholder:text-surface-400 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50 dark:placeholder:text-surface-500 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto"
+        class="w-full rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto"
         rows="3"
         oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
         use:autoResize
@@ -392,7 +392,7 @@
 
     <div class="space-y-1">
       <Label>Priority</Label>
-      <input type="number" bind:value={formPriority} class="w-20 rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50" />
+      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1" />
     </div>
 
     <div class="space-y-1">

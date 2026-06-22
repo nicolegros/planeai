@@ -185,17 +185,17 @@
   <!-- Mode toggle -->
   <!-- svelte-ignore a11y_autofocus -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div class="flex rounded-lg bg-surface-200 dark:bg-surface-600 p-0.5" role="toolbar" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
+  <div class="flex rounded-lg bg-panel-hi p-0.5" role="toolbar" tabindex="0" autofocus onkeydown={(e) => { if (e.key === "t") { e.preventDefault(); mode = "task"; } if (e.key === "m") { e.preventDefault(); mode = "manual"; } }}>
     <button
       type="button"
       tabindex={-1}
-      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'manual' ? 'bg-primary-500 text-white' : 'text-text-2 hover:text-text-1'}"
+      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'manual' ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
       onclick={() => (mode = "manual")}
     >Manual <span class="font-mono text-[10px] opacity-60">M</span></button>
     <button
       type="button"
       tabindex={-1}
-      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'task' ? 'bg-primary-500 text-white' : 'text-text-2 hover:text-text-1'}"
+      class="flex-1 px-3 py-1.5 text-[12px] font-medium rounded-md transition-colors {mode === 'task' ? 'bg-accent text-on-accent' : 'text-t2 hover:text-t1'}"
       onclick={() => (mode = "task")}
     >From task <span class="font-mono text-[10px] opacity-60">T</span></button>
   </div>
@@ -247,15 +247,15 @@
   >
     <div class="flex items-center gap-4">
       <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
-      <span class="font-mono text-[10px] text-text-3 bg-surface-200 dark:bg-surface-600 px-1 rounded">W</span>
+      <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1 rounded">W</span>
       <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
-      <span class="font-mono text-[10px] text-text-3 bg-surface-200 dark:bg-surface-600 px-1 rounded">A</span>
+      <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1 rounded">A</span>
     </div>
     {#if providerKeys.length > 1}
       <div class="flex items-center gap-2">
-        <span class="text-[11px] text-text-3">Provider</span>
-        <span class="text-[12px] text-text-1 font-medium">{selectedProvider || config.default_provider}</span>
-        <span class="font-mono text-[10px] text-text-3 bg-surface-200 dark:bg-surface-600 px-1 rounded">P</span>
+        <span class="text-[11px] text-t3">Provider</span>
+        <span class="text-[12px] text-t1 font-medium">{selectedProvider || config.default_provider}</span>
+        <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1 rounded">P</span>
       </div>
     {/if}
   </div>
@@ -274,7 +274,7 @@
         placeholder={defaultBranchName || "feat/my-feature"}
       />
       {#if worktreeBranch}
-        <p class="text-xs text-text-3">Branch: <span class="font-medium font-mono text-text-1">{worktreeBranch}</span></p>
+        <p class="text-xs text-t3">Branch: <span class="font-medium font-mono text-t1">{worktreeBranch}</span></p>
       {/if}
     </div>
   {:else}
@@ -288,23 +288,23 @@
         <Label>Base branch</Label>
         <Select items={branches} bind:value={baseBranchValue} onkeydown={metaEnter} placeholder="main" emptyText="No branches found" />
       </div>
-      <p class="text-xs text-text-3">Will create new branch: <span class="font-medium font-mono text-text-1">{branch}</span> from <span class="font-medium font-mono text-text-1">{baseBranch}</span></p>
+      <p class="text-xs text-t3">Will create new branch: <span class="font-medium font-mono text-t1">{branch}</span> from <span class="font-medium font-mono text-t1">{baseBranch}</span></p>
     {/if}
   {/if}
 
   {#if branchAlreadyUsed}
-    <p class="text-xs text-warning-400">Another session is using this branch — switching branches will affect it.</p>
+    <p class="text-xs text-status-review">Another session is using this branch — switching branches will affect it.</p>
   {/if}
 
   {#if error}
-    <p class="text-xs text-error-400">{error}</p>
+    <p class="text-xs text-status-exited">{error}</p>
   {/if}
 
   <!-- Footer with mode indicator -->
   <div class="flex items-center justify-between pt-2 pb-4 border-t border-border mt-3">
     <div class="flex items-center gap-2">
-      <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-500 font-medium">INSERT</span>
-      <span class="text-[10px] text-text-3">esc → normal mode</span>
+      <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+      <span class="text-[10px] text-t3">esc → normal mode</span>
     </div>
     <div class="flex gap-2">
       <Button type="button" onclick={onCancel}>Cancel</Button>
