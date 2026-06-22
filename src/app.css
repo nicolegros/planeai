@@ -37,6 +37,9 @@
     color: var(--theme-text-1);
     font-family: var(--font-sans);
   }
+  :focus-visible {
+    outline-color: var(--color-accent);
+  }
 }
 
 /* Border color override is in overrides.css (imported after tailwind processing) */

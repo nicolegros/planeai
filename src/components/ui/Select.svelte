@@ -62,7 +62,7 @@
     autocapitalize="off"
     spellcheck={false}
     data-form-type="other"
-    class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 {className}"
+    class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent {className}"
   />
   <Combobox.Portal>
     <Combobox.Content loop bind:ref={contentRef} class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-border bg-panel shadow-lg" sideOffset={4}>

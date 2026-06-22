@@ -383,7 +383,7 @@
       <textarea
         bind:value={formDescription}
         placeholder="Optional description"
-        class="w-full rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto"
+        class="w-full rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
         rows="3"
         oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
         use:autoResize
@@ -392,7 +392,7 @@
 
     <div class="space-y-1">
       <Label>Priority</Label>
-      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1" />
+      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
     <div class="space-y-1">
