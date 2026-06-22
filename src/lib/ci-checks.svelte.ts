@@ -64,6 +64,16 @@ export function startPolling(sessions: Session[]): () => void {
 
 export function updateSessions(sessions: Session[]): void {
   activeSessions = sessions;
+  // Clear concluded checks so next poll re-fetches (handles agent push → new CI run)
+  let invalidated = false;
+  for (const id of Object.keys(ciChecks)) {
+    const checks = ciChecks[id];
+    if (checks && checks.length > 0 && checks.every((c) => c.conclusion !== null)) {
+      delete ciChecks[id];
+      invalidated = true;
+    }
+  }
+  if (invalidated) ciChecks = { ...ciChecks };
 }
 
 function stopPolling(): void {
@@ -74,7 +84,14 @@ function stopPolling(): void {
 }
 
 async function pollAll(): Promise<void> {
-  const targets = activeSessions.filter((s) => s.status === "active" && s.pr_url);
+  const targets = activeSessions.filter((s) => {
+    if (s.status !== "active" || !s.pr_url) return false;
+    const existing = ciChecks[s.id];
+    // Skip if all checks already concluded
+    if (existing && existing.length > 0 && existing.every((c) => c.conclusion !== null))
+      return false;
+    return true;
+  });
   if (targets.length === 0) return;
   const results = await Promise.allSettled(
     targets.map(async (s) => {
