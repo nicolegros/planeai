@@ -310,6 +310,16 @@
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
+{#snippet ciBadge(id: string)}
+  {#if getCiStatus(id) === 'passing'}
+    <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
+  {:else if getCiStatus(id) === 'failing'}
+    <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
+  {:else if getCiStatus(id) === 'running'}
+    <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
+  {/if}
+{/snippet}
+
 <aside class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
@@ -387,13 +397,7 @@
                         {#if orchestrator.getReviewReady()[session.id]}
                           <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
                         {/if}
-                        {#if getCiStatus(session.id) === 'passing'}
-                          <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
-                        {:else if getCiStatus(session.id) === 'failing'}
-                          <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
-                        {:else if getCiStatus(session.id) === 'running'}
-                          <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
-                        {/if}
+                        {@render ciBadge(session.id)}
                         {#if session.pr_url}
                           <button
                             class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
@@ -465,13 +469,7 @@
                               {:else if agentStates[linked.id] === 'Idle'}
                                 <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
                               {/if}
-                              {#if getCiStatus(linked.id) === 'passing'}
-                                <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
-                              {:else if getCiStatus(linked.id) === 'failing'}
-                                <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
-                              {:else if getCiStatus(linked.id) === 'running'}
-                                <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
-                              {/if}
+                              {@render ciBadge(linked.id)}
                               {#if linked.pr_url}
                                 <button
                                   class="shrink-0 size-3.5 {linked.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : 'text-green-600 dark:text-green-400'}"
