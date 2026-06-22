@@ -29,6 +29,7 @@
   import EditorTab from "./components/EditorTab.svelte";
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
+  import SharedDialog from "./components/ui/Dialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
@@ -441,30 +442,27 @@
     {/if}
 
     {#if showNewItemModal}
-      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }}>
-        <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50 bg-scrim" />
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-0 z-50 w-[268px] -translate-x-1/2 mt-[150px] rounded-[13px] border border-border-s bg-panel shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] outline-none overflow-hidden" onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
-            <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
-              <Dialog.Title class="text-[13px] font-semibold text-t1">New…</Dialog.Title>
-              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
-            </div>
-            <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-              <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
-                <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
-                <span class="flex-1 text-[13.5px] text-t1">Session</span>
-                <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
-              </button>
-              <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
-                <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
-                <span class="flex-1 text-[13.5px] text-t1">Task</span>
-                <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
+          <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
+            <span class="text-[13px] font-semibold text-t1">New…</span>
+            <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
+          </div>
+          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
+              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
+              <span class="flex-1 text-[13.5px] text-t1">Session</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
+              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
+              <span class="flex-1 text-[13.5px] text-t1">Task</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
+            </button>
+          </div>
+        </div>
+      </SharedDialog>
     {/if}
 
     {#if showLogViewer}
