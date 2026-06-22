@@ -81,11 +81,11 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <form
   bind:this={formEl}
-  class="rounded-lg border border-surface-200 bg-surface-50 p-6 w-80 space-y-4 shadow-lg dark:border-surface-700 dark:bg-surface-900"
+  class="rounded-lg border border-border bg-panel p-6 w-80 space-y-4 shadow-lg"
   onsubmit={(e) => { e.preventDefault(); submit(); }}
   onkeydown={handleKeydown}
 >
-  <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Add Project</h2>
+  <h2 class="text-lg font-semibold text-t1">Add Project</h2>
 
   <div class="space-y-1">
     <Label>Repository path</Label>

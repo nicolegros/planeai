@@ -44,7 +44,7 @@
   let commentType = $state<"line" | "hunk" | "file">("line");
   let cursorLine = $state(1);
   let selectionAnchor = $state<number | null>(null);
-  let commentInputEl: HTMLTextAreaElement | undefined;
+  let commentInputEl = $state<HTMLTextAreaElement | undefined>();
 
   // CodeView + Worker Pool
   let viewerRoot: HTMLElement;
@@ -648,6 +648,7 @@
       {#each files as file, i (file.path)}
         {@const fileCount = getFileCommentCount(sessionId, file.path)}
         {@const viewed = viewedFiles.has(file.path)}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
           <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">

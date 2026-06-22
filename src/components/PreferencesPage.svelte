@@ -519,10 +519,11 @@
           <p class="text-xs text-t3">Full vim emulation in the code editor (motions, visual mode, ex commands)</p>
         </div>
         <button
-          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-accent' : 'bg-panel-hi '}"
+          class="w-10 h-5 rounded-full transition-colors {vimEnabled ? 'bg-accent' : 'bg-panel-hi'}"
           onclick={() => setVimMode(!vimEnabled)}
           role="switch"
           aria-checked={vimEnabled}
+          aria-label="Toggle vim mode"
         >
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>
@@ -537,10 +538,11 @@
           <p class="text-xs text-t3">Automatically open the Review tab when the active session's agent stops and has changes.</p>
         </div>
         <button
-          class="w-10 h-5 rounded-full transition-colors {(config.auto_open_review ?? true) ? 'bg-accent' : 'bg-panel-hi '}"
+          class="w-10 h-5 rounded-full transition-colors {(config.auto_open_review ?? true) ? 'bg-accent' : 'bg-panel-hi'}"
           onclick={() => updateSettings({ auto_open_review: !(config.auto_open_review ?? true) } as Partial<AppConfig>)}
           role="switch"
           aria-checked={config.auto_open_review ?? true}
+          aria-label="Toggle auto-open review"
         >
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {(config.auto_open_review ?? true) ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>

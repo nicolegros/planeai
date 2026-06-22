@@ -160,7 +160,8 @@
 
     <!-- PR controls -->
     {#if prUrl}
-      <div class="relative flex items-center" onclick={(e) => e.stopPropagation()}>
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div class="relative flex items-center" role="presentation" onclick={(e) => e.stopPropagation()}>
         <button
           class="flex items-center gap-[7px] h-[25px] px-[9px] rounded-[7px] text-[11.5px] font-medium
             {isMerged ? 'bg-[rgba(188,140,255,0.18)] text-[#bc8cff]' : 'bg-[rgba(63,185,80,0.18)] text-status-running'}"

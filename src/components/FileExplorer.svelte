@@ -38,7 +38,7 @@
   let createValue = $state("");
   let previewPath = $state<string | null>(null);
   let unlisten: (() => void) | null = null;
-  let panelEl: HTMLElement;
+  let panelEl = $state<HTMLElement>();
 
   function flatten(nodes: TreeNode[]): TreeNode[] {
     const result: TreeNode[] = [];
@@ -269,8 +269,9 @@
   });
 
   $effect(() => {
-    if (visible && panelEl) {
-      requestAnimationFrame(() => panelEl.focus());
+    const el = panelEl;
+    if (visible && el) {
+      requestAnimationFrame(() => el.focus());
     }
   });
 
@@ -287,10 +288,11 @@
 </script>
 
 {#if visible}
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<aside
+<div
   bind:this={panelEl}
   tabindex="-1"
+  role="toolbar"
+  aria-label="File explorer"
   class="relative shrink-0 flex flex-col border-l border-border bg-canvas overflow-hidden outline-none"
   style:width="{panelWidth}px"
   onclick={onFocus}
@@ -304,7 +306,7 @@
   </div>
 
   <!-- Tree -->
-  <nav class="flex-1 overflow-y-auto py-1 text-sm" role="tree">
+  <div class="flex-1 overflow-y-auto py-1 text-sm" role="tree">
     {#each flatList as node, i (node.entry.path)}
       {@const indent = depth(node)}
       {@const isSelected = i === selectedIndex}
@@ -332,6 +334,7 @@
           ondblclick={() => pinEntry(node)}
           oncontextmenu={(e) => showContextMenu(e, node)}
           role="treeitem"
+          aria-selected={isSelected}
           aria-expanded={node.entry.is_dir ? node.expanded : undefined}
         >
           <!-- Expand chevron for dirs -->
@@ -370,8 +373,8 @@
         />
       </div>
     {/if}
-  </nav>
-</aside>
+  </div>
+</div>
 {/if}
 
 {#if contextMenu}
