@@ -15,11 +15,11 @@ pub mod local;
 
 #[cfg(not(windows))]
 #[path = "platform_unix.rs"]
-pub(crate) mod platform;
+pub mod platform;
 
 #[cfg(windows)]
 #[path = "platform_windows.rs"]
-pub(crate) mod platform;
+pub mod platform;
 
 pub use config::{LocalPtyConfig, QueuePolicy};
 pub use diagnostics::{DiagnosticsSnapshot, PipelineDiagnostics};

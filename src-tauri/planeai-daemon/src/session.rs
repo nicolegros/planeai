@@ -49,18 +49,14 @@ impl DaemonSession {
 
         // If the caller already wrapped in a shell (e.g. /bin/sh -c "real command"),
         // extract the real command to avoid double-wrapping.
-        let full_cmd = if (is_shell_wrapper(command) && args.len() == 2 && args[0] == "-c")
-            || (cfg!(windows)
-                && command.eq_ignore_ascii_case("cmd")
-                && args.len() == 2
-                && args[0].eq_ignore_ascii_case("/C"))
-        {
-            args[1].to_string()
-        } else if args.is_empty() {
-            command.to_string()
-        } else {
-            format!("{} {}", command, args.join(" "))
-        };
+        let full_cmd =
+            if let Some(inner) = planeai_pty::platform::unwrap_shell_command(command, args) {
+                inner
+            } else if args.is_empty() {
+                command.to_string()
+            } else {
+                format!("{} {}", command, args.join(" "))
+            };
 
         let mut env_vec: Vec<(String, String)> =
             vec![("TERM".to_string(), "xterm-256color".to_string())];
@@ -133,11 +129,6 @@ impl DaemonSession {
     pub fn diagnostics(&self) -> &Arc<PipelineDiagnostics> {
         self.session.diagnostics()
     }
-}
-
-/// Returns true if the command is a Unix shell wrapper (sh, bash, etc.)
-fn is_shell_wrapper(cmd: &str) -> bool {
-    matches!(cmd, "/bin/sh" | "sh" | "bash" | "/bin/bash")
 }
 
 // ─── DaemonPtySink ───────────────────────────────────────────────────────────
