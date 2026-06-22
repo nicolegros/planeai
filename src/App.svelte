@@ -282,20 +282,17 @@
     {/if}
 
     {#if showSessionForm}
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="New Session">
-      <div class="w-[452px] rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
-        <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
-        <SessionForm
-          {projects}
-          {sessions}
-          {taskPrefill}
-          currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-          onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
-          onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
-        />
-      </div>
-    </div>
+    <SharedDialog open={true} onOpenChange={(v) => { if (!v) { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); } }} title="New Session" class="w-[452px] rounded-xl border-border-s shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden" preventEscapeClose>
+      <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
+      <SessionForm
+        {projects}
+        {sessions}
+        {taskPrefill}
+        currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
+        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
+      />
+    </SharedDialog>
     {/if}
 
     {#if getCycleState().isVisible}
