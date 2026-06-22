@@ -6,7 +6,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
+  import { Button, Input, Label, ContextMenu, Select } from "./ui";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
@@ -364,7 +364,9 @@
 {/if}
 
 <!-- Modal for create/edit -->
-<Dialog open={modalMode !== null} onOpenChange={(v) => { if (!v) { modalMode = null; focusTerminal(); } }} title={modalMode === "create" ? "Create Task" : "Edit Task"} class="w-[36rem] p-6" preventEscapeClose>
+{#if modalMode !== null}
+<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
+  <div class="w-[36rem] p-6 rounded-lg border border-border bg-panel shadow-lg">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none">
@@ -431,4 +433,6 @@
     </div>
   </form>
   </div>
-</Dialog>
+</div>
+</div>
+{/if}

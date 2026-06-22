@@ -280,17 +280,21 @@
       </div>
     {/if}
 
-    <SharedDialog open={showSessionForm} onOpenChange={(v) => { if (!v) showSessionForm = false; }} title="New Session" class="w-[452px] rounded-xl border-border-s shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden" preventEscapeClose>
-      <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
-      <SessionForm
-        {projects}
-        {sessions}
-        {taskPrefill}
-        currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
-        onCancel={() => { showSessionForm = false; taskPrefill = null; }}
-      />
-    </SharedDialog>
+    {#if showSessionForm}
+    <div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="New Session">
+      <div class="w-[452px] rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden">
+        <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
+        <SessionForm
+          {projects}
+          {sessions}
+          {taskPrefill}
+          currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
+          onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+          onCancel={() => { showSessionForm = false; taskPrefill = null; }}
+        />
+      </div>
+    </div>
+    {/if}
 
     {#if getCycleState().isVisible}
       <TabSwitcher mruSessionIds={getCycleState().cycleList} selectedIndex={getCycleState().index} />
