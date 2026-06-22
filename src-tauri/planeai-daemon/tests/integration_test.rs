@@ -28,8 +28,7 @@ fn spawn_echo_captures_output() {
 
 #[test]
 fn write_input_to_cat() {
-    let session =
-        DaemonSession::spawn("test-cat", "/bin/cat", &[], None, None, 4096).unwrap();
+    let session = DaemonSession::spawn("test-cat", "/bin/cat", &[], None, None, 4096).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     session.write(b"ping\n").unwrap();
     std::thread::sleep(Duration::from_millis(500));
@@ -44,8 +43,7 @@ fn write_input_to_cat() {
 
 #[test]
 fn resize_does_not_error() {
-    let session =
-        DaemonSession::spawn("test-resize", "/bin/cat", &[], None, None, 4096).unwrap();
+    let session = DaemonSession::spawn("test-resize", "/bin/cat", &[], None, None, 4096).unwrap();
     session.resize(120, 40).unwrap();
     session.kill().unwrap();
 }
@@ -70,8 +68,7 @@ fn eof_detection() {
 
 #[test]
 fn kill_terminates_process() {
-    let session =
-        DaemonSession::spawn("test-kill", "sleep", &["999"], None, None, 4096).unwrap();
+    let session = DaemonSession::spawn("test-kill", "sleep", &["999"], None, None, 4096).unwrap();
     std::thread::sleep(Duration::from_millis(200));
     assert!(session.is_alive());
     session.kill().unwrap();
@@ -174,9 +171,15 @@ fn spawn_diagnostics_available() {
 
 #[test]
 fn spawn_buffer_snapshot_works() {
-    let session =
-        DaemonSession::spawn("test-pty-snap", "echo", &["snapshot-test"], None, None, 4096)
-            .unwrap();
+    let session = DaemonSession::spawn(
+        "test-pty-snap",
+        "echo",
+        &["snapshot-test"],
+        None,
+        None,
+        4096,
+    )
+    .unwrap();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
@@ -198,9 +201,15 @@ fn spawn_durable_log_written() {
     let tmp = tempfile::TempDir::new().unwrap();
     std::env::set_var("PLANEAI_SESSION_LOG_DIR", tmp.path());
 
-    let session =
-        DaemonSession::spawn("test-pty-log", "echo", &["log-test-output"], None, None, 4096)
-            .unwrap();
+    let session = DaemonSession::spawn(
+        "test-pty-log",
+        "echo",
+        &["log-test-output"],
+        None,
+        None,
+        4096,
+    )
+    .unwrap();
 
     // Wait for output and exit
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
