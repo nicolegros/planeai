@@ -36,10 +36,6 @@ pub struct Config {
     pub max_mounted_terminals: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_links: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local_pty_core: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daemon_pty_core: Option<String>,
     /// Directory for durable session logs. Env var PLANEAI_SESSION_LOG_DIR takes priority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_log_dir: Option<String>,
@@ -261,8 +257,6 @@ impl Default for Config {
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
-            local_pty_core: None,
-            daemon_pty_core: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: Some(true),
@@ -564,8 +558,6 @@ mod tests {
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
-            local_pty_core: None,
-            daemon_pty_core: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: Some(true),

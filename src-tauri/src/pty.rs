@@ -1,6 +1,5 @@
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -70,65 +69,6 @@ const FLUSH_COALESCE: Duration = Duration::from_millis(4);
 const FLUSH_MAX_IDLE: Duration = Duration::from_millis(50);
 const READ_BUF: usize = 16 * 1024;
 
-// ─── Local PTY Backend ───────────────────────────────────────────────────────
-
-struct PtyHandle {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
-    flow: Arc<FlowControl>,
-    cancelled: Arc<AtomicBool>,
-}
-
-impl Drop for PtyHandle {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
-
-struct LocalBackend {
-    handle: Mutex<PtyHandle>,
-}
-
-impl SessionBackend for LocalBackend {
-    fn write(&self, data: &[u8]) -> Result<(), String> {
-        let mut h = self.handle.lock().map_err(|e| e.to_string())?;
-        h.writer
-            .write_all(data)
-            .map_err(|e| format!("write failed: {e}"))
-    }
-
-    fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
-        let h = self.handle.lock().map_err(|e| e.to_string())?;
-        h.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("resize failed: {e}"))
-    }
-
-    fn pause(&self) -> Result<(), String> {
-        let h = self.handle.lock().map_err(|e| e.to_string())?;
-        h.flow.pause();
-        Ok(())
-    }
-
-    fn resume(&self) -> Result<(), String> {
-        let h = self.handle.lock().map_err(|e| e.to_string())?;
-        h.flow.resume();
-        Ok(())
-    }
-
-    fn detach(&self) {
-        if let Ok(h) = self.handle.lock() {
-            h.cancelled.store(true, Ordering::Release);
-        }
-    }
-}
-
 // ─── Daemon Backend ──────────────────────────────────────────────────────────
 
 struct DaemonBackend {
@@ -157,7 +97,7 @@ impl SessionBackend for DaemonBackend {
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
         let sid = self.session_id.clone();
         std::thread::spawn(move || {
-            use std::io::{Read, Write};
+            use std::io::Read;
             let app_dir = crate::paths::app_data_dir();
             let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
                 Ok(s) => s,
@@ -250,57 +190,22 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
-        // planeai-pty path for Shell targets when PLANEAI_LOCAL_PTY_CORE=planeai-pty
-        if let PtyTarget::Shell {
-            ref command,
-            ref args,
-            ref cwd,
-        } = target
-        {
-            if use_planeai_pty_core() {
-                let cancelled = Arc::new(AtomicBool::new(false));
-                let observer = self.observer.read().unwrap().clone();
-                let socket_path = self.socket_path.lock().unwrap().clone();
-                let backend = PlaneaiPtyBackend::spawn(
-                    session_id,
-                    command,
-                    args,
-                    cwd,
-                    dark_mode,
-                    app,
-                    on_data,
-                    cancelled,
-                    observer,
-                    socket_path.as_deref(),
-                )?;
-                let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-                if let Some(old) = sessions.get(session_id) {
-                    old.detach();
-                }
-                sessions.insert(session_id.to_string(), Box::new(backend));
-                return Ok(());
-            }
-        }
-
-        let pty_system = native_pty_system();
-
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("failed to open pty: {e}"))?;
-
-        let mut cmd = match &target {
+        // Resolve the command/args/cwd for the target
+        let (command, args, cwd) = match target {
+            PtyTarget::Shell { command, args, cwd } => (command, args, cwd),
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
-                    let target = format!("={}", tmux_name);
-                    let mut c = CommandBuilder::new(tmux::tmux_bin());
-                    c.args(["attach-session", "-t", &target]);
-                    c
+                    let tmux_bin = tmux::tmux_bin().to_string();
+                    let target_arg = format!("={}", tmux_name);
+                    (
+                        tmux_bin,
+                        vec!["attach-session".to_string(), "-t".to_string(), target_arg],
+                        std::env::current_dir()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                    )
                 }
                 #[cfg(windows)]
                 {
@@ -308,168 +213,29 @@ impl PtyManager {
                     return Err("tmux not available on Windows".to_string());
                 }
             }
-            PtyTarget::Shell { command, args, cwd } => {
-                let mut c = CommandBuilder::new(command);
-                c.args(args);
-                c.cwd(cwd);
-                c
-            }
             PtyTarget::Daemon { .. } => unreachable!(),
         };
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORFGBG", if dark_mode { "15;0" } else { "0;15" });
-        cmd.env("PLANEAI_SESSION_ID", session_id);
-        if let Some(sock) = self.socket_path.lock().unwrap().as_deref() {
-            cmd.env("PLANEAI_SOCKET", sock);
-        }
-
-        #[cfg(unix)]
-        {
-            let has_utf8 = |v: &str| {
-                let upper = v.to_ascii_uppercase();
-                upper.contains("UTF-8") || upper.contains("UTF8")
-            };
-            if !has_utf8(&std::env::var("LANG").unwrap_or_default()) {
-                cmd.env("LANG", "en_US.UTF-8");
-            }
-            if !has_utf8(&std::env::var("LC_CTYPE").unwrap_or_default()) {
-                cmd.env("LC_CTYPE", "en_US.UTF-8");
-            }
-        }
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("failed to spawn: {e}"))?;
-        drop(pair.slave);
-
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| format!("failed to get writer: {e}"))?;
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| format!("failed to get reader: {e}"))?;
 
         let cancelled = Arc::new(AtomicBool::new(false));
-
-        let pty_handle = PtyHandle {
-            master: pair.master,
-            writer,
-            child,
-            flow: Arc::new(FlowControl::new()),
-            cancelled: cancelled.clone(),
-        };
-
-        let flow_clone = pty_handle.flow.clone();
-
-        let backend: Box<dyn SessionBackend> = Box::new(LocalBackend {
-            handle: Mutex::new(pty_handle),
-        });
-
-        {
-            let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
-            if let Some(old) = sessions.get(session_id) {
-                old.detach();
-            }
-            sessions.insert(session_id.to_string(), backend);
-        }
-
-        // Shared buffer between reader and flusher threads
-        let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
-            Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
-        let done = Arc::new(AtomicBool::new(false));
-
-        // ── Reader thread ─────────────────────────────────────────────────
-        // Always drains the PTY to prevent the child process from stalling.
-        // Flow control is applied in the flusher thread (gating sends to frontend).
-        let pending_r = pending.clone();
         let observer = self.observer.read().unwrap().clone();
-        let sid = session_id.to_string();
-        let done_r = done.clone();
-        thread::spawn(move || {
-            let mut buf = [0u8; READ_BUF];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let (lock, cv) = &*pending_r;
-                        let mut g = lock.lock().unwrap();
-                        // Cap buffer at 1MB to bound memory when paused
-                        if g.len() + n > 1_048_576 {
-                            let excess = g.len() + n - 1_048_576;
-                            g.drain(..excess);
-                        }
-                        g.extend_from_slice(&buf[..n]);
-                        cv.notify_one();
-                        observer.on_output(&sid, n);
-                    }
-                    Err(_) => break,
-                }
-            }
-            done_r.store(true, Ordering::Release);
-            pending_r.1.notify_one();
-        });
-
-        // ── Flusher thread ────────────────────────────────────────────────
-        let pending_f = pending.clone();
-        let done_f = done;
-        let exit_key = session_id.to_string();
-        let app_flusher = app.clone();
-        let cancelled_f = cancelled;
-        let flow_f = flow_clone;
-        let capture_f = match (&self.capture_file, &self.capture_session) {
-            (Some(f), None) => Some(f.clone()),
-            (Some(f), Some(s)) if s == session_id => Some(f.clone()),
-            _ => None,
-        };
-        thread::spawn(move || {
-            let (lock, cv) = &*pending_f;
-            loop {
-                {
-                    let mut g = lock.lock().unwrap();
-                    while g.is_empty() {
-                        if done_f.load(Ordering::Acquire) {
-                            if !g.is_empty() {
-                                let chunk = std::mem::take(&mut *g);
-                                if let Some(ref cf) = capture_f {
-                                    let _ = cf.lock().unwrap().write_all(&chunk);
-                                }
-                                let _ = on_data.send(Response::new(chunk));
-                            }
-                            if !cancelled_f.load(Ordering::Acquire) {
-                                let _ = app_flusher
-                                    .emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
-                            }
-                            return;
-                        }
-                        let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
-                        g = next;
-                    }
-                }
-
-                // Wait for flow control (backpressure from frontend)
-                flow_f.wait_if_paused();
-
-                thread::sleep(FLUSH_COALESCE);
-
-                let chunk = std::mem::take(&mut *lock.lock().unwrap());
-                if chunk.is_empty() {
-                    continue;
-                }
-                if let Some(ref cf) = capture_f {
-                    let _ = cf.lock().unwrap().write_all(&chunk);
-                }
-                if on_data.send(Response::new(chunk)).is_err() {
-                    break;
-                }
-            }
-            if !cancelled_f.load(Ordering::Acquire) {
-                let _ = app_flusher.emit("pty-exited", serde_json::json!({ "pty_key": exit_key }));
-            }
-        });
-
+        let socket_path = self.socket_path.lock().unwrap().clone();
+        let backend = PlaneaiPtyBackend::spawn(
+            session_id,
+            &command,
+            &args,
+            &cwd,
+            dark_mode,
+            app,
+            on_data,
+            cancelled,
+            observer,
+            socket_path.as_deref(),
+        )?;
+        let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
+        if let Some(old) = sessions.get(session_id) {
+            old.detach();
+        }
+        sessions.insert(session_id.to_string(), Box::new(backend));
         Ok(())
     }
 
@@ -656,11 +422,4 @@ impl PtyManager {
         let backend = sessions.get(session_id).ok_or("session not attached")?;
         backend.resume()
     }
-}
-
-/// Returns true when the planeai-pty backend should be used for local PTY sessions.
-fn use_planeai_pty_core() -> bool {
-    std::env::var("PLANEAI_LOCAL_PTY_CORE")
-        .map(|v| v == "planeai-pty")
-        .unwrap_or(false)
 }

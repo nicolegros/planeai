@@ -145,8 +145,6 @@ mod tests {
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
-            local_pty_core: None,
-            daemon_pty_core: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: None,

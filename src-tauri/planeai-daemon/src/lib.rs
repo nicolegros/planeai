@@ -41,12 +41,6 @@ pub fn run() -> anyhow::Result<()> {
     rt.block_on(async {
         let listener = DaemonListener::bind(&socket_path)?;
         tracing::info!("listening on {}", socket_path.display());
-        let pty_core = if session::use_planeai_pty_core() {
-            "planeai-pty"
-        } else {
-            "legacy"
-        };
-        tracing::info!("daemon PTY core: {pty_core}");
 
         std::fs::write(&pid_path, std::process::id().to_string())?;
 

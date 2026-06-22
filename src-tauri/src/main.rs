@@ -114,17 +114,6 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
-            // Config-driven PTY core selection (env var takes priority)
-            if std::env::var("PLANEAI_LOCAL_PTY_CORE").is_err() {
-                if let Some(ref core) = cfg.local_pty_core {
-                    std::env::set_var("PLANEAI_LOCAL_PTY_CORE", core);
-                }
-            }
-            if std::env::var("PLANEAI_DAEMON_PTY_CORE").is_err() {
-                if let Some(ref core) = cfg.daemon_pty_core {
-                    std::env::set_var("PLANEAI_DAEMON_PTY_CORE", core);
-                }
-            }
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 if let Some(ref dir) = cfg.session_log_dir {
                     std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
@@ -260,12 +249,6 @@ fn main() {
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
             tracing::info!("app setup complete");
-            let pty_core_mode =
-                std::env::var("PLANEAI_LOCAL_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
-            tracing::info!("local PTY core: {}", pty_core_mode);
-            let daemon_pty_core_mode =
-                std::env::var("PLANEAI_DAEMON_PTY_CORE").unwrap_or_else(|_| "legacy".to_string());
-            tracing::info!("daemon PTY core: {}", daemon_pty_core_mode);
 
             Ok(())
         })
