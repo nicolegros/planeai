@@ -20,3 +20,7 @@ windows-sys = { version = "0.52", features = [
   "Win32_Security",
   "Win32_System_IO",
 ] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "io-util", "net"] }
+tempfile = { workspace = true }
