@@ -5,13 +5,14 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap, GitFork, GitPullRequest, GitMerge, Plus, Settings } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle, Zap, GitFork, GitPullRequest, GitMerge, Plus, Settings, CheckCircle2, XCircle } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
+  import { getCiStatus } from "../lib/ci-checks.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -309,6 +310,17 @@
 
 <svelte:window onkeydown={handleKeydown} onfocus={onWindowFocus} />
 
+{#snippet ciBadge(id: string)}
+  {@const ci = getCiStatus(id)}
+  {#if ci === 'passing'}
+    <CheckCircle2 class="size-3 text-green-600 dark:text-green-400" title="CI passing" />
+  {:else if ci === 'failing'}
+    <XCircle class="size-3 text-red-600 dark:text-red-400" title="CI failing" />
+  {:else if ci === 'running'}
+    <LoaderCircle class="size-3 animate-spin text-amber-500" title="CI running" />
+  {/if}
+{/snippet}
+
 <aside class="relative shrink-0 flex flex-col border-r border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-950 {zone === 'sidebar' ? 'ring-1 ring-inset ring-primary-500/30' : ''}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={224} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
@@ -386,6 +398,7 @@
                         {#if orchestrator.getReviewReady()[session.id]}
                           <span class="size-2 rounded-full bg-blue-500" title="Ready for review"></span>
                         {/if}
+                        {@render ciBadge(session.id)}
                         {#if session.pr_url}
                           <button
                             class="shrink-0 size-3.5 {session.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : session.pr_state === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
@@ -457,6 +470,7 @@
                               {:else if agentStates[linked.id] === 'Idle'}
                                 <Lightbulb class="size-3.5 animate-pulse text-amber-500" />
                               {/if}
+                              {@render ciBadge(linked.id)}
                               {#if linked.pr_url}
                                 <button
                                   class="shrink-0 size-3.5 {linked.pr_state === 'merged' ? 'text-purple-600 dark:text-purple-400' : 'text-green-600 dark:text-green-400'}"

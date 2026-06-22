@@ -5,6 +5,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { sessions as sessionsApi, symphony, tasks, git } from "./api";
+import { getCiStatus as _getCiStatus, updateSessions as updateCiSessions } from "./ci-checks.svelte";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
@@ -107,6 +108,10 @@ export function clearReviewReady(sessionId: string): void {
   reviewReady = rest;
 }
 
+export function getCiStatus(sessionId: string): 'passing' | 'failing' | 'running' | null {
+  return _getCiStatus(sessionId);
+}
+
 export function toggleDiff(): void {
   _toggleDiff();
   if (activeSessionId) clearReviewReady(activeSessionId);
@@ -116,6 +121,7 @@ export function toggleDiff(): void {
 
 export async function loadSessions(): Promise<void> {
   sessions = await sessionsApi.list();
+  updateCiSessions(sessions);
   for (const s of sessions) {
     if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);
   }
