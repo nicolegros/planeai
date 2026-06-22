@@ -9,14 +9,18 @@
     description?: string;
     children: Snippet;
     class?: string;
+    preventEscapeClose?: boolean;
   }
 
-  let { open, onOpenChange, title, description, children, class: className = "" }: Props = $props();
+  let { open, onOpenChange, title, description, children, class: className = "", preventEscapeClose = false }: Props = $props();
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
   <Dialog.Portal>
-    <Dialog.Content class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-panel shadow-lg {className}">
+    <Dialog.Content
+      class="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-panel shadow-lg {className}"
+      onEscapeKeydown={(e) => { if (preventEscapeClose) e.preventDefault(); }}
+    >
       {#if title}
         <Dialog.Title class="sr-only">{title}</Dialog.Title>
       {/if}

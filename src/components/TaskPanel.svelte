@@ -364,7 +364,7 @@
 {/if}
 
 <!-- Modal for create/edit -->
-<Dialog open={modalMode !== null} onOpenChange={(v) => { if (!v) { modalMode = null; focusTerminal(); } }} title={modalMode === "create" ? "Create Task" : "Edit Task"} class="w-[36rem] p-6">
+<Dialog open={modalMode !== null} onOpenChange={(v) => { if (!v) { modalMode = null; focusTerminal(); } }} title={modalMode === "create" ? "Create Task" : "Edit Task"} class="w-[36rem] p-6" preventEscapeClose>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none">
