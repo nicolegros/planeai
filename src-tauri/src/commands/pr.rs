@@ -8,6 +8,37 @@ use crate::state::{ConfigState, DbState};
 
 use crate::commands::sessions::helpers::{resolve_task_manager, session_cwd};
 
+/// Common session context needed by PR commands.
+struct SessionContext {
+    cwd: String,
+    branch: String,
+    pr_url: Option<String>,
+    task_key: Option<String>,
+    base_branch: Option<String>,
+    name: String,
+}
+
+/// Resolve session from DB, returning the fields PR commands need.
+/// Locks and releases the DB mutex immediately.
+fn resolve_session_context(
+    db_state: &State<'_, DbState>,
+    session_id: &str,
+) -> Result<SessionContext, String> {
+    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
+    let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
+    Ok(SessionContext {
+        cwd,
+        branch: session.branch.clone(),
+        pr_url: session.pr_url.clone(),
+        task_key: session.task_key.clone(),
+        base_branch: session.base_branch.clone(),
+        name: session.name.clone(),
+    })
+}
+
 /// Check PR status for a single session and handle transitions.
 pub(crate) fn poll_pr_for_session(
     conn: &rusqlite::Connection,
@@ -114,35 +145,23 @@ pub async fn generate_pr_defaults(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<PrDefaults, String> {
-    let (cwd, session_name, task_key, base) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (
-            cwd,
-            session.name.clone(),
-            session.task_key.clone(),
-            session.base_branch.clone(),
-        )
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let title = match &task_key {
+    let title = match &ctx.task_key {
         Some(key) => {
             let prefix = format!("{}: ", key);
-            let name = session_name.strip_prefix(&prefix).unwrap_or(&session_name);
+            let name = ctx.name.strip_prefix(&prefix).unwrap_or(&ctx.name);
             format!("{} [{}]", name, key)
         }
-        None => session_name,
+        None => ctx.name,
     };
 
-    let base_ref = base.as_deref().unwrap_or("main");
+    let base_ref = ctx.base_branch.as_deref().unwrap_or("main");
 
     // Diff stats for body
     let diff_output = tokio::process::Command::new("git")
         .args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .ok()
@@ -156,9 +175,9 @@ pub async fn generate_pr_defaults(
         format!("## Changes\n\n```\n{diff_output}\n```")
     };
 
-    let base_branch = match base {
+    let base_branch = match ctx.base_branch {
         Some(b) => b,
-        None => detect_default_branch_async(&cwd).await,
+        None => detect_default_branch_async(&ctx.cwd).await,
     };
 
     Ok(PrDefaults {
@@ -193,19 +212,12 @@ pub async fn create_pr(
     db_state: State<'_, DbState>,
     _config_state: State<'_, ConfigState>,
 ) -> Result<String, String> {
-    let (cwd, branch) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (cwd, session.branch.clone())
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
     // Push branch
     let push = tokio::process::Command::new("git")
-        .args(["push", "-u", "origin", &branch])
-        .current_dir(&cwd)
+        .args(["push", "-u", "origin", &ctx.branch])
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run git push: {e}"))?;
@@ -239,7 +251,7 @@ pub async fn create_pr(
     }
     let pr_output = tokio::process::Command::new("gh")
         .args(&args)
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -293,21 +305,14 @@ pub async fn get_ci_checks(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<Vec<CiCheck>, String> {
-    let (cwd, branch) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (cwd, session.branch.clone())
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    tracing::debug!(session_id = %session_id, branch = %branch, "get_ci_checks called");
+    tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_ci_checks called");
 
     // Only run for GitHub-hosted repos
     let remote_output = tokio::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to get remote: {e}"))?;
@@ -320,8 +325,8 @@ pub async fn get_ci_checks(
     }
 
     let output = tokio::process::Command::new("gh")
-        .args(["pr", "view", &branch, "--json", "statusCheckRollup"])
-        .current_dir(&cwd)
+        .args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -359,17 +364,11 @@ pub async fn get_allowed_merge_strategies(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<Vec<String>, String> {
-    let cwd = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
     let remote_output = tokio::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to get remote: {e}"))?;
@@ -385,7 +384,7 @@ pub async fn get_allowed_merge_strategies(
             "--jq",
             "[.allow_squash_merge, .allow_merge_commit, .allow_rebase_merge] | @json",
         ])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -429,29 +428,17 @@ pub async fn merge_pr(
         return Err(format!("invalid merge strategy: {strategy}"));
     }
 
-    let (cwd, branch, pr_url, task_key) = {
-        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let session = db::get_session(&conn, &session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("session not found")?;
-        let cwd = session_cwd(&conn, &session).ok_or("cannot resolve session working directory")?;
-        (
-            cwd,
-            session.branch.clone(),
-            session.pr_url.clone().unwrap_or_default(),
-            session.task_key.clone(),
-        )
-    };
+    let ctx = resolve_session_context(&db_state, &session_id)?;
 
     let output = tokio::process::Command::new("gh")
         .args([
             "pr",
             "merge",
-            &branch,
+            &ctx.branch,
             &format!("--{strategy}"),
             "--delete-branch",
         ])
-        .current_dir(&cwd)
+        .current_dir(&ctx.cwd)
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -464,15 +451,16 @@ pub async fn merge_pr(
     // Update DB state
     {
         let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-        let _ = db::update_pr_state(&conn, &session_id, &pr_url, "merged");
+        let pr_url = ctx.pr_url.as_deref().unwrap_or_default();
+        let _ = db::update_pr_state(&conn, &session_id, pr_url, "merged");
     }
 
     // Fire task hook
     {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        if let Some(ref key) = task_key {
+        if let Some(ref key) = ctx.task_key {
             if let Ok(tm) = resolve_task_manager(&cfg) {
-                pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, std::path::Path::new(&cwd));
+                pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, std::path::Path::new(&ctx.cwd));
             }
         }
     }
