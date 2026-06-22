@@ -200,10 +200,17 @@
                 <div class="flex flex-col gap-1.5">
                   {#each checks as check, i (i)}
                     {@const ic = iconFor(classifyCheck(check))}
-                    <div class="flex items-center gap-2">
-                      <span class="w-[14px] text-center {ic.color}">{ic.char}</span>
-                      <span class="font-mono text-[11.5px] text-t2 truncate">{check.name}</span>
-                    </div>
+                    {#if check.url}
+                      <button class="flex items-center gap-2 hover:bg-panel-hi rounded px-1 -mx-1 text-left" onclick={() => openUrl(check.url!)}>
+                        <span class="w-[14px] text-center {ic.color}">{ic.char}</span>
+                        <span class="font-mono text-[11.5px] text-t2 truncate">{check.name}</span>
+                      </button>
+                    {:else}
+                      <div class="flex items-center gap-2">
+                        <span class="w-[14px] text-center {ic.color}">{ic.char}</span>
+                        <span class="font-mono text-[11.5px] text-t2 truncate">{check.name}</span>
+                      </div>
+                    {/if}
                   {/each}
                 </div>
                 {#if failedCount > 0}
