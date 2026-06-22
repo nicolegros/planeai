@@ -37,6 +37,52 @@
     color: var(--color-t1);
     font-family: var(--font-sans);
   }
+  /* ── Default terminal/editor/diff variables (light) ── */
+  :root {
+    --terminal-background: #ffffff;
+    --terminal-foreground: #171717;
+    --terminal-cursor: #18181d;
+    --terminal-selection: rgba(24,24,29,0.12);
+    --terminal-black: #171717;
+    --terminal-red: #cf222e;
+    --terminal-green: #116329;
+    --terminal-yellow: #9a6700;
+    --terminal-blue: #0550ae;
+    --terminal-magenta: #8250df;
+    --terminal-cyan: #1b7c83;
+    --terminal-white: #6e7781;
+    --terminal-bright-black: #6e7781;
+    --terminal-bright-red: #cf222e;
+    --terminal-bright-green: #1a7f37;
+    --terminal-bright-yellow: #9a6700;
+    --terminal-bright-blue: #0550ae;
+    --terminal-bright-magenta: #8250df;
+    --terminal-bright-cyan: #1b7c83;
+    --terminal-bright-white: #171717;
+    --diff-add-bg: #d4f8db;
+    --diff-del-bg: #fdd8d8;
+    --diff-add-color: #1a7f37;
+    --diff-del-color: #cf222e;
+    --editor-background: #ffffff;
+    --editor-foreground: #171717;
+    --editor-selection: rgba(24,24,29,0.12);
+    --editor-line-number: #88888f;
+    --editor-added: #116329;
+    --editor-deleted: #cf222e;
+    --editor-added-bg: #d4f8db;
+    --editor-deleted-bg: #fdd8d8;
+    --editor-keyword: #0550ae;
+    --editor-string: #1b7c83;
+    --editor-comment: #6e7781;
+    --editor-number: #9a6700;
+    --editor-variable: #171717;
+    --editor-type: #8250df;
+    --editor-function: #8250df;
+    --editor-property: #0550ae;
+    --editor-operator: #cf222e;
+    --editor-punctuation: #171717;
+    --editor-meta: #1b7c83;
+  }
   /* ── Dark-mode token overrides ── */
   .dark {
     --color-canvas: #171717;
@@ -58,6 +104,49 @@
     --color-status-review: #d29922;
     --color-status-exited: #ff7b72;
     --color-status-idle: #5b5b61;
+    --terminal-background: #0d0d0d;
+    --terminal-foreground: #f2f2f2;
+    --terminal-cursor: #f5f5f5;
+    --terminal-selection: rgba(245,245,245,0.18);
+    --terminal-black: #484f58;
+    --terminal-red: #ff7b72;
+    --terminal-green: #3fb950;
+    --terminal-yellow: #d29922;
+    --terminal-blue: #58a6ff;
+    --terminal-magenta: #bc8cff;
+    --terminal-cyan: #39c5cf;
+    --terminal-white: #f2f2f2;
+    --terminal-bright-black: #6e7681;
+    --terminal-bright-red: #ff7b72;
+    --terminal-bright-green: #3fb950;
+    --terminal-bright-yellow: #d29922;
+    --terminal-bright-blue: #58a6ff;
+    --terminal-bright-magenta: #bc8cff;
+    --terminal-bright-cyan: #39c5cf;
+    --terminal-bright-white: #f2f2f2;
+    --diff-add-bg: #1a3d2a;
+    --diff-del-bg: #3d1a1a;
+    --diff-add-color: #3fb950;
+    --diff-del-color: #ff7b72;
+    --editor-background: #0a0a0a;
+    --editor-foreground: #f2f2f2;
+    --editor-selection: rgba(245,245,245,0.18);
+    --editor-line-number: #5b5b61;
+    --editor-added: #3fb950;
+    --editor-deleted: #ff7b72;
+    --editor-added-bg: #1a3d2a;
+    --editor-deleted-bg: #3d1a1a;
+    --editor-keyword: #ff7b72;
+    --editor-string: #39c5cf;
+    --editor-comment: #6e7681;
+    --editor-number: #d29922;
+    --editor-variable: #f2f2f2;
+    --editor-type: #bc8cff;
+    --editor-function: #bc8cff;
+    --editor-property: #58a6ff;
+    --editor-operator: #ff7b72;
+    --editor-punctuation: #f2f2f2;
+    --editor-meta: #39c5cf;
   }
   :focus-visible {
     outline-color: var(--color-accent);
