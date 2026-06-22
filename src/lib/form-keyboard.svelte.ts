@@ -49,6 +49,9 @@ export function createFormKeyboardController(
 
     // Esc
     if (e.key === "Escape") {
+      // If inside an open combobox, let it close its dropdown first
+      const el = document.activeElement as HTMLElement | null;
+      if (el?.getAttribute("aria-expanded") === "true") return;
       e.preventDefault();
       e.stopPropagation();
       if (mode === "insert") {
