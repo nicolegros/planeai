@@ -360,7 +360,7 @@
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
           <button
-            class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isProjectSelected ? 'bg-panel-hi' : ''}"
+            class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isProjectSelected ? 'ring-1 ring-accent' : ''}"
             title={project.path}
             onclick={() => toggleSection(projectKey)}
             oncontextmenu={(e) => onProjectContextMenu(e, project)}
@@ -396,7 +396,7 @@
                       <button
                         class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
                           {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                          {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? 'bg-panel-hi' : ''}"
+                          {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? 'ring-1 ring-accent' : ''}"
                         onclick={() => handleOrphanClick(session)}
                         oncontextmenu={(e) => onContextMenu(e, session)}
                       >
@@ -428,7 +428,7 @@
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div>
                 <button
-                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? 'bg-panel-hi' : ''}"
+                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-1 ring-accent' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
                   <span class="size-1.5 rounded-full {statusDotColors[status]}"></span>
@@ -451,7 +451,7 @@
                           <button
                             class="flex-1 min-w-0 text-left py-[6px] px-2 flex items-center gap-1.5 transition-colors rounded-lg
                               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                              {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? 'bg-panel-hi' : ''}"
+                              {isPreviewing ? '[box-shadow:inset_0_0_0_2px_color-mix(in_srgb,var(--theme-accent)_50%,transparent)]' : isSelected ? 'ring-1 ring-accent' : ''}"
                             onclick={() => handleTaskClick(task, project.path)}
                             oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                           >
