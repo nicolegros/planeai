@@ -1,7 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest, Zap, RefreshCw, ChevronDown } from "@lucide/svelte";
+  import { GitPullRequest, Zap, RefreshCw } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { pr } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -30,32 +30,18 @@
   const platformPadding = IS_MAC ? "pl-20" : "pr-36";
   const STORAGE_KEY = "planeai:merge-strategy";
 
-  let ciExpanded = $state(false);
-  let mergeExpanded = $state(false);
   let merging = $state(false);
   let allowedStrategies = $state<string[]>([]);
   let selectedStrategy = $state<string>(localStorage.getItem(STORAGE_KEY) || "squash");
   let strategiesFetchedFor = $state<string | null>(null);
+  let prPanelOpen = $state(false);
 
   let checks = $derived(sessionId ? getCiChecks(sessionId) : []);
-  let passedCount = $derived(checks.filter((c) => classifyCheck(c) === "pass").length);
   let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
   let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
   let checksPassing = $derived(checks.length === 0 || (allConcluded && failedCount === 0));
   let isMerged = $derived(prState === "merged");
   let canMerge = $derived(prUrl && !isMerged && checksPassing && !merging);
-
-  function summary(): string {
-    if (failedCount > 0) return `${failedCount} failed`;
-    if (allConcluded) return "All passed";
-    return `${passedCount}/${checks.length}`;
-  }
-
-  function summaryColor(): string {
-    if (failedCount > 0) return "text-red-600 dark:text-red-400";
-    if (allConcluded) return "text-green-600 dark:text-green-400";
-    return "text-yellow-500";
-  }
 
   function iconFor(c: CiConclusion): { char: string; color: string } {
     if (c === "pass") return { char: "✓", color: "text-green-600 dark:text-green-400" };
@@ -87,7 +73,7 @@
   async function doMerge(strategy: string) {
     if (!sessionId || !canMerge) return;
     merging = true;
-    mergeExpanded = false;
+    prPanelOpen = false;
     try {
       await pr.merge(sessionId, strategy);
       selectedStrategy = strategy;
@@ -107,8 +93,7 @@
   });
 
   function handleClickOutside(e: MouseEvent) {
-    if (ciExpanded) ciExpanded = false;
-    if (mergeExpanded) mergeExpanded = false;
+    if (prPanelOpen) prPanelOpen = false;
   }
 </script>
 
@@ -147,82 +132,84 @@
   {#if prUrl}
     <div class="ml-2 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
       <button
-        class="flex items-center gap-1 px-2 py-1 rounded-l text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-        title="Open pull request"
+        class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
+        title="Pull request"
         tabindex="-1"
-        onmousedown={(e: MouseEvent) => e.preventDefault()}
-        onclick={() => openUrl(prUrl!)}
+        onclick={() => (prPanelOpen = !prPanelOpen)}
       >
         <GitPullRequest class="size-3.5" />
-        <span>View PR</span>
-      </button>
-      <button
-        class="px-1 py-1 rounded-r text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 border-l border-surface-300 dark:border-surface-600 transition-colors"
-        tabindex="-1"
-        onclick={() => (mergeExpanded = !mergeExpanded)}
-      >
-        <ChevronDown class="size-3" />
+        {#if checks.length > 0}
+          <span class="size-1.5 rounded-full {failedCount > 0 ? 'bg-red-500' : allConcluded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}"></span>
+        {/if}
       </button>
 
-      {#if mergeExpanded}
+      {#if prPanelOpen}
         {@const disabledReason = mergeDisabledReason()}
-        <div class="absolute top-full right-0 mt-1 z-50 w-44 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-1">
-          <div class="text-[10px] text-surface-500 uppercase tracking-wide px-3 py-1">Merge</div>
-          {#each allowedStrategies as strat (strat)}
-            <button
-              class="w-full text-left px-3 py-1.5 text-xs rounded hover:bg-surface-200 dark:hover:bg-surface-700 capitalize disabled:opacity-50 disabled:pointer-events-none {strat === selectedStrategy ? 'text-purple-600 dark:text-purple-400 font-medium' : 'text-surface-700 dark:text-surface-300'}"
-              disabled={!canMerge}
-              title={disabledReason ?? ""}
-              onclick={() => doMerge(strat)}
-            >
-              {strat}
+        <div class="absolute top-full right-0 mt-1 z-50 w-72 rounded-xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-xl p-4 space-y-3">
+          <!-- PR link -->
+          <div class="flex items-center justify-between">
+            <button class="text-xs text-primary-600 dark:text-primary-400 hover:underline font-medium" onclick={() => openUrl(prUrl!)}>
+              Open PR ↗
             </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
+            <span class="text-[10px] text-surface-400">{isMerged ? "merged" : prState ?? "open"}</span>
+          </div>
 
-    <!-- CI Checks summary -->
-    {#if checks.length > 0}
-      <div class="ml-1 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
-        <button
-          class="flex items-center gap-1 px-2 py-1 rounded text-xs {summaryColor()} hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-          title={checks.map(c => `${iconFor(classifyCheck(c)).char} ${c.name}`).join("\n")}
-          tabindex="-1"
-          onclick={() => (ciExpanded = !ciExpanded)}
-        >
-          <span>{summary()}</span>
-          <ChevronDown class="size-3" />
-        </button>
-        <button
-          class="ml-0.5 p-0.5 rounded text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
-          tabindex="-1"
-          title="Refresh checks"
-          onclick={() => refreshCiChecks(sessionId!)}
-        >
-          <RefreshCw size={11} />
-        </button>
-
-        {#if ciExpanded}
-          <div class="absolute top-full right-0 mt-1 z-50 w-64 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 shadow-lg p-2">
-            <div class="text-[10px] text-surface-500 uppercase tracking-wide mb-1">CI Checks</div>
-            <ul class="space-y-0.5">
+          <!-- CI Checks -->
+          {#if checks.length > 0}
+            <div class="border-t border-surface-200 dark:border-surface-700 pt-2 space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="text-[10px] text-surface-500 uppercase tracking-wide">Checks</span>
+                <button
+                  class="text-[10px] text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
+                  onclick={() => refreshCiChecks(sessionId!)}
+                >
+                  <RefreshCw size={10} />
+                </button>
+              </div>
               {#each checks as check, i (i)}
                 {@const ic = iconFor(classifyCheck(check))}
-                <li class="flex items-center gap-1.5 text-xs">
+                <div class="flex items-center gap-1.5 text-xs">
                   <span class={ic.color}>{ic.char}</span>
                   {#if check.url}
                     <button class="text-surface-700 dark:text-surface-300 hover:underline truncate text-left" onclick={() => openUrl(check.url!)}>{check.name}</button>
                   {:else}
                     <span class="text-surface-700 dark:text-surface-300 truncate">{check.name}</span>
                   {/if}
-                </li>
+                </div>
               {/each}
-            </ul>
-          </div>
-        {/if}
-      </div>
-    {/if}
+            </div>
+          {/if}
+
+          <!-- Merge -->
+          {#if !isMerged}
+            <div class="border-t border-surface-200 dark:border-surface-700 pt-2">
+              <div class="text-[10px] text-surface-500 uppercase tracking-wide mb-1.5">Merge</div>
+              <div class="flex gap-1">
+                {#each allowedStrategies as strat (strat)}
+                  <button
+                    class="flex-1 px-2 py-1.5 text-xs rounded capitalize {strat === selectedStrategy ? 'bg-purple-600 text-white' : 'bg-surface-200 dark:bg-surface-700 text-surface-700 dark:text-surface-300 hover:bg-surface-300 dark:hover:bg-surface-600'}"
+                    onclick={() => { selectedStrategy = strat; localStorage.setItem(STORAGE_KEY, strat); }}
+                  >
+                    {strat}
+                  </button>
+                {/each}
+              </div>
+              <button
+                class="w-full mt-2 px-2 py-1.5 text-xs rounded bg-purple-600 text-white hover:bg-purple-700 font-medium disabled:opacity-50 disabled:pointer-events-none"
+                disabled={!canMerge}
+                title={disabledReason ?? ""}
+                onclick={() => doMerge(selectedStrategy)}
+              >
+                {merging ? "Merging…" : `Merge with ${selectedStrategy}`}
+              </button>
+              {#if disabledReason && !merging}
+                <p class="text-[10px] text-surface-400 mt-1">{disabledReason}</p>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
   {:else if hasChanges && onCreatePr}
     <button
       class="ml-2 shrink-0 flex items-center gap-1 px-2 py-1 rounded text-xs text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
