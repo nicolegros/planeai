@@ -132,6 +132,8 @@
   let wrapperEl = $state<HTMLDivElement | null>(null);
   let error = $state("");
 
+  $effect(() => { if (wrapperEl) wrapperEl.focus(); });
+
   const fk = createFormKeyboardController(
     () => [
       { key: "r", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='project'] input") ?? null },
