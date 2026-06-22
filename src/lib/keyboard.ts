@@ -119,6 +119,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "toggle_diff" };
   }
 
+  // Mod+\ — toggle diff tab
+  if (mod && !e.shiftKey && e.key === "\\") {
+    return { type: "toggle_diff" };
+  }
+
   // Mod+E — toggle file explorer
   if (mod && !e.shiftKey && key === "e") {
     return { type: "toggle_file_explorer" };
