@@ -49,12 +49,11 @@ impl DaemonSession {
 
         // If the caller already wrapped in a shell (e.g. /bin/sh -c "real command"),
         // extract the real command to avoid double-wrapping.
-        let full_cmd = if is_shell_wrapper(command) && args.len() == 2 && args[0] == "-c" {
-            args[1].to_string()
-        } else if cfg!(windows)
-            && command.eq_ignore_ascii_case("cmd")
-            && args.len() == 2
-            && args[0].eq_ignore_ascii_case("/C")
+        let full_cmd = if (is_shell_wrapper(command) && args.len() == 2 && args[0] == "-c")
+            || (cfg!(windows)
+                && command.eq_ignore_ascii_case("cmd")
+                && args.len() == 2
+                && args[0].eq_ignore_ascii_case("/C"))
         {
             args[1].to_string()
         } else if args.is_empty() {

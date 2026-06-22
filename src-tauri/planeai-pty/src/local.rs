@@ -39,7 +39,7 @@ impl LocalPtySession {
             let shell = config
                 .shell
                 .clone()
-                .unwrap_or_else(|| crate::platform::default_shell());
+                .unwrap_or_else(crate::platform::default_shell);
             CommandBuilder::new(&shell)
         };
         cmd.env("TERM", "xterm-256color");
