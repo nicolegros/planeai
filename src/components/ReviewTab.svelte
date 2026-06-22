@@ -81,6 +81,7 @@
   let totalCount = $derived(getTotalCommentCount(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
 
+
   // ─── Core Functions ─────────────────────────────────────────────────────────
 
   function currentFileId(): string {
@@ -651,3 +652,4 @@
     </ul>
   </div>
 </div>
+

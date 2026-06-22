@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff } from "./types";
+import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
 export interface LaunchSessionParams {
@@ -120,6 +120,21 @@ export const git = {
   readFile: (filePath: string) => invoke<string>("read_file", { filePath }),
   writeFile: (filePath: string, content: string) => invoke("write_file", { filePath, content }),
   fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
+};
+
+export const pr = {
+  create: (sessionId: string, title: string, body: string, baseBranch: string, draft: boolean) =>
+    invoke<string>("create_pr", { sessionId, title, body, baseBranch, draft }),
+  generateDefaults: (sessionId: string) =>
+    invoke<{ title: string; body: string; base_branch: string }>("generate_pr_defaults", {
+      sessionId,
+    }),
+  getCiChecks: (sessionId: string) => invoke<CiCheck[]>("get_ci_checks", { sessionId }),
+  getAllowedStrategies: (sessionId: string) =>
+    invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
+  merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
+  markReady: (sessionId: string) => invoke("mark_pr_ready", { sessionId }),
+  getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
 };
 
 export const notify = {

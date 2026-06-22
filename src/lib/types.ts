@@ -54,3 +54,10 @@ export interface FileDiff {
   modified: string;
   language: string;
 }
+
+export interface CiCheck {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+}

@@ -27,10 +27,11 @@
     onToggleDiff: () => void;
     onOpenFile?: (filePath: string) => void;
     onOpenLogViewer?: () => void;
+    onCreatePr?: () => void;
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -473,13 +474,13 @@
                   <kbd class="ml-auto text-xs text-surface-500 dark:text-surface-400">⌘⇧R</kbd>
                 </Command.Item>
                 <Command.Item
-                  value="open pull request"
-                  keywords={["pr", "pull request", "github", "link", "review"]}
+                  value="pull request"
+                  keywords={["pr", "pull request", "github", "link", "review", "create"]}
                   disabled={!activeSessionId}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  onSelect={async () => { try { const url = await git.fetchPrUrl(activeSessionId!); if (url) { openUrl(url); } } catch (e: any) { showSnackbar(e.toString()); } close(); }}
+                  onSelect={async () => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { openUrl(s.pr_url); close(); } else if (onCreatePr) { close(); onCreatePr(); } }}
                 >
-                  Open pull request
+                  {sessions.find(x => x.id === activeSessionId)?.pr_url ? "View PR" : "Create PR"}
                 </Command.Item>
                 {#if onOpenLogViewer}
                 <Command.Item

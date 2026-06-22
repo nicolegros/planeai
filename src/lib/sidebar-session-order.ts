@@ -12,7 +12,11 @@ export function computeSidebarSessionOrder(
   tasksByProject: Record<string, TaskItem[]>,
   hideDone: boolean,
 ): string[] {
-  const allTaskKeys = new Set(Object.values(tasksByProject).flat().map(t => t.key));
+  const allTaskKeys = new Set(
+    Object.values(tasksByProject)
+      .flat()
+      .map((t) => t.key),
+  );
   const ids: string[] = [];
 
   for (const project of projects) {
@@ -26,9 +30,11 @@ export function computeSidebarSessionOrder(
     const projectTasks = tasksByProject[project.path] ?? [];
     for (const status of STATUS_ORDER) {
       if (status === "done" && hideDone) continue;
-      const group = projectTasks.filter(t => t.status === status).sort((a, b) => b.priority - a.priority);
+      const group = projectTasks
+        .filter((t) => t.status === status)
+        .sort((a, b) => b.priority - a.priority);
       for (const t of group) {
-        const linked = sessions.find(s => s.task_key === t.key);
+        const linked = sessions.find((s) => s.task_key === t.key);
         if (linked) ids.push(linked.id);
       }
     }
