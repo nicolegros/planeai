@@ -55,7 +55,7 @@ fn delete_branch(repo_path: &str, branch: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove worktrees from sessions that have been exited/destroyed for more than 48 hours.
+/// Remove worktrees from sessions that have been exited/destroyed/archived for more than 48 hours.
 /// Returns a list of errors encountered (empty = all good).
 pub fn cleanup_stale_worktrees(
     conn: &rusqlite::Connection,
@@ -67,7 +67,7 @@ pub fn cleanup_stale_worktrees(
     let mut stmt = match conn.prepare(
         "SELECT s.id, s.worktree_path, p.path FROM sessions s
          JOIN projects p ON p.id = s.project_id
-         WHERE s.status IN ('exited', 'destroyed')
+         WHERE s.status IN ('exited', 'destroyed', 'archived')
            AND s.worktree_path IS NOT NULL
            AND s.updated_at IS NOT NULL
            AND s.updated_at < ?1",
@@ -93,9 +93,17 @@ pub fn cleanup_stale_worktrees(
             }
         };
 
-    for (_session_id, worktree_path, project_path) in &rows {
+    for (session_id, worktree_path, project_path) in &rows {
         if let Err(e) = remove_worktree(project_path, worktree_path) {
-            errors.push(format!("session {}: {e}", _session_id));
+            errors.push(format!("session {}: {e}", session_id));
+        } else {
+            // Mark worktree as cleaned so it's not re-processed on next startup
+            if let Err(e) = conn.execute(
+                "UPDATE sessions SET worktree_path = NULL WHERE id = ?1",
+                rusqlite::params![session_id],
+            ) {
+                errors.push(format!("session {} null worktree_path: {e}", session_id));
+            }
         }
     }
 

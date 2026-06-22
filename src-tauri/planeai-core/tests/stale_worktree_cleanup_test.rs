@@ -88,7 +88,7 @@ fn exited_session_less_than_48h_is_skipped() {
 }
 
 #[test]
-fn active_and_archived_sessions_are_skipped() {
+fn active_sessions_are_skipped() {
     let conn = test_db();
     let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
 
@@ -101,6 +101,20 @@ fn active_and_archived_sessions_are_skipped() {
         Some("/tmp/wt/a"),
         &old,
     );
+
+    let errors = cleanup_stale_worktrees(&conn, |_, _| {
+        panic!("should not be called for active sessions");
+    });
+
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn archived_session_older_than_48h_gets_worktree_removed() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
     insert_session(
         &conn,
         "sess-archived",
@@ -110,11 +124,83 @@ fn active_and_archived_sessions_are_skipped() {
         &old,
     );
 
-    let errors = cleanup_stale_worktrees(&conn, |_, _| {
-        panic!("should not be called for active/archived sessions");
+    thread_local! {
+        static REMOVED: RefCell<Vec<(String, String)>> = const { RefCell::new(vec![]) };
+    }
+
+    let errors = cleanup_stale_worktrees(&conn, |project_path, wt_path| {
+        REMOVED.with(|r| {
+            r.borrow_mut()
+                .push((project_path.to_string(), wt_path.to_string()))
+        });
+        Ok(())
     });
 
     assert!(errors.is_empty());
+    REMOVED.with(|r| {
+        assert_eq!(
+            r.borrow().as_slice(),
+            &[("/tmp/myapp".to_string(), "/tmp/wt/b".to_string())]
+        );
+    });
+}
+
+#[test]
+fn successful_cleanup_nulls_worktree_path() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    insert_session(
+        &conn,
+        "sess-1",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/abc"),
+        &old,
+    );
+
+    let errors = cleanup_stale_worktrees(&conn, |_, _| Ok(()));
+    assert!(errors.is_empty());
+
+    // worktree_path should now be NULL
+    let wt: Option<String> = conn
+        .query_row(
+            "SELECT worktree_path FROM sessions WHERE id = 'sess-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(wt.is_none());
+}
+
+#[test]
+fn failed_cleanup_preserves_worktree_path() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    insert_session(
+        &conn,
+        "sess-1",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/abc"),
+        &old,
+    );
+
+    let errors = cleanup_stale_worktrees(&conn, |_, _| Err("disk error".to_string()));
+    assert_eq!(errors.len(), 1);
+
+    // worktree_path should still be set
+    let wt: Option<String> = conn
+        .query_row(
+            "SELECT worktree_path FROM sessions WHERE id = 'sess-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(wt.as_deref(), Some("/tmp/wt/abc"));
 }
 
 #[test]
