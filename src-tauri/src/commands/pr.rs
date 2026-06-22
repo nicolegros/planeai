@@ -382,7 +382,7 @@ pub async fn get_allowed_merge_strategies(
             "api",
             &format!("repos/{repo}"),
             "--jq",
-            "[.allow_squash_merge, .allow_merge_commit, .allow_rebase_merge] | @json",
+            "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
         ])
         .current_dir(&ctx.cwd)
         .output()
@@ -394,23 +394,27 @@ pub async fn get_allowed_merge_strategies(
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    // Parse JSON array of booleans like "[true, false, true]"
-    let parsed: Vec<bool> = serde_json::from_str(&raw)
-        .or_else(|_| {
-            // gh --jq @json wraps in quotes, try unquoting
-            let unquoted = raw.trim_matches('"').replace("\\\"", "\"");
-            serde_json::from_str(&unquoted)
-        })
-        .map_err(|e| format!("failed to parse merge settings: {e}"))?;
+    parse_merge_settings(&raw)
+}
 
+#[derive(Deserialize)]
+struct RepoMergeSettings {
+    squash: bool,
+    merge: bool,
+    rebase: bool,
+}
+
+fn parse_merge_settings(raw: &str) -> Result<Vec<String>, String> {
+    let settings: RepoMergeSettings =
+        serde_json::from_str(raw).map_err(|e| format!("failed to parse merge settings: {e}"))?;
     let mut strategies = Vec::new();
-    if parsed.first().copied().unwrap_or(false) {
+    if settings.squash {
         strategies.push("squash".to_string());
     }
-    if parsed.get(1).copied().unwrap_or(false) {
+    if settings.merge {
         strategies.push("merge".to_string());
     }
-    if parsed.get(2).copied().unwrap_or(false) {
+    if settings.rebase {
         strategies.push("rebase".to_string());
     }
     Ok(strategies)
