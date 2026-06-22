@@ -691,59 +691,27 @@ mod tests {
 
     #[test]
     fn parse_merge_strategies_all_enabled() {
-        let raw = "[true,true,true]";
-        let parsed: Vec<bool> = serde_json::from_str(raw).unwrap();
-        let mut strategies = Vec::new();
-        if parsed.first().copied().unwrap_or(false) {
-            strategies.push("squash".to_string());
-        }
-        if parsed.get(1).copied().unwrap_or(false) {
-            strategies.push("merge".to_string());
-        }
-        if parsed.get(2).copied().unwrap_or(false) {
-            strategies.push("rebase".to_string());
-        }
-        assert_eq!(strategies, vec!["squash", "merge", "rebase"]);
+        let result = parse_merge_settings(r#"{"squash":true,"merge":true,"rebase":true}"#).unwrap();
+        assert_eq!(result, vec!["squash", "merge", "rebase"]);
     }
 
     #[test]
     fn parse_merge_strategies_only_squash() {
-        let raw = "[true,false,false]";
-        let parsed: Vec<bool> = serde_json::from_str(raw).unwrap();
-        let mut strategies = Vec::new();
-        if parsed.first().copied().unwrap_or(false) {
-            strategies.push("squash".to_string());
-        }
-        if parsed.get(1).copied().unwrap_or(false) {
-            strategies.push("merge".to_string());
-        }
-        if parsed.get(2).copied().unwrap_or(false) {
-            strategies.push("rebase".to_string());
-        }
-        assert_eq!(strategies, vec!["squash"]);
+        let result =
+            parse_merge_settings(r#"{"squash":true,"merge":false,"rebase":false}"#).unwrap();
+        assert_eq!(result, vec!["squash"]);
     }
 
     #[test]
-    fn parse_merge_strategies_quoted_json() {
-        // gh --jq @json wraps the output in quotes with escaped content
-        let raw = "\"[true,false,true]\"";
-        let parsed: Vec<bool> = serde_json::from_str::<Vec<bool>>(raw)
-            .or_else(|_| {
-                let unquoted = raw.trim_matches('"').replace("\\\"", "\"");
-                serde_json::from_str(&unquoted)
-            })
-            .unwrap();
-        let mut strategies = Vec::new();
-        if parsed.first().copied().unwrap_or(false) {
-            strategies.push("squash".to_string());
-        }
-        if parsed.get(1).copied().unwrap_or(false) {
-            strategies.push("merge".to_string());
-        }
-        if parsed.get(2).copied().unwrap_or(false) {
-            strategies.push("rebase".to_string());
-        }
-        assert_eq!(strategies, vec!["squash", "rebase"]);
+    fn parse_merge_strategies_partial() {
+        let result =
+            parse_merge_settings(r#"{"squash":true,"merge":false,"rebase":true}"#).unwrap();
+        assert_eq!(result, vec!["squash", "rebase"]);
+    }
+
+    #[test]
+    fn parse_merge_strategies_invalid_json() {
+        assert!(parse_merge_settings("not json").is_err());
     }
 
     #[test]
