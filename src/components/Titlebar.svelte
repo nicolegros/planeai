@@ -1,7 +1,7 @@
 <script lang="ts">
   import { IS_MAC } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { GitPullRequest, Zap, RefreshCw } from "@lucide/svelte";
+  import { GitPullRequest, GitMerge, Zap, RefreshCw } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { pr } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -132,15 +132,12 @@
   {#if prUrl}
     <div class="ml-2 shrink-0 relative flex items-center" onclick={(e) => e.stopPropagation()}>
       <button
-        class="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-primary-600 dark:text-primary-400 hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors"
-        title="Pull request"
+        class="flex items-center gap-1.5 px-2 py-1 rounded text-xs hover:bg-surface-200 dark:hover:bg-surface-800 transition-colors {isMerged ? 'text-purple-600 dark:text-purple-400' : prState === 'draft' ? 'text-surface-500 dark:text-surface-400' : 'text-green-600 dark:text-green-400'}"
+        title="Pull request ({prState ?? 'open'})"
         tabindex="-1"
         onclick={() => (prPanelOpen = !prPanelOpen)}
       >
-        <GitPullRequest class="size-3.5" />
-        {#if checks.length > 0}
-          <span class="size-1.5 rounded-full {failedCount > 0 ? 'bg-red-500' : allConcluded ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}"></span>
-        {/if}
+        {#if isMerged}<GitMerge class="size-3.5" />{:else}<GitPullRequest class="size-3.5" />{/if}
       </button>
 
       {#if prPanelOpen}
