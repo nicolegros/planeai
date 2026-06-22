@@ -197,9 +197,7 @@ fn main() {
             ];
             for (name, content) in bundled_themes {
                 let path = themes_dir.join(name);
-                if !path.exists() {
-                    let _ = std::fs::write(&path, content);
-                }
+                let _ = std::fs::write(&path, content);
             }
 
             let db_arc = Arc::new(Mutex::new(conn));
