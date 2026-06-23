@@ -58,8 +58,12 @@ impl IpcListener {
         }
         #[cfg(windows)]
         {
-            // On Windows, use a named pipe or file-based approach
-            Ok(Self { path: path })
+            // IPC not implemented on Windows — fail fast to prevent accept() spin loops
+            let _ = path;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "IPC listener not implemented on Windows",
+            ))
         }
     }
 
