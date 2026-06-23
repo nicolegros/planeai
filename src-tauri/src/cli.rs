@@ -267,6 +267,7 @@ mod tests {
             id: "proj-1".to_string(),
             name: "myapp".to_string(),
             path: "/home/user/myapp".to_string(),
+            status: "active".to_string(),
             prefix: "MYA".to_string(),
         }
     }

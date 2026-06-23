@@ -1,13 +1,7 @@
 use rusqlite::{params, Connection, Result, Row};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub prefix: String,
-}
+pub use planeai_core::services::Project;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -151,26 +145,11 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
 // Project CRUD — thin wrappers over planeai_core::services::ProjectService
 
 pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Project> {
-    let p = planeai_core::services::ProjectService::create(conn, name, path)?;
-    Ok(Project {
-        id: p.id,
-        name: p.name,
-        path: p.path,
-        prefix: p.prefix,
-    })
+    planeai_core::services::ProjectService::create(conn, name, path)
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let projects = planeai_core::services::ProjectService::list_active(conn)?;
-    Ok(projects
-        .into_iter()
-        .map(|p| Project {
-            id: p.id,
-            name: p.name,
-            path: p.path,
-            prefix: p.prefix,
-        })
-        .collect())
+    planeai_core::services::ProjectService::list_active(conn)
 }
 
 pub fn archive_project(conn: &Connection, id: &str) -> Result<()> {
@@ -178,16 +157,7 @@ pub fn archive_project(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn list_archived_projects(conn: &Connection) -> Result<Vec<Project>> {
-    let projects = planeai_core::services::ProjectService::list_archived(conn)?;
-    Ok(projects
-        .into_iter()
-        .map(|p| Project {
-            id: p.id,
-            name: p.name,
-            path: p.path,
-            prefix: p.prefix,
-        })
-        .collect())
+    planeai_core::services::ProjectService::list_archived(conn)
 }
 
 pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
@@ -199,14 +169,7 @@ pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
-    Ok(
-        planeai_core::services::ProjectService::get_by_id(conn, id)?.map(|p| Project {
-            id: p.id,
-            name: p.name,
-            path: p.path,
-            prefix: p.prefix,
-        }),
-    )
+    planeai_core::services::ProjectService::get_by_id(conn, id)
 }
 
 pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<Session>> {
