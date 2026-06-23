@@ -61,13 +61,27 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-/// Derive a project prefix from a project name (first 3 alphanumeric chars, uppercased).
+/// Derive a project prefix from a project name.
+/// Multi-word names (separated by `-`, `_`, or space) use word initials (e.g. "deployment-pipeline" → "DP").
+/// Single-word names use the first 3 alphanumeric chars (e.g. "planeai" → "PLA").
 pub fn derive_prefix(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_alphanumeric())
-        .take(3)
-        .collect::<String>()
-        .to_uppercase()
+    let words: Vec<&str> = name
+        .split(['-', '_', ' '])
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() > 1 {
+        words
+            .iter()
+            .filter_map(|w| w.chars().find(|c| c.is_alphanumeric()))
+            .collect::<String>()
+            .to_uppercase()
+    } else {
+        name.chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(3)
+            .collect::<String>()
+            .to_uppercase()
+    }
 }
 
 pub struct SqliteRepository {
@@ -760,8 +774,21 @@ mod tests {
     fn derive_prefix_from_name() {
         assert_eq!(derive_prefix("planeai"), "PLA");
         assert_eq!(derive_prefix("nomi"), "NOM");
-        assert_eq!(derive_prefix("budget-buddy"), "BUD");
+        assert_eq!(derive_prefix("budget-buddy"), "BB");
         assert_eq!(derive_prefix("AB"), "AB");
+    }
+
+    #[test]
+    fn derive_prefix_unique_for_similar_names() {
+        // These must produce different prefixes
+        let a = derive_prefix("deployment-pipeline");
+        let b = derive_prefix("deployment-pipeline-api");
+        assert_ne!(
+            a, b,
+            "deployment-pipeline and deployment-pipeline-api must have different prefixes"
+        );
+        assert_eq!(a, "DP");
+        assert_eq!(b, "DPA");
     }
 
     #[test]

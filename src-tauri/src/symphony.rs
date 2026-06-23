@@ -383,6 +383,7 @@ struct Project {
     id: String,
     name: String,
     path: String,
+    prefix: String,
 }
 
 pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
@@ -415,10 +416,10 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
             .unwrap_or_else(|| vec!["done".into(), "cancelled".into(), "canceled".into()]);
 
         // Build SqliteTaskSource from a new connection to the same DB
-        let prefix = planeai_tasks::sqlite::derive_prefix(&project.name);
+        let prefix = &project.prefix;
         let db_path = crate::paths::app_data_dir().join("planeai.db");
         let _ = std::fs::create_dir_all(db_path.parent().unwrap_or(std::path::Path::new(".")));
-        let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix) {
+        let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -469,9 +470,9 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
 }
 
 fn load_auto_projects(conn: &Connection) -> Vec<Project> {
-    let mut stmt = match conn
-        .prepare("SELECT id, name, path FROM projects WHERE status = 'active' AND auto_mode = 1")
-    {
+    let mut stmt = match conn.prepare(
+        "SELECT id, name, path, prefix FROM projects WHERE status = 'active' AND auto_mode = 1",
+    ) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -480,6 +481,7 @@ fn load_auto_projects(conn: &Connection) -> Vec<Project> {
             id: row.get(0)?,
             name: row.get(1)?,
             path: row.get(2)?,
+            prefix: row.get(3)?,
         })
     })
     .map(|rows| rows.filter_map(|r| r.ok()).collect())

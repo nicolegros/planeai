@@ -16,6 +16,7 @@ struct SessionContext {
     task_key: Option<String>,
     base_branch: Option<String>,
     name: String,
+    project_id: String,
 }
 
 /// Resolve session from DB, returning the fields PR commands need.
@@ -36,6 +37,7 @@ fn resolve_session_context(
         task_key: session.task_key.clone(),
         base_branch: session.base_branch.clone(),
         name: session.name.clone(),
+        project_id: session.project_id.clone(),
     })
 }
 
@@ -65,7 +67,12 @@ pub(crate) fn poll_pr_for_session(
     if let Some(ref t) = transition {
         if let Some(ref task_key) = session.task_key {
             if let Ok(tm) = resolve_task_manager(cfg) {
-                pr::fire_pr_hook(tm, t, task_key, std::path::Path::new(&cwd));
+                let prefix = db::get_project(conn, &session.project_id)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.prefix)
+                    .unwrap_or_default();
+                pr::fire_pr_hook(tm, t, task_key, &prefix);
             }
         }
     }
@@ -465,12 +472,15 @@ pub async fn merge_pr(
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         if let Some(ref key) = ctx.task_key {
             if let Ok(tm) = resolve_task_manager(&cfg) {
-                pr::fire_pr_hook(
-                    tm,
-                    &pr::PrTransition::Merged,
-                    key,
-                    std::path::Path::new(&ctx.cwd),
-                );
+                let prefix = {
+                    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+                    db::get_project(&conn, &ctx.project_id)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.prefix)
+                        .unwrap_or_default()
+                };
+                pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, &prefix);
             }
         }
     }

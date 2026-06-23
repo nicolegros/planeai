@@ -59,7 +59,7 @@ pub fn fire_pr_hook(
     tm: &crate::config::TaskManager,
     transition: &PrTransition,
     task_key: &str,
-    cwd: &Path,
+    prefix: &str,
 ) -> Option<String> {
     let hook = match transition {
         PrTransition::Opened => tm.on_pr_open.as_ref(),
@@ -67,11 +67,8 @@ pub fn fire_pr_hook(
     };
     let h = hook?;
     let db_path = crate::paths::db_path();
-    let prefix = planeai_tasks::sqlite::derive_prefix(
-        &cwd.file_name().unwrap_or_default().to_string_lossy(),
-    );
     if let Ok(repo) =
-        planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or_default(), &prefix)
+        planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or_default(), prefix)
     {
         use planeai_tasks::model::{Status, UpdateParams};
         use planeai_tasks::provider::TaskProvider;
@@ -206,14 +203,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn fire_pr_hook_on_opened_calls_move_task() {
-        let dir = tempdir().unwrap();
-        let script = dir.path().join("move.sh");
-        fs::write(&script, "#!/bin/sh\nexit 0").unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
         let tm = crate::config::TaskManager {
             templates: None,
             on_start: None,
@@ -227,19 +217,12 @@ mod tests {
             auto_dispatch: None,
         };
 
-        let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());
+        let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", "TASK");
         assert_eq!(result, Some("in_review".to_string()));
     }
 
     #[test]
-    #[cfg(unix)]
     fn fire_pr_hook_on_merged_calls_move_task() {
-        let dir = tempdir().unwrap();
-        let script = dir.path().join("move.sh");
-        fs::write(&script, "#!/bin/sh\nexit 0").unwrap();
-        #[cfg(unix)]
-        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-
         let tm = crate::config::TaskManager {
             templates: None,
             on_start: None,
@@ -253,13 +236,12 @@ mod tests {
             auto_dispatch: None,
         };
 
-        let result = fire_pr_hook(&tm, &PrTransition::Merged, "TASK-1", dir.path());
+        let result = fire_pr_hook(&tm, &PrTransition::Merged, "TASK-1", "TASK");
         assert_eq!(result, Some("done".to_string()));
     }
 
     #[test]
     fn fire_pr_hook_returns_none_when_no_hook_configured() {
-        let dir = tempdir().unwrap();
         let tm = crate::config::TaskManager {
             templates: None,
             on_start: None,
@@ -271,7 +253,7 @@ mod tests {
             auto_dispatch: None,
         };
 
-        let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", dir.path());
+        let result = fire_pr_hook(&tm, &PrTransition::Opened, "TASK-1", "TASK");
         assert_eq!(result, None);
     }
 

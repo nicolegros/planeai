@@ -3,7 +3,7 @@ use tauri::State;
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
-use planeai_tasks::sqlite::{derive_prefix, SqliteRepository};
+use planeai_tasks::sqlite::SqliteRepository;
 
 use crate::db;
 use crate::state::{ConfigState, DbState};
@@ -52,7 +52,7 @@ fn resolve_repo(db_state: &State<DbState>, repo_path: &str) -> Result<SqliteRepo
         .iter()
         .find(|p| p.path == repo_path || repo_path.starts_with(&p.path))
         .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
-    let prefix = derive_prefix(&project.name);
+    let prefix = project.prefix.clone();
     drop(conn);
     let db_path = crate::paths::db_path();
     SqliteRepository::open(db_path.to_str().unwrap(), &prefix).map_err(|e| e.to_string())

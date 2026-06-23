@@ -6,6 +6,7 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub path: String,
+    pub prefix: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,6 +156,7 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
         id: p.id,
         name: p.name,
         path: p.path,
+        prefix: p.prefix,
     })
 }
 
@@ -166,6 +168,7 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
             id: p.id,
             name: p.name,
             path: p.path,
+            prefix: p.prefix,
         })
         .collect())
 }
@@ -182,6 +185,7 @@ pub fn list_archived_projects(conn: &Connection) -> Result<Vec<Project>> {
             id: p.id,
             name: p.name,
             path: p.path,
+            prefix: p.prefix,
         })
         .collect())
 }
@@ -200,6 +204,7 @@ pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
             id: p.id,
             name: p.name,
             path: p.path,
+            prefix: p.prefix,
         }),
     )
 }
