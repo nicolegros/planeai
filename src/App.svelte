@@ -22,6 +22,7 @@
   import UnifiedSidebar from "./components/UnifiedSidebar.svelte";
   import ProjectForm from "./components/ProjectForm.svelte";
   import SessionForm from "./components/SessionForm.svelte";
+  import TaskForm from "./components/TaskForm.svelte";
   import Terminal from "./components/Terminal.svelte";
   import TabSwitcher from "./components/TabSwitcher.svelte";
   import CommandMenu from "./components/CommandMenu.svelte";
@@ -30,6 +31,7 @@
   import FileExplorer from "./components/FileExplorer.svelte";
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import SharedDialog from "./components/ui/Dialog.svelte";
+  import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
@@ -38,8 +40,8 @@
   // ─── UI-only state ──────────────────────────────────────────────────────────
   let showProjectForm = $state(false);
   let showSessionForm = $state(false);
+  let showTaskForm = $state(false);
   let sidebarVisible = $state(true);
-  let taskCreateRequested = $state(false);
   let commandMenuOpen = $state(false);
   let commandMenuFileMode = $state(false);
   let showNewItemModal = $state(false);
@@ -185,7 +187,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -208,10 +210,37 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
-      () => showSessionForm,
+      () => showSessionForm || showTaskForm,
     );
+
+    function onModalKeydown(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (showNewItemModal) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.key === 'Escape') { showNewItemModal = false; }
+        else if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }
+        else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
+      } else if (sessionToDelete) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') sessionToDelete = null;
+        else if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); }
+      } else if (projectToDelete) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') projectToDelete = null;
+        else if (e.key === 'd' || e.key === 'y') deleteProject(projectToDelete);
+      } else if (showQuitConfirm) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false;
+        else if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); }
+      }
+    }
+    window.addEventListener("keydown", onModalKeydown, true);
 
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
@@ -223,7 +252,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -256,7 +285,6 @@
   {#if sidebarVisible}
       <UnifiedSidebar
         {renamingSessionId}
-        {taskCreateRequested}
         onSelectSession={(id) => orchestrator.selectSession(id)}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
@@ -268,7 +296,6 @@
         onAddProject={() => (showProjectForm = true)}
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showNewItemModal = true; }}
-        onTaskCreateConsumed={() => { taskCreateRequested = false; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
       />
   {/if}
@@ -282,8 +309,7 @@
     {/if}
 
     {#if showSessionForm}
-    <SharedDialog open={true} onOpenChange={(v) => { if (!v) { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); } }} title="New Session" class="w-[452px] rounded-xl border-border-s shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden" preventEscapeClose>
-      <div class="px-5 pt-5 pb-3 text-[15px] font-semibold text-t1">New Session</div>
+    <FormDialog title="New Session" onClose={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}>
       <SessionForm
         {projects}
         {sessions}
@@ -292,7 +318,17 @@
         onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
-    </SharedDialog>
+    </FormDialog>
+    {/if}
+
+    {#if showTaskForm}
+    <FormDialog title="New Task" onClose={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}>
+      <TaskForm
+        {projects}
+        onCreated={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
+        onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
+      />
+    </FormDialog>
     {/if}
 
     {#if getCycleState().isVisible}
@@ -315,7 +351,7 @@
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
       onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
-      onCreateTask={() => { if (!sidebarVisible) sidebarVisible = true; requestAnimationFrame(() => { taskCreateRequested = true; }); }}
+      onCreateTask={() => { showTaskForm = true; }}
       onToggleDiff={() => orchestrator.toggleDiff()}
       onOpenFile={(path) => orchestrator.openFile(path)}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
@@ -338,7 +374,7 @@
         <Terminal
           sessionId={ptyKey}
           visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal"}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           paused={poolIsPaused(session.id)}
@@ -389,60 +425,78 @@
     {/if}
 
     {#if sessionToDelete}
-      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }}>
-        <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50" />
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') sessionToDelete = null; if (e.key === 'd' || e.key === 'y') { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); } }}>
-            <Dialog.Title class="text-sm">Delete session <strong>{sessionToDelete.name || sessionToDelete.branch}</strong>?</Dialog.Title>
-            <div class="flex justify-between">
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">c</kbd> cancel</span>
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">d</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">y</kbd> delete</span>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) sessionToDelete = null; }} title="Delete session" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+        <div>
+          <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
+            <span class="text-[13px] font-semibold text-t1">Delete <span class="font-bold">{sessionToDelete.name || sessionToDelete.branch}</span>?</span>
+            <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
+          </div>
+          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { sessionToDelete = null; }}>
+              <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { const s = sessionToDelete; sessionToDelete = null; if (s) orchestrator.deleteSession(s); }}>
+              <span class="flex-1 text-[13.5px]">Delete</span>
+              <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">d</span>
+            </button>
+          </div>
+        </div>
+      </SharedDialog>
     {/if}
     {#if projectToDelete}
       {@const ptd = projectToDelete}
       {@const projSessions = sessions.filter((s) => s.project_id === ptd.id)}
       {@const worktreeCount = projSessions.filter((s) => s.worktree_path).length}
-      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) projectToDelete = null; }}>
-        <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50" />
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'c' || e.key === 'n') projectToDelete = null; if (e.key === 'd' || e.key === 'y') deleteProject(ptd); }}>
-            <Dialog.Title class="text-sm">Delete project <strong>{ptd.name}</strong>?</Dialog.Title>
-            <p class="text-xs text-t3">This will permanently remove {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and clean up {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. This cannot be undone.</p>
-            <div class="flex justify-between">
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">c</kbd> cancel</span>
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">d</kbd>/<kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">y</kbd> delete</span>
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) projectToDelete = null; }} title="Delete project" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+        <div>
+          <div class="flex flex-col px-[15px] pt-[13px] pb-[11px] gap-1">
+            <div class="flex items-center">
+              <span class="text-[13px] font-semibold text-t1">Delete <span class="font-bold">{ptd.name}</span>?</span>
+              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            <p class="text-[11px] text-t3">Removes {projSessions.length} session{projSessions.length !== 1 ? 's' : ''}{#if worktreeCount > 0} and {worktreeCount} worktree{worktreeCount !== 1 ? 's' : ''}{/if}. Cannot be undone.</p>
+          </div>
+          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { projectToDelete = null; }}>
+              <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { deleteProject(ptd); }}>
+              <span class="flex-1 text-[13.5px]">Delete</span>
+              <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">d</span>
+            </button>
+          </div>
+        </div>
+      </SharedDialog>
     {/if}
     {#if showQuitConfirm}
-      <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }}>
-        <Dialog.Portal>
-          <Dialog.Overlay class="fixed inset-0 z-50" />
-          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-6 space-y-4 shadow-lg outline-none" onkeydown={(e) => { if (e.key === 'Escape' || e.key === 'n') showQuitConfirm = false; if (e.key === 'q' || e.key === 'y') { showQuitConfirm = false; getCurrentWindow().destroy(); } }}>
-            <Dialog.Title class="text-sm font-medium">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</Dialog.Title>
-            <p class="text-xs text-t3">Direct sessions don't survive app quit.</p>
-            <div class="flex justify-between">
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">n</kbd> cancel</span>
-              <span class="text-sm text-t3"><kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">q</kbd> quit</span>
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) showQuitConfirm = false; }} title="Quit" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+        <div>
+          <div class="flex flex-col px-[15px] pt-[13px] pb-[11px] gap-1">
+            <div class="flex items-center">
+              <span class="text-[13px] font-semibold text-t1">{quitDirectCount} active session{quitDirectCount > 1 ? 's' : ''} will be terminated.</span>
+              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+            <p class="text-[11px] text-t3">Direct sessions don't survive app quit.</p>
+          </div>
+          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showQuitConfirm = false; }}>
+              <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { showQuitConfirm = false; getCurrentWindow().destroy(); }}>
+              <span class="flex-1 text-[13.5px]">Quit</span>
+              <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">q</span>
+            </button>
+          </div>
+        </div>
+      </SharedDialog>
     {/if}
 
     {#if showNewItemModal}
       <SharedDialog open={true} onOpenChange={(v) => { if (!v) showNewItemModal = false; }} title="New…" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Escape') showNewItemModal = false; if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; } if (e.key === 't') { showNewItemModal = false; taskCreateRequested = true; } }}>
+        <div>
           <div class="flex items-center px-[15px] pt-[13px] pb-[11px]">
             <span class="text-[13px] font-semibold text-t1">New…</span>
             <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
@@ -453,7 +507,7 @@
               <span class="flex-1 text-[13.5px] text-t1">Session</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
             </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; taskCreateRequested = true; }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
               <span class="flex-1 text-[13.5px] text-t1">Task</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>

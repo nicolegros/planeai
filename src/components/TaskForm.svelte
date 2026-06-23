@@ -1,0 +1,118 @@
+<script lang="ts">
+  import type { Project } from "../lib/types";
+  import { Button, Input, Label, Select } from "./ui";
+  import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
+
+  interface Props {
+    projects: Project[];
+    onCreated: () => void;
+    onCancel: () => void;
+  }
+
+  let { projects, onCreated, onCancel }: Props = $props();
+
+  let formTitle = $state("");
+  let formDescription = $state("");
+  let formPriority = $state(0);
+  let formBaseBranch = $state("main");
+  let formProjectPath = $state(projects[0]?.path ?? "");
+  let formWrapper = $state<HTMLDivElement | null>(null);
+
+  const fk = createFormKeyboardController(
+    () => [
+      { key: "t", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
+      { key: "d", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
+      { key: "p", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
+      { key: "b", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
+    ],
+    { wrapper: () => formWrapper, onDismiss: onCancel },
+  );
+
+  const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
+
+  async function handleSubmit() {
+    if (!formTitle.trim()) return;
+    const repoPath = formProjectPath || projects[0]?.path;
+    if (!repoPath) return;
+    try {
+      await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [], baseBranch: formBaseBranch });
+      onCreated();
+    } catch (e: any) { showSnackbar(e.toString()); }
+  }
+
+  function autofocusForm(node: HTMLFormElement) {
+    requestAnimationFrame(() => node.querySelector<HTMLInputElement>("input")?.focus());
+  }
+
+  function autoResize(node: HTMLTextAreaElement) {
+    requestAnimationFrame(() => { node.style.height = 'auto'; node.style.height = node.scrollHeight + 'px'; });
+  }
+</script>
+
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<div bind:this={formWrapper} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+  <form
+    class="space-y-4"
+    use:autofocusForm
+    onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
+    onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
+  >
+    {#if projects.length > 1}
+      <div class="space-y-1">
+        <Label>Project</Label>
+        <Select
+          items={projects.map(p => ({ value: p.path, label: p.name }))}
+          bind:value={formProjectPath}
+          placeholder="Select project…"
+        />
+      </div>
+    {/if}
+
+    <div class="space-y-1" data-field="title">
+      <Label>Title <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
+      <Input bind:value={formTitle} placeholder="Task title" />
+    </div>
+
+    <div class="space-y-1" data-field="desc">
+      <Label>Description <span class="font-mono text-[10px] px-1 rounded {badge}">D</span></Label>
+      <textarea
+        bind:value={formDescription}
+        placeholder="Optional description"
+        class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
+        rows="3"
+        oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
+        use:autoResize
+      ></textarea>
+    </div>
+
+    <div class="space-y-1" data-field="priority">
+      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></Label>
+      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+    </div>
+
+    <div class="space-y-1" data-field="base">
+      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
+      <Input bind:value={formBaseBranch} placeholder="main" />
+    </div>
+
+    <div class="flex items-center justify-between pt-2 border-t border-border">
+      <div class="flex items-center gap-2">
+        {#if fk.mode === "insert"}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+          <span class="text-[10px] text-t3">esc → normal mode</span>
+        {:else}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
+          <span class="text-[10px] text-t3">press a key to focus field</span>
+        {/if}
+      </div>
+      <div class="flex gap-2">
+        <Button type="button" onclick={onCancel}>Cancel</Button>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>Create <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+      </div>
+    </div>
+  </form>
+</div>
