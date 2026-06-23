@@ -318,7 +318,7 @@
   {:else if ci === 'failing'}
     <XCircle class="size-3 text-status-exited" title="CI failing" />
   {:else if ci === 'running'}
-    <LoaderCircle class="size-3 animate-spin text-t3" title="CI running" />
+    <span class="size-2 rounded-full bg-amber-500" style="animation:pulse-dot 1.6s ease-in-out infinite" title="CI running"></span>
   {/if}
 {/snippet}
 
