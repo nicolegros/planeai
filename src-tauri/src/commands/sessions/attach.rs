@@ -74,12 +74,18 @@ pub fn attach_session(
             .unwrap_or(project_path)
             .to_string();
 
-        let cmd = crate::session_restart::restart_command(
-            &session.status,
-            provider_def,
-            None,
-        )
-        .unwrap_or_else(|| config::launch_command(provider_def, session.auto_approve));
+        let cmd = if session.status == "exited" {
+            match crate::session_restart::restart_command(
+                &session.status,
+                provider_def,
+                None,
+            ) {
+                Some(c) => c,
+                None => return Err("session restarting too quickly (circuit breaker)".to_string()),
+            }
+        } else {
+            config::launch_command(provider_def, session.auto_approve)
+        };
 
         let (program, args) = planeai_core::command::shell_args(&cmd);
         let target = pty::PtyTarget::Shell {
