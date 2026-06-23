@@ -30,9 +30,11 @@ pub fn connect(channel: Channel, app_dir: &Path) -> std::io::Result<std::os::uni
 }
 
 #[cfg(windows)]
-pub fn connect(channel: Channel, app_dir: &Path) -> std::io::Result<std::fs::File> {
-    let path = address(channel, app_dir);
-    std::fs::OpenOptions::new().read(true).write(true).open(path)
+pub fn connect(_channel: Channel, _app_dir: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "IPC not implemented on Windows",
+    ))
 }
 
 /// Listener for incoming IPC connections.
