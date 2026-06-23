@@ -35,6 +35,7 @@
   import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
+  import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -636,3 +637,5 @@
     <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
+
+<PostMergePrompt />
