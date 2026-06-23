@@ -78,10 +78,13 @@ pub fn resolve_daemon_binary_fallback() -> PathBuf {
         "planeai-daemon"
     };
 
-    // Check /usr/local/bin (symlink from install)
-    let symlinked = PathBuf::from("/usr/local/bin").join(bin_name);
-    if symlinked.exists() {
-        return symlinked;
+    // Check the app's resource directory (production bundle)
+    let resource_dir = app_data_dir().parent().map(|p| p.join("Resources"));
+    if let Some(ref dir) = resource_dir {
+        let bundled = dir.join(bin_name);
+        if bundled.exists() {
+            return bundled;
+        }
     }
 
     // Same directory as current executable
@@ -92,6 +95,12 @@ pub fn resolve_daemon_binary_fallback() -> PathBuf {
                 return sibling;
             }
         }
+    }
+
+    // Check /usr/local/bin (symlink from install)
+    let symlinked = PathBuf::from("/usr/local/bin").join(bin_name);
+    if symlinked.exists() {
+        return symlinked;
     }
 
     PathBuf::from(bin_name)
