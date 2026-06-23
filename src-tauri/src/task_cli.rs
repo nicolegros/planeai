@@ -2,7 +2,6 @@ use rusqlite::Connection;
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
-use planeai_tasks::sqlite::derive_prefix;
 
 use crate::db;
 
@@ -24,7 +23,7 @@ pub fn resolve_prefix(
             .find(|p| cwd.starts_with(&p.path))
             .ok_or_else(|| "could not resolve project from CWD; use --project".to_string())?
     };
-    Ok(derive_prefix(&proj.name))
+    Ok(proj.prefix.clone())
 }
 
 pub struct AddParams<'a> {
@@ -153,9 +152,10 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active'
+                status TEXT NOT NULL DEFAULT 'active',
+                prefix TEXT NOT NULL DEFAULT ''
             );
-            INSERT INTO projects (id, name, path) VALUES ('p1', 'planeai', '/Users/dev/planeai');",
+            INSERT INTO projects (id, name, path, prefix) VALUES ('p1', 'planeai', '/Users/dev/planeai', 'PLA');",
         )
         .unwrap();
         // Open a second in-memory conn for the task repo (since repo takes ownership)

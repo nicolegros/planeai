@@ -27,7 +27,11 @@ export function createFormKeyboardController(
 
   function isTextField(el: Element | null): boolean {
     if (!el) return false;
-    if (el.tagName === "INPUT" && !["checkbox", "radio", "button"].includes((el as HTMLInputElement).type)) return true;
+    if (
+      el.tagName === "INPUT" &&
+      !["checkbox", "radio", "button"].includes((el as HTMLInputElement).type)
+    )
+      return true;
     if (el.tagName === "TEXTAREA") return true;
     if (el.closest("[role='combobox']")) return true;
     return false;
@@ -67,7 +71,7 @@ export function createFormKeyboardController(
 
     // Normal mode: check mnemonic bindings
     const key = e.key.toLowerCase();
-    const binding = bindings().find(b => b.key === key);
+    const binding = bindings().find((b) => b.key === key);
     if (binding) {
       e.preventDefault();
       if (binding.toggle) {
@@ -84,7 +88,9 @@ export function createFormKeyboardController(
   }
 
   return {
-    get mode() { return mode; },
+    get mode() {
+      return mode;
+    },
     handleKeydown,
     handleFocusin,
   };

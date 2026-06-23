@@ -231,7 +231,7 @@ pub fn fire_task_hook(
         let prefix = projects
             .iter()
             .find(|p| cwd.starts_with(&p.path))
-            .map(|p| planeai_tasks::sqlite::derive_prefix(&p.name))
+            .map(|p| p.prefix.clone())
             .unwrap_or_default();
         if !prefix.is_empty() {
             if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
@@ -1039,6 +1039,8 @@ mod tests {
             id: "proj-1".to_string(),
             name: "myapp".to_string(),
             path: "/tmp/myapp".to_string(),
+            status: "active".to_string(),
+            prefix: "MYA".to_string(),
         }];
         let sessions = vec![db::Session {
             id: "aaaabbbb-1111-2222-3333-444455556666".to_string(),

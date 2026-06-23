@@ -12,11 +12,11 @@
   --color-t2: #686870;
   --color-t3: #88888f;
   --color-border: rgba(0, 0, 0, 0.06);
-  --color-border-s: rgba(0, 0, 0, 0.10);
+  --color-border-s: rgba(0, 0, 0, 0.1);
   --color-accent: #18181d;
   --color-on-accent: #ffffff;
   --color-accent-bg: rgba(24, 24, 29, 0.07);
-  --color-scrim: rgba(25, 25, 30, 0.30);
+  --color-scrim: rgba(25, 25, 30, 0.3);
   --color-status-running: #1a7f37;
   --color-status-review: #9a6700;
   --color-status-exited: #cf222e;
@@ -42,7 +42,7 @@
     --terminal-background: #ffffff;
     --terminal-foreground: #171717;
     --terminal-cursor: #18181d;
-    --terminal-selection: rgba(24,24,29,0.12);
+    --terminal-selection: rgba(24, 24, 29, 0.12);
     --terminal-black: #171717;
     --terminal-red: #cf222e;
     --terminal-green: #116329;
@@ -65,7 +65,7 @@
     --diff-del-color: #cf222e;
     --editor-background: #ffffff;
     --editor-foreground: #171717;
-    --editor-selection: rgba(24,24,29,0.12);
+    --editor-selection: rgba(24, 24, 29, 0.12);
     --editor-line-number: #88888f;
     --editor-added: #116329;
     --editor-deleted: #cf222e;
@@ -94,12 +94,12 @@
     --color-t1: #f2f2f2;
     --color-t2: #9e9e9e;
     --color-t3: #5b5b61;
-    --color-border: rgba(255,255,255,0.08);
-    --color-border-s: rgba(255,255,255,0.14);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-s: rgba(255, 255, 255, 0.14);
     --color-accent: #f5f5f5;
     --color-on-accent: #0a0a0a;
-    --color-accent-bg: rgba(245,245,245,0.12);
-    --color-scrim: rgba(0,0,0,0.55);
+    --color-accent-bg: rgba(245, 245, 245, 0.12);
+    --color-scrim: rgba(0, 0, 0, 0.55);
     --color-status-running: #3fb950;
     --color-status-review: #d29922;
     --color-status-exited: #ff7b72;
@@ -107,7 +107,7 @@
     --terminal-background: #0d0d0d;
     --terminal-foreground: #f2f2f2;
     --terminal-cursor: #f5f5f5;
-    --terminal-selection: rgba(245,245,245,0.18);
+    --terminal-selection: rgba(245, 245, 245, 0.18);
     --terminal-black: #484f58;
     --terminal-red: #ff7b72;
     --terminal-green: #3fb950;
@@ -130,7 +130,7 @@
     --diff-del-color: #ff7b72;
     --editor-background: #0a0a0a;
     --editor-foreground: #f2f2f2;
-    --editor-selection: rgba(245,245,245,0.18);
+    --editor-selection: rgba(245, 245, 245, 0.18);
     --editor-line-number: #5b5b61;
     --editor-added: #3fb950;
     --editor-deleted: #ff7b72;
@@ -163,32 +163,88 @@
 /* Border color override is in overrides.css (imported after tailwind processing) */
 
 /* CodeMirror syntax highlighting — classHighlighter applies .tok-* classes */
-.tok-keyword { color: var(--editor-keyword, var(--editor-foreground)); }
-.tok-atom { color: var(--editor-atom, var(--editor-keyword, var(--editor-foreground))); }
-.tok-bool { color: var(--editor-bool, var(--editor-atom, var(--editor-keyword, var(--editor-foreground)))); }
-.tok-string { color: var(--editor-string, var(--editor-foreground)); }
-.tok-string2 { color: var(--editor-string2, var(--editor-string, var(--editor-foreground))); }
-.tok-number { color: var(--editor-number, var(--editor-foreground)); }
-.tok-variableName { color: var(--editor-variable, var(--editor-foreground)); }
-.tok-variableName2 { color: var(--editor-variable2, var(--editor-variable, var(--editor-foreground))); }
-.tok-typeName { color: var(--editor-type, var(--editor-foreground)); }
-.tok-className { color: var(--editor-class, var(--editor-type, var(--editor-foreground))); }
-.tok-namespace { color: var(--editor-namespace, var(--editor-type, var(--editor-foreground))); }
-.tok-macroName { color: var(--editor-macro, var(--editor-function, var(--editor-foreground))); }
-.tok-propertyName { color: var(--editor-property, var(--editor-foreground)); }
-.tok-operator { color: var(--editor-operator, var(--editor-foreground)); }
-.tok-comment { color: var(--editor-comment, var(--editor-foreground)); font-style: italic; }
-.tok-meta { color: var(--editor-meta, var(--editor-foreground)); }
-.tok-punctuation { color: var(--editor-punctuation, var(--editor-foreground)); }
-.tok-invalid { color: var(--editor-invalid, #ff0000); text-decoration: underline; }
-.tok-literal { color: var(--editor-literal, var(--editor-string, var(--editor-foreground))); }
-.tok-labelName { color: var(--editor-label, var(--editor-foreground)); }
-.tok-heading { color: var(--editor-heading, var(--editor-keyword, var(--editor-foreground))); font-weight: bold; }
-.tok-emphasis { font-style: italic; }
-.tok-strong { font-weight: bold; }
-.tok-link { color: var(--editor-link, var(--editor-string, var(--editor-foreground))); text-decoration: underline; }
-.tok-definition { font-weight: 600; }
-.tok-local { text-decoration: underline; }
+.tok-keyword {
+  color: var(--editor-keyword, var(--editor-foreground));
+}
+.tok-atom {
+  color: var(--editor-atom, var(--editor-keyword, var(--editor-foreground)));
+}
+.tok-bool {
+  color: var(--editor-bool, var(--editor-atom, var(--editor-keyword, var(--editor-foreground))));
+}
+.tok-string {
+  color: var(--editor-string, var(--editor-foreground));
+}
+.tok-string2 {
+  color: var(--editor-string2, var(--editor-string, var(--editor-foreground)));
+}
+.tok-number {
+  color: var(--editor-number, var(--editor-foreground));
+}
+.tok-variableName {
+  color: var(--editor-variable, var(--editor-foreground));
+}
+.tok-variableName2 {
+  color: var(--editor-variable2, var(--editor-variable, var(--editor-foreground)));
+}
+.tok-typeName {
+  color: var(--editor-type, var(--editor-foreground));
+}
+.tok-className {
+  color: var(--editor-class, var(--editor-type, var(--editor-foreground)));
+}
+.tok-namespace {
+  color: var(--editor-namespace, var(--editor-type, var(--editor-foreground)));
+}
+.tok-macroName {
+  color: var(--editor-macro, var(--editor-function, var(--editor-foreground)));
+}
+.tok-propertyName {
+  color: var(--editor-property, var(--editor-foreground));
+}
+.tok-operator {
+  color: var(--editor-operator, var(--editor-foreground));
+}
+.tok-comment {
+  color: var(--editor-comment, var(--editor-foreground));
+  font-style: italic;
+}
+.tok-meta {
+  color: var(--editor-meta, var(--editor-foreground));
+}
+.tok-punctuation {
+  color: var(--editor-punctuation, var(--editor-foreground));
+}
+.tok-invalid {
+  color: var(--editor-invalid, #ff0000);
+  text-decoration: underline;
+}
+.tok-literal {
+  color: var(--editor-literal, var(--editor-string, var(--editor-foreground)));
+}
+.tok-labelName {
+  color: var(--editor-label, var(--editor-foreground));
+}
+.tok-heading {
+  color: var(--editor-heading, var(--editor-keyword, var(--editor-foreground)));
+  font-weight: bold;
+}
+.tok-emphasis {
+  font-style: italic;
+}
+.tok-strong {
+  font-weight: bold;
+}
+.tok-link {
+  color: var(--editor-link, var(--editor-string, var(--editor-foreground)));
+  text-decoration: underline;
+}
+.tok-definition {
+  font-weight: 600;
+}
+.tok-local {
+  text-decoration: underline;
+}
 
 .xterm {
   height: 100%;
@@ -196,15 +252,21 @@
   overflow: hidden;
 }
 
-.scrollbar-hide { scrollbar-width: none; }
-.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
 
 .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-width: none;
   background-color: inherit !important;
 }
-.xterm-viewport::-webkit-scrollbar { display: none; }
+.xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
 
 /* ── @pierre/diffs theming ── */
 /* NOTE: --diffs-font-size / --diffs-font-family are NOT set here on purpose.
@@ -224,10 +286,33 @@ diffs-container {
 }
 
 /* ── Animations ── */
-@keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.78); } }
-@keyframes blink-caret { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.78);
+  }
+}
+@keyframes blink-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
 
 /* ── Titlebar drag region ── */
-[data-tauri-drag-region] { -webkit-app-region: drag; }
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
 [data-tauri-drag-region] button,
-[data-tauri-drag-region] [role="presentation"] { -webkit-app-region: no-drag; }
+[data-tauri-drag-region] [role="presentation"] {
+  -webkit-app-region: no-drag;
+}

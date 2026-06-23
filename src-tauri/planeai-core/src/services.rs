@@ -81,6 +81,41 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     let _ =
         conn.execute_batch("ALTER TABLE projects ADD COLUMN auto_mode INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN task_manager TEXT");
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN prefix TEXT NOT NULL DEFAULT ''");
+    // Backfill prefix for existing projects that don't have one yet.
+    // If a project already has tasks under the old (first-3-chars) prefix, keep it to avoid
+    // orphaning tasks. Only derive new-style prefix for projects without existing tasks.
+    {
+        let mut stmt = conn.prepare("SELECT id, name FROM projects WHERE prefix = ''")?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (id, name) in rows {
+            let old_prefix: String = name
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .take(3)
+                .collect::<String>()
+                .to_uppercase();
+            // Check if tasks exist under the old prefix
+            let has_tasks: bool = conn
+                .prepare("SELECT EXISTS(SELECT 1 FROM task_projects WHERE prefix = ?1)")
+                .and_then(|mut s| s.query_row(params![old_prefix], |r| r.get(0)))
+                .unwrap_or(false);
+            let prefix = if has_tasks {
+                old_prefix
+            } else {
+                planeai_tasks::sqlite::derive_prefix(&name)
+            };
+            conn.execute(
+                "UPDATE projects SET prefix = ?1 WHERE id = ?2",
+                params![prefix, id],
+            )?;
+        }
+    }
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN updated_at TEXT");
     let _ =
         conn.execute_batch("UPDATE sessions SET updated_at = created_at WHERE updated_at IS NULL");
@@ -142,6 +177,7 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub status: String,
+    pub prefix: String,
 }
 
 // ─── Session types (matches production db::Session) ──────────────────────────
@@ -221,7 +257,7 @@ impl ProjectService {
     pub fn ensure_project(conn: &Connection, path: &str) -> SqlResult<Project> {
         let existing: Option<Project> = conn
             .prepare(
-                "SELECT id, name, path, status FROM projects WHERE path = ?1 AND status = 'active'",
+                "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
             )?
             .query_row(params![path], |row| {
                 Ok(Project {
@@ -229,6 +265,7 @@ impl ProjectService {
                     name: row.get(1)?,
                     path: row.get(2)?,
                     status: row.get(3)?,
+                    prefix: row.get(4)?,
                 })
             })
             .ok();
@@ -243,27 +280,31 @@ impl ProjectService {
             .unwrap_or_else(|| "project".to_string());
 
         let id = uuid::Uuid::new_v4().to_string();
+        let prefix = Self::unique_prefix(conn, &name)?;
         conn.execute(
-            "INSERT INTO projects (id, name, path, status) VALUES (?1, ?2, ?3, 'active')",
-            params![id, name, path],
+            "INSERT INTO projects (id, name, path, status, prefix) VALUES (?1, ?2, ?3, 'active', ?4)",
+            params![id, name, path, prefix],
         )?;
         Ok(Project {
             id,
             name,
             path: path.to_string(),
             status: "active".to_string(),
+            prefix,
         })
     }
 
     pub fn list_active(conn: &Connection) -> SqlResult<Vec<Project>> {
-        let mut stmt =
-            conn.prepare("SELECT id, name, path, status FROM projects WHERE status = 'active'")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'active'",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 path: row.get(2)?,
                 status: row.get(3)?,
+                prefix: row.get(4)?,
             })
         })?;
         rows.collect()
@@ -271,7 +312,7 @@ impl ProjectService {
 
     pub fn get_by_path(conn: &Connection, path: &str) -> SqlResult<Option<Project>> {
         conn.prepare(
-            "SELECT id, name, path, status FROM projects WHERE path = ?1 AND status = 'active'",
+            "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
         )?
         .query_row(params![path], |row| {
             Ok(Project {
@@ -279,6 +320,7 @@ impl ProjectService {
                 name: row.get(1)?,
                 path: row.get(2)?,
                 status: row.get(3)?,
+                prefix: row.get(4)?,
             })
         })
         .ok()
@@ -286,13 +328,14 @@ impl ProjectService {
     }
 
     pub fn get_by_id(conn: &Connection, id: &str) -> SqlResult<Option<Project>> {
-        conn.prepare("SELECT id, name, path, status FROM projects WHERE id = ?1")?
+        conn.prepare("SELECT id, name, path, status, prefix FROM projects WHERE id = ?1")?
             .query_row(params![id], |row| {
                 Ok(Project {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: row.get(2)?,
                     status: row.get(3)?,
+                    prefix: row.get(4)?,
                 })
             })
             .ok()
@@ -301,15 +344,17 @@ impl ProjectService {
 
     pub fn create(conn: &Connection, name: &str, path: &str) -> SqlResult<Project> {
         let id = uuid::Uuid::new_v4().to_string();
+        let prefix = Self::unique_prefix(conn, name)?;
         conn.execute(
-            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
-            params![id, name, path],
+            "INSERT INTO projects (id, name, path, prefix) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, path, prefix],
         )?;
         Ok(Project {
             id,
             name: name.to_string(),
             path: path.to_string(),
             status: "active".to_string(),
+            prefix,
         })
     }
 
@@ -326,14 +371,16 @@ impl ProjectService {
     }
 
     pub fn list_archived(conn: &Connection) -> SqlResult<Vec<Project>> {
-        let mut stmt =
-            conn.prepare("SELECT id, name, path, status FROM projects WHERE status = 'archived'")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'archived'",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 path: row.get(2)?,
                 status: row.get(3)?,
+                prefix: row.get(4)?,
             })
         })?;
         rows.collect()
@@ -360,6 +407,29 @@ impl ProjectService {
             |r| r.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Derive a unique prefix for a project name, appending a numeric disambiguator if needed.
+    fn unique_prefix(conn: &Connection, name: &str) -> SqlResult<String> {
+        let base = planeai_tasks::sqlite::derive_prefix(name);
+        let exists = |p: &str| -> SqlResult<bool> {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM projects WHERE prefix = ?1",
+                params![p],
+                |r| r.get(0),
+            )?;
+            Ok(count > 0)
+        };
+        if !exists(&base)? {
+            return Ok(base);
+        }
+        for i in 2..=99 {
+            let candidate = format!("{base}{i}");
+            if !exists(&candidate)? {
+                return Ok(candidate);
+            }
+        }
+        Ok(base) // fallback — shouldn't happen in practice
     }
 }
 
@@ -798,11 +868,10 @@ impl TaskService {
     /// List tasks for a project prefix (non-done tasks). Uses planeai_tasks SqliteRepository.
     pub fn list_for_project(
         db_path: &Path,
-        project_name: &str,
+        prefix: &str,
     ) -> Result<Vec<planeai_tasks::model::Task>, String> {
-        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
         let repo =
-            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix)
                 .map_err(|e| e.to_string())?;
         use planeai_tasks::provider::TaskProvider;
         repo.list(planeai_tasks::model::ListFilter {
@@ -815,12 +884,11 @@ impl TaskService {
     /// Get a single task by key.
     pub fn get_task(
         db_path: &Path,
-        project_name: &str,
+        prefix: &str,
         key: &str,
     ) -> Result<planeai_tasks::model::Task, String> {
-        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
         let repo =
-            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix)
                 .map_err(|e| e.to_string())?;
         use planeai_tasks::provider::TaskProvider;
         repo.get(key).map_err(|e| e.to_string())
@@ -843,15 +911,14 @@ impl TaskService {
     /// Link a session to a task and optionally move task to a new status (on_start hook).
     pub fn fire_lifecycle_hook(
         db_path: &Path,
-        project_name: &str,
+        prefix: &str,
         task_key: &str,
         move_to: &str,
     ) -> Result<(), String> {
         let status = planeai_tasks::model::Status::parse(move_to)
             .ok_or_else(|| format!("invalid status: {move_to}"))?;
-        let prefix = planeai_tasks::sqlite::derive_prefix(project_name);
         let repo =
-            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), &prefix)
+            planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix)
                 .map_err(|e| e.to_string())?;
         use planeai_tasks::provider::TaskProvider;
         repo.update(
