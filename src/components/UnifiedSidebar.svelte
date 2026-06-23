@@ -18,7 +18,6 @@
 
   interface Props {
     renamingSessionId: string | null;
-    taskCreateRequested?: boolean;
     onAddProject: () => void;
     onSelectSession: (id: string) => void;
     onArchiveSession: (session: Session) => void;
@@ -30,11 +29,10 @@
     onDeleteProject: (project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
-    onTaskCreateConsumed?: () => void;
     onSessionsChanged?: () => void;
   }
 
-  let { renamingSessionId, taskCreateRequested = false, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onTaskCreateConsumed, onSessionsChanged }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -105,7 +103,6 @@
 
   // External triggers
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
-  $effect(() => { if (taskCreateRequested) { taskPanelRef?.openCreate(); onTaskCreateConsumed?.(); } });
 
   // Derive orphan sessions (no task_key or task_key not in loaded tasks)
   const allTaskKeys = $derived(new Set(Object.values(tasksByProject).flat().map(t => t.key)));
@@ -500,8 +497,8 @@
   </button>
 </aside>
 
-<!-- Hidden TaskPanel for create dialog -->
-<div class="hidden">
+<!-- Hidden TaskPanel for edit dialog -->
+<div class="absolute w-0 h-0 overflow-hidden">
   <TaskPanel
     bind:this={taskPanelRef}
     disableKeyboard={true}
