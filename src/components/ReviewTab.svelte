@@ -658,9 +658,9 @@
         {@const fileCount = getFileCommentCount(sessionId, file.path)}
         {@const viewed = viewedFiles.has(file.path)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
+        <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 min-w-0 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
           <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-          <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
+          <div class="flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
           {#if viewed}
             <button class="shrink-0 text-status-running" onclick={(e) => { e.stopPropagation(); toggleViewed(i); }} title="Mark as unviewed"><Check size={12} /></button>
           {:else}
@@ -668,7 +668,7 @@
           {/if}
           <span class="truncate flex-1 font-mono" title={file.path}><span class="text-t3 text-[9.5px]">{dirName(file.path)}</span><span class="text-t1 text-[12px]">{fileName(file.path)}</span></span>
           {#if fileCount > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{fileCount}</span>{/if}
-          <span class="text-[10px] font-mono text-t3">+{file.additions} −{file.deletions}</span>
+          <span class="shrink-0 text-[10px] font-mono text-t3">+{file.additions} −{file.deletions}</span>
           </div>
         </li>
       {/each}
