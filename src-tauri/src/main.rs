@@ -162,14 +162,6 @@ fn main() {
             });
             // Jira integration (before cfg is moved into ConfigState)
             let jira_state = jira::init_jira(&cfg);
-            if let Some(ref state) = jira_state {
-                if let (Some(sync), Some(cancel)) = (&state.sync, &state.cancel) {
-                    let sync = sync.clone();
-                    let cancel = cancel.clone();
-                    tokio::spawn(async move { sync.start(cancel).await });
-                    tracing::info!("jira sync loop started");
-                }
-            }
 
             app.manage(ConfigState(Mutex::new(cfg)));
             app.manage(commands::JiraHandle(Mutex::new(jira_state)));
