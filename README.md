@@ -5,6 +5,16 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 > **Status:** Early development. Expect breaking changes between releases.
 
 <!-- TODO: Add screenshot/GIF showing the main UI with multiple sessions running -->
+<table>
+  <tr>
+    <td align="center"><img src="docs/assets/claude-dark.png" alt="Multi-agent support" /><br/><sub>Bring your agent (claude, copilot, kiro, etc.)</sub></td>
+    <td align="center"><img src="docs/assets/claude-light.png" alt="Custom themes" /><br/><sub>Custom themes and presets</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/assets/terminal-dark.png" alt="Terminal" /><br/><sub>Multi-tab terminal w/ WebGL rendering</sub></td>
+    <td align="center"><img src="docs/assets/diff-dark.png" alt="Review diff" /><br/><sub>Review diff and send feedback to your agent</sub></td>
+  </tr>
+</table>
 
 ## Features
 
