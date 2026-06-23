@@ -9,6 +9,14 @@ use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
 use super::helpers::provider_has_hook;
 use super::launch::discover_provider_session_id;
 
+struct DiscoveryParams {
+    list_cmd: String,
+    pattern: String,
+    is_resume: bool,
+    previous_id: Option<String>,
+    cwd: String,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn attach_session(
@@ -77,13 +85,16 @@ pub fn attach_session(
             cwd: cwd.clone(),
         };
 
-        let disc = Some((
-            list_cmd,
-            pattern,
-            is_resume,
-            session.provider_session_id.clone(),
-            cwd,
-        ));
+        let disc = match (list_cmd, pattern) {
+            (Some(list_cmd), Some(pattern)) => Some(DiscoveryParams {
+                list_cmd,
+                pattern,
+                is_resume,
+                previous_id: session.provider_session_id.clone(),
+                cwd,
+            }),
+            _ => None,
+        };
         (target, disc)
     };
 
@@ -122,10 +133,10 @@ pub fn attach_session(
     }
     drop(conn);
 
-    if let Some((Some(list_cmd), Some(pattern), is_resume, previous_id, cwd)) = discovery_info {
+    if let Some(params) = discovery_info {
         eprintln!(
             "[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'",
-            &session_id, &list_cmd, &cwd
+            &session_id, &params.list_cmd, &params.cwd
         );
         let sid = session_id.clone();
         let db_path = app
@@ -136,21 +147,19 @@ pub fn attach_session(
         std::thread::spawn(move || {
             discover_provider_session_id(
                 &sid,
-                &list_cmd,
-                &pattern,
-                &cwd,
-                previous_id.as_deref(),
-                is_resume,
+                &params.list_cmd,
+                &params.pattern,
+                &params.cwd,
+                params.previous_id.as_deref(),
+                params.is_resume,
                 &db_path,
                 &app,
             );
         });
     } else {
         eprintln!(
-            "[DEBUG-disc] skipping discovery: discovery_info={:?}",
-            discovery_info
-                .as_ref()
-                .map(|(a, b, _, _, _)| (a.is_some(), b.is_some()))
+            "[DEBUG-disc] skipping discovery for session={}",
+            &session_id
         );
     }
 
