@@ -122,7 +122,7 @@
 >
   <!-- Breadcrumb: project / session + provider tag -->
   {#if projectName || sessionName}
-    <div class="flex items-center gap-2 text-[12.5px] select-none pointer-events-none shrink-0">
+    <div data-tauri-drag-region class="flex items-center gap-2 text-[12.5px] select-none pointer-events-none shrink-0">
       {#if projectName}<span class="text-t2">{projectName}</span>{/if}
       {#if projectName && sessionName}<span class="text-t3">/</span>{/if}
       {#if sessionName}<span class="text-t1 font-medium">{sessionName}</span>{/if}
@@ -134,7 +134,7 @@
   {/if}
 
   <!-- Inline tabs -->
-  <div class="flex items-stretch h-[38px]" role="tablist">
+  <div data-tauri-drag-region class="flex items-stretch h-[38px] flex-1" role="tablist">
     {#each tabs as tab (tab.index)}
       {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
       <button
