@@ -9,7 +9,7 @@
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
-  import { addComment, removeComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
+  import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
   import { MessageSquare, Send, Check } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -45,6 +45,7 @@
   let cursorLine = $state(1);
   let selectionAnchor = $state<number | null>(null);
   let commentInputEl = $state<HTMLTextAreaElement | undefined>();
+  let editingCommentId = $state<string | null>(null);
 
   // CodeView + Worker Pool
   let viewerRoot: HTMLElement;
@@ -80,6 +81,9 @@
   // Reactive
   let totalCount = $derived(getTotalCommentCount(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
+  let currentFileComments = $derived(
+    getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
+  );
 
 
   // ─── Core Functions ─────────────────────────────────────────────────────────
@@ -226,13 +230,17 @@
   function submitComment() {
     const text = commentText.trim();
     if (!text) return;
-    addComment(sessionId, {
-      filePath: files[selectedIndex]?.path ?? "",
-      type: commentType,
-      startLine: commentStartLine,
-      endLine: commentEndLine,
-      text,
-    });
+    if (editingCommentId) {
+      editComment(sessionId, editingCommentId, text);
+    } else {
+      addComment(sessionId, {
+        filePath: files[selectedIndex]?.path ?? "",
+        type: commentType,
+        startLine: commentStartLine,
+        endLine: commentEndLine,
+        text,
+      });
+    }
     cancelComment();
     clearSelection();
     updateAnnotations();
@@ -241,6 +249,17 @@
   function cancelComment() {
     showCommentInput = false;
     commentText = "";
+    editingCommentId = null;
+  }
+
+  function openEditComment(comment: ReviewComment) {
+    commentStartLine = comment.startLine;
+    commentEndLine = comment.endLine;
+    commentType = comment.type;
+    commentText = comment.text;
+    editingCommentId = comment.id;
+    showCommentInput = true;
+    requestAnimationFrame(() => commentInputEl?.focus());
   }
 
   function handleCommentKeydown(e: KeyboardEvent) {
@@ -250,15 +269,12 @@
 
   function updateAnnotations() {
     if (!viewer || files.length === 0) return;
-    const file = files[selectedIndex];
-    const item = viewer.getItem(`diff:${file.path}`);
-    if (item?.type === "diff") {
-      viewer.updateItem({
-        ...item,
-        version: (item.version ?? 0) + 1,
-        annotations: getAnnotationsForFile(file.path),
-      });
-    }
+    allItems = allItems.map((it) =>
+      it.type === "diff"
+        ? { ...it, version: (it.version ?? 0) + 1, annotations: getAnnotationsForFile(it.id.replace("diff:", "")) }
+        : it,
+    );
+    viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
   }
 
   async function sendFeedback() {
@@ -339,12 +355,44 @@
       if (!inRange) cursorLine = ranges[0].start;
     }
     viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "nearest" });
+    // Scroll the selected line into view directly on the viewerRoot container
+    if (viewerRoot) {
+      for (const host of viewerRoot.querySelectorAll("diffs-container")) {
+        const el = host.shadowRoot?.querySelector("[data-selected-line]") as HTMLElement | null;
+        if (!el) continue;
+        const containerRect = viewerRoot.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const margin = 40;
+        if (elRect.bottom + margin > containerRect.bottom) {
+          viewerRoot.scrollTop += elRect.bottom - containerRect.bottom + margin;
+        } else if (elRect.top - margin < containerRect.top) {
+          viewerRoot.scrollTop -= containerRect.top - elRect.top + margin;
+        }
+        break;
+      }
+    }
   }
 
   function moveCursor(delta: number) {
+    const prevLine = cursorLine;
     const newLine = Math.max(1, cursorLine + delta);
     cursorLine = snapToVisible(newLine, delta >= 0 ? 1 : -1);
+    // Cross-file advancement when stuck at boundary
+    if (cursorLine === prevLine && selectionAnchor === null) {
+      const dir = delta >= 0 ? 1 : -1;
+      const nextIdx = findNextFile(selectedIndex, dir);
+      if (nextIdx !== -1) {
+        selectedIndex = nextIdx;
+        onFileChange?.(files[nextIdx]?.path.split("/").pop() || files[nextIdx]?.path || "");
+        diffFocus = "body";
+        const ranges = visibleRanges.get(nextIdx);
+        if (ranges && ranges.length > 0) {
+          cursorLine = dir === 1 ? ranges[0].start : ranges[ranges.length - 1].end;
+        }
+        showCursor();
+        return;
+      }
+    }
     if (selectionAnchor !== null) {
       const start = Math.min(selectionAnchor, cursorLine);
       const end = Math.max(selectionAnchor, cursorLine);
@@ -352,6 +400,15 @@
     } else {
       showCursor();
     }
+  }
+
+  function findNextFile(fromIndex: number, direction: 1 | -1): number {
+    for (let i = fromIndex + direction; i >= 0 && i < files.length; i += direction) {
+      if (!viewedFiles.has(files[i].path)) return i;
+    }
+    // All remaining are viewed — advance to adjacent anyway
+    const next = fromIndex + direction;
+    return next >= 0 && next < files.length ? next : -1;
   }
 
   function snapToVisible(line: number, direction: 1 | -1): number {
@@ -469,6 +526,11 @@
         openCommentInput(cursorLine, cursorLine, "line");
       }
     }
+    else if (e.key === "E" && !e.metaKey && !e.ctrlKey && files.length > 0) {
+      e.preventDefault();
+      const comment = getComments(sessionId).find((c) => c.filePath === files[selectedIndex]?.path && c.startLine <= cursorLine && c.endLine >= cursorLine);
+      if (comment) openEditComment(comment);
+    }
   }
 
   function toggleDiffStyle() {
@@ -520,11 +582,17 @@
         const text = document.createElement("span");
         text.style.cssText = "flex:1;white-space:pre-wrap;word-break:break-word";
         text.textContent = comment.text;
+        const edit = document.createElement("button");
+        edit.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:12px";
+        edit.textContent = "✎";
+        edit.title = "Edit comment";
+        edit.onclick = () => { openEditComment(comment); };
         const del = document.createElement("button");
         del.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:14px";
         del.textContent = "×";
         del.onclick = () => { removeComment(sessionId, comment.id); updateAnnotations(); };
         el.appendChild(text);
+        el.appendChild(edit);
         el.appendChild(del);
         return el;
       },
@@ -626,10 +694,24 @@
     {#if showCommentInput}
       <div class="absolute top-[42px] left-0 right-0 z-20 p-3 border-b border-border bg-chrome">
         {#if commentType !== "file"}
-          <div class="text-[10px] text-t3 mb-1.5">● Review note · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
+          <div class="text-[10px] text-t3 mb-1.5">● {editingCommentId ? "Edit note" : "Review note"} · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
         {/if}
-        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full p-2 text-[12.5px] rounded-lg border border-border-s bg-panel text-t1 resize-none focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
+        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full p-2 text-[12.5px] rounded-lg border border-border-s bg-panel text-t1 resize-none focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="{editingCommentId ? 'Edit note…' : 'Add a note…'} (Enter to submit, Esc to cancel)"></textarea>
         <span class="font-mono text-[10px] text-t3 mt-1 inline-block">r reply</span>
+      </div>
+    {/if}
+
+    <!-- Comment list (split view) -->
+    {#if diffStyle === "split" && currentFileComments.length > 0 && !showCommentInput}
+      <div class="absolute top-[42px] left-0 right-0 z-10 border-b border-border bg-chrome max-h-[200px] overflow-y-auto">
+        {#each currentFileComments as comment (comment.id)}
+          <div class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0">
+            <span class="shrink-0 text-[10px] text-t3 font-mono pt-0.5">{comment.type === "hunk" ? `L${comment.startLine}–${comment.endLine}` : `L${comment.startLine}`}</span>
+            <span class="flex-1 text-[12px] text-t1 whitespace-pre-wrap break-words">{comment.text}</span>
+            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} title="Edit">✎</button>
+            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={() => { removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
+          </div>
+        {/each}
       </div>
     {/if}
 
