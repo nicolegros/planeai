@@ -42,7 +42,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="absolute top-0 bottom-0 w-1 cursor-col-resize z-10 transition-colors {side === 'right' ? 'right-0' : 'left-0'} {dragging ? 'bg-primary-500' : 'hover:bg-primary-500/50'}"
+  class="absolute top-0 bottom-0 w-1 cursor-col-resize z-10 transition-colors {side === 'right' ? 'right-0' : 'left-0'} {dragging ? 'bg-accent' : 'hover:bg-accent/50'}"
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}

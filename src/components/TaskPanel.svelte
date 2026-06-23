@@ -6,7 +6,8 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Button, Input, Label, ContextMenu, Dialog, Select } from "./ui";
+  import { Button, Input, Label, ContextMenu, Select } from "./ui";
+  import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -43,6 +44,19 @@
   let formKey = $state("");
   let formProjectPath = $state("");
   let formBaseBranch = $state("main");
+  let taskFormWrapper = $state<HTMLDivElement | null>(null);
+
+  const taskFk = createFormKeyboardController(
+    () => [
+      { key: "t", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
+      { key: "d", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
+      { key: "p", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
+      { key: "b", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
+    ],
+    { wrapper: () => taskFormWrapper, onDismiss: () => { modalMode = null; focusTerminal(); } },
+  );
+
+  const taskBadge = $derived(taskFk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
 
   // Context menu
   let contextMenu = $state<{ x: number; y: number; task: TaskItem } | null>(null);
@@ -265,16 +279,16 @@
   <!-- Task list: project > status -->
   <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-3">
     {#if projects.length === 0}
-      <p class="text-xs text-surface-600 dark:text-surface-400 text-center mt-8">No projects</p>
+      <p class="text-xs text-t2 text-center mt-8">No projects</p>
     {:else if Object.values(tasksByProject).every(t => t.length === 0) && !loading}
-      <p class="text-xs text-surface-600 dark:text-surface-400 text-center mt-8">No tasks found</p>
+      <p class="text-xs text-t2 text-center mt-8">No tasks found</p>
     {:else}
       {#each projects as project (project.path)}
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {#if projectTasks.length > 0}
           {@const statusGroups = groupByStatus(projectTasks)}
           <div>
-            <h3 class="px-2 mb-1 text-[11px] font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider truncate flex items-center gap-1">{project.name}</h3>
+            <h3 class="px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-wider truncate flex items-center gap-1">{project.name}</h3>
             {#each statusOrder.filter(s => !(s === "done" && getSettings().hide_done_tasks)) as status}
               {@const items = statusGroups[status] ?? []}
               {#if items.length > 0}
@@ -283,7 +297,7 @@
                 {@const isSectionSelected = getActiveZone() === 'sidebar' && sectionNavIdx === getSelectedIndex()}
                 <div class="ml-1">
                   <button
-                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-surface-500'} hover:opacity-80 rounded-md {isSectionSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                    class="w-full flex items-center gap-1.5 px-2 py-1 text-xs font-semibold {statusColors[status] ?? 'text-t3'} hover:opacity-80 rounded-md {isSectionSelected ? 'ring-1 ring-accent/50' : ''}"
                     onclick={() => toggleSection(sectionKey)}
                   >
                     {#if collapsedSections[sectionKey]}
@@ -304,20 +318,20 @@
                         <li>
                           <button
                             class="w-full text-left px-2 py-1.5 rounded-md text-sm flex items-center gap-1 transition-colors select-none
-                              {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50 font-medium' : 'text-surface-700 dark:text-surface-300 hover:bg-surface-200 dark:hover:bg-surface-800'}
-                              {isTaskSelected ? 'ring-1 ring-primary-500/50' : ''}"
+                              {isActive ? 'bg-accent-bg text-t1 font-medium' : 'text-t1 hover:bg-panel-hi'}
+                              {isTaskSelected ? 'ring-1 ring-accent/50' : ''}"
                             onclick={() => handleClick(task, project.path)}
                             oncontextmenu={(e) => onContextMenuOpen(e, task)}
                           >
                             {#if task.parent_key}
-                              <span class="shrink-0 text-[10px] text-surface-500 dark:text-surface-500">{task.parent_key} ›</span>
+                              <span class="shrink-0 text-[10px] text-t3 dark:text-t3">{task.parent_key} ›</span>
                             {/if}
-                            <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-surface-400 dark:text-surface-400' : 'text-primary-600 dark:text-primary-400'}">{task.key}</span>
+                            <span class="shrink-0 text-[10px] font-medium {isParent ? 'text-t3' : 'text-accent'}">{task.key}</span>
                             <span class="truncate">{task.title}</span>
                             {#if sessionForTask(task.key)}
                               {@const linked = sessionForTask(task.key)!}
                               {#if agentStates[linked.id] === 'Busy'}
-                                <span class="ml-auto shrink-0 size-3.5 animate-spin text-surface-500" title="Agent working">
+                                <span class="ml-auto shrink-0 size-3.5 animate-spin text-t3" title="Agent working">
                                   <LoaderCircle class="size-3.5" />
                                 </span>
                               {:else if agentStates[linked.id] === 'Idle'}
@@ -352,15 +366,18 @@
 {/if}
 
 <!-- Modal for create/edit -->
-<Dialog open={modalMode !== null} onOpenChange={(v) => { if (!v) { modalMode = null; focusTerminal(); } }} title={modalMode === "create" ? "Create Task" : "Edit Task"} class="w-[36rem] p-6">
+{#if modalMode !== null}
+<div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
+  <div class="w-[36rem] p-6 rounded-lg border border-border bg-panel shadow-lg">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none" data-form-keyboard>
   <form
     class="space-y-4"
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-    onkeydown={(e) => { if (e.key === "Escape") { e.stopPropagation(); modalMode = null; focusTerminal(); } if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
-    use:autofocusForm
+    onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
   >
-    <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
+    <h2 class="text-lg font-semibold text-t1">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
 
     {#if modalMode === "create" && projects.length > 1}
       <div class="space-y-1">
@@ -373,36 +390,51 @@
       </div>
     {/if}
 
-    <div class="space-y-1">
-      <Label>Title</Label>
+    <div class="space-y-1" data-field="title">
+      <Label>Title <span class="font-mono text-[10px] px-1 rounded {taskBadge}">T</span></Label>
       <Input bind:value={formTitle} placeholder="Task title" />
     </div>
 
-    <div class="space-y-1">
-      <Label>Description</Label>
+    <div class="space-y-1" data-field="desc">
+      <Label>Description <span class="font-mono text-[10px] px-1 rounded {taskBadge}">D</span></Label>
       <textarea
         bind:value={formDescription}
         placeholder="Optional description"
-        class="w-full rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 placeholder:text-surface-400 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50 dark:placeholder:text-surface-500 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto"
+        class="w-full rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
         rows="3"
         oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
         use:autoResize
       ></textarea>
     </div>
 
-    <div class="space-y-1">
-      <Label>Priority</Label>
-      <input type="number" bind:value={formPriority} class="w-20 rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50" />
+    <div class="space-y-1" data-field="priority">
+      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {taskBadge}">P</span></Label>
+      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel-hi px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
-    <div class="space-y-1">
-      <Label>Base branch</Label>
+    <div class="space-y-1" data-field="base">
+      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {taskBadge}">B</span></Label>
       <Input bind:value={formBaseBranch} placeholder="main" />
     </div>
 
-    <div class="flex justify-end gap-2">
-      <Button type="button" onclick={() => { modalMode = null; focusTerminal(); }}>Cancel</Button>
-      <Button type="submit" variant="primary" disabled={!formTitle.trim()}>{modalMode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+    <!-- Footer with mode indicator -->
+    <div class="flex items-center justify-between pt-2 border-t border-border">
+      <div class="flex items-center gap-2">
+        {#if taskFk.mode === "insert"}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+          <span class="text-[10px] text-t3">esc → normal mode</span>
+        {:else}
+          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
+          <span class="text-[10px] text-t3">press a key to focus field</span>
+        {/if}
+      </div>
+      <div class="flex gap-2">
+        <Button type="button" onclick={() => { modalMode = null; focusTerminal(); }}>Cancel</Button>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>{modalMode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+      </div>
     </div>
   </form>
-</Dialog>
+  </div>
+</div>
+</div>
+{/if}

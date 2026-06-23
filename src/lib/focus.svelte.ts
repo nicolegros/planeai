@@ -1,4 +1,4 @@
-export type FocusZone = "terminal" | "sidebar" | "explorer";
+export type FocusZone = "terminal" | "sidebar" | "explorer" | "none";
 export type SidebarSubZone = "sessions" | "tasks";
 
 let activeZone = $state<FocusZone>("terminal");
@@ -17,6 +17,12 @@ export function setActiveZone(zone: FocusZone): void {
 }
 
 export function focusTerminal(): void {
+  activeZone = "terminal";
+}
+
+/** Force terminal re-focus even if already the active zone */
+export function refocusTerminal(): void {
+  activeZone = "none";
   activeZone = "terminal";
 }
 

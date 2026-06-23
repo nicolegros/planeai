@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { injectTheme, extractTerminalTheme, DEFAULT_THEME_CSS } from "../theme-loader";
+import { injectTheme, extractTerminalTheme } from "../theme-loader";
 
 describe("injectTheme", () => {
   beforeEach(() => {
@@ -7,20 +7,28 @@ describe("injectTheme", () => {
   });
 
   it("injects a <style> tag into <head>", () => {
-    injectTheme(":root { --color-surface-50: #fff; }");
+    injectTheme(":root { --color-panel: #fff; }");
 
     const style = document.getElementById("planeai-theme") as HTMLStyleElement;
     expect(style).not.toBeNull();
-    expect(style.textContent).toBe(":root { --color-surface-50: #fff; }");
+    expect(style.textContent).toBe(":root { --color-panel: #fff; }");
   });
 
   it("replaces existing theme style on re-inject", () => {
-    injectTheme(":root { --color-surface-50: #fff; }");
-    injectTheme(":root { --color-surface-50: #000; }");
+    injectTheme(":root { --color-panel: #fff; }");
+    injectTheme(":root { --color-panel: #000; }");
 
     const styles = document.querySelectorAll("#planeai-theme");
     expect(styles.length).toBe(1);
-    expect(styles[0].textContent).toBe(":root { --color-surface-50: #000; }");
+    expect(styles[0].textContent).toBe(":root { --color-panel: #000; }");
+  });
+
+  it("clears theme when given empty string", () => {
+    injectTheme(":root { --color-panel: #fff; }");
+    injectTheme("");
+
+    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
+    expect(style.textContent).toBe("");
   });
 });
 
@@ -70,20 +78,5 @@ describe("extractTerminalTheme", () => {
     expect(theme.white).toBe("#bac2de");
     expect(theme.brightBlack).toBe("#585b70");
     expect(theme.brightWhite).toBe("#a6adc8");
-  });
-});
-
-describe("injectTheme fallback", () => {
-  beforeEach(() => {
-    document.head.innerHTML = "";
-  });
-
-  it("uses embedded default when given empty string", () => {
-    injectTheme("");
-
-    const style = document.getElementById("planeai-theme") as HTMLStyleElement;
-    expect(style).not.toBeNull();
-    expect(style.textContent).toBe(DEFAULT_THEME_CSS);
-    expect(style.textContent!.length).toBeGreaterThan(0);
   });
 });

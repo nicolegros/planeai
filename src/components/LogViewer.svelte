@@ -19,7 +19,7 @@
   let error = $state("");
 
   // Replay state
-  let termEl: HTMLDivElement;
+  let termEl = $state<HTMLDivElement>();
   let term: Terminal | null = null;
   let fitAddon: FitAddon | null = null;
   let replayOffset = 0;

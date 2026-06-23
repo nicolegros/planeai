@@ -274,14 +274,14 @@
   <div bind:this={editorContainer} class="flex-1 min-w-0 relative overflow-hidden"></div>
 
   {#if !activeBuffer}
-    <div class="absolute inset-0 flex items-center justify-center text-surface-500 bg-surface-50 dark:bg-surface-900">
-      <span class="text-sm">Press <kbd class="px-1.5 py-0.5 rounded bg-surface-200 dark:bg-surface-700 text-xs font-mono">{MOD_LABEL}P</kbd> to open a file</span>
+    <div class="absolute inset-0 flex items-center justify-center text-t3 bg-panel">
+      <span class="text-sm">Press <kbd class="px-1.5 py-0.5 rounded bg-panel-hi text-xs font-mono">{MOD_LABEL}P</kbd> to open a file</span>
     </div>
   {/if}
 
   <!-- Status bar -->
   {#if activeBuffer}
-    <div class="flex items-center justify-between px-3 py-0.5 text-xs font-mono border-t border-surface-200 dark:border-surface-800 bg-surface-100 dark:bg-surface-900 text-surface-600 dark:text-surface-400">
+    <div class="flex items-center justify-between px-3 py-0.5 text-xs font-mono border-t border-border bg-panel-hi text-t2">
       <div class="flex items-center gap-3">
         <span class="font-bold {vimMode === 'INSERT' ? 'text-green-500' : vimMode === 'VISUAL' || vimMode === 'V-LINE' ? 'text-purple-400' : 'text-blue-400'}">
           {vimMode}
@@ -292,7 +292,7 @@
       </div>
       <div class="flex items-center gap-3">
         {#if buffers.length > 1}
-          <span class="text-surface-500">[{activeIndex + 1}/{buffers.length}]</span>
+          <span class="text-t3">[{activeIndex + 1}/{buffers.length}]</span>
         {/if}
         <span>{cursorLine}:{cursorCol}</span>
       </div>

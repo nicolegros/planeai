@@ -9,6 +9,6 @@
   let { children, class: className = "", ...rest }: Props = $props();
 </script>
 
-<label class="text-sm font-medium text-surface-700 dark:text-surface-300 {className}" {...rest}>
+<label class="text-sm font-medium text-t2 {className}" {...rest}>
   {@render children()}
 </label>

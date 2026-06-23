@@ -62,17 +62,17 @@
     autocapitalize="off"
     spellcheck={false}
     data-form-type="other"
-    class="w-full rounded border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 placeholder:text-surface-400 dark:border-surface-600 dark:bg-surface-900 dark:text-surface-50 dark:placeholder:text-surface-500 {className}"
+    class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent {className}"
   />
   <Combobox.Portal>
-    <Combobox.Content loop bind:ref={contentRef} class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-900" sideOffset={4}>
+    <Combobox.Content loop bind:ref={contentRef} class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-border bg-panel shadow-lg" sideOffset={4}>
       {#each filtered as item (item.value)}
-        <Combobox.Item value={item.value} label={item.label} class="flex items-center justify-between cursor-pointer px-3 py-2 text-sm text-surface-700 data-[highlighted]:bg-surface-100 dark:text-surface-300 dark:data-[highlighted]:bg-surface-800">
+        <Combobox.Item value={item.value} label={item.label} class="flex items-center justify-between cursor-pointer px-3 py-2 text-sm text-t2 data-[highlighted]:bg-panel-hi">
           <span>{item.label}</span>
-          {#if item.remote}<span class="rounded bg-surface-200 px-1.5 py-0.5 text-[10px] text-surface-500 dark:bg-surface-700 dark:text-surface-400">remote</span>{/if}
+          {#if item.remote}<span class="rounded bg-panel-hi px-1.5 py-0.5 text-[10px] text-t3">remote</span>{/if}
         </Combobox.Item>
       {:else}
-        <span class="block px-3 py-2 text-sm text-surface-600 dark:text-surface-400">{emptyText}</span>
+        <span class="block px-3 py-2 text-sm text-t3">{emptyText}</span>
       {/each}
     </Combobox.Content>
   </Combobox.Portal>

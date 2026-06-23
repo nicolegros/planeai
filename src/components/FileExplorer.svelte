@@ -38,7 +38,7 @@
   let createValue = $state("");
   let previewPath = $state<string | null>(null);
   let unlisten: (() => void) | null = null;
-  let panelEl: HTMLElement;
+  let panelEl = $state<HTMLElement>();
 
   function flatten(nodes: TreeNode[]): TreeNode[] {
     const result: TreeNode[] = [];
@@ -269,8 +269,9 @@
   });
 
   $effect(() => {
-    if (visible && panelEl) {
-      requestAnimationFrame(() => panelEl.focus());
+    const el = panelEl;
+    if (visible && el) {
+      requestAnimationFrame(() => el.focus());
     }
   });
 
@@ -287,11 +288,12 @@
 </script>
 
 {#if visible}
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<aside
+<div
   bind:this={panelEl}
   tabindex="-1"
-  class="relative shrink-0 flex flex-col border-l border-surface-200 dark:border-surface-800 bg-surface-50 dark:bg-surface-900 overflow-hidden outline-none"
+  role="toolbar"
+  aria-label="File explorer"
+  class="relative shrink-0 flex flex-col border-l border-border bg-canvas overflow-hidden outline-none"
   style:width="{panelWidth}px"
   onclick={onFocus}
   onkeydown={handleKeydown}
@@ -299,12 +301,12 @@
   <ResizeHandle side="left" bind:width={panelWidth} min={140} max={500} defaultWidth={220} onResizeEnd={(w) => setLayoutWidth("file-explorer", w)} />
 
   <!-- Header -->
-  <div class="flex items-center justify-between px-3 py-2 border-b border-surface-200 dark:border-surface-800">
-    <span class="text-xs font-semibold text-surface-700 dark:text-surface-300 uppercase tracking-wider">Files</span>
+  <div class="flex items-center justify-between px-3 py-2 border-b border-border">
+    <span class="text-xs font-semibold text-t2 uppercase tracking-wider">Files</span>
   </div>
 
   <!-- Tree -->
-  <nav class="flex-1 overflow-y-auto py-1 text-sm" role="tree">
+  <div class="flex-1 overflow-y-auto py-1 text-sm" role="tree">
     {#each flatList as node, i (node.entry.path)}
       {@const indent = depth(node)}
       {@const isSelected = i === selectedIndex}
@@ -315,7 +317,7 @@
         <div class="flex items-center gap-1 px-2 py-0.5" style:padding-left="{indent * 12 + 8}px">
           <input
             use:autofocus
-            class="flex-1 px-1 py-0.5 rounded text-xs bg-surface-100 dark:bg-surface-800 border border-primary-500 outline-none"
+            class="flex-1 px-1 py-0.5 rounded text-xs bg-panel-hi border border-accent outline-none"
             bind:value={renameValue}
             onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") { renamingNode = null; } }}
             onblur={() => commitRename()}
@@ -324,28 +326,29 @@
       {:else}
         <button
           class="w-full text-left flex items-center gap-1 px-2 py-0.5 cursor-pointer transition-colors
-            {isActive ? 'bg-primary-500/15 text-primary-700 dark:text-surface-50' : ''}
-            {isSelected ? 'ring-1 ring-inset ring-primary-500/50' : ''}
-            {!isActive && !isSelected ? 'text-surface-700 dark:text-surface-300 hover:bg-surface-100 dark:hover:bg-surface-800' : ''}"
+            {isActive ? 'bg-accent-bg text-accent' : ''}
+            {isSelected ? 'ring-1 ring-inset ring-accent/50' : ''}
+            {!isActive && !isSelected ? 'text-t2 hover:bg-panel-hi' : ''}"
           style:padding-left="{indent * 12 + 8}px"
           onclick={() => { selectedIndex = i; openEntry(node); }}
           ondblclick={() => pinEntry(node)}
           oncontextmenu={(e) => showContextMenu(e, node)}
           role="treeitem"
+          aria-selected={isSelected}
           aria-expanded={node.entry.is_dir ? node.expanded : undefined}
         >
           <!-- Expand chevron for dirs -->
           {#if node.entry.is_dir}
             {#if node.expanded}
-              <ChevronDown class="size-3 shrink-0 text-surface-500" />
-              <FolderOpen class="size-3.5 shrink-0 text-surface-500 dark:text-surface-400" />
+              <ChevronDown class="size-3 shrink-0 text-t3" />
+              <FolderOpen class="size-3.5 shrink-0 text-t3" />
             {:else}
-              <ChevronRight class="size-3 shrink-0 text-surface-500" />
-              <Folder class="size-3.5 shrink-0 text-surface-500 dark:text-surface-400" />
+              <ChevronRight class="size-3 shrink-0 text-t3" />
+              <Folder class="size-3.5 shrink-0 text-t3" />
             {/if}
           {:else}
             <span class="size-3 shrink-0"></span>
-            <File class="size-3.5 shrink-0 text-surface-500 dark:text-surface-400" />
+            <File class="size-3.5 shrink-0 text-t3" />
           {/if}
 
           <span class="truncate {previewPath === relativePath(node.entry.path) ? 'italic' : ''}">{node.entry.name}</span>
@@ -357,21 +360,21 @@
     {#if creatingIn}
       <div class="flex items-center gap-1 px-2 py-0.5" style:padding-left="20px">
         {#if creatingIn.isDir}
-          <Folder class="size-3.5 shrink-0 text-surface-500" />
+          <Folder class="size-3.5 shrink-0 text-t3" />
         {:else}
-          <File class="size-3.5 shrink-0 text-surface-500" />
+          <File class="size-3.5 shrink-0 text-t3" />
         {/if}
         <input
           use:autofocus
-          class="flex-1 px-1 py-0.5 rounded text-xs bg-surface-100 dark:bg-surface-800 border border-primary-500 outline-none"
+          class="flex-1 px-1 py-0.5 rounded text-xs bg-panel-hi border border-accent outline-none"
           bind:value={createValue}
           onkeydown={(e) => { if (e.key === "Enter") commitCreate(); if (e.key === "Escape") { creatingIn = null; } }}
           onblur={() => commitCreate()}
         />
       </div>
     {/if}
-  </nav>
-</aside>
+  </div>
+</div>
 {/if}
 
 {#if contextMenu}

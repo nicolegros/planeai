@@ -119,6 +119,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "toggle_diff" };
   }
 
+  // Mod+\ — toggle diff tab
+  if (mod && !e.shiftKey && e.key === "\\") {
+    return { type: "toggle_diff" };
+  }
+
   // Mod+E — toggle file explorer
   if (mod && !e.shiftKey && key === "e") {
     return { type: "toggle_file_explorer" };
@@ -182,6 +187,7 @@ export function installKeyboardRouter(
   onAction: ActionHandler,
   shouldPassEscape?: () => boolean,
   isEditorFocused?: () => boolean,
+  shouldYieldEscape?: () => boolean,
 ): () => void {
   const editorAllowedActions = new Set<KeyboardAction["type"]>([
     "open_file",
@@ -214,6 +220,11 @@ export function installKeyboardRouter(
         getActiveZone() === "terminal" &&
         (!shouldPassEscape || shouldPassEscape())
       ) {
+        return;
+      }
+
+      // If Escape and a form controller is active, let it handle
+      if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
         return;
       }
 

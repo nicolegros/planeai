@@ -138,46 +138,46 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fixed inset-0 z-50" />
     <Dialog.Content
-      class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-surface-200 bg-surface-50 shadow-lg overflow-hidden dark:border-surface-700 dark:bg-surface-900"
+      class="fixed left-1/2 top-1/2 z-50 w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)] overflow-hidden"
     >
       <Dialog.Title class="sr-only">Command Menu</Dialog.Title>
       <Dialog.Description class="sr-only">Search sessions, archive, or create new.</Dialog.Description>
       {#if subMenu === "archivedSessions"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Search archived sessions..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">
                 No archived sessions.
               </Command.Empty>
               <Command.Group>
-                <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Archived Sessions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Archived Sessions</Command.GroupHeading>
                 <Command.GroupItems>
                   {#each archivedSessions as session (session.id)}
                     <Command.Item
                       value="restore {session.name || session.branch} {projectName(session.project_id)}"
                       keywords={[session.name, session.branch, projectName(session.project_id)]}
-                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                       onSelect={() => { onRestoreSession(session.id); archivedSessions = archivedSessions.filter(s => s.id !== session.id); }}
                     >
-                      <span class="truncate">{session.name || session.branch} <span class="text-xs text-surface-500">({projectName(session.project_id)})</span></span>
-                      <span class="text-xs text-primary-600 dark:text-primary-400 shrink-0 ml-2">Restore</span>
+                      <span class="truncate">{session.name || session.branch} <span class="text-xs text-t3">({projectName(session.project_id)})</span></span>
+                      <span class="text-xs text-accent shrink-0 ml-2">Restore</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
               </Command.Group>
-              <Command.Separator class="my-1 h-px bg-surface-100 dark:bg-surface-800" />
+              <Command.Separator class="my-1 h-px bg-border" />
               <Command.Group>
-                <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Delete Archived</Command.GroupHeading>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Delete Archived</Command.GroupHeading>
                 <Command.GroupItems>
                   {#each archivedSessions as session (session.id)}
                     <Command.Item
                       value="delete {session.name || session.branch} {projectName(session.project_id)}"
                       keywords={[session.name, session.branch, "delete", "destroy"]}
-                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-status-exited data-selected:bg-accent-bg"
                       onSelect={() => { onDestroyArchivedSession(session.id); archivedSessions = archivedSessions.filter(s => s.id !== session.id); }}
                     >
                       <span class="truncate">{session.name || session.branch} <span class="text-xs opacity-70">({projectName(session.project_id)})</span></span>
@@ -192,18 +192,18 @@
       {:else if subMenu === "archiveProject"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Archive which project..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No projects.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each projects as project (project.id)}
                     <Command.Item
                       value="archive {project.name}"
-                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                       onSelect={() => { onArchiveProject(project.id); close(); }}
                     >
                       {project.name}
@@ -217,18 +217,18 @@
       {:else if subMenu === "deleteProject"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Delete which project..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No projects.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each projects as project (project.id)}
                     <Command.Item
                       value="delete {project.name}"
-                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-status-exited data-selected:bg-accent-bg"
                       onSelect={() => { onDeleteProject(project.id); close(); }}
                     >
                       {project.name}
@@ -242,22 +242,22 @@
       {:else if subMenu === "restoreProject"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Restore which project..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No archived projects.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No archived projects.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each archivedProjects as project (project.id)}
                     <Command.Item
                       value="restore {project.name}"
-                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                       onSelect={() => { onRestoreProject(project.id); archivedProjects = archivedProjects.filter(p => p.id !== project.id); }}
                     >
                       <span>{project.name}</span>
-                      <span class="text-xs text-primary-600 dark:text-primary-400 shrink-0 ml-2">Restore</span>
+                      <span class="text-xs text-accent shrink-0 ml-2">Restore</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
@@ -268,22 +268,22 @@
       {:else if subMenu === "pickTask"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Search tasks..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No tasks found.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No tasks found.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each taskItems as task (task.key)}
                     <Command.Item
                       value="{task.key}: {task.title}"
                       keywords={[task.key, task.title]}
-                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                       onSelect={() => { onPickTask(task); close(); }}
                     >
-                      <span class="font-medium text-primary-600 dark:text-primary-400 mr-2">{task.key}</span>
+                      <span class="font-medium font-mono text-accent mr-2">{task.key}</span>
                       <span class="truncate">{task.title}</span>
                     </Command.Item>
                   {/each}
@@ -295,18 +295,18 @@
       {:else if subMenu === "openFile"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Open file..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No files found.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No files found.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each fileList as file (file)}
                     <Command.Item
                       value={file}
-                      class="flex h-9 cursor-pointer items-center rounded-md px-3 text-sm font-mono text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[12.5px] font-mono text-t1 data-selected:bg-accent-bg"
                       onSelect={() => { onOpenFile?.(file); close(); }}
                     >
                       <span class="truncate">{file}</span>
@@ -320,23 +320,23 @@
       {:else if subMenu === "autoDispatch"}
         <Command.Root class="flex flex-col" loop disablePointerSelection>
           <Command.Input
-            class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
             placeholder="Toggle auto-dispatch..."
           />
           <Command.List class="max-h-72 overflow-y-auto p-2">
             <Command.Viewport>
-              <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">No projects.</Command.Empty>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No projects.</Command.Empty>
               <Command.Group>
                 <Command.GroupItems>
                   {#each projects as project (project.id)}
                     <Command.Item
                       value="{projectAutoModes[project.id] ? 'disable' : 'enable'} auto-dispatch {project.name}"
                       keywords={[project.name, "auto", "dispatch", "toggle"]}
-                      class="flex h-9 cursor-pointer items-center justify-between rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                       onSelect={async () => { const next = !projectAutoModes[project.id]; await projectsApi.setAutoMode(project.id, next); projectAutoModes = { ...projectAutoModes, [project.id]: next }; }}
                     >
                       <span>{project.name}</span>
-                      <span class="text-xs shrink-0 ml-2 {projectAutoModes[project.id] ? 'text-amber-500' : 'text-surface-400'}">{projectAutoModes[project.id] ? '✓ On' : 'Off'}</span>
+                      <span class="text-xs shrink-0 ml-2 {projectAutoModes[project.id] ? 'text-status-running' : 'text-t3'}">{projectAutoModes[project.id] ? '✓ On' : 'Off'}</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
@@ -347,23 +347,23 @@
       {:else}
       <Command.Root class="flex flex-col" loop disablePointerSelection>
         <Command.Input
-          class="h-11 w-full border-b border-surface-200 bg-transparent px-4 text-sm outline-none placeholder:text-surface-400 dark:border-surface-700 dark:placeholder:text-surface-500"
-          placeholder="Search sessions..."
+          class="h-11 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-t3"
+          placeholder="Go to a session, task, or action…"
         />
         <Command.List class="max-h-72 overflow-y-auto p-2">
           <Command.Viewport>
-            <Command.Empty class="flex items-center justify-center py-6 text-sm text-surface-700 dark:text-surface-300">
+            <Command.Empty class="flex items-center justify-center py-6 text-sm text-t2">
               No results found.
             </Command.Empty>
 
             <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Sessions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
               <Command.GroupItems>
                 {#each sessions as session (session.id)}
                   <Command.Item
                     value="session {session.name || session.branch} {session.id}"
                     keywords={[session.name, session.branch]}
-                    class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 {session.id === activeSessionId ? 'font-medium' : ''}"
+                    class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg {session.id === activeSessionId ? 'font-medium' : ''}"
                     onSelect={() => { onSelectSession(session.id); close(); }}
                   >
                     <span class="truncate">{session.name || session.branch}</span>
@@ -372,16 +372,16 @@
               </Command.GroupItems>
             </Command.Group>
 
-            <Command.Separator class="my-1 h-px bg-surface-100 dark:bg-surface-800" />
+            <Command.Separator class="my-1 h-px bg-border" />
 
             <Command.Group>
-              <Command.GroupHeading class="px-3 pb-1 pt-3 text-xs text-surface-700 dark:text-surface-300">Actions</Command.GroupHeading>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Actions</Command.GroupHeading>
               <Command.GroupItems>
                 <Command.Item
                   value="copy project root path"
                   keywords={["copy", "path", "root", "directory", "cwd"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={copyRootPath}
                 >
                   Copy project root path
@@ -390,7 +390,7 @@
                   value="rename current session"
                   keywords={["rename", "name", "edit"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onRenameSession(); close(); }}
                 >
                   Rename session
@@ -399,7 +399,7 @@
                   value="archive current session"
                   keywords={["archive", "close", "stop"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onArchiveSession(); close(); }}
                 >
                   Archive current session
@@ -408,7 +408,7 @@
                   value="delete current session"
                   keywords={["delete", "destroy", "remove", "kill"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-status-exited data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onDeleteSession(); close(); }}
                 >
                   Delete current session
@@ -416,7 +416,7 @@
                 <Command.Item
                   value="create new session"
                   keywords={["new", "create", "add"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={() => { onNewSession(); close(); }}
                 >
                   New session
@@ -424,7 +424,7 @@
                 <Command.Item
                   value="pick task"
                   keywords={["task", "kanban", "issue", "ticket", "pick"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={openTaskPicker}
                 >
                   Pick task…
@@ -432,7 +432,7 @@
                 <Command.Item
                   value="create task"
                   keywords={["task", "new", "add", "create", "ticket"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={() => { onCreateTask(); close(); }}
                 >
                   Create task…
@@ -440,7 +440,7 @@
                 <Command.Item
                   value={getSettings().hide_done_tasks ? "show done tasks" : "hide done tasks"}
                   keywords={["done", "tasks", "hide", "show", "toggle", "completed"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={() => { updateSettings({ hide_done_tasks: !getSettings().hide_done_tasks }); close(); }}
                 >
                   {getSettings().hide_done_tasks ? "Show done tasks" : "Hide done tasks"}
@@ -449,7 +449,7 @@
                   value="reset terminal"
                   keywords={["reset", "clear", "redraw", "refresh", "fix"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onResetTerminal(); close(); }}
                 >
                   Reset terminal
@@ -458,7 +458,7 @@
                   value="view branch diff"
                   keywords={["diff", "changes", "git", "review", "branch"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onToggleDiff(); close(); }}
                 >
                   View branch diff
@@ -467,17 +467,17 @@
                   value="review changes"
                   keywords={["review", "diff", "changes", "git"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={() => { onToggleDiff(); close(); }}
                 >
                   Review Changes
-                  <kbd class="ml-auto text-xs text-surface-500 dark:text-surface-400">⌘⇧R</kbd>
+                  <kbd class="ml-auto text-[10px] font-mono text-t3">⌘⇧R</kbd>
                 </Command.Item>
                 <Command.Item
                   value="pull request"
                   keywords={["pr", "pull request", "github", "link", "review", "create"]}
                   disabled={!activeSessionId}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={async () => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { openUrl(s.pr_url); close(); } else if (onCreatePr) { close(); onCreatePr(); } }}
                 >
                   {sessions.find(x => x.id === activeSessionId)?.pr_url ? "View PR" : "Create PR"}
@@ -486,7 +486,7 @@
                 <Command.Item
                   value="session log viewer"
                   keywords={["log", "replay", "dogfood", "debug", "ansi", "session logs"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={() => { onOpenLogViewer(); close(); }}
                 >
                   Session log viewer <span class="text-xs opacity-50 ml-1">dogfood</span>
@@ -495,7 +495,7 @@
                 <Command.Item
                   value="archived sessions"
                   keywords={["archived", "restore", "old", "hidden"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={openArchived}
                 >
                   Archived sessions
@@ -504,7 +504,7 @@
                   value="archive project"
                   keywords={["archive", "hide", "project"]}
                   disabled={projects.length === 0}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={openArchiveProject}
                 >
                   Archive project…
@@ -513,7 +513,7 @@
                   value="delete project"
                   keywords={["delete", "remove", "project"]}
                   disabled={projects.length === 0}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-error-600 dark:text-error-400 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-status-exited data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={openDeleteProject}
                 >
                   Delete project…
@@ -521,7 +521,7 @@
                 <Command.Item
                   value="restore project"
                   keywords={["restore", "unarchive", "project"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
                   onSelect={openArchivedProjects}
                 >
                   Restore project…
@@ -530,7 +530,7 @@
                   value="toggle auto-dispatch"
                   keywords={["auto", "dispatch", "toggle", "project", "automatic"]}
                   disabled={projects.length === 0}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm text-surface-700 dark:text-surface-300 data-selected:bg-surface-100 dark:data-selected:bg-surface-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={openAutoDispatch}
                 >
                   Toggle auto-dispatch…
@@ -541,6 +541,12 @@
         </Command.List>
       </Command.Root>
       {/if}
+      <!-- Footer hints -->
+      <div class="h-[42px] flex items-center gap-4 px-4 border-t border-border bg-panel-hi text-[11px] text-t3">
+        <span><kbd class="font-mono">↑↓</kbd> Navigate</span>
+        <span><kbd class="font-mono">↵</kbd> Open</span>
+        <span><kbd class="font-mono">esc</kbd> Dismiss</span>
+      </div>
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>

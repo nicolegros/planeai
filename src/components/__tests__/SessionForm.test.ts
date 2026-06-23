@@ -38,7 +38,7 @@ describe("SessionForm", () => {
     const target = renderForm();
     const buttons = target.querySelectorAll("[role='toolbar'] button");
     const manualBtn = Array.from(buttons).find((b) => b.textContent?.includes("Manual"));
-    expect(manualBtn?.className).toContain("bg-primary-500");
+    expect(manualBtn?.className).toContain("bg-accent");
   });
 
   it("defaults to task mode when taskPrefill is provided", () => {
@@ -54,7 +54,7 @@ describe("SessionForm", () => {
     });
     const buttons = target.querySelectorAll("[role='toolbar'] button");
     const taskBtn = Array.from(buttons).find((b) => b.textContent?.includes("From task"));
-    expect(taskBtn?.className).toContain("bg-primary-500");
+    expect(taskBtn?.className).toContain("bg-accent");
   });
 
   it("renders Manual button first and From task button second", () => {
