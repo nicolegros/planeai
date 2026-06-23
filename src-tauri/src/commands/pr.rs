@@ -67,11 +67,7 @@ pub(crate) fn poll_pr_for_session(
     if let Some(ref t) = transition {
         if let Some(ref task_key) = session.task_key {
             if let Ok(tm) = resolve_task_manager(cfg) {
-                let prefix = db::get_project(conn, &session.project_id)
-                    .ok()
-                    .flatten()
-                    .map(|p| p.prefix)
-                    .unwrap_or_default();
+                let prefix = db::get_project_prefix(conn, &session.project_id);
                 pr::fire_pr_hook(tm, t, task_key, &prefix);
             }
         }
@@ -474,11 +470,7 @@ pub async fn merge_pr(
             if let Ok(tm) = resolve_task_manager(&cfg) {
                 let prefix = {
                     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-                    db::get_project(&conn, &ctx.project_id)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.prefix)
-                        .unwrap_or_default()
+                    db::get_project_prefix(&conn, &ctx.project_id)
                 };
                 pr::fire_pr_hook(tm, &pr::PrTransition::Merged, key, &prefix);
             }

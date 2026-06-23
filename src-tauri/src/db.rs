@@ -177,6 +177,14 @@ pub fn get_project_sessions(conn: &Connection, project_id: &str) -> Result<Vec<S
     Ok(records.into_iter().map(record_to_session).collect())
 }
 
+pub fn get_project_prefix(conn: &Connection, project_id: &str) -> String {
+    get_project(conn, project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.prefix)
+        .unwrap_or_default()
+}
+
 // Session CRUD — thin wrappers over planeai_core::services::SessionService
 
 pub fn create_session(
