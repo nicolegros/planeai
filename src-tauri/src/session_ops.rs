@@ -273,6 +273,7 @@ pub trait RestartOps {
     ) -> Result<(), String>;
 }
 
+#[tracing::instrument(skip(conn, config, restart_ops), fields(session_id = id))]
 pub fn restart(
     conn: &Connection,
     id: &str,
@@ -282,16 +283,6 @@ pub fn restart(
     let session = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
-
-    tracing::info!(
-        session_id = &id[..8.min(id.len())],
-        name = %session.name,
-        backend = %session.backend,
-        status = %session.status,
-        provider = ?session.provider,
-        has_provider_session_id = session.provider_session_id.is_some(),
-        "restart: beginning"
-    );
 
     if !matches!(session.status.as_str(), "exited" | "archived") {
         return Err("can only restart exited or archived sessions".to_string());
@@ -317,14 +308,7 @@ pub fn restart(
     };
     let fresh_cmd = crate::config::launch_command(provider_def, session.auto_approve);
 
-    tracing::info!(
-        session_id = &id[..8.min(id.len())],
-        has_resume = has_resume,
-        has_resume_command = has_resume_command,
-        resume_cmd = ?resume_cmd,
-        fresh_cmd = %fresh_cmd,
-        "restart: commands resolved"
-    );
+    tracing::debug!(backend = %session.backend, ?resume_cmd, %fresh_cmd, "commands resolved");
 
     let extra_path_dirs = config.resolved_extra_path_dirs();
 
@@ -345,14 +329,6 @@ pub fn restart(
         fresh_cmd.clone()
     };
 
-    tracing::info!(
-        session_id = &id[..8.min(id.len())],
-        backend = %session.backend,
-        cmd = %cmd_to_use,
-        cwd = %cwd,
-        "restart: spawning"
-    );
-
     let tmux_name = session.tmux_name.as_deref();
     let try_spawn = |cmd: &str| -> Result<(), String> {
         match session.backend.as_str() {
@@ -369,18 +345,13 @@ pub fn restart(
 
     // Fallback: if resume failed, retry with fresh command
     let spawn_result = if spawn_result.is_err() && resume_cmd.is_some() {
-        tracing::warn!(session_id = &id[..8.min(id.len())], err = ?spawn_result, "restart: resume failed, falling back to fresh launch");
+        tracing::warn!(err = ?spawn_result, "resume failed, falling back to fresh launch");
         try_spawn(&fresh_cmd)
     } else {
         spawn_result
     };
 
-    spawn_result.map_err(|e| {
-        tracing::error!(session_id = &id[..8.min(id.len())], err = %e, "restart: spawn failed");
-        e
-    })?;
-
-    tracing::info!(session_id = &id[..8.min(id.len())], "restart: spawn succeeded, restoring DB status");
+    spawn_result?;
 
     db::restore_session(conn, id).map_err(|e| e.to_string())?;
     let updated = db::get_session(conn, id)
@@ -393,8 +364,6 @@ pub fn restart(
             fire_task_hook(config, &updated, "on_restart", &cwd, conn);
         }
     }
-
-    tracing::info!(session_id = &id[..8.min(id.len())], status = %updated.status, "restart: complete");
 
     Ok(updated)
 }
