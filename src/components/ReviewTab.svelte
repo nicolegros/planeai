@@ -646,7 +646,7 @@
   </div>
 
   <!-- File sidebar (right) -->
-  <div class="relative shrink-0 border-l border-border bg-chrome overflow-y-auto" style:width="{sidebarWidth}px">
+  <div class="relative shrink-0 border-l border-border bg-chrome overflow-y-auto overflow-x-hidden" style:width="{sidebarWidth}px">
     <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={240} onResizeEnd={(w) => setLayoutWidth("diff-sidebar", w)} />
     <div class="px-3 py-2.5 text-[10px] font-semibold text-t3 uppercase tracking-[.05em] border-b border-border flex items-center justify-between">
       <span>Changed · {files.length}</span>
@@ -660,7 +660,7 @@
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
           <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
-          <div class="flex-1 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
+          <div class="flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
           {#if viewed}
             <button class="shrink-0 text-status-running" onclick={(e) => { e.stopPropagation(); toggleViewed(i); }} title="Mark as unviewed"><Check size={12} /></button>
           {:else}
