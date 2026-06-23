@@ -337,6 +337,26 @@
     }
   });
 
+  // Re-attach when session is restarted (exited → active)
+  let prevExited = $state(exited);
+  $effect(() => {
+    if (prevExited && !exited && term && !skipAttach) {
+      const onData = new Channel<ArrayBuffer>();
+      onData.onmessage = (raw: ArrayBuffer) => {
+        const data = new Uint8Array(raw);
+        term.write(data);
+      };
+      pty.attach(sessionId, isDark(), onData).then(() => {
+        attached = true;
+        const { rows, cols } = term;
+        pty.resize(sessionId, rows, cols);
+      }).catch((e) => {
+        showSnackbar(String(e));
+      });
+    }
+    prevExited = exited;
+  });
+
 
 </script>
 

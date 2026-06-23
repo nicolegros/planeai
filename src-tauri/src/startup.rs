@@ -18,13 +18,18 @@ pub fn revive_sessions<F, G>(
 ) -> Vec<String>
 where
     F: Fn(&str) -> bool,
-    G: Fn(&str, &str, &str, &str) -> Result<(), String>,
+    G: Fn(&str, &str, &str, &str, &[String]) -> Result<(), String>,
 {
     let sessions = match db::list_sessions(conn) {
         Ok(s) => s,
         Err(_) => return vec![],
     };
     let projects = db::list_projects(conn).unwrap_or_default();
+    let extra_path_dirs: Vec<String> = cfg
+        .extra_path_dirs
+        .iter()
+        .map(|d| crate::util::expand_tilde(d))
+        .collect();
     let mut failures = Vec::new();
 
     for session in &sessions {
@@ -53,7 +58,7 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        match create_tmux(tmux_name, cwd, &cmd, &session.id) {
+        match create_tmux(tmux_name, cwd, &cmd, &session.id, &extra_path_dirs) {
             Ok(()) => {
                 if session.status == "exited" {
                     let _ = db::restore_session(conn, &session.id);
@@ -323,7 +328,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -378,7 +383,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -427,7 +432,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -476,7 +481,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |_, _, _, _| Err("tmux not found".to_string()),
+            |_, _, _, _, _| Err("tmux not found".to_string()),
         );
 
         assert_eq!(failures, vec!["s1"]);
@@ -515,7 +520,7 @@ mod tests {
             &conn,
             &cfg,
             |_| true,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),

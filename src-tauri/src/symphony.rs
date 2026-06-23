@@ -501,6 +501,7 @@ mod tests {
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: None,
                 autonomous_prompt_template: None,
+                resume_command: None,
                 session_id_pattern: None,
                 resume_flag: None,
                 interactive_resume_command: None,

@@ -261,6 +261,15 @@ pub trait RestartOps {
         cwd: &str,
         cmd: &str,
         session_id: &str,
+        extra_path_dirs: &[String],
+    ) -> Result<(), String>;
+
+    fn spawn_daemon_session(
+        &self,
+        session_id: &str,
+        cmd: &str,
+        cwd: &str,
+        extra_path_dirs: &[String],
     ) -> Result<(), String>;
 }
 
@@ -273,6 +282,16 @@ pub fn restart(
     let session = db::get_session(conn, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session not found: {id}"))?;
+
+    tracing::info!(
+        session_id = &id[..8.min(id.len())],
+        name = %session.name,
+        backend = %session.backend,
+        status = %session.status,
+        provider = ?session.provider,
+        has_provider_session_id = session.provider_session_id.is_some(),
+        "restart: beginning"
+    );
 
     if !matches!(session.status.as_str(), "exited" | "archived") {
         return Err("can only restart exited or archived sessions".to_string());
@@ -287,31 +306,97 @@ pub fn restart(
         .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
-    let cmd = if has_resume {
-        crate::config::restart_command_for_provider(
+    let has_resume_command = provider_def.resume_command.is_some();
+    let resume_cmd = if has_resume || has_resume_command {
+        Some(crate::config::restart_command_for_provider(
             provider_def,
             session.provider_session_id.as_deref(),
-        )
+        ))
     } else {
-        crate::config::launch_command(provider_def, session.auto_approve)
+        None
+    };
+    let fresh_cmd = crate::config::launch_command(provider_def, session.auto_approve);
+
+    tracing::info!(
+        session_id = &id[..8.min(id.len())],
+        has_resume = has_resume,
+        has_resume_command = has_resume_command,
+        resume_cmd = ?resume_cmd,
+        fresh_cmd = %fresh_cmd,
+        "restart: commands resolved"
+    );
+
+    let extra_path_dirs: Vec<String> = config
+        .extra_path_dirs
+        .iter()
+        .map(|d| planeai_core::session_launch::expand_tilde(d))
+        .collect();
+
+    let project_path = db::get_project(conn, &session.project_id)
+        .ok()
+        .flatten()
+        .map(|p| p.path);
+    let cwd = session
+        .worktree_path
+        .as_deref()
+        .or(project_path.as_deref())
+        .unwrap_or("/");
+
+    // Try resume first, fallback to fresh launch
+    let cmd_to_use = if let Some(ref resume) = resume_cmd {
+        resume.clone()
+    } else {
+        fresh_cmd.clone()
     };
 
-    if session.backend == "tmux" {
-        let tmux_name = session
-            .tmux_name
-            .as_deref()
-            .ok_or("tmux session has no tmux_name")?;
-        let project_path = db::get_project(conn, &session.project_id)
-            .ok()
-            .flatten()
-            .map(|p| p.path);
-        let cwd = session
-            .worktree_path
-            .as_deref()
-            .or(project_path.as_deref())
-            .unwrap_or("/");
-        restart_ops.create_tmux_session(tmux_name, cwd, &cmd, id)?;
-    }
+    tracing::info!(
+        session_id = &id[..8.min(id.len())],
+        backend = %session.backend,
+        cmd = %cmd_to_use,
+        cwd = %cwd,
+        "restart: spawning"
+    );
+
+    let spawn_result = match session.backend.as_str() {
+        "tmux" => {
+            let tmux_name = session
+                .tmux_name
+                .as_deref()
+                .ok_or("tmux session has no tmux_name")?;
+            restart_ops.create_tmux_session(tmux_name, cwd, &cmd_to_use, id, &extra_path_dirs)
+        }
+        "daemon" => {
+            restart_ops.spawn_daemon_session(id, &cmd_to_use, cwd, &extra_path_dirs)
+        }
+        other => Err(format!("unsupported backend: {other}")),
+    };
+
+    // Fallback: if resume failed, retry with fresh command
+    let spawn_result = if spawn_result.is_err() && resume_cmd.is_some() {
+        tracing::warn!(session_id = &id[..8.min(id.len())], err = ?spawn_result, "restart: resume failed, falling back to fresh launch");
+        match session.backend.as_str() {
+            "tmux" => {
+                let tmux_name = session
+                    .tmux_name
+                    .as_deref()
+                    .ok_or("tmux session has no tmux_name")?;
+                restart_ops.create_tmux_session(tmux_name, cwd, &fresh_cmd, id, &extra_path_dirs)
+            }
+            "daemon" => {
+                restart_ops.spawn_daemon_session(id, &fresh_cmd, cwd, &extra_path_dirs)
+            }
+            _ => spawn_result,
+        }
+    } else {
+        spawn_result
+    };
+
+    spawn_result.map_err(|e| {
+        tracing::error!(session_id = &id[..8.min(id.len())], err = %e, "restart: spawn failed");
+        e
+    })?;
+
+    tracing::info!(session_id = &id[..8.min(id.len())], "restart: spawn succeeded, restoring DB status");
 
     db::restore_session(conn, id).map_err(|e| e.to_string())?;
     let updated = db::get_session(conn, id)
@@ -325,10 +410,12 @@ pub fn restart(
         }
     }
 
+    tracing::info!(session_id = &id[..8.min(id.len())], status = %updated.status, "restart: complete");
+
     Ok(updated)
 }
 
-/// Production RestartOps using real tmux calls.
+/// Production RestartOps using real tmux calls and daemon spawn.
 pub fn real_restart_ops() -> impl RestartOps {
     struct RealRestartOps;
     impl RestartOps for RealRestartOps {
@@ -338,16 +425,44 @@ pub fn real_restart_ops() -> impl RestartOps {
             cwd: &str,
             cmd: &str,
             session_id: &str,
+            extra_path_dirs: &[String],
         ) -> Result<(), String> {
             #[cfg(not(windows))]
             {
-                crate::tmux::create_session_with_cmd(tmux_name, cwd, cmd, session_id)
+                // If the tmux session still exists, just reattach — don't recreate
+                if crate::tmux::has_session(tmux_name) {
+                    tracing::info!(tmux_name, "restart: tmux session still alive, reattaching");
+                    return Ok(());
+                }
+                crate::tmux::create_session_with_cmd_and_path(tmux_name, cwd, cmd, session_id, extra_path_dirs)
             }
             #[cfg(windows)]
             {
-                let _ = (tmux_name, cwd, cmd, session_id);
+                let _ = (tmux_name, cwd, cmd, session_id, extra_path_dirs);
                 Err("tmux backend not available on Windows".to_string())
             }
+        }
+
+        fn spawn_daemon_session(
+            &self,
+            session_id: &str,
+            cmd: &str,
+            cwd: &str,
+            extra_path_dirs: &[String],
+        ) -> Result<(), String> {
+            tracing::info!(session_id = &session_id[..8.min(session_id.len())], cmd, cwd, "restart_ops: spawning daemon session");
+
+            // Ensure daemon is running before trying to spawn
+            let socket_path = planeai_ipc::daemon_socket_path();
+            let daemon_bin = crate::paths::resolve_daemon_binary_fallback();
+            let scrollback = 1_048_576;
+            crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
+
+            let mut env = std::collections::HashMap::new();
+            let path = planeai_core::command::augmented_path(extra_path_dirs);
+            env.insert("PATH", path.as_str());
+            env.insert("TERM", "xterm-256color");
+            crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
         }
     }
     RealRestartOps
@@ -1283,12 +1398,24 @@ mod tests {
 
     struct MockRestartOps {
         calls: RefCell<Vec<(String, String, String, String)>>,
+        daemon_calls: RefCell<Vec<(String, String, String)>>,
+        fail_resume: bool,
     }
 
     impl MockRestartOps {
         fn new() -> Self {
             Self {
                 calls: RefCell::new(vec![]),
+                daemon_calls: RefCell::new(vec![]),
+                fail_resume: false,
+            }
+        }
+
+        fn failing_resume() -> Self {
+            Self {
+                calls: RefCell::new(vec![]),
+                daemon_calls: RefCell::new(vec![]),
+                fail_resume: true,
             }
         }
     }
@@ -1300,12 +1427,34 @@ mod tests {
             cwd: &str,
             cmd: &str,
             session_id: &str,
+            _extra_path_dirs: &[String],
         ) -> Result<(), String> {
+            if self.fail_resume && cmd.contains("--resume-id") {
+                return Err("resume failed".to_string());
+            }
             self.calls.borrow_mut().push((
                 tmux_name.to_string(),
                 cwd.to_string(),
                 cmd.to_string(),
                 session_id.to_string(),
+            ));
+            Ok(())
+        }
+
+        fn spawn_daemon_session(
+            &self,
+            session_id: &str,
+            cmd: &str,
+            cwd: &str,
+            _extra_path_dirs: &[String],
+        ) -> Result<(), String> {
+            if self.fail_resume && cmd.contains("--resume-id") {
+                return Err("resume failed".to_string());
+            }
+            self.daemon_calls.borrow_mut().push((
+                session_id.to_string(),
+                cmd.to_string(),
+                cwd.to_string(),
             ));
             Ok(())
         }
@@ -1393,5 +1542,79 @@ mod tests {
         assert_eq!(updated.status, "active");
         assert_eq!(ops.calls.borrow().len(), 1);
         assert_eq!(ops.calls.borrow()[0].0, "planeai-myapp-fff");
+    }
+
+    #[test]
+    fn restart_daemon_session_spawns_in_daemon() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "aaaa1111-3333-4444-5555-666677778888";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "daemon-restart",
+            None,
+            "main",
+            None,
+            None,
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        // Should use daemon_calls, not tmux calls
+        assert_eq!(ops.calls.borrow().len(), 0);
+        assert_eq!(ops.daemon_calls.borrow().len(), 1);
+        assert_eq!(ops.daemon_calls.borrow()[0].0, id);
+    }
+
+    #[test]
+    fn restart_falls_back_to_fresh_when_resume_fails() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "bbbb2222-4444-5555-6666-777788889999";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "resume-fallback",
+            Some("planeai-myapp-bbb"),
+            "main",
+            None,
+            Some("kiro"),
+            "tmux",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::set_provider_session_id(&conn, id, "sess-abc").unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::failing_resume();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        // First call was resume (failed), second was fresh (succeeded)
+        assert_eq!(ops.calls.borrow().len(), 1);
+        let call = &ops.calls.borrow()[0];
+        // Fresh command should NOT contain --resume-id
+        assert!(!call.2.contains("--resume-id"), "expected fresh launch, got: {}", call.2);
     }
 }

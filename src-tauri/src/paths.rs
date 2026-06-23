@@ -69,3 +69,30 @@ pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {
     tracing::warn!("daemon binary not found alongside executable, falling back to PATH");
     PathBuf::from(bin_name)
 }
+
+/// Resolve the daemon binary without an AppHandle (for use in sync contexts).
+pub fn resolve_daemon_binary_fallback() -> PathBuf {
+    let bin_name = if cfg!(windows) {
+        "planeai-daemon.exe"
+    } else {
+        "planeai-daemon"
+    };
+
+    // Check /usr/local/bin (symlink from install)
+    let symlinked = PathBuf::from("/usr/local/bin").join(bin_name);
+    if symlinked.exists() {
+        return symlinked;
+    }
+
+    // Same directory as current executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join(bin_name);
+            if sibling.exists() {
+                return sibling;
+            }
+        }
+    }
+
+    PathBuf::from(bin_name)
+}
