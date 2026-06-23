@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use planeai::ipc::{Channel, IpcListener};
 
@@ -128,6 +128,15 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 if fired {
                     emit_state_change(app, &msg.session_id, AgentState::Idle);
                     fire_notification(app, &msg.session_id, state);
+                }
+            }
+        }
+        NotifyEvent::SendPrompt => {
+            if let Some(text) = &msg.text {
+                let pty_state = app.state::<crate::state::PtyState>();
+                let payload = format!("{}\n", text);
+                if let Err(e) = pty_state.0.write(&msg.session_id, payload.as_bytes()) {
+                    eprintln!("[notify] send_prompt write failed for {}: {e}", msg.session_id);
                 }
             }
         }

@@ -19,12 +19,14 @@ pub enum NotifyEvent {
     Busy,
     SessionCreated,
     SessionChanged,
+    SendPrompt,
 }
 
 #[derive(Debug, Clone)]
 pub struct NotifyMessage {
     pub session_id: String,
     pub event: NotifyEvent,
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -214,13 +216,16 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("busy") => NotifyEvent::Busy,
             Some("session_created") => NotifyEvent::SessionCreated,
             Some("session_changed") => NotifyEvent::SessionChanged,
+            Some("send_prompt") => NotifyEvent::SendPrompt,
             _ => NotifyEvent::Stop,
         };
-        NotifyMessage { session_id, event }
+        let text = v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string());
+        NotifyMessage { session_id, event, text }
     } else {
         NotifyMessage {
             session_id: line.trim().to_string(),
             event: NotifyEvent::Stop,
+            text: None,
         }
     }
 }
