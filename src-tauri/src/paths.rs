@@ -78,21 +78,19 @@ pub fn resolve_daemon_binary_fallback() -> PathBuf {
         "planeai-daemon"
     };
 
-    // Check the app's resource directory (production bundle)
-    let resource_dir = app_data_dir().parent().map(|p| p.join("Resources"));
-    if let Some(ref dir) = resource_dir {
-        let bundled = dir.join(bin_name);
-        if bundled.exists() {
-            return bundled;
-        }
-    }
-
-    // Same directory as current executable
+    // Same directory as current executable (works in dev and production bundles)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let sibling = dir.join(bin_name);
             if sibling.exists() {
                 return sibling;
+            }
+            // macOS bundle: exe is in <App>.app/Contents/MacOS/, Resources is sibling
+            let resources = dir.parent().map(|p| p.join("Resources").join(bin_name));
+            if let Some(ref bundled) = resources {
+                if bundled.exists() {
+                    return bundled.clone();
+                }
             }
         }
     }
