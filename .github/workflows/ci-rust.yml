@@ -7,6 +7,10 @@ on:
       - "src-tauri/**"
       - "!src-tauri/icons/**"
 
+env:
+  JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
+  JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+
 jobs:
   check:
     runs-on: ubuntu-latest

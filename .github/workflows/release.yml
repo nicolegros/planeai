@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+env:
+  JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
+  JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+
 permissions:
   contents: write
   pull-requests: read
