@@ -66,13 +66,8 @@ impl JiraState {
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
-            let issue_proj = self.repo.get_issue(&issue_key).ok()??.jira_project;
-            jira_cfg
-                .projects
-                .values()
-                .find(|m| m.jira_project == issue_proj)?
-                .writeback
-                .clone()
+            let source_name = self.repo.get_issue(&issue_key).ok()??.jira_project;
+            jira_cfg.sources.get(&source_name)?.writeback.clone()
         })();
         if let Some(wb_config) = wb_config {
             tokio::spawn(async move {
@@ -130,9 +125,9 @@ fn open_task_provider(
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {
     let db_path = paths::db_path();
     let path_str = db_path.to_str().ok_or("invalid db path")?;
-    // Use first project key as prefix; falls back to "JIRA" if no projects configured
+    // Use first source key as prefix; falls back to "JIRA" if no sources configured
     let prefix = config
-        .projects
+        .sources
         .keys()
         .next()
         .map(|k| planeai_tasks::sqlite::derive_prefix(k))

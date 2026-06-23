@@ -63,16 +63,16 @@ impl JiraSync {
     pub async fn sync_now(&self) -> Result<SyncResult, crate::Error> {
         let mut result = SyncResult::default();
 
-        if self.config.projects.is_empty() {
-            tracing::warn!("sync_now: no project mappings configured");
+        if self.config.sources.is_empty() {
+            tracing::warn!("sync_now: no sync sources configured");
             return Ok(result);
         }
 
-        for mapping in self.config.projects.values() {
-            match self.sync_project(mapping, &mut result).await {
+        for (name, source) in &self.config.sources {
+            match self.sync_source(name, source, &mut result).await {
                 Ok(()) => {}
                 Err(e) => {
-                    warn!(project = %mapping.jira_project, error = %e, "sync failed for project, continuing");
+                    warn!(source = %name, error = %e, "sync failed for source, continuing");
                     result.errors += 1;
                 }
             }
@@ -81,12 +81,14 @@ impl JiraSync {
         Ok(result)
     }
 
-    async fn sync_project(
+    async fn sync_source(
         &self,
-        mapping: &crate::config::JiraProjectMapping,
+        name: &str,
+        source: &crate::config::SyncSource,
         result: &mut SyncResult,
     ) -> Result<(), crate::Error> {
-        let issues = self.client.search(&mapping.jql).await?;
+        let issues = self.client.search(&source.jql).await?;
+        let status_map = source.status_map.as_ref();
 
         let mut seen_keys = HashSet::new();
 
@@ -96,7 +98,7 @@ impl JiraSync {
             // Upsert raw issue into local store
             let jira_issue = crate::model::JiraIssue {
                 issue_key: issue.issue_key.clone(),
-                jira_project: mapping.jira_project.clone(),
+                jira_project: name.to_string(),
                 summary: issue.summary.clone(),
                 description: issue.description.clone(),
                 status: issue.status.clone(),
@@ -111,7 +113,7 @@ impl JiraSync {
 
             match existing_task_key {
                 None => {
-                    let status = map_status(&issue.status, &mapping.status_map);
+                    let status = map_status(&issue.status, status_map);
                     let priority = map_priority(issue.priority.as_deref());
                     let task = self.task_provider.create(CreateParams {
                         title: issue.summary.clone(),
@@ -128,7 +130,7 @@ impl JiraSync {
                 Some(task_key) => {
                     let task = self.task_provider.get(&task_key)?;
 
-                    let new_status = map_status(&issue.status, &mapping.status_map);
+                    let new_status = map_status(&issue.status, status_map);
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
                         || task.status != new_status;
@@ -152,12 +154,11 @@ impl JiraSync {
         }
 
         // Stale detection
-        let synced_keys = self.repo.list_synced_keys(&mapping.jira_project)?;
+        let synced_keys = self.repo.list_synced_keys(name)?;
         for key in synced_keys {
             if seen_keys.contains(&key) {
                 continue;
             }
-            // Only mark stale if the linked task is still todo
             if let Some(task_key) = self.repo.find_task_by_issue_key(&key)? {
                 if let Ok(task) = self.task_provider.get(&task_key) {
                     if task.status == Status::Todo {
@@ -175,9 +176,12 @@ impl JiraSync {
     }
 }
 
-fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>) -> Status {
+fn map_status(
+    jira_status: &str,
+    status_map: Option<&std::collections::HashMap<String, String>>,
+) -> Status {
     status_map
-        .get(jira_status)
+        .and_then(|m| m.get(jira_status))
         .and_then(|v| Status::parse(v))
         .unwrap_or(Status::Todo)
 }
@@ -197,7 +201,7 @@ fn map_priority(name: Option<&str>) -> i32 {
 mod tests {
     use super::*;
     use crate::auth::JiraAuth;
-    use crate::config::{JiraConfig, JiraProjectMapping};
+    use crate::config::{JiraConfig, SyncSource};
     use rusqlite::Connection;
     use std::collections::HashMap;
     use wiremock::matchers::{method, path};
@@ -207,19 +211,19 @@ mod tests {
     fn test_map_status_found() {
         let mut m = HashMap::new();
         m.insert("In Progress".to_string(), "in_progress".to_string());
-        assert_eq!(map_status("In Progress", &m), Status::InProgress);
+        assert_eq!(map_status("In Progress", Some(&m)), Status::InProgress);
     }
 
     #[test]
     fn test_map_status_not_found_defaults_to_todo() {
-        assert_eq!(map_status("Unknown", &HashMap::new()), Status::Todo);
+        assert_eq!(map_status("Unknown", None), Status::Todo);
     }
 
     #[test]
     fn test_map_status_invalid_mapped_value_defaults_to_todo() {
         let mut m = HashMap::new();
         m.insert("X".to_string(), "invalid_status".to_string());
-        assert_eq!(map_status("X", &m), Status::Todo);
+        assert_eq!(map_status("X", Some(&m)), Status::Todo);
     }
 
     #[test]
@@ -261,23 +265,22 @@ mod tests {
     }
 
     fn test_config() -> JiraConfig {
-        let mut projects = HashMap::new();
-        projects.insert(
+        let mut sources = HashMap::new();
+        sources.insert(
             "proj".to_string(),
-            JiraProjectMapping {
-                jira_project: "PROJ".to_string(),
+            SyncSource {
                 jql: "project = PROJ".to_string(),
-                status_map: HashMap::from([
+                status_map: Some(HashMap::from([
                     ("In Progress".to_string(), "in_progress".to_string()),
                     ("Done".to_string(), "done".to_string()),
-                ]),
+                ])),
                 writeback: None,
             },
         );
         JiraConfig {
             site: "https://test.atlassian.net".to_string(),
             sync_interval_ms: 60_000,
-            projects,
+            sources,
         }
     }
 
@@ -496,13 +499,12 @@ mod tests {
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
         let mut config = test_config();
-        // Add a second project mapping — it'll use the same mock (returns same data)
-        config.projects.insert(
+        // Add a second source — it'll use the same mock (returns same data)
+        config.sources.insert(
             "other".to_string(),
-            JiraProjectMapping {
-                jira_project: "OTHER".to_string(),
+            SyncSource {
                 jql: "project = OTHER".to_string(),
-                status_map: HashMap::new(),
+                status_map: None,
                 writeback: None,
             },
         );
