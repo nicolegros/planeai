@@ -311,6 +311,16 @@
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
+              <label class="text-xs text-t2 flex items-center gap-1">Interactive resume command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Command run when restarting an exited session on focus. Falls back to the base command if empty.</span></span></label>
+              <Input
+                value={provider.interactive_resume_command || ""}
+                onchange={(e) => updateProvider(key, "interactive_resume_command", e.currentTarget.value)}
+                class="font-mono"
+                placeholder="e.g. kiro-cli chat --trust-all-tools --resume-picker"
+              />
+            </div>
+            <div class="space-y-1">
+              <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="text-xs text-t2 flex items-center gap-1">Prompt command (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 whitespace-nowrap rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Variable: {"{prompt}"} — replaced with rendered task prompt</span></span></label>
               <Input
                 value={provider.prompt_command || ""}
@@ -492,7 +502,7 @@
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Session Backend</h2>
       <div class="flex gap-2">
-        {#each [{ value: "auto", label: "Auto" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon" }] as opt (opt.value)}
+        {#each [{ value: "local", label: "Local" }, { value: "tmux", label: "tmux" }] as opt (opt.value)}
           <button
             class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi '}"
             onclick={() => setSessionBackend(opt.value)}
@@ -503,9 +513,9 @@
         <p class="text-xs text-amber-600">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
       {/if}
       <p class="text-xs text-t2">
-        {#if backendValue === "auto"}Auto-detect: uses tmux if available, otherwise daemon.
+        {#if backendValue === "local"}Sessions run in-process. Restarted with resume command on focus.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
-        {:else}Sessions persist after quitting (built-in daemon).
+        {:else}Sessions run in-process. Restarted with resume command on focus.
         {/if}
         Changes apply to new sessions only.
       </p>
