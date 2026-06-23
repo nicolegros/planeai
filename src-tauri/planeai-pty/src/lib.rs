@@ -10,7 +10,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod error;
 pub mod event;
-pub(crate) mod flow_control;
+pub mod flow_control;
 pub mod local;
 
 #[cfg(not(windows))]
@@ -24,4 +24,5 @@ pub mod platform;
 pub use config::{LocalPtyConfig, QueuePolicy};
 pub use diagnostics::{DiagnosticsSnapshot, PipelineDiagnostics};
 pub use event::{PtyEvent, PtyEventSink, SessionId};
+pub use flow_control::FlowControl;
 pub use local::LocalPtySession;

@@ -66,6 +66,8 @@ pub fn archive(
     let kill_errors = crate::cleanup::kill_backend(
         &session.backend,
         session.tmux_name.as_deref(),
+        Some(session.id.as_str()),
+        session.tab_count,
         kill_ops,
     );
     if !kill_errors.is_empty() {
@@ -178,6 +180,8 @@ pub fn destroy(
         } else {
             None
         },
+        session_id: Some(session.id.clone()),
+        tab_count: session.tab_count,
     };
     let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
 
@@ -359,6 +363,7 @@ pub trait PromptOps {
     fn tmux_send_keys(&self, tmux_name: &str, text: &str) -> Result<(), String>;
     fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String>;
     fn tmux_has_session(&self, tmux_name: &str) -> bool;
+    fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String>;
 }
 
 #[cfg(not(windows))]
@@ -387,6 +392,9 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
         }
         fn tmux_has_session(&self, tmux_name: &str) -> bool {
             crate::tmux::has_session(tmux_name)
+        }
+        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            daemon_send_prompt(session_id, text)
         }
     }
     RealPromptOps
@@ -438,8 +446,52 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
                 .map(|o| o.status.success())
                 .unwrap_or(false)
         }
+        fn daemon_send(&self, session_id: &str, text: &str) -> Result<(), String> {
+            daemon_send_prompt(session_id, text)
+        }
     }
     WindowsPromptOps
+}
+
+/// Send a prompt to a daemon-backend session via the daemon data connection.
+fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    let app_dir = crate::paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+        .map_err(|e| format!("daemon connect failed: {e}"))?;
+
+    // Data connection type byte
+    stream
+        .write_all(&[0x01])
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    // Session ID as 36-byte UTF-8
+    stream
+        .write_all(session_id.as_bytes())
+        .map_err(|e| format!("session id send failed: {e}"))?;
+
+    // Send FRAME_INPUT: [type=0x02][4-byte big-endian len][payload]
+    let payload = text.as_bytes();
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(0x02); // FRAME_INPUT
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    stream
+        .write_all(&frame)
+        .map_err(|e| format!("frame write failed: {e}"))?;
+
+    // Send Enter key
+    let enter = b"\n";
+    let mut enter_frame = Vec::with_capacity(6);
+    enter_frame.push(0x02);
+    enter_frame.extend_from_slice(&(enter.len() as u32).to_be_bytes());
+    enter_frame.extend_from_slice(enter);
+    stream
+        .write_all(&enter_frame)
+        .map_err(|e| format!("enter frame write failed: {e}"))?;
+
+    Ok(())
 }
 
 pub fn send_prompt(
@@ -477,6 +529,10 @@ pub fn send_prompt(
         "local" => {
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
+        }
+        "daemon" => {
+            ops.daemon_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
         }
         other => return Err(format!("unsupported backend: {other}")),
     }
@@ -556,6 +612,9 @@ mod tests {
         fn tmux_has_session(&self, _tmux_name: &str) -> bool {
             self.has_session
         }
+        fn daemon_send(&self, _session_id: &str, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     fn setup_db() -> Connection {
@@ -595,6 +654,7 @@ mod tests {
     fn test_kill_ops() -> KillOps {
         KillOps {
             kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
         }
     }
 
@@ -602,6 +662,7 @@ mod tests {
         CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                kill_daemon_session: Box::new(|_| Err("daemon error".to_string())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
@@ -815,6 +876,7 @@ mod tests {
                 KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
+            kill_daemon_session: Box::new(|_| Ok(())),
         };
 
         archive(&conn, id, &None, &ops).unwrap();
@@ -850,6 +912,7 @@ mod tests {
 
         let ops = KillOps {
             kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
+            kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
         };
 
         archive(&conn, id, &None, &ops).unwrap();

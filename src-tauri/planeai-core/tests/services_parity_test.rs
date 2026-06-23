@@ -121,7 +121,7 @@ fn existing_rows_survive_migration() {
 }
 
 #[test]
-fn direct_backend_migrates_to_daemon() {
+fn direct_backend_migrates_to_local() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
         .unwrap();
@@ -137,7 +137,7 @@ fn direct_backend_migrates_to_daemon() {
     migrate_project_session_schema(&conn).unwrap();
 
     let s = SessionService::get(&conn, "s1").unwrap().unwrap();
-    assert_eq!(s.backend, "daemon");
+    assert_eq!(s.backend, "local");
 }
 
 // ─── CRUD parity ─────────────────────────────────────────────────────────────

@@ -38,6 +38,9 @@ pub fn attach_session(
     let (pty_target, discovery_info) = if session.backend == "tmux" {
         let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
         (pty::PtyTarget::TmuxAttach { tmux_name }, None)
+    } else if session.backend == "daemon" {
+        let socket_path = planeai_ipc::daemon_socket_path();
+        (pty::PtyTarget::Daemon { session_id: session_id.clone(), socket_path }, None)
     } else {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);

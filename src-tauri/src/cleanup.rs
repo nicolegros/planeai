@@ -11,11 +11,14 @@ pub struct CleanupContext {
     pub worktree_path: Option<String>,
     pub project_path: Option<String>,
     pub branch: Option<String>,
+    pub session_id: Option<String>,
+    pub tab_count: i64,
 }
 
 /// Operations to kill a backend session (injectable for testing).
 pub struct KillOps {
     pub kill_tmux: Op1,
+    pub kill_daemon_session: Op1,
 }
 
 /// Operations that cleanup can perform (injectable for testing).
@@ -27,11 +30,11 @@ pub struct CleanupOps {
 }
 
 /// Kill the backend process (tmux or daemon) for a session. Returns collected errors.
-/// For daemon-backend sessions with tab_count > 1, also kills shell tabs
-/// ({session_id}:1, {session_id}:2, ...).
 pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
+    session_id: Option<&str>,
+    tab_count: i64,
     ops: &KillOps,
 ) -> Vec<String> {
     let mut errors = vec![];
@@ -40,6 +43,20 @@ pub fn kill_backend(
             if let Some(name) = tmux_name {
                 if let Err(e) = (ops.kill_tmux)(name) {
                     errors.push(format!("tmux kill: {e}"));
+                }
+            }
+        }
+        "daemon" => {
+            if let Some(id) = session_id {
+                if let Err(e) = (ops.kill_daemon_session)(id) {
+                    errors.push(format!("daemon kill: {e}"));
+                }
+                // Kill shell tabs (tab indices 1..tab_count)
+                for i in 1..tab_count {
+                    let tab_id = format!("{id}:{i}");
+                    if let Err(e) = (ops.kill_daemon_session)(&tab_id) {
+                        errors.push(format!("daemon kill tab {i}: {e}"));
+                    }
                 }
             }
         }
@@ -53,6 +70,8 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
     let mut errors = kill_backend(
         &ctx.backend,
         ctx.tmux_name.as_deref(),
+        ctx.session_id.as_deref(),
+        ctx.tab_count,
         &ops.kill,
     );
 
@@ -89,6 +108,22 @@ pub fn real_kill_ops() -> KillOps {
             {
                 Ok(())
             }
+        }),
+        kill_daemon_session: Box::new(|session_id| {
+            use std::io::{Read, Write};
+            let app_dir = crate::paths::app_data_dir();
+            let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
+                Ok(s) => s,
+                Err(_) => return Ok(()), // Daemon not running — nothing to kill
+            };
+            stream.write_all(&[0x00]).map_err(|e| e.to_string())?;
+            let req = serde_json::json!({"cmd": "kill", "session_id": session_id});
+            stream
+                .write_all(format!("{}\n", req).as_bytes())
+                .map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf);
+            Ok(())
         }),
     }
 }
@@ -131,12 +166,13 @@ mod tests {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = KillOps {
-            kill_tmux: Box::new(|name| {
-                KILLED.with(|k| k.borrow_mut().push(name.to_string()));
-                Ok(())
-            }),
-        };
-        let errors = kill_backend("tmux", Some("planeai-abc"), &ops);
+                    kill_tmux: Box::new(|name| {
+                        KILLED.with(|k| k.borrow_mut().push(name.to_string()));
+                        Ok(())
+                    }),
+                    kill_daemon_session: Box::new(|_| Ok(())),
+                };
+        let errors = kill_backend("tmux", Some("planeai-abc"), None, 1, &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
             assert_eq!(k.borrow().as_slice(), &["planeai-abc"]);
@@ -146,9 +182,10 @@ mod tests {
     #[test]
     fn kill_backend_local_is_noop() {
         let ops = KillOps {
-            kill_tmux: Box::new(|_| Ok(())),
-        };
-        let errors = kill_backend("local", None, &ops);
+                    kill_tmux: Box::new(|_| Ok(())),
+                    kill_daemon_session: Box::new(|_| Ok(())),
+                };
+        let errors = kill_backend("local", None, None, 1, &ops);
         assert!(errors.is_empty());
     }
 
@@ -163,6 +200,7 @@ mod tests {
                     KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                     Ok(())
                 }),
+                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
@@ -174,6 +212,8 @@ mod tests {
             worktree_path: None,
             project_path: None,
             branch: None,
+            session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -192,6 +232,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
+                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|repo, wt| {
                 WT_REMOVED.with(|v| v.borrow_mut().push((repo.to_string(), wt.to_string())));
@@ -212,6 +253,8 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("test-iv".to_string()),
+            session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -237,6 +280,7 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
+                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
@@ -248,6 +292,8 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("feat-x".to_string()),
+            session_id: None,
+            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert_eq!(errors.len(), 4);

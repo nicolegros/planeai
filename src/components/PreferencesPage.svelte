@@ -502,7 +502,7 @@
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Session Backend</h2>
       <div class="flex gap-2">
-        {#each [{ value: "local", label: "Local" }, { value: "tmux", label: "tmux" }] as opt (opt.value)}
+        {#each [{ value: "local", label: "Local" }, { value: "tmux", label: "tmux" }, { value: "daemon", label: "Daemon (experimental)" }] as opt (opt.value)}
           <button
             class="px-4 py-2 rounded-md text-sm font-medium transition-colors {backendValue === opt.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi '}"
             onclick={() => setSessionBackend(opt.value)}
@@ -515,6 +515,7 @@
       <p class="text-xs text-t2">
         {#if backendValue === "local"}Sessions run in-process. Restarted with resume command on focus.
         {:else if backendValue === "tmux"}Sessions persist after quitting (requires tmux).
+        {:else if backendValue === "daemon"}Sessions persist after quitting (built-in daemon, experimental).
         {:else}Sessions run in-process. Restarted with resume command on focus.
         {/if}
         Changes apply to new sessions only.

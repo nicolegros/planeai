@@ -1,6 +1,6 @@
 use std::sync::{Condvar, Mutex};
 
-pub(crate) struct FlowControl {
+pub struct FlowControl {
     paused: Mutex<bool>,
     cond: Condvar,
 }
@@ -18,7 +18,7 @@ impl FlowControl {
     pub fn resume(&self) {
         let mut p = self.paused.lock().unwrap();
         *p = false;
-        self.cond.notify_one();
+        self.cond.notify_all();
     }
     pub fn wait_if_paused(&self) {
         let mut p = self.paused.lock().unwrap();
