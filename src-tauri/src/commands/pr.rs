@@ -317,6 +317,43 @@ struct GhPrView {
 }
 
 #[tauri::command]
+pub async fn get_merge_conflict_status(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<bool, String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+    if resolve_github_repo(&ctx.cwd).await?.is_none() {
+        return Ok(false);
+    }
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &ctx.branch,
+            "--json",
+            "mergeable,mergeStateStatus",
+        ])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse error: {e}"))?;
+    let conflicting = parsed
+        .get("mergeable")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s == "CONFLICTING")
+        || parsed
+            .get("mergeStateStatus")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s == "DIRTY");
+    Ok(conflicting)
+}
+
+#[tauri::command]
 pub async fn get_ci_checks(
     session_id: String,
     db_state: State<'_, DbState>,
