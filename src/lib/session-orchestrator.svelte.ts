@@ -143,9 +143,9 @@ export function selectSession(id: string): void {
   activeSessionId = id;
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
-    sessionsApi.restart(id).then((updated) => {
-      sessions = sessions.map((s) => (s.id === id ? updated : s));
-    }).catch(() => {});
+    sessionsApi.restart(id).catch((e) => {
+      showSnackbar(`Restart failed: ${e}`);
+    });
   }
   poolActivate(id);
   if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
