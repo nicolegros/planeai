@@ -123,32 +123,35 @@ impl JiraClient {
     #[instrument(skip(self), fields(jql))]
     pub async fn search(&self, jql: &str) -> Result<Vec<FetchedIssue>, Error> {
         let mut issues = Vec::new();
-        let mut start_at = 0u64;
+        let mut next_page_token: Option<String> = None;
         let page_size_str = PAGE_SIZE.to_string();
 
         loop {
-            debug!(start_at, "fetching search page");
-            let url = format!("{}/search", self.base_url());
-            let start_str = start_at.to_string();
+            debug!(?next_page_token, "fetching search page");
+            let url = format!("{}/search/jql", self.base_url());
+            let token_ref = next_page_token.clone();
 
             let page: SearchResponse = self
                 .send_with_retry(|token| {
-                    self.client.get(&url).bearer_auth(token).query(&[
+                    let mut req = self.client.get(&url).bearer_auth(token).query(&[
                         ("jql", jql),
                         ("fields", SEARCH_FIELDS),
-                        ("maxResults", &page_size_str),
-                        ("startAt", start_str.as_str()),
-                    ])
+                        ("maxResults", page_size_str.as_str()),
+                    ]);
+                    if let Some(ref pt) = token_ref {
+                        req = req.query(&[("nextPageToken", pt.as_str())]);
+                    }
+                    req
                 })
                 .await?
                 .json()
                 .await?;
 
             parse_page(&page, &mut issues);
-            if start_at + PAGE_SIZE >= page.total {
-                break;
+            match page.next_page_token {
+                Some(token) => next_page_token = Some(token),
+                None => break,
             }
-            start_at += PAGE_SIZE;
         }
 
         debug!(count = issues.len(), "search complete");
@@ -219,8 +222,10 @@ impl JiraClient {
 
 #[derive(Deserialize)]
 struct SearchResponse {
-    total: u64,
+    #[serde(default)]
     issues: Vec<RawIssue>,
+    #[serde(default, rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -342,13 +347,10 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .and(query_param("jql", "project = TEST"))
             .and(header("Authorization", "Bearer test_token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0,
-                "maxResults": 50,
-                "total": 2,
                 "issues": [
                     issue_json("TEST-1", "First issue", "To Do"),
                     issue_json("TEST-2", "Second issue", "In Progress"),
@@ -375,29 +377,24 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/search"))
-            .and(query_param("startAt", "0"))
+            .and(path("/search/jql"))
+            .and(query_param("nextPageToken", "page2"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0,
-                "maxResults": 50,
-                "total": 52,
-                "issues": (0..50).map(|i| issue_json(&format!("T-{i}"), &format!("Issue {i}"), "Open")).collect::<Vec<_>>()
+                "issues": [
+                    issue_json("T-50", "Issue 50", "Open"),
+                    issue_json("T-51", "Issue 51", "Open"),
+                ]
             })))
             .expect(1)
             .mount(&server)
             .await;
 
+        // This matches any request to /search/jql (including the first page without nextPageToken)
         Mock::given(method("GET"))
-            .and(path("/search"))
-            .and(query_param("startAt", "50"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 50,
-                "maxResults": 50,
-                "total": 52,
-                "issues": [
-                    issue_json("T-50", "Issue 50", "Open"),
-                    issue_json("T-51", "Issue 51", "Open"),
-                ]
+                "nextPageToken": "page2",
+                "issues": (0..50).map(|i| issue_json(&format!("T-{i}"), &format!("Issue {i}"), "Open")).collect::<Vec<_>>()
             })))
             .expect(1)
             .mount(&server)
@@ -516,7 +513,7 @@ mod tests {
 
         // First call returns 401, second (after refresh) returns 200
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .and(header("Authorization", "Bearer test_token"))
             .respond_with(ResponseTemplate::new(401))
             .expect(1)
@@ -524,10 +521,9 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .and(header("Authorization", "Bearer refreshed_token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 1,
                 "issues": [issue_json("TEST-1", "Refreshed", "Open")]
             })))
             .expect(1)
@@ -545,7 +541,7 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "30"))
             .mount(&server)
             .await;

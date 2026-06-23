@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use url::Url;
 
-const CLIENT_ID: &str = "PLACEHOLDER_CLIENT_ID";
+include!(concat!(env!("OUT_DIR"), "/oauth_credentials.rs"));
 const AUTH_URL: &str = "https://auth.atlassian.com/authorize";
 const TOKEN_URL: &str = "https://auth.atlassian.com/oauth/token";
 const RESOURCES_URL: &str = "https://api.atlassian.com/oauth/token/accessible-resources";
@@ -43,28 +43,32 @@ pub trait TokenStore: Send + Sync {
     fn delete(&self, key: &str) -> Result<(), Error>;
 }
 
-/// Production token store backed by the OS keychain.
-pub struct KeyringStore;
+/// Production token store backed by a file in the app data directory.
+/// Falls back from OS keychain to avoid entitlement issues in dev builds.
+pub struct FileStore {
+    dir: std::path::PathBuf,
+}
 
-impl TokenStore for KeyringStore {
+impl FileStore {
+    pub fn new(dir: std::path::PathBuf) -> Self {
+        let _ = std::fs::create_dir_all(&dir);
+        Self { dir }
+    }
+}
+
+impl TokenStore for FileStore {
     fn get(&self, key: &str) -> Result<String, Error> {
-        keyring::Entry::new("planeai-jira", key)
-            .expect("keyring entry")
-            .get_password()
+        std::fs::read_to_string(self.dir.join(key))
+            .map(|s| s.trim().to_string())
             .map_err(|e| Error::Keyring(e.to_string()))
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-        keyring::Entry::new("planeai-jira", key)
-            .expect("keyring entry")
-            .set_password(value)
-            .map_err(|e| Error::Keyring(e.to_string()))
+        std::fs::write(self.dir.join(key), value).map_err(|e| Error::Keyring(e.to_string()))
     }
 
     fn delete(&self, key: &str) -> Result<(), Error> {
-        let _ = keyring::Entry::new("planeai-jira", key)
-            .expect("keyring entry")
-            .delete_credential();
+        let _ = std::fs::remove_file(self.dir.join(key));
         Ok(())
     }
 }
@@ -98,8 +102,8 @@ pub struct JiraAuth {
 }
 
 impl JiraAuth {
-    pub fn new(site: &str) -> Self {
-        Self::with_store(site, Box::new(KeyringStore))
+    pub fn new(site: &str, token_dir: std::path::PathBuf) -> Self {
+        Self::with_store(site, Box::new(FileStore::new(token_dir)))
     }
 
     pub fn with_store(site: &str, store: Box<dyn TokenStore>) -> Self {
@@ -152,9 +156,8 @@ impl JiraAuth {
     }
 
     pub async fn connect(&self) -> Result<(), Error> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let port = listener.local_addr()?.port();
-        let redirect_uri = format!("http://localhost:{port}/callback");
+        let listener = TcpListener::bind("127.0.0.1:19287").await?;
+        let redirect_uri = "http://localhost:19287/callback".to_string();
 
         let (verifier, challenge) = generate_pkce();
         let state = generate_state();
@@ -212,14 +215,17 @@ impl JiraAuth {
     async fn refresh(&self) -> Result<String, Error> {
         let refresh_token = self.store.get("refresh_token")?;
 
+        let body = serde_json::json!({
+            "grant_type": "refresh_token",
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "refresh_token": refresh_token,
+        });
+
         let resp = self
             .client
             .post(&self.token_url)
-            .json(&serde_json::json!({
-                "grant_type": "refresh_token",
-                "client_id": CLIENT_ID,
-                "refresh_token": refresh_token,
-            }))
+            .json(&body)
             .send()
             .await?
             .error_for_status()?
@@ -236,15 +242,18 @@ impl JiraAuth {
         redirect_uri: &str,
         verifier: &str,
     ) -> Result<TokenResponse, Error> {
+        let body = serde_json::json!({
+            "grant_type": "authorization_code",
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+        });
+
         self.client
             .post(&self.token_url)
-            .json(&serde_json::json!({
-                "grant_type": "authorization_code",
-                "client_id": CLIENT_ID,
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "code_verifier": verifier,
-            }))
+            .json(&body)
             .send()
             .await?
             .error_for_status()?

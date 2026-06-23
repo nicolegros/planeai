@@ -89,7 +89,8 @@ impl JiraState {
 
 pub fn init_jira(config: &Config) -> Option<JiraState> {
     let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
-    let auth = Arc::new(JiraAuth::new(&jira_config.site));
+    let token_dir = paths::app_data_dir().join("jira-tokens");
+    let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
 
     let db_path = paths::db_path();
     let conn = match Connection::open(&db_path) {
