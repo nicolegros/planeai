@@ -63,6 +63,7 @@ export interface AppConfig {
   max_mounted_terminals?: number | null;
   web_links?: boolean | null;
   auto_open_review?: boolean | null;
+  post_merge_action?: "archive" | "destroy" | "keep" | null;
 }
 
 let config = $state<AppConfig>({

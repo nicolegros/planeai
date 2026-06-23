@@ -1,8 +1,9 @@
 /**
  * Post-merge prompt store — shows Archive/Destroy/Keep prompt when a PR is merged.
- * Auto-archives after 30s if no user interaction.
+ * Default timeout action is configurable via settings.post_merge_action.
  */
 import { showSnackbar } from "./snackbar.svelte";
+import { getSettings } from "./settings.svelte";
 
 export interface MergePrompt {
   sessionId: string;
@@ -11,7 +12,8 @@ export interface MergePrompt {
 
 let prompt = $state<MergePrompt | null>(null);
 let timer: ReturnType<typeof setTimeout> | null = null;
-let onArchive: ((sessionId: string) => Promise<void>) | null = null;
+let onArchive: ((id: string) => Promise<void>) | null = null;
+let onDestroy: ((id: string) => Promise<void>) | null = null;
 
 export function getPrompt(): MergePrompt | null {
   return prompt;
@@ -21,13 +23,16 @@ export function showMergePrompt(
   sessionId: string,
   sessionName: string,
   archiveFn: (id: string) => Promise<void>,
+  destroyFn: (id: string) => Promise<void>,
 ): void {
   clearTimer();
   prompt = { sessionId, sessionName };
   onArchive = archiveFn;
-  timer = setTimeout(() => {
-    autoArchive();
-  }, 30_000);
+  onDestroy = destroyFn;
+
+  const action = getSettings().post_merge_action ?? "archive";
+  if (action === "keep") return; // no timeout
+  timer = setTimeout(() => runDefault(), 30_000);
 }
 
 export async function handleArchive(): Promise<void> {
@@ -38,12 +43,12 @@ export async function handleArchive(): Promise<void> {
   await onArchive(id);
 }
 
-export async function handleDestroy(destroyFn: (id: string) => Promise<void>): Promise<void> {
-  if (!prompt) return;
+export async function handleDestroy(): Promise<void> {
+  if (!prompt || !onDestroy) return;
   const id = prompt.sessionId;
   clearTimer();
   prompt = null;
-  await destroyFn(id);
+  await onDestroy(id);
 }
 
 export function handleKeep(): void {
@@ -51,14 +56,18 @@ export function handleKeep(): void {
   prompt = null;
 }
 
-function autoArchive(): void {
-  if (!prompt || !onArchive) return;
+function runDefault(): void {
+  if (!prompt) return;
+  const action = getSettings().post_merge_action ?? "archive";
   const id = prompt.sessionId;
   prompt = null;
   timer = null;
-  onArchive(id).then(() => {
-    showSnackbar("Session auto-archived", "success");
-  });
+
+  if (action === "archive" && onArchive) {
+    onArchive(id).then(() => showSnackbar("Session auto-archived", "success"));
+  } else if (action === "destroy" && onDestroy) {
+    onDestroy(id).then(() => showSnackbar("Session auto-destroyed", "success"));
+  }
 }
 
 function clearTimer(): void {

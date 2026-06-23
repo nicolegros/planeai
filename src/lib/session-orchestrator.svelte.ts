@@ -307,8 +307,11 @@ export function startEventListeners(): () => void {
     listen<{ session_id: string }>("pr-merged", (event) => {
       const s = sessions.find((x) => x.id === event.payload.session_id);
       if (s) {
-        showMergePrompt(s.id, s.name || s.branch, (id) =>
-          archiveSession(sessions.find((x) => x.id === id)!),
+        showMergePrompt(
+          s.id,
+          s.name || s.branch,
+          (id) => archiveSession(sessions.find((x) => x.id === id)!),
+          (id) => deleteSession(sessions.find((x) => x.id === id)!),
         );
       }
     }),

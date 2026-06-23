@@ -22,6 +22,7 @@ These are normal options users should configure.
 | `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config      |
 | `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                       |
 | `scrollback_lines`        | number   | —            | Terminal scrollback line limit                |
+| `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
 
 ### 2. Advanced compatibility config
 
