@@ -5,7 +5,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -13,6 +13,7 @@
   import TaskPanel from "./TaskPanel.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
+  import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -330,6 +331,15 @@
   {/if}
 {/snippet}
 
+{#snippet commentBadge(id: string)}
+  {@const count = getCommentCount(id)}
+  {#if count > 0}
+    <span class="flex items-center gap-0.5 text-[10px] text-t3" title="{count} comment{count !== 1 ? 's' : ''}">
+      <MessageSquare class="size-3" />{count}
+    </span>
+  {/if}
+{/snippet}
+
 <aside class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
@@ -417,6 +427,7 @@
                           <LoaderCircle class="size-3 animate-spin text-t2" />
                         {/if}
                         {@render ciBadge(session.id)}
+                        {@render commentBadge(session.id)}
                       </span>
                     </button>
                     </div>
@@ -477,6 +488,7 @@
                                 <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
                               {/if}
                               {@render ciBadge(linked.id)}
+                              {@render commentBadge(linked.id)}
                             </span>
                           {/if}
                         </button>

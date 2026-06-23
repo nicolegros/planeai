@@ -1,6 +1,7 @@
 <script lang="ts">
   import { IS_MAC, MOD_LABEL } from "../lib/keyboard";
-  import { Bot, Terminal, GitCompare, FileCode } from "@lucide/svelte";
+  import { Bot, Terminal, GitCompare, FileCode, MessageSquare } from "@lucide/svelte";
+  import { getCommentCount } from "../lib/pr-comments.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
   interface Props {
@@ -29,6 +30,7 @@
 
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
 
+  let commentCount = $derived(sessionId ? getCommentCount(sessionId) : 0);
   let isMerged = $derived(prState === "merged");
   let isDraft = $derived(prState === "draft");
 
@@ -88,6 +90,9 @@
       >
         <span class="size-[7px] rounded-full {isMerged ? 'bg-[#bc8cff]' : isDraft ? 'bg-t3' : prState === 'closed' ? 'bg-status-exited' : 'bg-status-running'}"></span>
         PR{prUrl?.match(/#(\d+)/)?.[0] ?? ''}
+        {#if commentCount > 0}
+          <span class="flex items-center gap-0.5 text-[10px] text-t2"><MessageSquare size={10} />{commentCount}</span>
+        {/if}
         {#if ciStatus}
           <span class="size-[5px] rounded-full {ciStatus === 'failing' ? 'bg-status-exited' : ciStatus === 'passing' ? 'bg-status-running' : 'bg-status-review animate-pulse'}"></span>
         {/if}

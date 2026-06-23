@@ -16,6 +16,7 @@
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
+  import { pollPrComments } from "./lib/pr-comments.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -194,6 +195,8 @@
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
     const cleanupCi = startCiPolling(orchestrator.getSessions());
+    pollPrComments();
+    const prCommentTimer = setInterval(pollPrComments, 60_000);
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
@@ -286,7 +289,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); clearInterval(prCommentTimer); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 

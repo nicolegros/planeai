@@ -635,6 +635,85 @@ pub async fn mark_pr_ready(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PrCommentInfo {
+    pub comment_count: usize,
+    pub review_decision: Option<String>,
+    pub pr_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhPrComments {
+    comments: Vec<serde_json::Value>,
+    reviews: Vec<GhReview>,
+    review_decision: Option<String>,
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhReview {
+    state: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_pr_comments(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<PrCommentInfo, String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    if resolve_github_repo(&ctx.cwd).await?.is_none() {
+        return Ok(PrCommentInfo {
+            comment_count: 0,
+            review_decision: None,
+            pr_url: None,
+        });
+    }
+
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &ctx.branch,
+            "--json",
+            "comments,reviews,reviewDecision,url",
+        ])
+        .current_dir(&ctx.cwd)
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(PrCommentInfo {
+            comment_count: 0,
+            review_decision: None,
+            pr_url: ctx.pr_url,
+        });
+    }
+
+    let data: GhPrComments = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse pr comments: {e}"))?;
+
+    let comment_count = data.comments.len()
+        + data
+            .reviews
+            .iter()
+            .filter(|r| {
+                r.state
+                    .as_deref()
+                    .is_some_and(|s| !s.eq_ignore_ascii_case("APPROVED") && !s.eq_ignore_ascii_case("PENDING"))
+            })
+            .count();
+
+    Ok(PrCommentInfo {
+        comment_count,
+        review_decision: data.review_decision,
+        pr_url: data.url.or(ctx.pr_url),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
