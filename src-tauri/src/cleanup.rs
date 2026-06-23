@@ -18,7 +18,6 @@ pub struct CleanupContext {
 /// Operations to kill a backend session (injectable for testing).
 pub struct KillOps {
     pub kill_tmux: Op1,
-    pub kill_daemon_session: Op1,
 }
 
 /// Operations that cleanup can perform (injectable for testing).
@@ -35,8 +34,6 @@ pub struct CleanupOps {
 pub fn kill_backend(
     backend: &str,
     tmux_name: Option<&str>,
-    session_id: Option<&str>,
-    tab_count: i64,
     ops: &KillOps,
 ) -> Vec<String> {
     let mut errors = vec![];
@@ -45,20 +42,6 @@ pub fn kill_backend(
             if let Some(name) = tmux_name {
                 if let Err(e) = (ops.kill_tmux)(name) {
                     errors.push(format!("tmux kill: {e}"));
-                }
-            }
-        }
-        "daemon" => {
-            if let Some(id) = session_id {
-                if let Err(e) = (ops.kill_daemon_session)(id) {
-                    errors.push(format!("daemon kill: {e}"));
-                }
-                // Kill shell tabs (tab indices 1..tab_count)
-                for i in 1..tab_count {
-                    let tab_id = format!("{id}:{i}");
-                    if let Err(e) = (ops.kill_daemon_session)(&tab_id) {
-                        errors.push(format!("daemon kill tab {i}: {e}"));
-                    }
                 }
             }
         }
@@ -72,8 +55,6 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
     let mut errors = kill_backend(
         &ctx.backend,
         ctx.tmux_name.as_deref(),
-        ctx.session_id.as_deref(),
-        ctx.tab_count,
         &ops.kill,
     );
 
@@ -111,22 +92,6 @@ pub fn real_kill_ops() -> KillOps {
                 Ok(())
             }
         }),
-        kill_daemon_session: Box::new(|session_id| {
-            use std::io::{Read, Write};
-            let app_dir = crate::paths::app_data_dir();
-            let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
-                Ok(s) => s,
-                Err(_) => return Ok(()), // Daemon not running — nothing to kill
-            };
-            stream.write_all(&[0x00]).map_err(|e| e.to_string())?;
-            let req = serde_json::json!({"cmd": "kill", "session_id": session_id});
-            stream
-                .write_all(format!("{}\n", req).as_bytes())
-                .map_err(|e| e.to_string())?;
-            let mut buf = vec![0u8; 1024];
-            let _ = stream.read(&mut buf);
-            Ok(())
-        }),
     }
 }
 
@@ -163,81 +128,30 @@ mod tests {
     use std::cell::RefCell;
 
     #[test]
-    fn kill_backend_kills_shell_tabs_for_daemon_backend() {
+    fn kill_backend_tmux() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = KillOps {
-            kill_tmux: Box::new(|_| Ok(())),
-            kill_daemon_session: Box::new(|id| {
-                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+            kill_tmux: Box::new(|name| {
+                KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                 Ok(())
             }),
         };
-        let errors = kill_backend("daemon", None, Some("sess-abc"), 3, &ops);
+        let errors = kill_backend("tmux", Some("planeai-abc"), &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
-            let killed = k.borrow();
-            // Kills agent session + 2 shell tabs (tab_count=3 means tabs 0,1,2; 0 is agent)
-            assert_eq!(killed.len(), 3);
-            assert!(killed.contains(&"sess-abc".to_string()));
-            assert!(killed.contains(&"sess-abc:1".to_string()));
-            assert!(killed.contains(&"sess-abc:2".to_string()));
+            assert_eq!(k.borrow().as_slice(), &["planeai-abc"]);
         });
     }
 
     #[test]
-    fn kill_backend_with_single_tab_only_kills_agent() {
-        thread_local! {
-            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
-        }
+    fn kill_backend_local_is_noop() {
         let ops = KillOps {
             kill_tmux: Box::new(|_| Ok(())),
-            kill_daemon_session: Box::new(|id| {
-                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
-                Ok(())
-            }),
         };
-        let errors = kill_backend("daemon", None, Some("sess-abc"), 1, &ops);
+        let errors = kill_backend("local", None, &ops);
         assert!(errors.is_empty());
-        KILLED.with(|k| {
-            let killed = k.borrow();
-            assert_eq!(killed.len(), 1);
-            assert_eq!(killed[0], "sess-abc");
-        });
-    }
-
-    #[test]
-    fn cleanup_kills_daemon_session_for_daemon_backend() {
-        thread_local! {
-            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
-        }
-        let ops = CleanupOps {
-            kill: KillOps {
-                kill_tmux: Box::new(|_| Ok(())),
-                kill_daemon_session: Box::new(|id| {
-                    KILLED.with(|k| k.borrow_mut().push(id.to_string()));
-                    Ok(())
-                }),
-            },
-            remove_worktree: Box::new(|_, _| Ok(())),
-            remove_dir: Box::new(|_| Ok(())),
-            delete_branch: Box::new(|_, _| Ok(())),
-        };
-        let ctx = CleanupContext {
-            backend: "daemon".to_string(),
-            tmux_name: None,
-            worktree_path: None,
-            project_path: None,
-            branch: None,
-            session_id: Some("sess-123".to_string()),
-            tab_count: 1,
-        };
-        let errors = run_cleanup(&ctx, &ops);
-        assert!(errors.is_empty());
-        KILLED.with(|k| {
-            assert_eq!(k.borrow().as_slice(), &["sess-123"]);
-        });
     }
 
     #[test]
@@ -251,7 +165,6 @@ mod tests {
                     KILLED.with(|k| k.borrow_mut().push(name.to_string()));
                     Ok(())
                 }),
-                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Ok(())),
             remove_dir: Box::new(|_| Ok(())),
@@ -283,7 +196,6 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Ok(())),
-                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|repo, wt| {
                 WT_REMOVED.with(|v| v.borrow_mut().push((repo.to_string(), wt.to_string())));
@@ -331,7 +243,6 @@ mod tests {
         let ops = CleanupOps {
             kill: KillOps {
                 kill_tmux: Box::new(|_| Err("tmux not found".to_string())),
-                kill_daemon_session: Box::new(|_| Ok(())),
             },
             remove_worktree: Box::new(|_, _| Err("locked".to_string())),
             remove_dir: Box::new(|_| Err("permission denied".to_string())),
