@@ -178,8 +178,6 @@ pub fn destroy(
         } else {
             None
         },
-        session_id: Some(session.id.clone()),
-        tab_count: session.tab_count,
     };
     let cleanup_errors = crate::cleanup::run_cleanup(&ctx, cleanup_ops);
 

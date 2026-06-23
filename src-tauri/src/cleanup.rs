@@ -11,8 +11,6 @@ pub struct CleanupContext {
     pub worktree_path: Option<String>,
     pub project_path: Option<String>,
     pub branch: Option<String>,
-    pub session_id: Option<String>,
-    pub tab_count: i64,
 }
 
 /// Operations to kill a backend session (injectable for testing).
@@ -176,8 +174,6 @@ mod tests {
             worktree_path: None,
             project_path: None,
             branch: None,
-            session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -216,8 +212,6 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("test-iv".to_string()),
-            session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert!(errors.is_empty());
@@ -254,8 +248,6 @@ mod tests {
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("feat-x".to_string()),
-            session_id: None,
-            tab_count: 1,
         };
         let errors = run_cleanup(&ctx, &ops);
         assert_eq!(errors.len(), 4);
