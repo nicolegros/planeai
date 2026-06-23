@@ -326,11 +326,7 @@ pub fn restart(
         "restart: commands resolved"
     );
 
-    let extra_path_dirs: Vec<String> = config
-        .extra_path_dirs
-        .iter()
-        .map(|d| planeai_core::session_launch::expand_tilde(d))
-        .collect();
+    let extra_path_dirs = config.resolved_extra_path_dirs();
 
     let project_path = db::get_project(conn, &session.project_id)
         .ok()

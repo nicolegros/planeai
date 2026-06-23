@@ -169,12 +169,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         let scrollback = 1_048_576;
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-        let extra_path_dirs: Vec<String> = env
-            .config
-            .extra_path_dirs
-            .iter()
-            .map(|d| planeai_core::session_launch::expand_tilde(d))
-            .collect();
+        let extra_path_dirs = env.config.resolved_extra_path_dirs();
         let path = planeai_core::command::augmented_path(&extra_path_dirs);
         let mut session_env = std::collections::HashMap::new();
         session_env.insert("PATH", path.as_str());
@@ -189,12 +184,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     } else if let Some(tmux_name) = &plan.tmux_name {
         #[cfg(not(windows))]
         {
-            let extra_path_dirs: Vec<String> = env
-                .config
-                .extra_path_dirs
-                .iter()
-                .map(|d| planeai_core::session_launch::expand_tilde(d))
-                .collect();
+            let extra_path_dirs = env.config.resolved_extra_path_dirs();
             tmux::create_session_with_cmd_and_path(
                 tmux_name,
                 &plan.working_dir,

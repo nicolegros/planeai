@@ -192,6 +192,16 @@ pub fn config_dir(app_name: &str) -> PathBuf {
     }
 }
 
+impl Config {
+    /// Return extra_path_dirs with tildes expanded.
+    pub fn resolved_extra_path_dirs(&self) -> Vec<String> {
+        self.extra_path_dirs
+            .iter()
+            .map(|d| planeai_core::session_launch::expand_tilde(d))
+            .collect()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let mut providers = HashMap::new();

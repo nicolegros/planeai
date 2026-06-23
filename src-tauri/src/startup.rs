@@ -25,11 +25,7 @@ where
         Err(_) => return vec![],
     };
     let projects = db::list_projects(conn).unwrap_or_default();
-    let extra_path_dirs: Vec<String> = cfg
-        .extra_path_dirs
-        .iter()
-        .map(|d| crate::util::expand_tilde(d))
-        .collect();
+    let extra_path_dirs = cfg.resolved_extra_path_dirs();
     let mut failures = Vec::new();
 
     for session in &sessions {
