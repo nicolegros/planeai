@@ -341,18 +341,28 @@
   let prevExited = $state(exited);
   $effect(() => {
     if (prevExited && !exited && term && !skipAttach) {
-      const onData = new Channel<ArrayBuffer>();
-      onData.onmessage = (raw: ArrayBuffer) => {
+      if (attached) return;
+      const FLOW_HIGH = 32_000;
+      const FLOW_LOW = 8_000;
+      let pendingBytes = 0;
+      let isPaused = false;
+
+      const ch = new Channel<ArrayBuffer>();
+      ch.onmessage = (raw: ArrayBuffer) => {
         const data = new Uint8Array(raw);
-        term.write(data);
+        pendingBytes += data.byteLength;
+        if (pendingBytes > FLOW_HIGH && !isPaused) { isPaused = true; pty.pause(sessionId); }
+        term.write(data, () => {
+          pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
+          if (isPaused && pendingBytes < FLOW_LOW) { isPaused = false; pty.resume(sessionId); }
+        });
       };
-      pty.attach(sessionId, isDark(), onData).then(() => {
+      pty.attach(sessionId, isDark(), ch).then(() => {
         attached = true;
+        onAttached?.();
         const { rows, cols } = term;
         pty.resize(sessionId, rows, cols);
-      }).catch((e) => {
-        showSnackbar(String(e));
-      });
+      }).catch((e) => showSnackbar(String(e)));
     }
     prevExited = exited;
   });

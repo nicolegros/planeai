@@ -13,8 +13,8 @@ pub fn restart_session(
 ) -> Result<db::Session, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    let ops = crate::session_ops::real_restart_ops();
-    let session = crate::session_ops::restart(&conn, &session_id, &cfg, &ops)?;
+    let ops = crate::session_restart::real_restart_ops();
+    let session = crate::session_restart::restart(&conn, &session_id, &cfg, &ops)?;
     // Emit event so frontend re-attaches the PTY to the restarted session
     let _ = app.emit("session-restarted", serde_json::json!({ "session_id": session_id }));
     Ok(session)
