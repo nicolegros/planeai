@@ -79,7 +79,10 @@ mod socket_tests {
             }
         };
         let sessions = resp["sessions"].as_array().unwrap();
-        assert_eq!(sessions.len(), 0);
+        // Session is retained as killed (not immediately removed)
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0]["alive"], false);
+        assert_eq!(sessions[0]["status"], "killed");
     }
 
     #[tokio::test]

@@ -3,7 +3,9 @@
 //! Provides a control connection (JSON-line protocol) and data connections
 //! (binary frames for PTY I/O).
 
-use planeai_daemon::protocol::{write_frame, CONN_CONTROL, CONN_DATA, FRAME_OUTPUT};
+use planeai_daemon::protocol::{
+    write_frame, CONN_CONTROL, CONN_DATA, FRAME_ATTACH, FRAME_HELLO, PROTOCOL_VERSION,
+};
 use planeai_ipc::r#async::AsyncIpcStream;
 use std::collections::HashMap;
 use std::path::Path;
@@ -90,6 +92,7 @@ impl DaemonClient {
             "args": args,
             "cwd": cwd,
             "env": env,
+            "mode": "replace_exited",
         });
         self.send_request(&req).await
     }
@@ -126,7 +129,7 @@ pub struct DataConnection {
 
 impl DataConnection {
     /// Open a data connection to the given session.
-    /// Connects, sends 0x01 type byte, then sends session_id handshake frame.
+    /// Connects, sends 0x01 type byte, then performs HELLO/ATTACH handshake.
     pub async fn open(socket_path: &Path, session_id: &str) -> Result<Self, String> {
         let stream = AsyncIpcStream::connect(socket_path)
             .await
@@ -138,9 +141,12 @@ impl DataConnection {
             .await
             .map_err(|e| format!("failed to send data byte: {e}"))?;
 
-        write_frame(&mut writer, FRAME_OUTPUT, session_id.as_bytes())
+        write_frame(&mut writer, FRAME_HELLO, &[PROTOCOL_VERSION])
             .await
-            .map_err(|e| format!("handshake failed: {e}"))?;
+            .map_err(|e| format!("hello failed: {e}"))?;
+        write_frame(&mut writer, FRAME_ATTACH, session_id.as_bytes())
+            .await
+            .map_err(|e| format!("attach failed: {e}"))?;
 
         Ok(Self { reader, writer })
     }

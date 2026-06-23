@@ -42,6 +42,7 @@ These are NOT in the config file by default. Used for debugging, migration, and 
 | `PLANEAI_LOCAL_PTY_CORE`     | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for local sessions         |
 | `PLANEAI_DAEMON_PTY_CORE`    | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for daemon sessions        |
 | `PLANEAI_SESSION_LOG_DIR`    | path                    | unset    | Override `session_log_dir` config (highest priority) |
+| `PLANEAI_DAEMON_LOG_DIR`     | path                    | `~/.planeai/logs` | Override daemon process log directory       |
 | `PLANEAI_EXTRA_PATH`         | colon-separated dirs    | unset    | Override `extra_path_dirs` config (highest priority) |
 | `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true`             | unset    | Enable in-app log viewer (Tauri only)                |
 | `PLANEAI_BENCH_REPLAY`       | path                    | unset    | Benchmark replay fixture                             |

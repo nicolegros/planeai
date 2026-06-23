@@ -153,12 +153,19 @@ impl Backend for TauriBackend {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
         let scrollback = 1_048_576;
+        let extra_path_dirs = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.resolved_extra_path_dirs()
+        };
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
+        let path = planeai_core::command::augmented_path(&extra_path_dirs);
         let mut env = std::collections::HashMap::new();
         env.insert("TERM", "xterm-256color");
         env.insert("PLANEAI_SESSION_ID", session_id);
+        env.insert("PATH", path.as_str());
         crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
     }
 

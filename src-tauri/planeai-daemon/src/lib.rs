@@ -13,6 +13,9 @@ use std::sync::Arc;
 use transport::{default_socket_path, DaemonListener};
 
 fn default_log_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("PLANEAI_DAEMON_LOG_DIR") {
+        return PathBuf::from(dir);
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default();

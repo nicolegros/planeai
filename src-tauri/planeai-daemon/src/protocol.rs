@@ -1,3 +1,4 @@
+use crate::registry::{SpawnMode, SpawnOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -5,10 +6,19 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 // Binary frame type constants
 pub const FRAME_OUTPUT: u8 = 0x01;
 pub const FRAME_INPUT: u8 = 0x02;
+pub const FRAME_RESIZE: u8 = 0x03;
+pub const FRAME_EOF: u8 = 0x04;
+pub const FRAME_ERROR: u8 = 0x05;
+pub const FRAME_HELLO: u8 = 0x06;
+pub const FRAME_ATTACH: u8 = 0x07;
+pub const FRAME_GAP: u8 = 0x08;
 
 // Connection type discriminator (first byte on new connection)
 pub const CONN_CONTROL: u8 = 0x00;
 pub const CONN_DATA: u8 = 0x01;
+
+/// Current protocol version.
+pub const PROTOCOL_VERSION: u8 = 2;
 
 /// Write a binary frame: [1-byte type][4-byte big-endian length][payload]
 pub async fn write_frame(
@@ -48,6 +58,8 @@ pub enum Request {
         cwd: Option<String>,
         #[serde(default)]
         env: Option<HashMap<String, String>>,
+        #[serde(default)]
+        mode: Option<SpawnMode>,
     },
     Kill {
         session_id: String,
@@ -73,6 +85,8 @@ pub enum Response {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        outcome: Option<SpawnOutcome>,
     },
     Error {
         error: String,
@@ -90,6 +104,13 @@ pub enum Response {
 pub struct SessionInfoDto {
     pub session_id: String,
     pub alive: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_status: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
 }
 
 impl Response {
@@ -97,6 +118,15 @@ impl Response {
         Self::Ok {
             ok: true,
             session_id,
+            outcome: None,
+        }
+    }
+
+    pub fn ok_with_outcome(session_id: Option<String>, outcome: SpawnOutcome) -> Self {
+        Self::Ok {
+            ok: true,
+            session_id,
+            outcome: Some(outcome),
         }
     }
 

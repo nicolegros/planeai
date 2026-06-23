@@ -1,6 +1,6 @@
 use crate::data::handle_data_connection;
 use crate::protocol::{Request, Response, SessionInfoDto, CONN_CONTROL, CONN_DATA};
-use crate::registry::SessionRegistry;
+use crate::registry::{SessionRegistry, SpawnOutcome};
 use crate::transport::{DaemonListener, DaemonStream};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +9,7 @@ use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinSet;
 
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const GC_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct DaemonServer {
     registry: Arc<Mutex<SessionRegistry>>,
@@ -40,6 +41,10 @@ impl DaemonServer {
         // Spawn exit-event poller
         let server = Arc::clone(&self);
         tasks.spawn(async move { server.poll_exits().await });
+
+        // Spawn GC task
+        let server = Arc::clone(&self);
+        tasks.spawn(async move { server.gc_loop().await });
 
         // Spawn shutdown timer
         let server = Arc::clone(&self);
@@ -135,8 +140,16 @@ impl DaemonServer {
                 args,
                 cwd,
                 env,
+                mode,
             } => {
+                let spawn_mode = mode.unwrap_or_default();
                 let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                tracing::info!(
+                    session_id = %session_id,
+                    command = %command,
+                    mode = ?spawn_mode,
+                    "spawn request"
+                );
                 match reg.spawn(
                     &session_id,
                     &command,
@@ -144,16 +157,27 @@ impl DaemonServer {
                     cwd.as_deref(),
                     env.as_ref(),
                     self.buffer_capacity,
+                    spawn_mode,
                 ) {
-                    Ok(()) => {
-                        self.activity.notify_one();
-                        Response::ok(Some(session_id))
+                    Ok(outcome) => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            outcome = ?outcome,
+                            "spawn outcome"
+                        );
+                        if outcome != SpawnOutcome::AlreadyRunning {
+                            self.activity.notify_one();
+                        }
+                        Response::ok_with_outcome(Some(session_id), outcome)
                     }
                     Err(e) => Response::error(e.to_string()),
                 }
             }
             Request::Kill { session_id } => match reg.kill(&session_id) {
-                Ok(()) => Response::ok(Some(session_id)),
+                Ok(()) => {
+                    tracing::info!(session_id = %session_id, "session killed");
+                    Response::ok(Some(session_id))
+                }
                 Err(e) => Response::error(e.to_string()),
             },
             Request::Resize {
@@ -174,6 +198,10 @@ impl DaemonServer {
                     .map(|s| SessionInfoDto {
                         session_id: s.session_id,
                         alive: s.alive,
+                        status: s.status,
+                        exit_status: s.exit_status,
+                        started_at: s.started_at,
+                        ended_at: s.ended_at,
                     })
                     .collect();
                 Response::Sessions { sessions }
@@ -193,21 +221,36 @@ impl DaemonServer {
     async fn poll_exits(self: Arc<Self>) {
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let dead = self.registry.lock().await.remove_dead();
-            for id in dead {
+            let newly_exited = self.registry.lock().await.poll_exits();
+            for id in newly_exited {
+                tracing::info!(session_id = %id, "session exited");
                 let _ = self.event_tx.send(Response::event("exited", &id));
             }
         }
     }
 
-    /// Shutdown timer: exits process when no clients and no sessions for SHUTDOWN_GRACE.
+    /// Periodically GC old exited/killed sessions.
+    async fn gc_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(GC_INTERVAL).await;
+            let gc_ids = self.registry.lock().await.gc();
+            for id in &gc_ids {
+                tracing::debug!(session_id = %id, "gc removed");
+            }
+            if !gc_ids.is_empty() {
+                self.activity.notify_one();
+            }
+        }
+    }
+
+    /// Shutdown timer: exits process when no clients and no live sessions for SHUTDOWN_GRACE.
     async fn shutdown_timer(&self, shutdown_rx: &mut tokio::sync::watch::Receiver<()>) {
         use std::sync::atomic::Ordering;
         loop {
-            // Wait until conditions are met
+            // Wait until conditions are met: no clients AND no live sessions
             loop {
                 if self.client_count.load(Ordering::SeqCst) == 0
-                    && self.registry.lock().await.is_empty()
+                    && self.registry.lock().await.no_live_sessions()
                 {
                     break;
                 }
@@ -219,15 +262,13 @@ impl DaemonServer {
                 _ = tokio::time::sleep(SHUTDOWN_GRACE) => {
                     // Recheck conditions
                     if self.client_count.load(Ordering::SeqCst) == 0
-                        && self.registry.lock().await.is_empty()
+                        && self.registry.lock().await.no_live_sessions()
                     {
                         tracing::info!("shutdown timer expired, exiting");
-                        // Signal shutdown
                         std::process::exit(0);
                     }
                 }
                 _ = self.activity.notified() => {
-                    // Activity occurred, restart loop
                     continue;
                 }
                 _ = shutdown_rx.changed() => return,

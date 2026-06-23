@@ -40,14 +40,16 @@ pub fn ensure_running(
 }
 
 /// Spawn a session in the daemon. Assumes daemon is already running.
-/// Wraps the command in `sh -c` to preserve shell quoting.
+/// Splits the command string into program + args for direct argv execution.
 pub fn spawn_session(
     session_id: &str,
     cmd: &str,
     cwd: &str,
     env: Option<&std::collections::HashMap<&str, &str>>,
 ) -> Result<(), String> {
-    let (program, args) = planeai_core::command::shell_args(cmd);
+    let mut parts = cmd.split_whitespace();
+    let program = parts.next().unwrap_or(cmd);
+    let args: Vec<&str> = parts.collect();
     let app_dir = crate::paths::app_data_dir();
 
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
@@ -63,6 +65,7 @@ pub fn spawn_session(
         "args": args,
         "cwd": cwd,
         "env": env,
+        "mode": "replace_exited",
     });
     let payload = format!(
         "{}\n",
