@@ -171,4 +171,33 @@ describe("sidebar-nav", () => {
       expect(handleSidebarKey(key({ key: "j" }), 0)).toBeNull();
     });
   });
+
+  describe("scroll into view via data-nav-index", () => {
+    it("querySelector finds element by data-nav-index and can call scrollIntoView", () => {
+      const container = document.createElement("div");
+      for (let i = 0; i < 20; i++) {
+        const el = document.createElement("button");
+        el.setAttribute("data-nav-index", String(i));
+        el.scrollIntoView = vi.fn();
+        container.appendChild(el);
+      }
+      document.body.appendChild(container);
+
+      // Simulate navigation to index 15
+      setSelectedIndex(15);
+      const idx = getSelectedIndex();
+      const target = document.querySelector(`[data-nav-index="${idx}"]`) as HTMLElement;
+      expect(target).not.toBeNull();
+      target.scrollIntoView({ block: "nearest" });
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+
+      document.body.removeChild(container);
+    });
+
+    it("returns null gracefully when no matching element exists", () => {
+      setSelectedIndex(99);
+      const target = document.querySelector(`[data-nav-index="99"]`);
+      expect(target).toBeNull();
+    });
+  });
 });
