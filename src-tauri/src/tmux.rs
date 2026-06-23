@@ -77,17 +77,7 @@ pub fn create_session(
     } else {
         "kiro-cli chat".to_string()
     };
-    create_session_with_cmd(tmux_name, working_dir, &cmd, session_id)
-}
-
-/// Create a tmux session with a custom command.
-pub fn create_session_with_cmd(
-    tmux_name: &str,
-    working_dir: &str,
-    cmd: &str,
-    session_id: &str,
-) -> Result<(), String> {
-    create_session_with_cmd_and_path(tmux_name, working_dir, cmd, session_id, &[])
+    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[])
 }
 
 /// Create a tmux session with a custom command and extra PATH directories.

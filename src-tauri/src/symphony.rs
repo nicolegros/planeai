@@ -135,7 +135,7 @@ impl Backend for TauriBackend {
         cmd: &str,
         session_id: &str,
     ) -> Result<(), String> {
-        crate::tmux::create_session_with_cmd(name, cwd, cmd, session_id)
+        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[])
     }
 
     #[cfg(windows)]
