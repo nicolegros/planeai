@@ -2,6 +2,7 @@ use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
 use crate::db;
+use crate::config;
 use crate::pty;
 use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
 
@@ -25,9 +26,11 @@ pub fn attach_session(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
-    // Discovery info: only need list_cmd, pattern, is_resume, previous_id, cwd.
-    // Command resolution is skipped for daemon sessions (not needed for reattach).
-    let discovery_info = if session.backend != "tmux" {
+    // Resolve pty_target and discovery_info in a single pass
+    let (pty_target, discovery_info) = if session.backend == "tmux" {
+        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
+        (pty::PtyTarget::TmuxAttach { tmux_name }, None)
+    } else {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let provider_def = cfg
@@ -60,28 +63,28 @@ pub fn attach_session(
             .unwrap_or(project_path)
             .to_string();
 
-        Some((
+        let cmd = crate::session_restart::restart_command(
+            &session.status,
+            provider_def,
+            None,
+        )
+        .unwrap_or_else(|| config::launch_command(provider_def, session.auto_approve));
+
+        let (program, args) = planeai_core::command::shell_args(&cmd);
+        let target = pty::PtyTarget::Shell {
+            command: program.to_string(),
+            args: args.into_iter().map(|s| s.to_string()).collect(),
+            cwd: cwd.clone(),
+        };
+
+        let disc = Some((
             list_cmd,
             pattern,
             is_resume,
             session.provider_session_id.clone(),
             cwd,
-        ))
-    } else {
-        None
-    };
-
-    let pty_target = if session.backend == "tmux" {
-        let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
-        pty::PtyTarget::TmuxAttach { tmux_name }
-    } else if session.backend == "daemon" {
-        let socket_path = planeai_ipc::daemon_socket_path();
-        pty::PtyTarget::Daemon {
-            session_id: session_id.clone(),
-            socket_path,
-        }
-    } else {
-        return Err(format!("unsupported backend: {}", session.backend));
+        ));
+        (target, disc)
     };
 
     state.0.attach(
