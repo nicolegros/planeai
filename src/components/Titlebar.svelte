@@ -25,9 +25,10 @@
     onCloseTab: (index: number) => void;
     onAddTab: () => void;
     onCreatePr?: () => void;
+    onOpenCommand?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
   const STORAGE_KEY = "planeai:merge-strategy";
@@ -252,6 +253,10 @@
       >＋ Create PR</button>
     {/if}
 
-    <span class="font-mono text-[10.5px] text-t2 border border-border rounded-[6px] px-[7px] py-[3px] bg-panel-hi select-none">⌘K</span>
+    <button
+      class="font-mono text-[10.5px] text-t2 border border-border rounded-[6px] px-[7px] py-[3px] bg-panel-hi select-none hover:text-t1 hover:border-border-s transition-colors"
+      title="Open command palette"
+      onclick={(e) => { e.stopPropagation(); onOpenCommand?.(); }}
+    >⌘K</button>
   </div>
 </header>
