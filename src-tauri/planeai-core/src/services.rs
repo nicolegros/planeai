@@ -280,7 +280,7 @@ impl ProjectService {
             .unwrap_or_else(|| "project".to_string());
 
         let id = uuid::Uuid::new_v4().to_string();
-        let prefix = planeai_tasks::sqlite::derive_prefix(&name);
+        let prefix = Self::unique_prefix(conn, &name)?;
         conn.execute(
             "INSERT INTO projects (id, name, path, status, prefix) VALUES (?1, ?2, ?3, 'active', ?4)",
             params![id, name, path, prefix],
@@ -344,7 +344,7 @@ impl ProjectService {
 
     pub fn create(conn: &Connection, name: &str, path: &str) -> SqlResult<Project> {
         let id = uuid::Uuid::new_v4().to_string();
-        let prefix = planeai_tasks::sqlite::derive_prefix(name);
+        let prefix = Self::unique_prefix(conn, name)?;
         conn.execute(
             "INSERT INTO projects (id, name, path, prefix) VALUES (?1, ?2, ?3, ?4)",
             params![id, name, path, prefix],
@@ -407,6 +407,29 @@ impl ProjectService {
             |r| r.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Derive a unique prefix for a project name, appending a numeric disambiguator if needed.
+    fn unique_prefix(conn: &Connection, name: &str) -> SqlResult<String> {
+        let base = planeai_tasks::sqlite::derive_prefix(name);
+        let exists = |p: &str| -> SqlResult<bool> {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM projects WHERE prefix = ?1",
+                params![p],
+                |r| r.get(0),
+            )?;
+            Ok(count > 0)
+        };
+        if !exists(&base)? {
+            return Ok(base);
+        }
+        for i in 2..=99 {
+            let candidate = format!("{base}{i}");
+            if !exists(&candidate)? {
+                return Ok(candidate);
+            }
+        }
+        Ok(base) // fallback — shouldn't happen in practice
     }
 }
 

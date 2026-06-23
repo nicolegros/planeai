@@ -929,3 +929,13 @@ fn preallocated_session_id_matches_daemon_id() {
     assert_eq!(s.id, preallocated_id);
     assert_eq!(s.backend, "daemon");
 }
+
+#[test]
+fn create_project_disambiguates_prefix_on_collision() {
+    let conn = test_db();
+    let p1 = ProjectService::create(&conn, "deployment-pipeline", "/tmp/dp").unwrap();
+    let p2 = ProjectService::create(&conn, "deployment-platform", "/tmp/dp2").unwrap();
+    // Both would derive "DP" but second should get "DP2"
+    assert_eq!(p1.prefix, "DP");
+    assert_eq!(p2.prefix, "DP2");
+}
