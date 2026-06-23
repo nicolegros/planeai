@@ -47,17 +47,16 @@ export interface JiraWriteback {
   comment?: boolean;
 }
 
-export interface JiraProjectMapping {
-  jira_project: string;
+export interface SyncSource {
   jql: string;
-  status_map?: Record<string, string>;
+  status_map?: Record<string, string> | null;
   writeback?: JiraWriteback | null;
 }
 
 export interface JiraConfig {
   site: string;
   sync_interval_ms?: number;
-  projects?: Record<string, JiraProjectMapping>;
+  sources?: Record<string, SyncSource>;
 }
 
 export interface IntegrationsConfig {

@@ -11,15 +11,14 @@ pub struct JiraConfig {
     #[serde(default = "default_sync_interval_ms")]
     pub sync_interval_ms: u64,
     #[serde(default)]
-    pub projects: HashMap<String, JiraProjectMapping>,
+    pub sources: HashMap<String, SyncSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct JiraProjectMapping {
-    pub jira_project: String,
+pub struct SyncSource {
     pub jql: String,
     #[serde(default)]
-    pub status_map: HashMap<String, String>,
+    pub status_map: Option<HashMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writeback: Option<WritebackConfig>,
 }
@@ -40,16 +39,15 @@ mod tests {
 
     #[test]
     fn round_trip_jira_config() {
-        let mut projects = HashMap::new();
-        projects.insert(
+        let mut sources = HashMap::new();
+        sources.insert(
             "myproject".to_string(),
-            JiraProjectMapping {
-                jira_project: "MP".to_string(),
+            SyncSource {
                 jql: "project = MP AND status != Done".to_string(),
-                status_map: HashMap::from([
+                status_map: Some(HashMap::from([
                     ("In Progress".to_string(), "active".to_string()),
                     ("Done".to_string(), "completed".to_string()),
-                ]),
+                ])),
                 writeback: Some(WritebackConfig {
                     on_start: Some("In Progress".to_string()),
                     on_complete: Some("Done".to_string()),
@@ -61,7 +59,7 @@ mod tests {
         let config = JiraConfig {
             site: "https://mycompany.atlassian.net".to_string(),
             sync_interval_ms: 30_000,
-            projects,
+            sources,
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -74,7 +72,7 @@ mod tests {
         let json = r#"{"site": "https://x.atlassian.net"}"#;
         let config: JiraConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.sync_interval_ms, 60_000);
-        assert!(config.projects.is_empty());
+        assert!(config.sources.is_empty());
     }
 
     #[test]
