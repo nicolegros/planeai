@@ -63,6 +63,11 @@ impl JiraSync {
     pub async fn sync_now(&self) -> Result<SyncResult, crate::Error> {
         let mut result = SyncResult::default();
 
+        if self.config.projects.is_empty() {
+            tracing::warn!("sync_now: no project mappings configured");
+            return Ok(result);
+        }
+
         for mapping in self.config.projects.values() {
             match self.sync_project(mapping, &mut result).await {
                 Ok(()) => {}
@@ -288,9 +293,9 @@ mod tests {
     async fn sync_creates_tasks_for_new_issues() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 3,
+
                 "issues": [
                     issue_json("PROJ-1", "First", "To Do"),
                     issue_json("PROJ-2", "Second", "In Progress"),
@@ -323,9 +328,9 @@ mod tests {
 
         // First sync: 3 issues
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 3,
+
                 "issues": [
                     issue_json("PROJ-1", "First", "To Do"),
                     issue_json("PROJ-2", "Second", "To Do"),
@@ -345,9 +350,9 @@ mod tests {
         // Reset mock: second sync returns only PROJ-1 (PROJ-2, PROJ-3 disappear)
         server.reset().await;
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 1,
+
                 "issues": [issue_json("PROJ-1", "First", "To Do")]
             })))
             .mount(&server)
@@ -366,9 +371,9 @@ mod tests {
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 1,
+
                 "issues": [issue_json("PROJ-1", "Original Title", "To Do")]
             })))
             .expect(1)
@@ -384,9 +389,9 @@ mod tests {
         // Second sync: title changed
         server.reset().await;
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 1,
+
                 "issues": [issue_json("PROJ-1", "Updated Title", "To Do")]
             })))
             .mount(&server)
@@ -407,9 +412,9 @@ mod tests {
 
         // First sync: 2 issues
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 2,
+
                 "issues": [
                     issue_json("PROJ-1", "Todo task", "To Do"),
                     issue_json("PROJ-2", "Active task", "In Progress"),
@@ -428,9 +433,9 @@ mod tests {
         // Second sync: both disappear
         server.reset().await;
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 0, "issues": []
+                 "issues": []
             })))
             .mount(&server)
             .await;
@@ -449,9 +454,9 @@ mod tests {
     async fn start_stops_on_cancellation() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 0, "issues": []
+                 "issues": []
             })))
             .mount(&server)
             .await;
@@ -480,9 +485,9 @@ mod tests {
         let server = MockServer::start().await;
         // Only mount a mock that will match one project's JQL but not the other
         Mock::given(method("GET"))
-            .and(path("/search"))
+            .and(path("/search/jql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "startAt": 0, "maxResults": 50, "total": 1,
+
                 "issues": [issue_json("PROJ-1", "Works", "To Do")]
             })))
             .mount(&server)
