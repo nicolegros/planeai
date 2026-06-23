@@ -171,7 +171,13 @@ pub async fn launch_session(
         #[cfg(not(windows))]
         {
             let tn = tmux::session_name(&project_name);
-            tmux::create_session_with_cmd_and_path(&tn, &working_dir, &cmd, &session_id, &extra_path_dirs)?;
+            tmux::create_session_with_cmd_and_path(
+                &tn,
+                &working_dir,
+                &cmd,
+                &session_id,
+                &extra_path_dirs,
+            )?;
             Some(tn)
         }
         #[cfg(windows)]

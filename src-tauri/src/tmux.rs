@@ -89,7 +89,10 @@ pub fn create_session_with_cmd_and_path(
     extra_path_dirs: &[String],
 ) -> Result<(), String> {
     let env_flag = format!("PLANEAI_SESSION_ID={}", session_id);
-    let path_flag = format!("PATH={}", planeai_core::command::augmented_path(extra_path_dirs));
+    let path_flag = format!(
+        "PATH={}",
+        planeai_core::command::augmented_path(extra_path_dirs)
+    );
     let args = vec![
         "new-session",
         "-d",

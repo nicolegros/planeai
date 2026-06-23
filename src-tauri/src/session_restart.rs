@@ -167,7 +167,13 @@ pub fn real_restart_ops() -> impl RestartOps {
                     tracing::info!(tmux_name, "restart: tmux session still alive, reattaching");
                     return Ok(());
                 }
-                crate::tmux::create_session_with_cmd_and_path(tmux_name, cwd, cmd, session_id, extra_path_dirs)
+                crate::tmux::create_session_with_cmd_and_path(
+                    tmux_name,
+                    cwd,
+                    cmd,
+                    session_id,
+                    extra_path_dirs,
+                )
             }
             #[cfg(windows)]
             {
@@ -183,7 +189,12 @@ pub fn real_restart_ops() -> impl RestartOps {
             cwd: &str,
             extra_path_dirs: &[String],
         ) -> Result<(), String> {
-            tracing::info!(session_id = &session_id[..8.min(session_id.len())], cmd, cwd, "restart_ops: spawning daemon session");
+            tracing::info!(
+                session_id = &session_id[..8.min(session_id.len())],
+                cmd,
+                cwd,
+                "restart_ops: spawning daemon session"
+            );
 
             // Ensure daemon is running before trying to spawn
             let socket_path = planeai_ipc::daemon_socket_path();
@@ -448,6 +459,10 @@ mod tests {
         assert_eq!(ops.calls.borrow().len(), 1);
         let call = &ops.calls.borrow()[0];
         // Fresh command should NOT contain --resume-id
-        assert!(!call.2.contains("--resume-id"), "expected fresh launch, got: {}", call.2);
+        assert!(
+            !call.2.contains("--resume-id"),
+            "expected fresh launch, got: {}",
+            call.2
+        );
     }
 }

@@ -254,8 +254,6 @@ pub fn fire_task_hook(
     }
 }
 
-
-
 #[derive(Debug)]
 pub struct PromptResult {
     pub session_id: String,
@@ -1183,5 +1181,4 @@ mod tests {
         let err = send_prompt(&conn, "dddd", "hi", &ops).unwrap_err();
         assert!(err.contains("not running"));
     }
-
 }

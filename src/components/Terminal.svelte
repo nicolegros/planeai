@@ -338,7 +338,7 @@
   });
 
   // Re-attach when session is restarted (exited → active)
-  let prevExited = $state(exited);
+  let prevExited = exited;
   $effect(() => {
     if (prevExited && !exited && term && !skipAttach) {
       if (attached) return;
