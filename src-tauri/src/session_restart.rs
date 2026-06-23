@@ -11,7 +11,7 @@ const CIRCUIT_BREAKER_SECS: u64 = 5;
 ///
 /// Returns `Some(command)` if the session should be restarted, `None` otherwise.
 /// - Only restarts sessions with status "exited"
-/// - Uses `interactive_resume_command` if set, otherwise falls back to `command`
+/// - Uses `resume_command` if set, otherwise falls back to `command`
 /// - Circuit breaker: returns `None` if session lived less than `CIRCUIT_BREAKER_SECS`
 pub fn restart_command(
     session_status: &str,
@@ -28,7 +28,7 @@ pub fn restart_command(
     }
     Some(
         provider
-            .interactive_resume_command
+            .resume_command
             .clone()
             .unwrap_or_else(|| provider.command.clone()),
     )
@@ -77,7 +77,7 @@ pub fn restart(
         .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
-    let has_resume_command = provider_def.interactive_resume_command.is_some();
+    let has_resume_command = provider_def.resume_command.is_some();
     let resume_cmd = if has_resume || has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
@@ -202,11 +202,12 @@ pub fn real_restart_ops() -> impl RestartOps {
             let scrollback = 1_048_576;
             crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-            let mut env = std::collections::HashMap::new();
-            let path = planeai_core::command::augmented_path(extra_path_dirs);
-            env.insert("PATH", path.as_str());
-            env.insert("TERM", "xterm-256color");
-            crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
+            let mut path_buf = String::new();
+            let env =
+                planeai_core::command::build_daemon_env(extra_path_dirs, session_id, &mut path_buf);
+            let (program, args) = planeai_core::command::shell_args(cmd);
+            let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
         }
     }
     RealRestartOps

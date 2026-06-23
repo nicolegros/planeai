@@ -1,5 +1,6 @@
-use planeai_daemon::registry::{SessionRegistry, SpawnMode, SpawnOutcome};
+use planeai_daemon::registry::SessionRegistry;
 use planeai_daemon::session::DaemonSession;
+use planeai_daemon::types::{SpawnMode, SpawnOutcome};
 use std::sync::Mutex;
 use std::time::Duration;
 

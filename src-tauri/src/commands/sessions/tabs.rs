@@ -48,7 +48,7 @@ pub fn spawn_tab(
             .map(|ids| ids.contains(&pty_key))
             .unwrap_or(false);
         if !already_running {
-            crate::daemon::spawn_session(&pty_key, &shell, &cwd, None)?;
+            crate::daemon::spawn_session(&pty_key, &shell, &[], &cwd, None)?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {

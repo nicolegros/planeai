@@ -1,4 +1,4 @@
-use crate::registry::{SpawnMode, SpawnOutcome};
+use crate::types::{SpawnMode, SpawnOutcome};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -105,8 +105,6 @@ pub struct SessionInfoDto {
     pub session_id: String,
     pub alive: bool,
     pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exit_status: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

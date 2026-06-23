@@ -1,4 +1,5 @@
 use crate::session::DaemonSession;
+use crate::types::{SpawnMode, SpawnOutcome};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -10,13 +11,8 @@ pub const DEFAULT_GC_TTL: Duration = Duration::from_secs(30 * 60); // 30 minutes
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SessionState {
     Running,
-    Exited {
-        exit_status: Option<i32>,
-        ended_at: DateTime<Utc>,
-    },
-    Killed {
-        ended_at: DateTime<Utc>,
-    },
+    Exited { ended_at: DateTime<Utc> },
+    Killed { ended_at: DateTime<Utc> },
 }
 
 impl SessionState {
@@ -32,13 +28,6 @@ impl SessionState {
         }
     }
 
-    pub fn exit_status(&self) -> Option<i32> {
-        match self {
-            Self::Exited { exit_status, .. } => *exit_status,
-            _ => None,
-        }
-    }
-
     pub fn ended_at(&self) -> Option<DateTime<Utc>> {
         match self {
             Self::Exited { ended_at, .. } | Self::Killed { ended_at } => Some(*ended_at),
@@ -48,39 +37,19 @@ impl SessionState {
 }
 
 pub struct RegistryEntry {
-    pub session: DaemonSession,
-    pub state: SessionState,
-    pub created_at: DateTime<Utc>,
+    session: DaemonSession,
+    state: SessionState,
+    created_at: DateTime<Utc>,
 }
 
-/// Spawn mode controls how a spawn request interacts with existing sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SpawnMode {
-    /// Fail if session_id already exists.
-    CreateOnly,
-    /// Return AlreadyRunning if live; error if exited/missing.
-    AttachIfRunning,
-    /// Spawn if missing or exited/killed; error if running.
-    ReplaceExited,
-    /// Kill running if needed, then spawn.
-    Restart,
-}
-
-impl Default for SpawnMode {
-    fn default() -> Self {
-        Self::ReplaceExited
+impl RegistryEntry {
+    pub fn session(&self) -> &DaemonSession {
+        &self.session
     }
-}
 
-/// Outcome of a spawn request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SpawnOutcome {
-    Spawned,
-    AlreadyRunning,
-    ReplacedExited,
-    Restarted,
+    pub fn state(&self) -> &SessionState {
+        &self.state
+    }
 }
 
 /// Info returned to clients about a session.
@@ -89,7 +58,6 @@ pub struct SessionInfo {
     pub session_id: String,
     pub alive: bool,
     pub status: String,
-    pub exit_status: Option<i32>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
 }
@@ -130,11 +98,12 @@ impl SessionRegistry {
     ) -> anyhow::Result<SpawnOutcome> {
         let id: String = session_id.into();
 
-        match mode {
+        let outcome = match mode {
             SpawnMode::CreateOnly => {
                 if self.sessions.contains_key(&id) {
                     anyhow::bail!("session already exists: {id}");
                 }
+                SpawnOutcome::Spawned
             }
             SpawnMode::AttachIfRunning => {
                 if let Some(entry) = self.sessions.get(&id) {
@@ -150,9 +119,9 @@ impl SessionRegistry {
                     if entry.state.is_running() {
                         anyhow::bail!("session is still running: {id}");
                     }
-                    // Remove exited/killed entry to replace
                     self.sessions.remove(&id);
                 }
+                SpawnOutcome::Spawned
             }
             SpawnMode::Restart => {
                 if let Some(entry) = self.sessions.get(&id) {
@@ -160,32 +129,14 @@ impl SessionRegistry {
                         let _ = entry.session.kill();
                     }
                     self.sessions.remove(&id);
-                    let session =
-                        DaemonSession::spawn(&id, command, args, cwd, env, buffer_capacity)?;
-                    self.sessions.insert(
-                        id,
-                        RegistryEntry {
-                            session,
-                            state: SessionState::Running,
-                            created_at: Utc::now(),
-                        },
-                    );
-                    return Ok(SpawnOutcome::Restarted);
+                    SpawnOutcome::Restarted
+                } else {
+                    SpawnOutcome::Spawned
                 }
-                // Not found — spawn fresh
             }
-        }
+        };
 
         let session = DaemonSession::spawn(&id, command, args, cwd, env, buffer_capacity)?;
-        let outcome = if mode == SpawnMode::ReplaceExited
-            && !self.sessions.contains_key(&id)
-            && mode == SpawnMode::ReplaceExited
-        {
-            // We only know we replaced if we removed above; detect via lacking entry
-            SpawnOutcome::Spawned
-        } else {
-            SpawnOutcome::Spawned
-        };
         self.sessions.insert(
             id,
             RegistryEntry {
@@ -213,10 +164,6 @@ impl SessionRegistry {
         self.sessions.get(session_id).map(|e| &e.session)
     }
 
-    pub fn get_entry(&self, session_id: &str) -> Option<&RegistryEntry> {
-        self.sessions.get(session_id)
-    }
-
     pub fn list(&self) -> Vec<SessionInfo> {
         self.sessions
             .values()
@@ -224,7 +171,6 @@ impl SessionRegistry {
                 session_id: e.session.session_id().to_string(),
                 alive: e.state.is_running(),
                 status: e.state.status_str().to_string(),
-                exit_status: e.state.exit_status(),
                 started_at: Some(e.created_at.to_rfc3339()),
                 ended_at: e.state.ended_at().map(|t| t.to_rfc3339()),
             })
@@ -238,7 +184,6 @@ impl SessionRegistry {
         for (id, entry) in self.sessions.iter_mut() {
             if entry.state.is_running() && !entry.session.is_alive() {
                 entry.state = SessionState::Exited {
-                    exit_status: None, // portable-pty doesn't expose exit code via is_alive
                     ended_at: Utc::now(),
                 };
                 newly_exited.push(id.clone());

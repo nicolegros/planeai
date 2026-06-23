@@ -170,14 +170,18 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
         let extra_path_dirs = env.config.resolved_extra_path_dirs();
-        let path = planeai_core::command::augmented_path(&extra_path_dirs);
-        let mut session_env = std::collections::HashMap::new();
-        session_env.insert("PATH", path.as_str());
-        session_env.insert("TERM", "xterm-256color");
-        session_env.insert("PLANEAI_SESSION_ID", plan.session_id.as_str());
+        let mut path_buf = String::new();
+        let session_env = planeai_core::command::build_daemon_env(
+            &extra_path_dirs,
+            &plan.session_id,
+            &mut path_buf,
+        );
+        let (program, args) = planeai_core::command::shell_args(&plan.command);
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         crate::daemon::spawn_session(
             &plan.session_id,
-            &plan.command,
+            program,
+            &args_refs,
             &plan.working_dir,
             Some(&session_env),
         )?;

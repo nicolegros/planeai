@@ -26,7 +26,12 @@ async fn handle_data_inner(
     let session_id = match frame_type {
         // New protocol: FRAME_HELLO with version, then FRAME_ATTACH with session_id
         FRAME_HELLO => {
-            let _version = payload.first().copied().unwrap_or(1);
+            let version = payload.first().copied().unwrap_or(0);
+            if version < 2 {
+                let msg = format!("unsupported protocol version: {version}");
+                let _ = write_frame(&mut stream, FRAME_ERROR, msg.as_bytes()).await;
+                anyhow::bail!("{msg}");
+            }
             // Read FRAME_ATTACH
             let (attach_type, attach_payload) = read_frame(&mut stream).await?;
             if attach_type != FRAME_ATTACH {

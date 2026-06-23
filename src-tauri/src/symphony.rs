@@ -161,12 +161,12 @@ impl Backend for TauriBackend {
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-        let path = planeai_core::command::augmented_path(&extra_path_dirs);
-        let mut env = std::collections::HashMap::new();
-        env.insert("TERM", "xterm-256color");
-        env.insert("PLANEAI_SESSION_ID", session_id);
-        env.insert("PATH", path.as_str());
-        crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
+        let mut path_buf = String::new();
+        let env =
+            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let (program, args) = planeai_core::command::shell_args(cmd);
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
     }
 
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -511,7 +511,6 @@ mod tests {
                 resume_command: None,
                 session_id_pattern: None,
                 resume_flag: None,
-                interactive_resume_command: None,
                 list_sessions_command: None,
             },
         );

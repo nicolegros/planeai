@@ -1,7 +1,8 @@
 use crate::data::handle_data_connection;
 use crate::protocol::{Request, Response, SessionInfoDto, CONN_CONTROL, CONN_DATA};
-use crate::registry::{SessionRegistry, SpawnOutcome};
+use crate::registry::SessionRegistry;
 use crate::transport::{DaemonListener, DaemonStream};
+use crate::types::SpawnOutcome;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -199,7 +200,6 @@ impl DaemonServer {
                         session_id: s.session_id,
                         alive: s.alive,
                         status: s.status,
-                        exit_status: s.exit_status,
                         started_at: s.started_at,
                         ended_at: s.ended_at,
                     })

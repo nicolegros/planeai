@@ -147,6 +147,7 @@ mod tests {
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: None,
+            daemon_scrollback_bytes: None,
         };
         assert!(!provider_has_hook("nonexistent", &cfg));
     }
