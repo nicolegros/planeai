@@ -353,36 +353,24 @@ pub fn restart(
         "restart: spawning"
     );
 
-    let spawn_result = match session.backend.as_str() {
-        "tmux" => {
-            let tmux_name = session
-                .tmux_name
-                .as_deref()
-                .ok_or("tmux session has no tmux_name")?;
-            restart_ops.create_tmux_session(tmux_name, cwd, &cmd_to_use, id, &extra_path_dirs)
+    let tmux_name = session.tmux_name.as_deref();
+    let try_spawn = |cmd: &str| -> Result<(), String> {
+        match session.backend.as_str() {
+            "tmux" => {
+                let tn = tmux_name.ok_or("tmux session has no tmux_name")?;
+                restart_ops.create_tmux_session(tn, cwd, cmd, id, &extra_path_dirs)
+            }
+            "daemon" => restart_ops.spawn_daemon_session(id, cmd, cwd, &extra_path_dirs),
+            other => Err(format!("unsupported backend: {other}")),
         }
-        "daemon" => {
-            restart_ops.spawn_daemon_session(id, &cmd_to_use, cwd, &extra_path_dirs)
-        }
-        other => Err(format!("unsupported backend: {other}")),
     };
+
+    let spawn_result = try_spawn(&cmd_to_use);
 
     // Fallback: if resume failed, retry with fresh command
     let spawn_result = if spawn_result.is_err() && resume_cmd.is_some() {
         tracing::warn!(session_id = &id[..8.min(id.len())], err = ?spawn_result, "restart: resume failed, falling back to fresh launch");
-        match session.backend.as_str() {
-            "tmux" => {
-                let tmux_name = session
-                    .tmux_name
-                    .as_deref()
-                    .ok_or("tmux session has no tmux_name")?;
-                restart_ops.create_tmux_session(tmux_name, cwd, &fresh_cmd, id, &extra_path_dirs)
-            }
-            "daemon" => {
-                restart_ops.spawn_daemon_session(id, &fresh_cmd, cwd, &extra_path_dirs)
-            }
-            _ => spawn_result,
-        }
+        try_spawn(&fresh_cmd)
     } else {
         spawn_result
     };
