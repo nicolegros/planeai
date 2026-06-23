@@ -570,6 +570,15 @@
     viewerRoot.style.setProperty("--diffs-font-size", `${font_size}px`);
   }
 
+  // Keep the diff font (family + size) in sync with the terminal font settings,
+  // so changing it in Preferences updates the diff without a remount.
+  $effect(() => {
+    const { font_family, font_size } = getSettings().terminal;
+    void font_family;
+    void font_size;
+    if (mounted) applyDiffFont();
+  });
+
   $effect(() => {
     const dark = isDark();
     if (viewer && mounted) {

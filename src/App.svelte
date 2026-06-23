@@ -278,6 +278,7 @@
     }}
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
+    onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     {symphonyStatus}
   />
 

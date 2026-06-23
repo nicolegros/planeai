@@ -13,9 +13,12 @@
   const SIDEBAR_HINTS = [
     { k: "↑↓", l: "Navigate" },
     { k: "↵", l: "Open" },
+    { k: "s…", l: "Status" },
+    { k: "dd", l: "Delete" },
+    { k: "a", l: "Archive" },
+    { k: "E", l: "Rename" },
+    { k: "r", l: "Review" },
     { k: "⌘N", l: "New" },
-    { k: "r", l: "Rename" },
-    { k: "⌫", l: "Archive" },
     { k: "⌘B", l: "Hide" },
   ];
 

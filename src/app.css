@@ -207,8 +207,11 @@
 .xterm-viewport::-webkit-scrollbar { display: none; }
 
 /* ── @pierre/diffs theming ── */
+/* NOTE: --diffs-font-size / --diffs-font-family are NOT set here on purpose.
+   They are driven by the terminal font settings in ReviewTab.svelte and set on
+   an ancestor element so they inherit in. Declaring them directly on
+   diffs-container here would shadow that inherited value and win. */
 diffs-container {
-  --diffs-font-size: 12.5px;
   --diffs-line-height: 1.72;
   --diffs-dark-bg: #0a0a0a;
   --diffs-light-bg: #ffffff;
