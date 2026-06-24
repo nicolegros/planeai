@@ -190,6 +190,83 @@ mod tests {
     }
 
     #[test]
+    fn kill_backend_kills_shell_tabs_for_daemon_backend() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|id| {
+                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), 3, &ops);
+        assert!(errors.is_empty());
+        KILLED.with(|k| {
+            let killed = k.borrow();
+            assert_eq!(killed.len(), 3);
+            assert!(killed.contains(&"sess-abc".to_string()));
+            assert!(killed.contains(&"sess-abc:1".to_string()));
+            assert!(killed.contains(&"sess-abc:2".to_string()));
+        });
+    }
+
+    #[test]
+    fn kill_backend_with_single_tab_only_kills_agent() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|id| {
+                KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                Ok(())
+            }),
+        };
+        let errors = kill_backend("daemon", None, Some("sess-abc"), 1, &ops);
+        assert!(errors.is_empty());
+        KILLED.with(|k| {
+            let killed = k.borrow();
+            assert_eq!(killed.len(), 1);
+            assert_eq!(killed[0], "sess-abc");
+        });
+    }
+
+    #[test]
+    fn cleanup_kills_daemon_session_for_daemon_backend() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let ops = CleanupOps {
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Ok(())),
+                kill_daemon_session: Box::new(|id| {
+                    KILLED.with(|k| k.borrow_mut().push(id.to_string()));
+                    Ok(())
+                }),
+            },
+            remove_worktree: Box::new(|_, _| Ok(())),
+            remove_dir: Box::new(|_| Ok(())),
+            delete_branch: Box::new(|_, _| Ok(())),
+        };
+        let ctx = CleanupContext {
+            backend: "daemon".to_string(),
+            tmux_name: None,
+            worktree_path: None,
+            project_path: None,
+            branch: None,
+            session_id: Some("sess-123".to_string()),
+            tab_count: 1,
+        };
+        let errors = run_cleanup(&ctx, &ops);
+        assert!(errors.is_empty());
+        KILLED.with(|k| {
+            assert_eq!(k.borrow().as_slice(), &["sess-123"]);
+        });
+    }
+
+    #[test]
     fn cleanup_kills_tmux_for_tmux_backend() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };

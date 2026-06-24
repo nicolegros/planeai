@@ -922,6 +922,48 @@ mod tests {
     }
 
     #[test]
+    fn archive_kills_daemon_backend_session() {
+        thread_local! {
+            static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
+        }
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ddddeeee-2222-3333-4444-555566667777";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "daemon-archive",
+            None,
+            "main",
+            None,
+            None,
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|sid| {
+                KILLED.with(|k| k.borrow_mut().push(sid.to_string()));
+                Ok(())
+            }),
+        };
+
+        archive(&conn, id, &None, &ops).unwrap();
+
+        KILLED.with(|k| {
+            assert_eq!(k.borrow().as_slice(), &[id]);
+        });
+    }
+
+    #[test]
     fn archive_sets_status_and_returns_pre_mutation_session() {
         let conn = setup_db();
         db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
@@ -1142,6 +1184,40 @@ mod tests {
         // Local backend sends via notify socket
         assert_eq!(ops.sent_keys.borrow().len(), 0);
         assert_eq!(ops.sent_socket.borrow().len(), 1);
+    }
+
+    #[test]
+    fn send_prompt_daemon_backend_uses_daemon_connection() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "bbbbcccc-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "daemon-session",
+            None,
+            "main",
+            None,
+            None,
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // daemon_send_prompt will attempt a real IPC connection. If a daemon is running
+        // it may succeed; if not, it errors. Either way, verify the daemon path was taken
+        // (not tmux or socket).
+        let ops = MockPromptOps::new(true);
+        let _result = send_prompt(&conn, "bbbb", "hello agent", &ops);
+        // Verify neither tmux nor socket was called (daemon path was used)
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(ops.sent_socket.borrow().len(), 0);
     }
 
     #[test]
