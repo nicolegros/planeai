@@ -5,6 +5,12 @@ pub struct FlowControl {
     cond: Condvar,
 }
 
+impl Default for FlowControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FlowControl {
     pub fn new() -> Self {
         Self {
