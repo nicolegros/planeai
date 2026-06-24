@@ -136,7 +136,10 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 let pty_state = app.state::<crate::state::PtyState>();
                 let payload = format!("{}\n", text);
                 if let Err(e) = pty_state.0.write(&msg.session_id, payload.as_bytes()) {
-                    eprintln!("[notify] send_prompt write failed for {}: {e}", msg.session_id);
+                    eprintln!(
+                        "[notify] send_prompt write failed for {}: {e}",
+                        msg.session_id
+                    );
                 }
             }
         }

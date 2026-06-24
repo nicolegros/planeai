@@ -170,7 +170,9 @@ fn pause_resume_delivers_output() {
 
         // Write input that cat will echo back
         let marker = format!("MARKER_{iteration}\n");
-        session.write(marker.as_bytes()).expect("write should succeed");
+        session
+            .write(marker.as_bytes())
+            .expect("write should succeed");
 
         // Data is now in the PTY output buffer but flow is paused
         std::thread::sleep(std::time::Duration::from_millis(30));
@@ -186,7 +188,9 @@ fn pause_resume_delivers_output() {
             let output: String = events
                 .iter()
                 .filter_map(|e| match e {
-                    PtyEvent::Output { bytes, .. } => Some(String::from_utf8_lossy(bytes).to_string()),
+                    PtyEvent::Output { bytes, .. } => {
+                        Some(String::from_utf8_lossy(bytes).to_string())
+                    }
                     _ => None,
                 })
                 .collect();

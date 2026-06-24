@@ -166,12 +166,12 @@ mod tests {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
         }
         let ops = KillOps {
-                    kill_tmux: Box::new(|name| {
-                        KILLED.with(|k| k.borrow_mut().push(name.to_string()));
-                        Ok(())
-                    }),
-                    kill_daemon_session: Box::new(|_| Ok(())),
-                };
+            kill_tmux: Box::new(|name| {
+                KILLED.with(|k| k.borrow_mut().push(name.to_string()));
+                Ok(())
+            }),
+            kill_daemon_session: Box::new(|_| Ok(())),
+        };
         let errors = kill_backend("tmux", Some("planeai-abc"), None, 1, &ops);
         assert!(errors.is_empty());
         KILLED.with(|k| {
@@ -182,9 +182,9 @@ mod tests {
     #[test]
     fn kill_backend_local_is_noop() {
         let ops = KillOps {
-                    kill_tmux: Box::new(|_| Ok(())),
-                    kill_daemon_session: Box::new(|_| Ok(())),
-                };
+            kill_tmux: Box::new(|_| Ok(())),
+            kill_daemon_session: Box::new(|_| Ok(())),
+        };
         let errors = kill_backend("local", None, None, 1, &ops);
         assert!(errors.is_empty());
     }

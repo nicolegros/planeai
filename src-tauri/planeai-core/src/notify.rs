@@ -219,8 +219,15 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("send_prompt") => NotifyEvent::SendPrompt,
             _ => NotifyEvent::Stop,
         };
-        let text = v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string());
-        NotifyMessage { session_id, event, text }
+        let text = v
+            .get("text")
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string());
+        NotifyMessage {
+            session_id,
+            event,
+            text,
+        }
     } else {
         NotifyMessage {
             session_id: line.trim().to_string(),

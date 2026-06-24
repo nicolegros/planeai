@@ -12,9 +12,9 @@ use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
 use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
 use crate::session_backend::SessionBackend;
-use planeai_pty::FlowControl;
 #[cfg(not(windows))]
 use crate::tmux;
+use planeai_pty::FlowControl;
 
 /// Describes what command to run inside the PTY.
 pub enum PtyTarget {

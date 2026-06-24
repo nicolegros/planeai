@@ -201,7 +201,9 @@ impl Default for Config {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 resume_flag: Some("--resume-id".to_string()),
-                interactive_resume_command: Some("kiro-cli chat --trust-all-tools --resume-picker".to_string()),
+                interactive_resume_command: Some(
+                    "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
+                ),
                 list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
                 session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
@@ -795,7 +797,9 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: None,
             resume_flag: None,
-            interactive_resume_command: Some("kiro-cli chat --trust-all-tools --resume-picker".to_string()),
+            interactive_resume_command: Some(
+                "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
+            ),
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,

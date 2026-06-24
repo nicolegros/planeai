@@ -129,4 +129,3 @@ mod tests {
         assert!(cmd.is_some());
     }
 }
-

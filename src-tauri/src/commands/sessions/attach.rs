@@ -1,8 +1,8 @@
 use tauri::ipc::Channel;
 use tauri::{Manager, State};
 
-use crate::db;
 use crate::config;
+use crate::db;
 use crate::pty;
 use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
 
@@ -40,7 +40,13 @@ pub fn attach_session(
         (pty::PtyTarget::TmuxAttach { tmux_name }, None)
     } else if session.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
-        (pty::PtyTarget::Daemon { session_id: session_id.clone(), socket_path }, None)
+        (
+            pty::PtyTarget::Daemon {
+                session_id: session_id.clone(),
+                socket_path,
+            },
+            None,
+        )
     } else {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
@@ -75,11 +81,7 @@ pub fn attach_session(
             .to_string();
 
         let cmd = if session.status == "exited" {
-            match crate::session_restart::restart_command(
-                &session.status,
-                provider_def,
-                None,
-            ) {
+            match crate::session_restart::restart_command(&session.status, provider_def, None) {
                 Some(c) => c,
                 None => return Err("session restarting too quickly (circuit breaker)".to_string()),
             }
