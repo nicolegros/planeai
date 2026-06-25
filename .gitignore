@@ -6,6 +6,7 @@ dist/
 docs/.astro/
 src-tauri/target/
 src-tauri/binaries/
+.lavish/
 
 # IDE
 .vscode/
