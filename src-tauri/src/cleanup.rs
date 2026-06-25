@@ -111,7 +111,7 @@ pub fn real_kill_ops() -> KillOps {
         }),
         kill_daemon_session: Box::new(|session_id| {
             use std::io::{Read, Write};
-            let app_dir = crate::paths::app_data_dir();
+            let app_dir = planeai_paths::app_data_dir();
             let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
                 Ok(s) => s,
                 Err(_) => return Ok(()), // Daemon not running — nothing to kill

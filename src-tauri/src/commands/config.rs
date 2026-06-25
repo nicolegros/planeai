@@ -62,7 +62,7 @@ pub fn list_themes(app: tauri::AppHandle) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn get_log_dir() -> String {
-    crate::paths::app_data_dir()
+    planeai_paths::app_data_dir()
         .join("logs")
         .to_string_lossy()
         .into_owned()

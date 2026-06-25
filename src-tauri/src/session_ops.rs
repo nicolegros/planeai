@@ -226,7 +226,7 @@ pub fn fire_task_hook(
         _ => None,
     };
     if let Some(h) = hook {
-        let db_path = crate::paths::db_path();
+        let db_path = planeai_paths::db_path();
         let projects = db::list_projects(conn).unwrap_or_default();
         let prefix = projects
             .iter()
@@ -277,7 +277,7 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
         fn notify_socket_send(&self, session_id: &str, text: &str) -> Result<(), String> {
             use std::io::Write;
             use std::os::unix::net::UnixStream;
-            let sock = crate::paths::app_data_dir().join("notify.sock");
+            let sock = planeai_paths::app_data_dir().join("notify.sock");
             if !sock.exists() {
                 return Err("GUI is not running (socket not found)".to_string());
             }
@@ -358,7 +358,7 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
 fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let app_dir = crate::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
         .map_err(|e| format!("daemon connect failed: {e}"))?;
 

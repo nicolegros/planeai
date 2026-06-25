@@ -29,3 +29,11 @@ pub fn app_data_dir() -> PathBuf {
         PathBuf::from(base).join(APP_ID)
     }
 }
+
+pub fn db_path() -> PathBuf {
+    app_data_dir().join("planeai.db")
+}
+
+pub fn notify_socket_path() -> PathBuf {
+    app_data_dir().join("notify.sock")
+}

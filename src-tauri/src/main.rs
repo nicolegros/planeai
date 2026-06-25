@@ -40,7 +40,7 @@ use commands::*;
 use state::*;
 
 fn main() {
-    let app_dir = paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
     let log_dir = app_dir.join("logs");
     std::fs::create_dir_all(&log_dir).expect("failed to create log dir");
@@ -145,7 +145,7 @@ fn main() {
             startup::reconcile_local_sessions(&conn);
 
             // Stale worktree cleanup (fire-and-forget background thread)
-            let cleanup_db_path = paths::db_path();
+            let cleanup_db_path = planeai_paths::db_path();
             std::thread::spawn(move || {
                 let conn = match rusqlite::Connection::open(&cleanup_db_path) {
                     Ok(c) => c,

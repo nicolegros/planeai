@@ -1,20 +1,5 @@
 use std::path::PathBuf;
 
-/// Returns the app data directory (same as Tauri's app_data_dir).
-pub fn app_data_dir() -> PathBuf {
-    planeai_paths::app_data_dir()
-}
-
-#[allow(dead_code)]
-pub fn db_path() -> PathBuf {
-    app_data_dir().join("planeai.db")
-}
-
-#[allow(dead_code)]
-pub fn notify_socket_path() -> PathBuf {
-    app_data_dir().join("notify.sock")
-}
-
 /// Resolve the daemon binary path. In production, use the bundled resource.
 /// In development, use the workspace target directory.
 pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {

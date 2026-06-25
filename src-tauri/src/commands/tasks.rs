@@ -54,7 +54,7 @@ fn resolve_repo(db_state: &State<DbState>, repo_path: &str) -> Result<SqliteRepo
         .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
     let prefix = project.prefix.clone();
     drop(conn);
-    let db_path = crate::paths::db_path();
+    let db_path = planeai_paths::db_path();
     SqliteRepository::open(db_path.to_str().unwrap(), &prefix).map_err(|e| e.to_string())
 }
 

@@ -9,7 +9,7 @@ pub fn ensure_running(
     socket_path: &Path,
     scrollback_bytes: usize,
 ) -> Result<(), String> {
-    let app_dir = crate::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     if planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).is_ok() {
         return Ok(());
     }
@@ -48,7 +48,7 @@ pub fn spawn_session(
     cwd: &str,
     env: Option<&std::collections::HashMap<&str, &str>>,
 ) -> Result<(), String> {
-    let app_dir = crate::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
 
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
         .map_err(|e| format!("daemon connect failed: {e}"))?;
