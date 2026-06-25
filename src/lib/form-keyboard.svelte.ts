@@ -70,7 +70,7 @@ export function createFormKeyboardController(
     if (mode === "insert") return;
 
     // Normal mode: check mnemonic bindings
-    const key = e.key.toLowerCase();
+    const key = e.key;
     const binding = bindings().find((b) => b.key === key);
     if (binding) {
       e.preventDefault();

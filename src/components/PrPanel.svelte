@@ -40,7 +40,8 @@
     () => [
       { key: "o", toggle: () => openUrl(prUrl) },
       { key: "m", toggle: doMerge },
-      { key: "r", toggle: markReady },
+      { key: "r", toggle: () => refreshCiChecks(sessionId) },
+      { key: "R", toggle: markReady },
       { key: "f", toggle: sendFailuresToAgent },
       { key: "s", toggle: cycleStrategy },
       ...checks.map((c, i) => ({ key: String(i + 1), toggle: () => { if (c.url) openUrl(c.url); } })),
@@ -118,7 +119,7 @@
   {#if isDraft}
     <div class="py-3 border-b border-border">
       <button class="w-full py-1.5 text-xs rounded-lg border border-status-running/40 text-status-running hover:bg-status-running/10 font-medium" onclick={markReady}>
-        Mark as ready <span class="font-mono text-[10px] px-1 rounded {badge}">R</span>
+        Mark as ready <span class="font-mono text-[10px] px-1 rounded {badge}">⇧R</span>
       </button>
     </div>
   {/if}
@@ -190,8 +191,9 @@
     <div class="flex gap-3 text-[10px] text-t3 font-mono">
       <span><span class="px-1 rounded {badge}">O</span> open</span>
       <span><span class="px-1 rounded {badge}">S</span> strategy</span>
+      <span><span class="px-1 rounded {badge}">R</span> refresh</span>
       {#if checks.length > 0}<span><span class="px-1 rounded {badge}">1–{checks.length}</span> check</span>{/if}
-      {#if isDraft}<span><span class="px-1 rounded {badge}">R</span> ready</span>{/if}
+      {#if isDraft}<span><span class="px-1 rounded {badge}">⇧R</span> ready</span>{/if}
       {#if failedCount > 0}<span><span class="px-1 rounded {badge}">F</span> failures</span>{/if}
     </div>
   </div>

@@ -59,8 +59,10 @@
     { keys: `o`, description: "Open PR in browser" },
     { keys: `m`, description: "Merge" },
     { keys: `s`, description: "Cycle merge strategy" },
-    { keys: `r`, description: "Mark as ready" },
+    { keys: `r`, description: "Refresh CI checks" },
+    { keys: `R`, description: "Mark as ready (draft)" },
     { keys: `f`, description: "Send failures to agent" },
+    { keys: `1–9`, description: "Open CI check in browser" },
     { keys: `Esc`, description: "Close panel" },
   ]};
 
