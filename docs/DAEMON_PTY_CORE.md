@@ -18,7 +18,7 @@ The daemon is the source of truth for live PTY processes. The app (SQLite/Tauri 
 Daemon sessions have an explicit state machine:
 
 ```
-Running  →  Exited { exit_status, ended_at }
+Running  →  Exited { ended_at }
 Running  →  Killed { ended_at }
 ```
 
@@ -43,9 +43,8 @@ Default mode is `replace_exited` for backward compatibility.
 
 ### Spawn Outcomes
 
-- `spawned` — new process created
+- `spawned` — new process created (includes replace-exited case)
 - `already_running` — existing live session returned (no spawn)
-- `replaced_exited` — old exited entry removed, new process spawned
 - `restarted` — old process killed, new process spawned
 
 ## Control Protocol
@@ -66,7 +65,7 @@ JSON-line protocol on control connections (type byte `0x00`).
 ### List Response
 
 ```json
-{"sessions": [{"session_id": "...", "alive": true, "status": "running", "exit_status": null, "started_at": "...", "ended_at": null}]}
+{"sessions": [{"session_id": "...", "alive": true, "status": "running", "started_at": "...", "ended_at": null}]}
 ```
 
 ### Events (broadcast to all control connections)

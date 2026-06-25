@@ -9,7 +9,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                    |
 | **Session**         | A single agent working on a single task within a project. Backed by either a tmux session or the planeai daemon. Contains one terminal pane running the agent CLI.                                                   |
 | **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `daemon` (survives app quit, uses built-in daemon process). Resolved at session creation from the global setting.    |
-| **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command` and an optional `yolo_flag`. Multiple providers can be configured; one is the `default_provider`.                          |
+| **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command`, optional `yolo_flag`, optional `resume_flag` + `resume_command` for session resume. Multiple providers can be configured; one is the `default_provider`. |
 | **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
 | **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                 |
 | **Focus zone**      | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                       |
@@ -38,7 +38,7 @@ create → active → exited → deleted
 - **Tailwind CSS v4** with custom `@theme` block mapping CSS custom properties to utility classes
 - **Custom theming** via CSS files in `~/.config/planeai/themes/`. Theme file defines UI, terminal, and editor tokens for both light and dark modes.
 - **SQLite via rusqlite** on the Rust backend for persistence
-- **tmux** for optional process persistence (auto-detected; see Session backend)
+- **tmux** for optional process persistence (explicit opt-in; see Session backend)
 - **planeai-daemon** for built-in process persistence (no external dependencies)
 - **portable-pty** for PTY management (tmux-attach goes through a local PTY; daemon sessions are managed directly by the daemon process)
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
@@ -81,6 +81,7 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 | `busy`            | Hook → GUI       | `{"event":"busy","session_id":"..."}`            | Agent started working                                          |
 | `session_created` | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}` | New session created, GUI should refresh                        |
 | `session_changed` | CLI → GUI        | `{"event":"session_changed","session_id":"..."}` | Session state changed (archived/destroyed), GUI should refresh |
+| `session_restarted` | Backend → GUI  | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI should re-attach PTY           |
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
 For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
@@ -92,10 +93,10 @@ For daemon-backend sessions, the CLI sends prompts via the daemon data connectio
 The effective backend is resolved once at app startup:
 
 ```
-config.session_backend ?? (tmux_on_path ? "tmux" : "daemon")
+config.session_backend ?? "daemon"
 ```
 
-- Config field absent → auto-detect (tmux if available, otherwise daemon)
+- Config field absent → daemon (always the default)
 - `"session_backend": "tmux"` → force tmux (warn if not found)
 - `"session_backend": "daemon"` → force daemon
 
@@ -146,7 +147,7 @@ Exited sessions can be restarted: same session identity (name, project, worktree
 
 ### Preferences UI
 
-Dropdown: Auto (default) / tmux / Daemon. "Auto" maps to absent in config file. Inline warning if user selects tmux but binary not found.
+Dropdown: Daemon (default) / tmux. Inline warning if user selects tmux but binary not found.
 
 ## Worktree support
 
