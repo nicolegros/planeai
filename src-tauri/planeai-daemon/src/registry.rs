@@ -86,6 +86,7 @@ impl SessionRegistry {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &mut self,
         session_id: impl Into<String>,
