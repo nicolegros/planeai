@@ -111,13 +111,25 @@ describe("review-comments", () => {
   });
 
   it("editComment updates the text of an existing comment", () => {
-    const c = addComment("s1", { filePath: "a.ts", type: "line", startLine: 1, endLine: 1, text: "original" });
+    const c = addComment("s1", {
+      filePath: "a.ts",
+      type: "line",
+      startLine: 1,
+      endLine: 1,
+      text: "original",
+    });
     editComment("s1", c.id, "updated");
     expect(getComments("s1")[0].text).toBe("updated");
   });
 
   it("editComment preserves other fields", () => {
-    const c = addComment("s1", { filePath: "a.ts", type: "hunk", startLine: 5, endLine: 10, text: "old" });
+    const c = addComment("s1", {
+      filePath: "a.ts",
+      type: "hunk",
+      startLine: 5,
+      endLine: 10,
+      text: "old",
+    });
     editComment("s1", c.id, "new");
     const edited = getComments("s1")[0];
     expect(edited.id).toBe(c.id);

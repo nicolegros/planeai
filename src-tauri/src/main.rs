@@ -228,10 +228,6 @@ fn main() {
                 notify_state.clone(),
                 app.handle().clone(),
             )));
-            pty_mgr.set_socket_path(planeai::ipc::address(
-                planeai::ipc::Channel::Notify,
-                &app_dir,
-            ));
             app.manage(PtyState(pty_mgr));
             app.manage(FileExplorerState(Mutex::new(
                 file_explorer::WatcherManager::new(),

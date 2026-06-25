@@ -33,12 +33,12 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 }
 ```
 
-| Field                        | Description                                            |
-| ---------------------------- | ------------------------------------------------------ |
-| `command`                    | Shell command to start a new agent session             |
-| `prompt_command`             | Command to send a prompt to a running session          |
-| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task      |
-| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations |
+| Field                        | Description                                                           |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `command`                    | Shell command to start a new agent session                            |
+| `prompt_command`             | Command to send a prompt to a running session                         |
+| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                     |
+| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations                |
 | `resume_flag`                | Flag to resume a previous session (session ID appended automatically) |
 | `resume_command`             | Command to resume interactively (picker) when no stored session ID    |
 
@@ -52,10 +52,10 @@ Controls how planeai manages terminal sessions.
 }
 ```
 
-| Value    | Behavior                                                         |
-| -------- | ---------------------------------------------------------------- |
-| `local`  | In-process PTY — lightweight, no external dependencies (default) |
-| `tmux`   | Requires tmux — sessions persist via tmux                        |
+| Value    | Behavior                                                                      |
+| -------- | ----------------------------------------------------------------------------- |
+| `local`  | In-process PTY — lightweight, no external dependencies (default)              |
+| `tmux`   | Requires tmux — sessions persist via tmux                                     |
 | `daemon` | Built-in daemon process — sessions persist across app restarts (experimental) |
 
 :::tip

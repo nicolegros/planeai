@@ -4,14 +4,14 @@
 
 The daemon is the source of truth for live PTY processes. The app (SQLite/Tauri state) is the source of truth for PlaneAI task/session metadata.
 
-| Action | Effect |
-| --- | --- |
-| Close app | Detach from daemon sessions; they keep running |
-| Kill | Terminate process tree via daemon control command |
-| Restart | Explicit kill/replace/reconnect; not accidental attach |
+| Action                   | Effect                                                           |
+| ------------------------ | ---------------------------------------------------------------- |
+| Close app                | Detach from daemon sessions; they keep running                   |
+| Kill                     | Terminate process tree via daemon control command                |
+| Restart                  | Explicit kill/replace/reconnect; not accidental attach           |
 | OS reboot / daemon crash | Live PTYs lost; metadata/logs preserved; provider resume offered |
-| Spawn | Creates process only when spawn mode allows it |
-| Attach | Never creates a process |
+| Spawn                    | Creates process only when spawn mode allows it                   |
+| Attach                   | Never creates a process                                          |
 
 ## Session States
 
@@ -32,12 +32,12 @@ Exited/Killed sessions are retained until garbage collection (default TTL: 30 mi
 
 The `spawn` control command accepts a `mode` field:
 
-| Mode | ID missing | ID running | ID exited/killed |
-| --- | --- | --- | --- |
-| `create_only` | Spawn | Error | Error |
-| `attach_if_running` | Error | AlreadyRunning | Error |
-| `replace_exited` (default) | Spawn | Error | Remove + Spawn |
-| `restart` | Spawn | Kill + Spawn | Remove + Spawn |
+| Mode                       | ID missing | ID running     | ID exited/killed |
+| -------------------------- | ---------- | -------------- | ---------------- |
+| `create_only`              | Spawn      | Error          | Error            |
+| `attach_if_running`        | Error      | AlreadyRunning | Error            |
+| `replace_exited` (default) | Spawn      | Error          | Remove + Spawn   |
+| `restart`                  | Spawn      | Kill + Spawn   | Remove + Spawn   |
 
 Default mode is `replace_exited` for backward compatibility.
 
@@ -65,13 +65,23 @@ JSON-line protocol on control connections (type byte `0x00`).
 ### List Response
 
 ```json
-{"sessions": [{"session_id": "...", "alive": true, "status": "running", "started_at": "...", "ended_at": null}]}
+{
+  "sessions": [
+    {
+      "session_id": "...",
+      "alive": true,
+      "status": "running",
+      "started_at": "...",
+      "ended_at": null
+    }
+  ]
+}
 ```
 
 ### Events (broadcast to all control connections)
 
 ```json
-{"event": "exited", "session_id": "..."}
+{ "event": "exited", "session_id": "..." }
 ```
 
 ## Data Protocol
@@ -86,16 +96,16 @@ Binary framed protocol on data connections (type byte `0x01`).
 
 ### Frame Types
 
-| Byte | Name | Direction | Purpose |
-| --- | --- | --- | --- |
-| `0x01` | FRAME_OUTPUT | daemon→client | Terminal output data |
-| `0x02` | FRAME_INPUT | client→daemon | Terminal input data |
+| Byte   | Name         | Direction     | Purpose                             |
+| ------ | ------------ | ------------- | ----------------------------------- |
+| `0x01` | FRAME_OUTPUT | daemon→client | Terminal output data                |
+| `0x02` | FRAME_INPUT  | client→daemon | Terminal input data                 |
 | `0x03` | FRAME_RESIZE | client→daemon | Resize (4 bytes: cols BE + rows BE) |
-| `0x04` | FRAME_EOF | daemon→client | Session exited |
-| `0x05` | FRAME_ERROR | daemon→client | Attach/protocol error |
-| `0x06` | FRAME_HELLO | client→daemon | Protocol version (1 byte payload) |
-| `0x07` | FRAME_ATTACH | client→daemon | Session ID to attach |
-| `0x08` | FRAME_GAP | daemon→client | Output was lost (broadcast lag) |
+| `0x04` | FRAME_EOF    | daemon→client | Session exited                      |
+| `0x05` | FRAME_ERROR  | daemon→client | Attach/protocol error               |
+| `0x06` | FRAME_HELLO  | client→daemon | Protocol version (1 byte payload)   |
+| `0x07` | FRAME_ATTACH | client→daemon | Session ID to attach                |
+| `0x08` | FRAME_GAP    | daemon→client | Output was lost (broadcast lag)     |
 
 ### Attach Flow (new protocol)
 
@@ -114,6 +124,7 @@ Binary framed protocol on data connections (type byte `0x01`).
 ### Broadcast Lag
 
 When a slow client causes broadcast lag:
+
 - Daemon sends `FRAME_GAP` with JSON payload: `{"lagged": N}`
 - Client should display a gap indicator or request reconnect
 
@@ -125,6 +136,7 @@ The daemon preserves argument boundaries:
 - Otherwise, uses direct argv mode via `build_command_argv(program, args)` — no shell interpretation
 
 This ensures:
+
 - Args with spaces are preserved
 - Shell metacharacters are not interpreted unless explicitly shell-wrapped
 - Windows paths with spaces work
@@ -138,6 +150,7 @@ planeai_core::command::augmented_path(&extra_path_dirs)
 ```
 
 Priority (highest to lowest):
+
 1. `PLANEAI_EXTRA_PATH` env var
 2. Config file `extra_path_dirs` (tilde-expanded)
 3. Conventional developer directories (`~/.cargo/bin`, `/opt/homebrew/bin`, etc.)
@@ -155,6 +168,7 @@ The daemon writes structured logs on startup:
 - Filter: `RUST_LOG` env var (default: `info`)
 
 Logged events include:
+
 - Session spawn (session_id, command, args, cwd, mode, outcome)
 - Session state transitions (exit, kill)
 - Data attach/detach
@@ -177,6 +191,7 @@ $PLANEAI_SESSION_LOG_DIR/sessions/<session-id>/meta.json
 Provider resume is a recovery path, not true live process persistence.
 
 When restarting a daemon session:
+
 1. If provider config has `resume_flag` + stored `provider_session_id` → use resume command
 2. If provider config has `resume_command` (interactive picker) → use that
 3. Otherwise → fresh provider command
@@ -217,11 +232,13 @@ desktop client
 ## Platform Notes
 
 ### macOS / Linux
+
 - Unix domain socket at `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock`
 - Shell default: zsh (macOS) or sh (Linux)
 - Detached daemon via `process_group(0)`
 
 ### Windows
+
 - Named pipe at `\\.\pipe\planeai-daemon`
 - ConPTY via portable-pty
 - Shell default: `%COMSPEC%` (cmd.exe)
