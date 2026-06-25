@@ -381,12 +381,12 @@ pub async fn get_allowed_merge_strategies(
 
     let mut cmd = tokio::process::Command::new("gh");
     cmd.args([
-            "api",
-            &format!("repos/{repo}"),
-            "--jq",
-            "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
-        ])
-        .current_dir(&ctx.cwd);
+        "api",
+        &format!("repos/{repo}"),
+        "--jq",
+        "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
+    ])
+    .current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -454,13 +454,13 @@ pub async fn merge_pr(
 
     let mut cmd = tokio::process::Command::new("gh");
     cmd.args([
-            "pr",
-            "merge",
-            &ctx.branch,
-            strategy.as_gh_flag(),
-            "--delete-branch",
-        ])
-        .current_dir(&ctx.cwd);
+        "pr",
+        "merge",
+        &ctx.branch,
+        strategy.as_gh_flag(),
+        "--delete-branch",
+    ])
+    .current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()

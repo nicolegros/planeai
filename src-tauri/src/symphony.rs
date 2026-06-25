@@ -120,9 +120,7 @@ impl Backend for TauriBackend {
         cmd.args(["worktree", "add", "-b", branch, path, base])
             .current_dir(repo);
         planeai_core::command::no_window(&mut cmd);
-        let output = cmd
-            .output()
-            .map_err(|e| format!("git worktree add: {e}"))?;
+        let output = cmd.output().map_err(|e| format!("git worktree add: {e}"))?;
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
         }
