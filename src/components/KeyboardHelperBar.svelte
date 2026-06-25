@@ -1,5 +1,7 @@
 <script lang="ts">
   import { getActiveZone } from "../lib/focus.svelte";
+  import { getDiffTabActive } from "../lib/tab-layout.svelte";
+  import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
 
   const TERMINAL_HINTS = [
     { k: "⌘K", l: "Command" },
@@ -22,7 +24,22 @@
     { k: "⌘B", l: "Hide" },
   ];
 
-  let hints = $derived(getActiveZone() === "sidebar" ? SIDEBAR_HINTS : TERMINAL_HINTS);
+  const DIFF_HINTS = [
+    { k: "j/k", l: "Navigate" },
+    { k: "]/[", l: "Hunk" },
+    { k: "c", l: "Comment" },
+    { k: "E", l: "Edit" },
+    { k: "u", l: "Unified/Split" },
+    { k: "m", l: "Viewed" },
+    { k: "Esc", l: "Back" },
+  ];
+
+  let isDiffActive = $derived((() => {
+    const sid = getActiveSessionId();
+    return sid ? (getDiffTabActive()[sid] ?? false) : false;
+  })());
+
+  let hints = $derived(isDiffActive ? DIFF_HINTS : getActiveZone() === "sidebar" ? SIDEBAR_HINTS : TERMINAL_HINTS);
 </script>
 
 <div class="flex items-center gap-[18px] h-[34px] px-4 border-t border-border bg-chrome shrink-0">

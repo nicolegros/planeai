@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   addComment,
   removeComment,
+  editComment,
   getComments,
   getFileCommentCount,
   getTotalCommentCount,
@@ -107,5 +108,30 @@ describe("review-comments", () => {
     expect(c.type).toBe("hunk");
     expect(c.startLine).toBe(10);
     expect(c.endLine).toBe(25);
+  });
+
+  it("editComment updates the text of an existing comment", () => {
+    const c = addComment("s1", { filePath: "a.ts", type: "line", startLine: 1, endLine: 1, text: "original" });
+    editComment("s1", c.id, "updated");
+    expect(getComments("s1")[0].text).toBe("updated");
+  });
+
+  it("editComment preserves other fields", () => {
+    const c = addComment("s1", { filePath: "a.ts", type: "hunk", startLine: 5, endLine: 10, text: "old" });
+    editComment("s1", c.id, "new");
+    const edited = getComments("s1")[0];
+    expect(edited.id).toBe(c.id);
+    expect(edited.filePath).toBe("a.ts");
+    expect(edited.type).toBe("hunk");
+    expect(edited.startLine).toBe(5);
+    expect(edited.endLine).toBe(10);
+    expect(edited.createdAt).toBe(c.createdAt);
+  });
+
+  it("editComment is no-op for unknown session or id", () => {
+    addComment("s1", { filePath: "a.ts", type: "line", startLine: 1, endLine: 1, text: "keep" });
+    editComment("s1", "nonexistent", "changed");
+    editComment("s2", "any", "changed");
+    expect(getComments("s1")[0].text).toBe("keep");
   });
 });
