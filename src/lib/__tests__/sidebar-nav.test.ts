@@ -173,8 +173,8 @@ describe("sidebar-nav", () => {
   });
 
   describe("scroll into view via data-nav-index", () => {
-    it("querySelector finds element by data-nav-index and can call scrollIntoView", () => {
-      const container = document.createElement("div");
+    it("querySelector on container finds element by data-nav-index and calls scrollIntoView", () => {
+      const container = document.createElement("nav");
       for (let i = 0; i < 20; i++) {
         const el = document.createElement("button");
         el.setAttribute("data-nav-index", String(i));
@@ -183,10 +183,9 @@ describe("sidebar-nav", () => {
       }
       document.body.appendChild(container);
 
-      // Simulate navigation to index 15
       setSelectedIndex(15);
       const idx = getSelectedIndex();
-      const target = document.querySelector(`[data-nav-index="${idx}"]`) as HTMLElement;
+      const target = container.querySelector(`[data-nav-index="${idx}"]`) as HTMLElement;
       expect(target).not.toBeNull();
       target.scrollIntoView({ block: "nearest" });
       expect(target.scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
@@ -194,10 +193,15 @@ describe("sidebar-nav", () => {
       document.body.removeChild(container);
     });
 
-    it("returns null gracefully when no matching element exists", () => {
+    it("returns null gracefully when no matching element exists in container", () => {
+      const container = document.createElement("nav");
+      document.body.appendChild(container);
+
       setSelectedIndex(99);
-      const target = document.querySelector(`[data-nav-index="99"]`);
+      const target = container.querySelector(`[data-nav-index="99"]`);
       expect(target).toBeNull();
+
+      document.body.removeChild(container);
     });
   });
 });

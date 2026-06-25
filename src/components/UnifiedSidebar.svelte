@@ -42,6 +42,7 @@
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
 
+  let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
   let renameValue = $state("");
@@ -203,8 +204,8 @@
   // Scroll selected item into view on keyboard navigation
   $effect(() => {
     const idx = getSelectedIndex();
-    if (zone !== "sidebar") return;
-    document.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+    if (zone !== "sidebar" || !navRef) return;
+    navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
   // Auto-focus active session when sessions panel is toggled
@@ -347,7 +348,7 @@
   </div>
 
   <!-- Main content -->
-  <nav class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
+  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
