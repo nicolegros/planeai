@@ -43,6 +43,7 @@
       { key: "r", toggle: markReady },
       { key: "f", toggle: sendFailuresToAgent },
       { key: "s", toggle: cycleStrategy },
+      ...checks.map((c, i) => ({ key: String(i + 1), toggle: () => { if (c.url) openUrl(c.url); } })),
     ],
     { wrapper: () => wrapperEl, onDismiss: onClose },
   );
@@ -135,11 +136,13 @@
           {@const ic = iconFor(classifyCheck(check))}
           {#if check.url}
             <button class="flex items-center gap-2 hover:bg-panel-hi rounded px-1 -mx-1 text-left" onclick={() => openUrl(check.url!)}>
+              <span class="font-mono text-[10px] px-1 rounded {badge}">{i + 1}</span>
               <span class="w-[14px] text-center {ic.color}">{ic.char}</span>
               <span class="font-mono text-[11.5px] text-t2 truncate">{check.name}</span>
             </button>
           {:else}
             <div class="flex items-center gap-2">
+              <span class="font-mono text-[10px] px-1 rounded {badge}">{i + 1}</span>
               <span class="w-[14px] text-center {ic.color}">{ic.char}</span>
               <span class="font-mono text-[11.5px] text-t2 truncate">{check.name}</span>
             </div>
@@ -187,6 +190,7 @@
     <div class="flex gap-3 text-[10px] text-t3 font-mono">
       <span><span class="px-1 rounded {badge}">O</span> open</span>
       <span><span class="px-1 rounded {badge}">S</span> strategy</span>
+      {#if checks.length > 0}<span><span class="px-1 rounded {badge}">1–{checks.length}</span> check</span>{/if}
       {#if isDraft}<span><span class="px-1 rounded {badge}">R</span> ready</span>{/if}
       {#if failedCount > 0}<span><span class="px-1 rounded {badge}">F</span> failures</span>{/if}
     </div>
