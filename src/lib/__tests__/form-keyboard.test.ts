@@ -32,18 +32,18 @@ describe("createFormKeyboardController", () => {
   });
 
   it("starts in normal mode", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     expect(fk.mode).toBe("normal");
   });
 
   it("focuses field ref on mnemonic key in normal mode", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     const e = makeKey("t");
     fk.handleKeydown(e);
     expect(e.preventDefault).toHaveBeenCalled();
@@ -51,28 +51,28 @@ describe("createFormKeyboardController", () => {
   });
 
   it("calls toggle function on toggle binding", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "d", toggle: toggleDraft }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "d", toggle: toggleDraft }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     fk.handleKeydown(makeKey("d"));
     expect(toggleDraft).toHaveBeenCalledTimes(1);
   });
 
   it("enters insert mode on focusin to text input", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     fk.handleFocusin({ target: titleInput } as unknown as FocusEvent);
     expect(fk.mode).toBe("insert");
   });
 
   it("escape in insert mode returns to normal", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     // Enter insert mode
     fk.handleFocusin({ target: titleInput } as unknown as FocusEvent);
     expect(fk.mode).toBe("insert");
@@ -83,19 +83,19 @@ describe("createFormKeyboardController", () => {
   });
 
   it("escape in normal mode calls onDismiss", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     fk.handleKeydown(makeKey("Escape"));
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("does not intercept Cmd+Enter (lets it bubble for submit)", () => {
-    const fk = createFormKeyboardController(
-      () => [{ key: "t", ref: () => titleInput }],
-      { wrapper: () => wrapper, onDismiss },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "t", ref: () => titleInput }], {
+      wrapper: () => wrapper,
+      onDismiss,
+    });
     const e = makeKey("Enter", { metaKey: true });
     fk.handleKeydown(e);
     expect(e.preventDefault).not.toHaveBeenCalled();

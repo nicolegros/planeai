@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { matchChord, IS_MAC } from "../keyboard";
 
 const modKey = IS_MAC ? "metaKey" : "ctrlKey";
