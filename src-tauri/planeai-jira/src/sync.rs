@@ -107,13 +107,12 @@ impl JiraSync {
             };
             self.repo.upsert_issue(&jira_issue)?;
 
-            let existing_task_key = self.repo.find_task_by_issue_key(&issue.issue_key)?;
-
-            match existing_task_key {
-                None => {
+            match self.task_provider.get(&issue.issue_key) {
+                Err(planeai_tasks::provider::Error::NotFound) => {
                     let status = map_status(&issue.status, &mapping.status_map);
                     let priority = map_priority(issue.priority.as_deref());
-                    let task = self.task_provider.create(CreateParams {
+                    self.task_provider.create(CreateParams {
+                        key: Some(issue.issue_key.clone()),
                         title: issue.summary.clone(),
                         description: issue.description.clone(),
                         status: Some(status),
@@ -121,13 +120,9 @@ impl JiraSync {
                         tags: issue.labels.clone(),
                         ..Default::default()
                     })?;
-
-                    self.repo.link_task(&task.key, &issue.issue_key)?;
                     result.created += 1;
                 }
-                Some(task_key) => {
-                    let task = self.task_provider.get(&task_key)?;
-
+                Ok(task) => {
                     let new_status = map_status(&issue.status, &mapping.status_map);
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
@@ -135,7 +130,7 @@ impl JiraSync {
 
                     if needs_update {
                         self.task_provider.update(
-                            &task_key,
+                            &issue.issue_key,
                             UpdateParams {
                                 title: Some(issue.summary.clone()),
                                 description: Some(issue.description.clone()),
@@ -148,6 +143,7 @@ impl JiraSync {
 
                     self.repo.mark_synced(&issue.issue_key)?;
                 }
+                Err(e) => return Err(crate::Error::Storage(e.to_string())),
             }
         }
 
@@ -157,13 +153,11 @@ impl JiraSync {
             if seen_keys.contains(&key) {
                 continue;
             }
-            // Only mark stale if the linked task is still todo
-            if let Some(task_key) = self.repo.find_task_by_issue_key(&key)? {
-                if let Ok(task) = self.task_provider.get(&task_key) {
-                    if task.status == Status::Todo {
-                        self.repo.mark_stale(&[&key])?;
-                        result.stale += 1;
-                    }
+            if let Ok(task) = self.task_provider.get(&key) {
+                if task.status == Status::Todo {
+                    self.repo.mark_stale(&[&key])?;
+                    result.stale += 1;
+                }
                 }
             } else {
                 self.repo.mark_stale(&[&key])?;

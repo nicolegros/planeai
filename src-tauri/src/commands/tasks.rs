@@ -113,6 +113,7 @@ pub fn create_task_item(
     tracing::info!(title = %title, "create_task_item");
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.create(CreateParams {
+        key: None,
         title,
         description,
         status: None,

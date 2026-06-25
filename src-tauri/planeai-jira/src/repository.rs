@@ -157,35 +157,6 @@ impl JiraRepository {
             Err(e) => Err(e.into()),
         }
     }
-
-    pub fn link_task(&self, task_key: &str, issue_key: &str) -> Result<(), Error> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2)",
-            params![task_key, issue_key],
-        )?;
-        Ok(())
-    }
-
-    pub fn find_task_by_issue_key(&self, issue_key: &str) -> Result<Option<String>, Error> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        let result = conn.query_row(
-            "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
-            params![issue_key],
-            |row| row.get(0),
-        );
-        match result {
-            Ok(key) => Ok(key),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -223,7 +194,6 @@ mod tests {
     fn migration_creates_tables() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-        repo.link_task("TST-1", "PROJ-1").unwrap();
     }
 
     #[test]
@@ -300,33 +270,5 @@ mod tests {
 
         let keys = repo.list_synced_keys("PROJ").unwrap();
         assert_eq!(keys, vec!["PROJ-1"]);
-    }
-
-    #[test]
-    fn link_task_and_get_task_issue_key() {
-        let repo = setup();
-        repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        assert_eq!(repo.get_task_issue_key("TST-1").unwrap(), None);
-
-        repo.link_task("TST-1", "PROJ-1").unwrap();
-        assert_eq!(
-            repo.get_task_issue_key("TST-1").unwrap(),
-            Some("PROJ-1".to_string())
-        );
-    }
-
-    #[test]
-    fn find_task_by_issue_key_works() {
-        let repo = setup();
-        repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
-
-        assert_eq!(repo.find_task_by_issue_key("PROJ-1").unwrap(), None);
-
-        repo.link_task("TST-1", "PROJ-1").unwrap();
-        assert_eq!(
-            repo.find_task_by_issue_key("PROJ-1").unwrap(),
-            Some("TST-1".to_string())
-        );
     }
 }
