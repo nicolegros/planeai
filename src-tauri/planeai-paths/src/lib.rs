@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 const APP_ID: &str = "ca.nicolegros.planeai";
 
-fn home_dir() -> String {
+pub fn home_dir() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default()
