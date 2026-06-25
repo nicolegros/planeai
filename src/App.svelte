@@ -212,7 +212,7 @@
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
-      () => showSessionForm || showTaskForm,
+      () => !!document.activeElement?.closest('[data-form-keyboard]'),
     );
 
     function onModalKeydown(e: KeyboardEvent) {
