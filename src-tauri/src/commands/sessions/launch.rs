@@ -133,11 +133,11 @@ pub async fn launch_session(
 
     // Phase 2: sync work — detect base branch, git worktree/checkout
     let effective_base_branch = base_branch.clone().or_else(|| {
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(&repo_path)
-            .output()
-            .ok()?;
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo_path);
+        planeai_core::command::no_window(&mut cmd);
+        let output = cmd.output().ok()?;
         if output.status.success() {
             let b = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !b.is_empty() && b != "HEAD" {

@@ -82,7 +82,12 @@ pub fn resolve(cmd: &str) -> String {
     }
 
     // Fallback: use where.exe to search PATH
-    if let Ok(output) = Command::new("where.exe").arg(cmd).output() {
+    if let Ok(output) = {
+        let mut where_cmd = Command::new("where.exe");
+        where_cmd.arg(cmd);
+        planeai_core::command::no_window(&mut where_cmd);
+        where_cmd.output()
+    } {
         if output.status.success() {
             let path = String::from_utf8_lossy(&output.stdout)
                 .lines()

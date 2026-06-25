@@ -69,6 +69,7 @@ create → active → exited → deleted
 | **Title bar padding** | Left (traffic lights)                             | Right (caption buttons)                                |
 | **Font enumeration**  | font-kit (cross-platform)                         | font-kit (cross-platform)                              |
 | **Window style**      | Overlay title bar                                 | Overlay title bar (Tauri handles caption buttons)      |
+| **Subprocess spawn**  | No special handling                               | `CREATE_NO_WINDOW` flag via `no_window()` helpers      |
 
 ## Notification IPC events
 
@@ -192,6 +193,7 @@ Performance is critical — planeai is a real-time terminal multiplexer. The UI 
 - All Tauri commands that perform I/O (subprocess calls, network, filesystem) **must** be `async` and use `tokio` (e.g., `tokio::process::Command`, `tokio::fs`).
 - Release Mutex locks **before** awaiting I/O — hold locks only for in-memory reads/writes.
 - Synchronous `std::process::Command` is forbidden in Tauri commands. Use `tokio::process::Command` instead.
+- On Windows, all subprocess spawns must use `planeai_core::command::no_window()` (sync) or `no_window_tokio()` (async) to suppress console window flashes from the GUI.
 - Frontend polling intervals should be reasonable (≥30s for non-critical data) and stop when data is no longer needed (tab hidden, task complete).
 - Batch IPC calls where possible — prefer one `invoke` returning a list over N individual calls.
 

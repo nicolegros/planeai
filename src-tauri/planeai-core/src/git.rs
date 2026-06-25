@@ -1,9 +1,18 @@
 use std::process::Command;
 
+use crate::command::no_window;
+
+/// Create a `git` Command with CREATE_NO_WINDOW on Windows.
+fn git_cmd() -> Command {
+    let mut cmd = Command::new("git");
+    no_window(&mut cmd);
+    cmd
+}
+
 /// List local and remote branches for a git repo at the given path.
 /// Remote-only branches are prefixed with "remote:" to distinguish them.
 pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["branch", "--all", "--format=%(refname:short) %(refname)"])
         .current_dir(repo_path)
         .output()
@@ -60,7 +69,7 @@ pub fn checkout_branch(
         }
     }
 
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(&args)
         .current_dir(repo_path)
         .output()
@@ -80,7 +89,7 @@ pub fn worktree_add(
     base_branch: &str,
 ) -> Result<(), String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
-    let output = Command::new("git")
+    let output = git_cmd()
         .args([
             "worktree",
             "add",
@@ -106,7 +115,7 @@ pub fn worktree_add(
 pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String> {
     let name = base.strip_prefix("remote:").unwrap_or(base);
 
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["fetch", "origin", name])
         .current_dir(repo_path)
         .output();
@@ -130,7 +139,7 @@ pub fn resolve_base_branch(repo_path: &str, base: &str) -> Result<String, String
 
 /// Remove a git worktree forcefully.
 pub fn worktree_remove(repo_path: &str, worktree_path: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["worktree", "remove", "--force", worktree_path])
         .current_dir(repo_path)
         .output()
@@ -190,7 +199,7 @@ fn parse_rename_path(raw: &str) -> (String, String) {
 /// Includes committed changes on the branch + uncommitted modifications + untracked files.
 pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<ChangedFile>, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["diff", "--numstat", &resolved])
         .current_dir(repo_path)
         .output()
@@ -222,7 +231,7 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
     }
 
     // Get status for each file
-    let status_output = Command::new("git")
+    let status_output = git_cmd()
         .args(["diff", "--name-status", &resolved])
         .current_dir(repo_path)
         .output()
@@ -248,7 +257,7 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
     }
 
     // Include untracked files as Added
-    let untracked_output = Command::new("git")
+    let untracked_output = git_cmd()
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(repo_path)
         .output()
@@ -288,7 +297,7 @@ pub fn get_file_diff(
     let resolved = resolve_base_branch(repo_path, base_branch)?;
     let base_file_path = old_path.unwrap_or(file_path);
     // Get original content from base branch
-    let original_output = Command::new("git")
+    let original_output = git_cmd()
         .args(["show", &format!("{resolved}:{base_file_path}")])
         .current_dir(repo_path)
         .output()
@@ -325,7 +334,7 @@ pub fn get_file_patch(
     let base_file_path = old_path.unwrap_or(file_path);
 
     // Try tracked file diff first
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["diff", "--no-color", "-U3", &resolved, "--", base_file_path])
         .current_dir(repo_path)
         .output()
@@ -374,7 +383,7 @@ pub fn get_all_file_patches(
 /// Detect the default branch of a repo (main, master, etc.).
 /// Checks local branches for common names.
 pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["branch", "--format=%(refname:short)"])
         .current_dir(repo_path)
         .output()

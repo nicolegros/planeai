@@ -19,15 +19,23 @@ pub fn ensure_running(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    std::process::Command::new(daemon_bin)
-        .arg("--socket-path")
+    let mut cmd = std::process::Command::new(daemon_bin);
+    cmd.arg("--socket-path")
         .arg(socket_path)
         .arg("--scrollback-bytes")
         .arg(scrollback_bytes.to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd.spawn()
         .map_err(|e| format!("failed to spawn daemon: {e}"))?;
 
     for _ in 0..30 {
