@@ -8,11 +8,12 @@
   import { focusTerminal, refocusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, MOD_LABEL } from "./lib/keyboard";
+  import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { startPolling as startCiPolling } from "./lib/ci-checks.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
@@ -33,6 +34,7 @@
   import SharedDialog from "./components/ui/Dialog.svelte";
   import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
+  import PrPanel from "./components/PrPanel.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -54,12 +56,26 @@
 
   // PR form state
   let showPrForm = $state(false);
+  let showPrPanel = $state(false);
   let prTitle = $state("");
   let prBody = $state("");
   let prBaseBranch = $state("");
   let prDraft = $state(false);
   let prSubmitting = $state(false);
   let prError = $state("");
+  let prFormWrapper = $state<HTMLDivElement | null>(null);
+
+  const prFk = createFormKeyboardController(
+    () => [
+      { key: "t", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-title'] input") ?? null },
+      { key: "b", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-body'] textarea") ?? null },
+      { key: "a", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-base'] input") ?? null },
+      { key: "d", toggle: () => { prDraft = !prDraft; } },
+    ],
+    { wrapper: () => prFormWrapper, onDismiss: () => { showPrForm = false; tick().then(() => refocusTerminal()); } },
+  );
+
+  $effect(() => { if (showPrForm && prFormWrapper) prFormWrapper.focus(); });
 
   async function openPrForm() {
     if (!activeSessionId) return;
@@ -187,7 +203,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -209,8 +225,13 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
+        else if (action.type === "toggle_pr_panel") {
+          const s = sessions.find(x => x.id === activeSessionId);
+          if (s?.pr_url) { showPrPanel = !showPrPanel; }
+          else if (activeSessionId) { openPrForm(); }
+        }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
     );
@@ -549,41 +570,62 @@
 </main>
 
 {#if showPrForm}
-  <Dialog.Root open={true} onOpenChange={(v) => { if (!v) showPrForm = false; }}>
-    <Dialog.Portal>
-      <Dialog.Overlay class="fixed inset-0 z-50" />
-      <Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border-s bg-panel p-5 shadow-lg outline-none">
-        <Dialog.Title class="text-sm font-medium text-t1 mb-4">Create Pull Request</Dialog.Title>
-        <div class="flex flex-col gap-3">
-          <div>
-            <label for="pr-title" class="text-xs font-medium text-t2 mb-1 block">Title</label>
-            <input id="pr-title" type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+  <FormDialog title="Create Pull Request" onClose={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div bind:this={prFormWrapper} tabindex="-1" onkeydown={prFk.handleKeydown} onfocusin={prFk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+      <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitPr(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submitPr(); } }}>
+        <div class="space-y-1" data-field="pr-title">
+          <label class="text-xs font-medium text-t2 mb-1 block">Title <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></label>
+          <input type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+        </div>
+        <div class="space-y-1" data-field="pr-body">
+          <label class="text-xs font-medium text-t2 mb-1 block">Body <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></label>
+          <textarea bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
+        </div>
+        <div class="space-y-1" data-field="pr-base">
+          <label class="text-xs font-medium text-t2 mb-1 block">Base branch <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span></label>
+          <input type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+        </div>
+        <label class="flex items-center gap-2 text-xs text-t2">
+          <input type="checkbox" bind:checked={prDraft} class="rounded border-border" />
+          Draft PR <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
+        </label>
+        {#if prError}
+          <p class="text-xs text-status-exited">{prError}</p>
+        {/if}
+        <div class="flex items-center justify-between pt-2 border-t border-border">
+          <div class="flex items-center gap-2">
+            {#if prFk.mode === "insert"}
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+              <span class="text-[10px] text-t3">esc → normal mode</span>
+            {:else}
+              <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
+              <span class="text-[10px] text-t3">press a key to focus field</span>
+            {/if}
           </div>
-          <div>
-            <label for="pr-body" class="text-xs font-medium text-t2 mb-1 block">Body</label>
-            <textarea id="pr-body" bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
-          </div>
-          <div>
-            <label for="pr-base" class="text-xs font-medium text-t2 mb-1 block">Base branch</label>
-            <input id="pr-base" type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
-          </div>
-          <label class="flex items-center gap-2 text-xs text-t2">
-            <input type="checkbox" bind:checked={prDraft} class="rounded border-border" />
-            Draft PR
-          </label>
-          {#if prError}
-            <p class="text-xs text-status-exited">{prError}</p>
-          {/if}
-          <div class="flex justify-end gap-2 mt-1">
-            <button class="px-2 py-1 text-xs rounded border border-border text-t2 hover:bg-panel-hi" onclick={() => (showPrForm = false)}>Cancel</button>
-            <button class="px-2 py-1 text-xs rounded bg-accent text-on-accent hover:opacity-90 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()} onclick={submitPr}>
-              {prSubmitting ? "Creating…" : "Create"}
+          <div class="flex gap-2">
+            <button type="button" class="px-2 py-1 text-xs rounded border border-border text-t2 hover:bg-panel-hi" onclick={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>Cancel</button>
+            <button type="submit" class="px-2 py-1 text-xs rounded bg-accent text-on-accent hover:opacity-90 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()}>
+              {prSubmitting ? "Creating…" : "Create"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
             </button>
           </div>
         </div>
-      </Dialog.Content>
-    </Dialog.Portal>
-  </Dialog.Root>
+      </form>
+    </div>
+  </FormDialog>
+{/if}
+
+{#if showPrPanel && activeSessionId && sessions.find(s => s.id === activeSessionId)?.pr_url}
+  <FormDialog title="Pull Request" onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}>
+    <PrPanel
+      sessionId={activeSessionId}
+      prUrl={sessions.find(s => s.id === activeSessionId)!.pr_url!}
+      prState={sessions.find(s => s.id === activeSessionId)!.pr_state ?? null}
+      sessionName={sessions.find(s => s.id === activeSessionId)!.name}
+      onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}
+    />
+  </FormDialog>
 {/if}
 
 {#if getSnackbarMessage()}

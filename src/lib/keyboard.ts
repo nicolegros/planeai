@@ -41,6 +41,7 @@ export type KeyboardAction =
   | { type: "toggle_file_explorer" }
   | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
+  | { type: "toggle_pr_panel" }
   | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
@@ -132,6 +133,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+P — open file finder
   if (mod && !e.shiftKey && key === "p") {
     return { type: "open_file" };
+  }
+
+  // Mod+Shift+P — toggle PR panel
+  if (mod && e.shiftKey && key === "p") {
+    return { type: "toggle_pr_panel" };
   }
 
   // Mod+Shift+S — toggle sessions panel
