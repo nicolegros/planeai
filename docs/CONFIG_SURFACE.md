@@ -75,17 +75,17 @@ These exist in the config file for compatibility but are migration-period option
 
 ### Values
 
-| Value    | Meaning                                              |
-| -------- | ---------------------------------------------------- |
-| `daemon` | Sessions run in the PlaneAI daemon process (default) |
-| `tmux`   | Sessions run in tmux (requires tmux installed)       |
-| `local`  | Sessions run as local child processes                |
+| Value    | Meaning                                                       |
+| -------- | ------------------------------------------------------------- |
+| `local`  | Sessions run as local child processes (default)               |
+| `tmux`   | Sessions run in tmux (requires tmux installed)                |
+| `daemon` | Sessions run in the PlaneAI daemon process (experimental)     |
 
 ### Policy
 
-- **`daemon` is always the default.** When `session_backend` is unset or null, daemon is used.
+- **`local` is always the default.** When `session_backend` is unset or null, local is used.
 - **`tmux` is explicit optional behavior.** It is never auto-detected or silently selected.
-- **`local` is available** for simple local process flows.
+- **`daemon` is experimental** and provides session persistence across app restarts.
 - PTY core selection (`local_pty_core`, `daemon_pty_core`) is a separate concern and must NOT be conflated with session backend.
 
 ### Naming decision

@@ -1,38 +1,8 @@
 use rusqlite::Connection;
 
-use crate::config::{Config, Provider};
+use crate::config::Config;
 use crate::db::{self, Session};
 use crate::session_ops::{fire_task_hook, session_cwd};
-
-/// Minimum seconds a session must live before auto-restart is allowed.
-const CIRCUIT_BREAKER_SECS: u64 = 5;
-
-/// Determine the restart command for a session, if any.
-///
-/// Returns `Some(command)` if the session should be restarted, `None` otherwise.
-/// - Only restarts sessions with status "exited"
-/// - Uses `resume_command` if set, otherwise falls back to `command`
-/// - Circuit breaker: returns `None` if session lived less than `CIRCUIT_BREAKER_SECS`
-pub fn restart_command(
-    session_status: &str,
-    provider: &Provider,
-    session_age_secs: Option<u64>,
-) -> Option<String> {
-    if session_status != "exited" {
-        return None;
-    }
-    if let Some(age) = session_age_secs {
-        if age < CIRCUIT_BREAKER_SECS {
-            return None;
-        }
-    }
-    Some(
-        provider
-            .resume_command
-            .clone()
-            .unwrap_or_else(|| provider.command.clone()),
-    )
-}
 
 pub trait RestartOps {
     fn create_tmux_session(
@@ -117,6 +87,7 @@ pub fn restart(
                 restart_ops.create_tmux_session(tn, cwd, cmd, id, &extra_path_dirs)
             }
             "daemon" => restart_ops.spawn_daemon_session(id, cmd, cwd, &extra_path_dirs),
+            "local" => Ok(()), // PTY spawned on attach, nothing to pre-create
             other => Err(format!("unsupported backend: {other}")),
         }
     };
@@ -423,6 +394,29 @@ mod tests {
         assert_eq!(ops.calls.borrow().len(), 0);
         assert_eq!(ops.daemon_calls.borrow().len(), 1);
         assert_eq!(ops.daemon_calls.borrow()[0].0, id);
+    }
+
+    #[test]
+    fn restart_local_session_restores_without_spawning() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "cccc3333-5555-6666-7777-888899990000";
+        db::create_session_with_id(
+            &conn, id, pid, "local-restart", None, "main", None, None, "local", false, None, None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert_eq!(ops.calls.borrow().len(), 0);
+        assert_eq!(ops.daemon_calls.borrow().len(), 0);
     }
 
     #[test]

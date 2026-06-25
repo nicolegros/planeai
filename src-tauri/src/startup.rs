@@ -74,6 +74,14 @@ where
     failures
 }
 
+/// Reconcile local sessions: mark active local sessions as exited since they cannot survive app restart.
+pub fn reconcile_local_sessions(conn: &rusqlite::Connection) {
+    let _ = conn.execute(
+        "UPDATE sessions SET status = 'exited' WHERE backend = 'local' AND status = 'active'",
+        [],
+    );
+}
+
 /// Reconcile daemon sessions: mark sessions as exited if the daemon doesn't know about them.
 pub fn reconcile_daemon_sessions(conn: &rusqlite::Connection, _cfg: &config::Config) {
     let sessions = match db::list_sessions(conn) {
@@ -618,5 +626,29 @@ mod tests {
 
         let ns = notify_state.lock().unwrap();
         assert_eq!(ns.get_meta("s1").unwrap().name, "feature/cool");
+    }
+
+    #[test]
+    fn reconcile_local_sessions_marks_active_as_exited() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_session_with_id(
+            &conn, "s1", &project.id, "local-sess", None, "main", None, Some("kiro"), "local",
+            false, None, None,
+        )
+        .unwrap();
+        // Daemon session should be untouched
+        db::create_session_with_id(
+            &conn, "s2", &project.id, "daemon-sess", None, "feat", None, Some("kiro"), "daemon",
+            false, None, None,
+        )
+        .unwrap();
+
+        reconcile_local_sessions(&conn);
+
+        assert_eq!(db::get_session(&conn, "s1").unwrap().unwrap().status, "exited");
+        assert_eq!(db::get_session(&conn, "s2").unwrap().unwrap().status, "active");
     }
 }

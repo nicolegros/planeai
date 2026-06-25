@@ -81,10 +81,7 @@ pub fn attach_session(
             .to_string();
 
         let cmd = if session.status == "exited" {
-            match crate::session_restart::restart_command(&session.status, provider_def, None) {
-                Some(c) => c,
-                None => return Err("session restarting too quickly (circuit breaker)".to_string()),
-            }
+            config::restart_command_for_provider(provider_def, resume_id)
         } else {
             config::launch_command(provider_def, session.auto_approve)
         };

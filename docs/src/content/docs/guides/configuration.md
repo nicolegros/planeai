@@ -48,22 +48,26 @@ Controls how planeai manages terminal sessions.
 
 ```jsonc
 {
-  "session_backend": "daemon", // "daemon" | "tmux" | "local"
+  "session_backend": "local", // "local" | "tmux" | "daemon"
 }
 ```
 
 | Value    | Behavior                                                         |
 | -------- | ---------------------------------------------------------------- |
-| `daemon` | Built-in daemon process — sessions persist across app restarts (default) |
+| `local`  | In-process PTY — lightweight, no external dependencies (default) |
 | `tmux`   | Requires tmux — sessions persist via tmux                        |
-| `local`  | In-process PTY — sessions terminate when the app closes          |
+| `daemon` | Built-in daemon process — sessions persist across app restarts (experimental) |
 
 :::tip
-The daemon backend is recommended for most users. It works cross-platform and requires no external dependencies.
+The local backend is the default and recommended for most users. Sessions terminate when the app closes.
+:::
+
+:::caution
+The `daemon` backend is experimental. It provides session persistence across app restarts but may have stability issues.
 :::
 
 :::note
-tmux is not supported on Windows. The `daemon` backend is used automatically on Windows regardless of this setting.
+tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
 ## Task Manager Integration

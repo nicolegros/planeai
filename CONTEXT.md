@@ -1,14 +1,14 @@
 # planeai
 
-A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session. Supports two session backends: tmux (persistent, requires tmux binary) and daemon (persistent, built-in).
+A cross-platform agent session orchestrator. Manages multiple AI coding agents running in parallel, each in its own terminal session. Supports three session backends: local (in-process PTY, default), tmux (persistent, requires tmux binary), and daemon (persistent, built-in, experimental).
 
 ## Glossary
 
 | Term                | Definition                                                                                                                                                                                                           |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                    |
-| **Session**         | A single agent working on a single task within a project. Backed by either a tmux session or the planeai daemon. Contains one terminal pane running the agent CLI.                                                   |
-| **Session backend** | The process hosting strategy for a session: `tmux` (survives app quit, requires tmux binary) or `daemon` (survives app quit, uses built-in daemon process). Resolved at session creation from the global setting.    |
+| **Session**         | A single agent working on a single task within a project. Backed by a local PTY (default), tmux session, or the planeai daemon. Contains one terminal pane running the agent CLI.                                                   |
+| **Session backend** | The process hosting strategy for a session: `local` (in-process PTY, default), `tmux` (survives app quit, requires tmux binary), or `daemon` (survives app quit, built-in, experimental). Resolved at session creation from the global setting.    |
 | **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command`, optional `yolo_flag`, optional `resume_flag` + `resume_command` for session resume. Multiple providers can be configured; one is the `default_provider`. |
 | **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
 | **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                 |
@@ -18,7 +18,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Token**           | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                |
 | **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.      |
 | **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                   |
-| **Daemon**          | A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                              |
+| **Daemon**          | (Experimental) A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                              |
 
 ## Session lifecycle (v1)
 
@@ -96,9 +96,9 @@ The effective backend is resolved once at app startup:
 config.session_backend ?? "daemon"
 ```
 
-- Config field absent → daemon (always the default)
+- Config field absent → local (always the default)
 - `"session_backend": "tmux"` → force tmux (warn if not found)
-- `"session_backend": "daemon"` → force daemon
+- `"session_backend": "daemon"` → force daemon (experimental)
 
 Setting changes affect new sessions only. Existing sessions keep their backend.
 
@@ -141,13 +141,13 @@ Exited sessions can be restarted: same session identity (name, project, worktree
 
 ### DB columns
 
-- `backend TEXT NOT NULL DEFAULT 'tmux'` — set at creation time, values: `'tmux'` or `'daemon'`
+- `backend TEXT NOT NULL DEFAULT 'tmux'` — set at creation time, values: `'local'`, `'tmux'`, or `'daemon'`
 - `status TEXT NOT NULL DEFAULT 'active'` — updated on exit/delete
 - `tmux_name TEXT` — NULL for daemon sessions, populated for tmux sessions
 
 ### Preferences UI
 
-Dropdown: Daemon (default) / tmux. Inline warning if user selects tmux but binary not found.
+Dropdown: Local (default) / tmux / Daemon (experimental). Inline warning if user selects tmux but binary not found.
 
 ## Worktree support
 

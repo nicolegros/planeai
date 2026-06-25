@@ -141,6 +141,9 @@ fn main() {
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
 
+            // Reconcile local sessions (cannot survive app restart)
+            startup::reconcile_local_sessions(&conn);
+
             // Stale worktree cleanup (fire-and-forget background thread)
             let cleanup_db_path = paths::db_path();
             std::thread::spawn(move || {

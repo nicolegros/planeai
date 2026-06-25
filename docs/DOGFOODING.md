@@ -325,7 +325,7 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 | ------------ | ----------------------------------------- |
 | Cmd+W        | Detach — session keeps running in daemon  |
 | Cmd+Shift+W  | Kill — daemon terminates the session      |
-| Close window | Detach all daemon sessions (default)      |
+| Close window | Detach all sessions (default)             |
 | Cmd+R        | Refresh daemon session list               |
 | Cmd+A        | Attach to first unattached daemon session |
 | Cmd+N        | Spawn new daemon session                  |
@@ -540,7 +540,7 @@ Or in `~/.config/planeai/config.json`:
 
 ### Policy Notes
 
-- **tmux:** Optional, not default. Daemon backend is used.
+- **tmux:** Optional, not default. Local backend is the default; daemon backend is experimental.
 - **Production Tauri app:** Remains the primary app. Workflow mode is a prototype.
 - **Iced window close:** Detaches sessions (does not kill).
 - **Daemon idle timeout:** 30s with no sessions/clients → auto-exit.

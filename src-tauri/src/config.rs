@@ -471,7 +471,7 @@ pub fn should_accept_provider_session_id(
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
         Some(b) => b.as_str(),
-        None => "daemon",
+        None => "local",
     }
 }
 
@@ -794,12 +794,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_backend_falls_back_to_tmux_detection_when_unset() {
+    fn resolve_backend_falls_back_to_local_when_unset() {
         let config = Config::default();
         assert!(config.session_backend.is_none());
         let result = resolve_backend(&config);
-        // Default is always daemon regardless of tmux availability
-        assert_eq!(result, "daemon");
+        assert_eq!(result, "local");
     }
 
     #[test]
