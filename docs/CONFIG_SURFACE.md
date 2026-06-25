@@ -37,17 +37,17 @@ Power-user options. Not required for normal use.
 
 These are NOT in the config file by default. Used for debugging, migration, and rollback.
 
-| Variable                     | Values                  | Default  | Description                                          |
-| ---------------------------- | ----------------------- | -------- | ---------------------------------------------------- |
-| `PLANEAI_LOCAL_PTY_CORE`     | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for local sessions         |
-| `PLANEAI_DAEMON_PTY_CORE`    | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for daemon sessions        |
-| `PLANEAI_SESSION_LOG_DIR`    | path                    | unset    | Override `session_log_dir` config (highest priority) |
-| `PLANEAI_DAEMON_LOG_DIR`     | path                    | `~/.planeai/logs` | Override daemon process log directory       |
-| `PLANEAI_EXTRA_PATH`         | colon-separated dirs    | unset    | Override `extra_path_dirs` config (highest priority) |
-| `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true`             | unset    | Enable in-app log viewer (Tauri only)                |
-| `PLANEAI_BENCH_REPLAY`       | path                    | unset    | Benchmark replay fixture                             |
-| `PLANEAI_BENCH_COLS`         | number                  | —        | Benchmark terminal columns                           |
-| `PLANEAI_BENCH_ROWS`         | number                  | —        | Benchmark terminal rows                              |
+| Variable                     | Values                  | Default           | Description                                          |
+| ---------------------------- | ----------------------- | ----------------- | ---------------------------------------------------- |
+| `PLANEAI_LOCAL_PTY_CORE`     | `legacy`, `planeai-pty` | `legacy`          | Select PTY implementation for local sessions         |
+| `PLANEAI_DAEMON_PTY_CORE`    | `legacy`, `planeai-pty` | `legacy`          | Select PTY implementation for daemon sessions        |
+| `PLANEAI_SESSION_LOG_DIR`    | path                    | unset             | Override `session_log_dir` config (highest priority) |
+| `PLANEAI_DAEMON_LOG_DIR`     | path                    | `~/.planeai/logs` | Override daemon process log directory                |
+| `PLANEAI_EXTRA_PATH`         | colon-separated dirs    | unset             | Override `extra_path_dirs` config (highest priority) |
+| `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true`             | unset             | Enable in-app log viewer (Tauri only)                |
+| `PLANEAI_BENCH_REPLAY`       | path                    | unset             | Benchmark replay fixture                             |
+| `PLANEAI_BENCH_COLS`         | number                  | —                 | Benchmark terminal columns                           |
+| `PLANEAI_BENCH_ROWS`         | number                  | —                 | Benchmark terminal rows                              |
 
 ### 4. Temporary migration options (config fields)
 
@@ -75,11 +75,11 @@ These exist in the config file for compatibility but are migration-period option
 
 ### Values
 
-| Value    | Meaning                                                       |
-| -------- | ------------------------------------------------------------- |
-| `local`  | Sessions run as local child processes (default)               |
-| `tmux`   | Sessions run in tmux (requires tmux installed)                |
-| `daemon` | Sessions run in the PlaneAI daemon process (experimental)     |
+| Value    | Meaning                                                   |
+| -------- | --------------------------------------------------------- |
+| `local`  | Sessions run as local child processes (default)           |
+| `tmux`   | Sessions run in tmux (requires tmux installed)            |
+| `daemon` | Sessions run in the PlaneAI daemon process (experimental) |
 
 ### Policy
 

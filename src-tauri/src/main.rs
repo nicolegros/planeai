@@ -147,12 +147,13 @@ fn main() {
 
             // Stale worktree cleanup (fire-and-forget background thread)
             let cleanup_db_path = planeai_paths::db_path();
-            let cleanup_cfg = cfg.clone();
             std::thread::spawn(move || {
                 let cleanup_conn =
                     rusqlite::Connection::open(&cleanup_db_path).expect("open db for cleanup");
-                let errors =
-                    crate::worktree::cleanup_stale_worktrees(&cleanup_conn, &cleanup_cfg);
+                let errors = planeai_core::cleanup::cleanup_stale_worktrees(
+                    &cleanup_conn,
+                    planeai_core::git::worktree_remove,
+                );
                 for e in &errors {
                     tracing::warn!("stale worktree cleanup error: {e}");
                 }
