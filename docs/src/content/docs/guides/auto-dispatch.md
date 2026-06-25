@@ -81,7 +81,7 @@ Start with `max_concurrent: 1` until you're comfortable with the dispatch behavi
 
 ## CLI Commands
 
-Control auto-dispatch from the command menu (Cmd+K):
+Control auto-dispatch from the command menu (Cmd+K / Ctrl+K):
 
 | Command           | Description                 |
 | ----------------- | --------------------------- |

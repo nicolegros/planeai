@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { IS_MAC } from "../lib/keyboard";
+  import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { GitPullRequest, GitMerge, RefreshCw, Bot, Terminal, GitCompare, FileCode } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
@@ -144,7 +144,7 @@
           {tab.index === activeTabIndex ? 'border-accent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
         onclick={() => onSelectTab(tab.index)}
       >
-        <Icon size={13} class="{tab.index === activeTabIndex ? 'text-accent' : 'text-t3'}" />
+        <Icon size={13} class={tab.index === activeTabIndex ? 'text-accent' : 'text-t3'} />
         {tab.label}
       </button>
     {/each}
@@ -238,7 +238,7 @@
                   title={disabledReason ?? ""}
                   onclick={() => doMerge(selectedStrategy)}
                 >
-                  {merging ? "Merging…" : `Merge with ${selectedStrategy}`}<span class="font-mono text-[10px] opacity-80">⌘↵</span>
+                  {merging ? "Merging…" : `Merge with ${selectedStrategy}`}<span class="font-mono text-[10px] opacity-80">{MOD_ENTER_HINT}</span>
                 </button>
                 {#if disabledReason && !merging}<p class="text-[10px] text-t3 mt-1">{disabledReason}</p>{/if}
               </div>
@@ -257,6 +257,6 @@
       class="font-mono text-[10.5px] text-t2 border border-border rounded-[6px] px-[7px] py-[3px] bg-panel-hi select-none hover:text-t1 hover:border-border-s transition-colors"
       title="Open command palette"
       onclick={(e) => { e.stopPropagation(); onOpenCommand?.(); }}
-    >⌘K</button>
+    >{MOD_LABEL}K</button>
   </div>
 </header>

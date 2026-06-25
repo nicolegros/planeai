@@ -87,7 +87,7 @@
     { keys: `u`, description: "Split / unified" },
     { keys: `e`, description: "Edit file" },
     { keys: `r`, description: "Refresh" },
-    { keys: `⌘↵`, description: "Send feedback" },
+    { keys: MOD_ENTER_HINT, description: "Send feedback" },
   ]};
 
   const visibleShortcuts = $derived(

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Command, Dialog } from "bits-ui";
+  import { MOD_LABEL } from "../lib/keyboard";
   import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi, git } from "../lib/api";
   import type { Session, Project, TaskItem } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -471,7 +472,7 @@
                   onSelect={() => { onToggleDiff(); close(); }}
                 >
                   Review Changes
-                  <kbd class="ml-auto text-[10px] font-mono text-t3">⌘⇧R</kbd>
+                  <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧R</kbd>
                 </Command.Item>
                 <Command.Item
                   value="pull request"

@@ -4,21 +4,21 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 
 ## Glossary
 
-| Term                | Definition                                                                                                                                                                                                           |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                    |
-| **Session**         | A single agent working on a single task within a project. Backed by a local PTY (default), tmux session, or the planeai daemon. Contains one terminal pane running the agent CLI.                                                   |
-| **Session backend** | The process hosting strategy for a session: `local` (in-process PTY, default), `tmux` (survives app quit, requires tmux binary), or `daemon` (survives app quit, built-in, experimental). Resolved at session creation from the global setting.    |
+| Term                | Definition                                                                                                                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                                                   |
+| **Session**         | A single agent working on a single task within a project. Backed by a local PTY (default), tmux session, or the planeai daemon. Contains one terminal pane running the agent CLI.                                                                   |
+| **Session backend** | The process hosting strategy for a session: `local` (in-process PTY, default), `tmux` (survives app quit, requires tmux binary), or `daemon` (survives app quit, built-in, experimental). Resolved at session creation from the global setting.     |
 | **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command`, optional `yolo_flag`, optional `resume_flag` + `resume_command` for session resume. Multiple providers can be configured; one is the `default_provider`. |
-| **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing. |
-| **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                 |
-| **Focus zone**      | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd+B, Cmd+N, Cmd+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                       |
-| **Tab switcher**    | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms.                                                                                                          |
-| **Notification**    | (future) A signal that an agent needs human attention.                                                                                                                                                               |
-| **Token**           | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                |
-| **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.      |
-| **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                   |
-| **Daemon**          | (Experimental) A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                              |
+| **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing.                                |
+| **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                                                |
+| **Focus zone**      | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd/Ctrl+B, Cmd/Ctrl+N, Cmd/Ctrl+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                                       |
+| **Tab switcher**    | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms.                                                                                                                                         |
+| **Notification**    | (future) A signal that an agent needs human attention.                                                                                                                                                                                              |
+| **Token**           | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                                               |
+| **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.                                     |
+| **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                                                  |
+| **Daemon**          | (Experimental) A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                                              |
 
 ## Session lifecycle (v1)
 
@@ -74,14 +74,14 @@ create → active → exited → deleted
 
 The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL messages. Each message has an `event` field and a `session_id` field.
 
-| Event             | Direction        | Payload                                          | Purpose                                                        |
-| ----------------- | ---------------- | ------------------------------------------------ | -------------------------------------------------------------- |
-| `stop`            | Hook → GUI       | `{"event":"stop","session_id":"..."}`            | Agent finished (debounced idle detection)                      |
-| `notification`    | Hook → GUI       | `{"event":"notification","session_id":"..."}`    | Agent needs human attention                                    |
-| `busy`            | Hook → GUI       | `{"event":"busy","session_id":"..."}`            | Agent started working                                          |
-| `session_created` | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}` | New session created, GUI should refresh                        |
-| `session_changed` | CLI → GUI        | `{"event":"session_changed","session_id":"..."}` | Session state changed (archived/destroyed), GUI should refresh |
-| `session_restarted` | Backend → GUI  | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI should re-attach PTY           |
+| Event               | Direction        | Payload                                            | Purpose                                                        |
+| ------------------- | ---------------- | -------------------------------------------------- | -------------------------------------------------------------- |
+| `stop`              | Hook → GUI       | `{"event":"stop","session_id":"..."}`              | Agent finished (debounced idle detection)                      |
+| `notification`      | Hook → GUI       | `{"event":"notification","session_id":"..."}`      | Agent needs human attention                                    |
+| `busy`              | Hook → GUI       | `{"event":"busy","session_id":"..."}`              | Agent started working                                          |
+| `session_created`   | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}`   | New session created, GUI should refresh                        |
+| `session_changed`   | CLI → GUI        | `{"event":"session_changed","session_id":"..."}`   | Session state changed (archived/destroyed), GUI should refresh |
+| `session_restarted` | Backend → GUI    | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI should re-attach PTY             |
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
 For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
@@ -104,13 +104,13 @@ Setting changes affect new sessions only. Existing sessions keep their backend.
 
 ### Backend comparison
 
-| Feature      | local (default)              | tmux                         | daemon                                                 |
-| ------------ | ---------------------------- | ---------------------------- | ------------------------------------------------------ |
-| Persistence  | Dies with app                | Survives app quit            | Survives app quit                                      |
-| Dependencies | None                         | Requires tmux binary         | Built-in (planeai-daemon binary)                       |
-| CLI headless | N/A                          | Works (tmux manages process) | Works (daemon spawned on-demand)                       |
-| Scrollback   | xterm.js buffer              | Managed by tmux              | Ring buffer (configurable via daemon_scrollback_bytes) |
-| Platform     | macOS, Linux, Windows        | macOS, Linux                 | macOS, Linux, Windows                                  |
+| Feature      | local (default)       | tmux                         | daemon                                                 |
+| ------------ | --------------------- | ---------------------------- | ------------------------------------------------------ |
+| Persistence  | Dies with app         | Survives app quit            | Survives app quit                                      |
+| Dependencies | None                  | Requires tmux binary         | Built-in (planeai-daemon binary)                       |
+| CLI headless | N/A                   | Works (tmux manages process) | Works (daemon spawned on-demand)                       |
+| Scrollback   | xterm.js buffer       | Managed by tmux              | Ring buffer (configurable via daemon_scrollback_bytes) |
+| Platform     | macOS, Linux, Windows | macOS, Linux                 | macOS, Linux, Windows                                  |
 
 ### PTY architecture
 

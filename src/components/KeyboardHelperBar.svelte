@@ -2,14 +2,15 @@
   import { getActiveZone } from "../lib/focus.svelte";
   import { getDiffTabActive } from "../lib/tab-layout.svelte";
   import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
+  import { MOD_LABEL } from "../lib/keyboard";
 
   const TERMINAL_HINTS = [
-    { k: "⌘K", l: "Command" },
-    { k: "⌘N", l: "New" },
-    { k: "⌘B", l: "Sidebar" },
+    { k: `${MOD_LABEL}K`, l: "Command" },
+    { k: `${MOD_LABEL}N`, l: "New" },
+    { k: `${MOD_LABEL}B`, l: "Sidebar" },
     { k: "⌃⇥", l: "Switch" },
-    { k: "⌘1–9", l: "Jump" },
-    { k: "⌘\\", l: "Diff" },
+    { k: `${MOD_LABEL}1–9`, l: "Jump" },
+    { k: `${MOD_LABEL}\\`, l: "Diff" },
   ];
 
   const SIDEBAR_HINTS = [
@@ -20,8 +21,8 @@
     { k: "a", l: "Archive" },
     { k: "E", l: "Rename" },
     { k: "r", l: "Review" },
-    { k: "⌘N", l: "New" },
-    { k: "⌘B", l: "Hide" },
+    { k: `${MOD_LABEL}N`, l: "New" },
+    { k: `${MOD_LABEL}B`, l: "Hide" },
   ];
 
   const DIFF_HINTS = [
