@@ -88,7 +88,6 @@ impl JiraSync {
         result: &mut SyncResult,
     ) -> Result<(), crate::Error> {
         let issues = self.client.search(&source.jql).await?;
-        let status_map = source.status_map.as_ref();
 
         let mut seen_keys = HashSet::new();
 
@@ -113,7 +112,7 @@ impl JiraSync {
 
             match existing_task_key {
                 None => {
-                    let status = map_status(&issue.status, status_map);
+                    let status = map_status(&issue.status, &source.status_map);
                     let priority = map_priority(issue.priority.as_deref());
                     let task = self.task_provider.create(CreateParams {
                         title: issue.summary.clone(),
@@ -130,7 +129,7 @@ impl JiraSync {
                 Some(task_key) => {
                     let task = self.task_provider.get(&task_key)?;
 
-                    let new_status = map_status(&issue.status, status_map);
+                    let new_status = map_status(&issue.status, &source.status_map);
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
                         || task.status != new_status;
@@ -176,12 +175,9 @@ impl JiraSync {
     }
 }
 
-fn map_status(
-    jira_status: &str,
-    status_map: Option<&std::collections::HashMap<String, String>>,
-) -> Status {
+fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>) -> Status {
     status_map
-        .and_then(|m| m.get(jira_status))
+        .get(jira_status)
         .and_then(|v| Status::parse(v))
         .unwrap_or(Status::Todo)
 }
@@ -211,19 +207,19 @@ mod tests {
     fn test_map_status_found() {
         let mut m = HashMap::new();
         m.insert("In Progress".to_string(), "in_progress".to_string());
-        assert_eq!(map_status("In Progress", Some(&m)), Status::InProgress);
+        assert_eq!(map_status("In Progress", &m), Status::InProgress);
     }
 
     #[test]
     fn test_map_status_not_found_defaults_to_todo() {
-        assert_eq!(map_status("Unknown", None), Status::Todo);
+        assert_eq!(map_status("Unknown", &HashMap::new()), Status::Todo);
     }
 
     #[test]
     fn test_map_status_invalid_mapped_value_defaults_to_todo() {
         let mut m = HashMap::new();
         m.insert("X".to_string(), "invalid_status".to_string());
-        assert_eq!(map_status("X", Some(&m)), Status::Todo);
+        assert_eq!(map_status("X", &m), Status::Todo);
     }
 
     #[test]
@@ -270,10 +266,10 @@ mod tests {
             "proj".to_string(),
             SyncSource {
                 jql: "project = PROJ".to_string(),
-                status_map: Some(HashMap::from([
+                status_map: HashMap::from([
                     ("In Progress".to_string(), "in_progress".to_string()),
                     ("Done".to_string(), "done".to_string()),
-                ])),
+                ]),
                 writeback: None,
             },
         );
@@ -504,7 +500,7 @@ mod tests {
             "other".to_string(),
             SyncSource {
                 jql: "project = OTHER".to_string(),
-                status_map: None,
+                status_map: HashMap::new(),
                 writeback: None,
             },
         );

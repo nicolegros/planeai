@@ -47,7 +47,7 @@ export interface JiraWriteback {
 
 export interface SyncSource {
   jql: string;
-  status_map?: Record<string, string> | null;
+  status_map?: Record<string, string>;
   writeback?: JiraWriteback | null;
 }
 

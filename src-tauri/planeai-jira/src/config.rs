@@ -18,7 +18,7 @@ pub struct JiraConfig {
 pub struct SyncSource {
     pub jql: String,
     #[serde(default)]
-    pub status_map: Option<HashMap<String, String>>,
+    pub status_map: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writeback: Option<WritebackConfig>,
 }
@@ -44,10 +44,10 @@ mod tests {
             "myproject".to_string(),
             SyncSource {
                 jql: "project = MP AND status != Done".to_string(),
-                status_map: Some(HashMap::from([
+                status_map: HashMap::from([
                     ("In Progress".to_string(), "active".to_string()),
                     ("Done".to_string(), "completed".to_string()),
-                ])),
+                ]),
                 writeback: Some(WritebackConfig {
                     on_start: Some("In Progress".to_string()),
                     on_complete: Some("Done".to_string()),
