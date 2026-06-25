@@ -13,6 +13,7 @@
   import { MessageSquare, Send, Check } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
+  import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
@@ -686,7 +687,7 @@
         <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded">c Comment</span>
       {/if}
       {#if totalCount > 0}
-        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : "Send feedback (⌘Enter)"}><Send size={12} /><span class="ml-1">Send ({totalCount})</span></Button>
+        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}><Send size={12} /><span class="ml-1">Send ({totalCount})</span></Button>
       {/if}
     </div>
 
