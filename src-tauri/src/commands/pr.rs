@@ -76,9 +76,10 @@ pub(crate) fn poll_pr_for_session(
 }
 
 fn new_pr_url(cwd: &str, branch: &str, base_branch: Option<&str>) -> Result<String, String> {
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to get remote URL: {e}"))?;
     if !output.status.success() {
@@ -104,9 +105,10 @@ fn parse_github_repo(url: &str) -> Option<String> {
 
 /// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
 async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
-    let output = tokio::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to get remote: {e}"))?;
@@ -174,15 +176,18 @@ pub async fn generate_pr_defaults(
     let base_ref = ctx.base_branch.as_deref().unwrap_or("main");
 
     // Diff stats for body
-    let diff_output = tokio::process::Command::new("git")
-        .args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
-        .current_dir(&ctx.cwd)
-        .output()
-        .await
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let diff_output = {
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
+            .current_dir(&ctx.cwd);
+        planeai_core::command::no_window_tokio(&mut cmd);
+        cmd.output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
 
     let body = if diff_output.is_empty() {
         String::new()
@@ -203,10 +208,11 @@ pub async fn generate_pr_defaults(
 }
 
 async fn detect_default_branch_async(cwd: &str) -> String {
-    tokio::process::Command::new("git")
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-        .current_dir(cwd)
-        .output()
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        .current_dir(cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    cmd.output()
         .await
         .ok()
         .filter(|o| o.status.success())
@@ -230,9 +236,12 @@ pub async fn create_pr(
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
     // Push branch
-    let push = tokio::process::Command::new("git")
+    let mut push_cmd = tokio::process::Command::new("git");
+    push_cmd
         .args(["push", "-u", "origin", &ctx.branch])
-        .current_dir(&ctx.cwd)
+        .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut push_cmd);
+    let push = push_cmd
         .output()
         .await
         .map_err(|e| format!("failed to run git push: {e}"))?;
@@ -255,9 +264,10 @@ pub async fn create_pr(
     if draft {
         args.push("--draft".to_string());
     }
-    let pr_output = tokio::process::Command::new("gh")
-        .args(&args)
-        .current_dir(&ctx.cwd)
+    let mut pr_cmd = tokio::process::Command::new("gh");
+    pr_cmd.args(&args).current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut pr_cmd);
+    let pr_output = pr_cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -321,9 +331,11 @@ pub async fn get_ci_checks(
         return Ok(vec![]);
     }
 
-    let output = tokio::process::Command::new("gh")
-        .args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
-        .current_dir(&ctx.cwd)
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
+        .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -367,14 +379,16 @@ pub async fn get_allowed_merge_strategies(
         .await?
         .ok_or("not a GitHub repo")?;
 
-    let output = tokio::process::Command::new("gh")
-        .args([
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.args([
             "api",
             &format!("repos/{repo}"),
             "--jq",
             "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
         ])
-        .current_dir(&ctx.cwd)
+        .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -438,15 +452,17 @@ pub async fn merge_pr(
 ) -> Result<(), String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let output = tokio::process::Command::new("gh")
-        .args([
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.args([
             "pr",
             "merge",
             &ctx.branch,
             strategy.as_gh_flag(),
             "--delete-branch",
         ])
-        .current_dir(&ctx.cwd)
+        .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -493,9 +509,10 @@ pub async fn mark_pr_ready(
 ) -> Result<(), String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let output = tokio::process::Command::new("gh")
-        .args(["pr", "ready", &ctx.branch])
-        .current_dir(&ctx.cwd)
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.args(["pr", "ready", &ctx.branch]).current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;

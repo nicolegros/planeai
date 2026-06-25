@@ -139,9 +139,10 @@ pub fn real_ops() -> CleanupOps {
             Err(e) => Err(e.to_string()),
         }),
         delete_branch: Box::new(|repo, branch| {
-            let output = std::process::Command::new("git")
-                .args(["branch", "-D", branch])
-                .current_dir(repo)
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(["branch", "-D", branch]).current_dir(repo);
+            planeai_core::command::no_window(&mut cmd);
+            let output = cmd
                 .output()
                 .map_err(|e| format!("failed to run git: {e}"))?;
             if !output.status.success() {

@@ -41,9 +41,10 @@ pub fn cleanup_worktree(
 }
 
 fn delete_branch(repo_path: &str, branch: &str) -> Result<(), String> {
-    let output = std::process::Command::new("git")
-        .args(["branch", "-D", branch])
-        .current_dir(repo_path)
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["branch", "-D", branch]).current_dir(repo_path);
+    crate::command::no_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
     if !output.status.success() {

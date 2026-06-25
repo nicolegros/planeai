@@ -1,8 +1,9 @@
 #[tauri::command]
 pub fn list_files(repo_path: String) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files"])
-        .current_dir(&repo_path)
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["ls-files"]).current_dir(&repo_path);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to run git ls-files: {e}"))?;
     if !output.status.success() {

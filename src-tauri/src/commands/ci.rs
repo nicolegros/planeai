@@ -46,9 +46,11 @@ pub async fn get_ci_failure_logs(
 
     tracing::info!(branch = %branch, "fetching CI failure logs");
 
-    let output = tokio::process::Command::new("gh")
-        .args(["pr", "view", &branch, "--json", "statusCheckRollup"])
-        .current_dir(&cwd)
+    let mut cmd = tokio::process::Command::new("gh");
+    cmd.args(["pr", "view", &branch, "--json", "statusCheckRollup"])
+        .current_dir(&cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -76,9 +78,12 @@ pub async fn get_ci_failure_logs(
     };
 
     tracing::info!(run_id = %run_id, "found failed run, fetching logs");
-    let log_output = tokio::process::Command::new("gh")
+    let mut log_cmd = tokio::process::Command::new("gh");
+    log_cmd
         .args(["run", "view", run_id, "--log-failed"])
-        .current_dir(&cwd)
+        .current_dir(&cwd);
+    planeai_core::command::no_window_tokio(&mut log_cmd);
+    let log_output = log_cmd
         .output()
         .await
         .map_err(|e| format!("gh run view failed: {e}"))?;

@@ -1,6 +1,32 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Apply `CREATE_NO_WINDOW` to a Command on Windows to prevent a console
+/// window from flashing when spawning background processes from a GUI app.
+/// No-op on non-Windows platforms.
+#[cfg(windows)]
+pub fn no_window(cmd: &mut Command) -> &mut Command {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000) // CREATE_NO_WINDOW
+}
+
+#[cfg(not(windows))]
+pub fn no_window(cmd: &mut Command) -> &mut Command {
+    cmd
+}
+
+/// Same as [`no_window`] but for `tokio::process::Command`.
+#[cfg(windows)]
+pub fn no_window_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000) // CREATE_NO_WINDOW
+}
+
+#[cfg(not(windows))]
+pub fn no_window_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    cmd
+}
+
 #[derive(Debug)]
 pub enum CommandError {
     SpawnFailed { command: String, source: String },
@@ -158,6 +184,7 @@ fn shell_command(cmd_str: &str) -> Command {
 fn shell_command(cmd_str: &str) -> Command {
     let mut cmd = Command::new("cmd");
     cmd.args(["/C", cmd_str]);
+    no_window(&mut cmd);
     cmd
 }
 
