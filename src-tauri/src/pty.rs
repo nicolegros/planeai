@@ -67,7 +67,7 @@ impl SessionBackend for DaemonBackend {
         let sid = self.session_id.clone();
         std::thread::spawn(move || {
             use std::io::Read;
-            let app_dir = crate::paths::app_data_dir();
+            let app_dir = planeai_paths::app_data_dir();
             let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
                 Ok(s) => s,
                 Err(_) => return,

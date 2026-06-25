@@ -66,7 +66,7 @@ pub fn fire_pr_hook(
         PrTransition::Merged => tm.on_pr_merge.as_ref(),
     };
     let h = hook?;
-    let db_path = crate::paths::db_path();
+    let db_path = planeai_paths::db_path();
     if let Ok(repo) =
         planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or_default(), prefix)
     {

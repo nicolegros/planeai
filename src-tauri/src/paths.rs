@@ -1,41 +1,5 @@
 use std::path::PathBuf;
 
-use crate::config::home_dir;
-
-const APP_ID: &str = "ca.nicolegros.planeai";
-
-/// Returns the app data directory (same as Tauri's app_data_dir).
-pub fn app_data_dir() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        PathBuf::from(home_dir())
-            .join("Library/Application Support")
-            .join(APP_ID)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let base = std::env::var("APPDATA")
-            .unwrap_or_else(|_| format!("{}\\AppData\\Roaming", home_dir()));
-        PathBuf::from(base).join(APP_ID)
-    }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    {
-        let base = std::env::var("XDG_DATA_HOME")
-            .unwrap_or_else(|_| format!("{}/.local/share", home_dir()));
-        PathBuf::from(base).join(APP_ID)
-    }
-}
-
-#[allow(dead_code)]
-pub fn db_path() -> PathBuf {
-    app_data_dir().join("planeai.db")
-}
-
-#[allow(dead_code)]
-pub fn notify_socket_path() -> PathBuf {
-    app_data_dir().join("notify.sock")
-}
-
 /// Resolve the daemon binary path. In production, use the bundled resource.
 /// In development, use the workspace target directory.
 pub fn resolve_daemon_binary(app: &tauri::AppHandle) -> PathBuf {

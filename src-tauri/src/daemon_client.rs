@@ -168,7 +168,7 @@ impl DataConnection {
 pub fn list_sessions_sync() -> Option<std::collections::HashSet<String>> {
     use std::io::{BufRead, Write};
 
-    let app_dir = crate::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir).ok()?;
     stream.write_all(&[0x00]).ok()?; // control connection type byte
     let req = serde_json::json!({"cmd": "list"});

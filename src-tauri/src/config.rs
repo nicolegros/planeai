@@ -173,9 +173,7 @@ fn default_max_concurrent() -> usize {
 
 /// Returns the user's home directory. Checks HOME first, falls back to USERPROFILE (Windows).
 pub fn home_dir() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default()
+    planeai_paths::home_dir()
 }
 
 /// Returns the config directory.

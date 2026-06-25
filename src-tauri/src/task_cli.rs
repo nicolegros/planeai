@@ -130,7 +130,7 @@ pub fn run_task_delete(repo: &dyn TaskProvider, key: &str) -> Result<String, Str
 /// Send a task_changed event through the notify socket.
 pub fn notify_task_changed(key: &str) {
     use crate::ipc::{self, Channel};
-    let app_dir = crate::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     if ipc::channel_exists(Channel::Notify, &app_dir) {
         if let Ok(mut stream) = ipc::connect(Channel::Notify, &app_dir) {
             use std::io::Write;

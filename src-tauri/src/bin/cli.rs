@@ -181,10 +181,10 @@ enum TaskAction {
 fn main() {
     let cli = Cli::parse();
 
-    let log_dir = planeai::paths::app_data_dir().join("logs");
+    let log_dir = planeai_paths::app_data_dir().join("logs");
     let _guard = planeai::logging::init(&log_dir);
 
-    let db_path = planeai::paths::db_path();
+    let db_path = planeai_paths::db_path();
     let conn = rusqlite::Connection::open(&db_path).unwrap_or_else(|e| {
         eprintln!("{{\"error\": \"failed to open database: {e}\"}}");
         std::process::exit(1);
@@ -222,7 +222,7 @@ fn main() {
 
                 let env = planeai::cli::Env {
                     backend,
-                    socket_path: planeai::paths::notify_socket_path(),
+                    socket_path: planeai_paths::notify_socket_path(),
                     config: cfg,
                 };
 
@@ -381,7 +381,7 @@ fn main() {
                 };
 
                 let ops =
-                    planeai::session_ops::real_prompt_ops(planeai::paths::notify_socket_path());
+                    planeai::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
                 match planeai::session_ops::send_prompt(&conn, &id, &prompt_text, &ops) {
                     Ok(result) => {
                         let output = serde_json::json!({
@@ -566,7 +566,7 @@ fn main() {
 
 fn notify_session_changed(session_id: &str) {
     use planeai::ipc::{self, Channel};
-    let app_dir = planeai::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     if ipc::channel_exists(Channel::Notify, &app_dir) {
         if let Ok(mut stream) = ipc::connect(Channel::Notify, &app_dir) {
             use std::io::Write;
@@ -581,7 +581,7 @@ fn symphony_command(cmd: &str) -> Result<String, String> {
     use planeai::ipc::{self, Channel};
     use std::io::{BufRead, BufReader, Write};
 
-    let app_dir = planeai::paths::app_data_dir();
+    let app_dir = planeai_paths::app_data_dir();
     if !ipc::channel_exists(Channel::Symphony, &app_dir) {
         return Err("{\"error\": \"orchestrator is not running\"}".to_string());
     }
