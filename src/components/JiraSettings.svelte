@@ -80,7 +80,7 @@
 
   function addSource() {
     const key = `source_${Object.keys(sourcesMap).length + 1}`;
-    saveJira({ sources: { ...sourcesMap, [key]: { jql: "", status_map: null, writeback: null } } });
+    saveJira({ sources: { ...sourcesMap, [key]: { jql: "", status_map: {}, writeback: null } } });
   }
 
   function removeSource(key: string) {
@@ -163,7 +163,7 @@
               const val = map[jiraStatus];
               delete map[jiraStatus];
               if (e.currentTarget.value) map[e.currentTarget.value] = val;
-              updateSource(key, { status_map: Object.keys(map).length ? map : null });
+              updateSource(key, { status_map: map });
             }} class="flex-1" aria-label="Jira status name" />
             <span class="text-xs text-t3">→</span>
             <select class="flex-1 rounded border border-border bg-surface-100 dark:bg-surface-800 px-2 py-1 text-sm" value={planeaiStatus} onchange={(e) => {
@@ -176,7 +176,7 @@
             <button class="text-xs text-red-500 hover:text-red-700" onclick={() => {
               const map = { ...(source.status_map ?? {}) };
               delete map[jiraStatus];
-              updateSource(key, { status_map: Object.keys(map).length ? map : null });
+              updateSource(key, { status_map: map });
             }} aria-label="Remove status pair">×</button>
           </div>
         {/each}
