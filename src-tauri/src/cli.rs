@@ -166,7 +166,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     if plan.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = resolve_daemon_binary();
-        let scrollback = env.config.daemon_scrollback_bytes.unwrap_or(1_048_576);
+        let scrollback = 1_048_576;
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
         let mut session_env = std::collections::HashMap::new();

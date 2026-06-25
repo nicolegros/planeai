@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod logging;
 pub mod paths;
 pub mod session_ops;
+pub mod session_restart;
 pub mod task_cli;
 pub mod template;
 #[cfg(not(windows))]

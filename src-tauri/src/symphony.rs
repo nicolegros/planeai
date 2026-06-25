@@ -152,11 +152,7 @@ impl Backend for TauriBackend {
     fn create_daemon_session(&self, session_id: &str, cmd: &str, cwd: &str) -> Result<(), String> {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
-        let scrollback = {
-            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
-            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
-            cfg.daemon_scrollback_bytes.unwrap_or(1_048_576)
-        };
+        let scrollback = 1_048_576;
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
@@ -507,6 +503,7 @@ mod tests {
                 autonomous_prompt_template: None,
                 session_id_pattern: None,
                 resume_flag: None,
+                interactive_resume_command: None,
                 list_sessions_command: None,
             },
         );

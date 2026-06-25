@@ -526,6 +526,10 @@ pub fn send_prompt(
             ops.tmux_send_keys(tmux_name, text)?;
             tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
+        "local" => {
+            ops.notify_socket_send(&session.id, text)?;
+            tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
+        }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
@@ -609,7 +613,7 @@ mod tests {
             self.has_session
         }
         fn daemon_send(&self, _session_id: &str, _text: &str) -> Result<(), String> {
-            Err("daemon not running (mock)".to_string())
+            Ok(())
         }
     }
 
@@ -883,6 +887,41 @@ mod tests {
     }
 
     #[test]
+    fn archive_local_backend_session_does_not_kill() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ddddeeee-2222-3333-4444-555566667777";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "local-archive",
+            None,
+            "main",
+            None,
+            None,
+            "local",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = KillOps {
+            kill_tmux: Box::new(|_| panic!("should not be called for local backend")),
+            kill_daemon_session: Box::new(|_| panic!("should not be called for local backend")),
+        };
+
+        archive(&conn, id, &None, &ops).unwrap();
+
+        let session = db::get_session(&conn, id).unwrap().unwrap();
+        assert_eq!(session.status, "archived");
+    }
+
+    #[test]
     fn archive_kills_daemon_backend_session() {
         thread_local! {
             static KILLED: RefCell<Vec<String>> = const { RefCell::new(vec![]) };
@@ -1116,6 +1155,37 @@ mod tests {
             ops.sent_keys.borrow()[0],
             ("planeai-myapp-aaaa".to_string(), "fix the bug".to_string())
         );
+    }
+
+    #[test]
+    fn send_prompt_local_backend_uses_notify_socket() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "bbbbcccc-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "local-session",
+            None,
+            "main",
+            None,
+            None,
+            "local",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let _result = send_prompt(&conn, "bbbb", "hello agent", &ops);
+        // Local backend sends via notify socket
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+        assert_eq!(ops.sent_socket.borrow().len(), 1);
     }
 
     #[test]

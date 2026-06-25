@@ -29,8 +29,6 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub daemon_scrollback_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_lines: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mounted_terminals: Option<u32>,
@@ -101,6 +99,8 @@ pub struct Provider {
     pub yolo_flag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_flag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive_resume_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_sessions_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,6 +201,9 @@ impl Default for Config {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 resume_flag: Some("--resume-id".to_string()),
+                interactive_resume_command: Some(
+                    "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
+                ),
                 list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
                 session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
@@ -213,6 +216,7 @@ impl Default for Config {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                 resume_flag: None,
+                interactive_resume_command: Some("claude --resume".to_string()),
                 list_sessions_command: None,
                 session_id_pattern: None,
                 prompt_command: Some("-p {prompt}".to_string()),
@@ -225,6 +229,7 @@ impl Default for Config {
                 command: "copilot --resume".to_string(),
                 yolo_flag: Some("--allow-all-tools".to_string()),
                 resume_flag: None,
+                interactive_resume_command: None,
                 list_sessions_command: None,
                 session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
@@ -253,7 +258,6 @@ impl Default for Config {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
-            daemon_scrollback_bytes: None,
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
@@ -441,11 +445,11 @@ pub fn should_accept_provider_session_id(
     }
 }
 
-/// Resolve the effective session backend: use config value if set, otherwise auto-detect.
+/// Resolve the effective session backend: use config value if set, otherwise default to local.
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
         Some(b) => b.as_str(),
-        None => "daemon",
+        None => "local",
     }
 }
 
@@ -539,6 +543,7 @@ mod tests {
                         command: "claude".to_string(),
                         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                         resume_flag: None,
+                        interactive_resume_command: None,
                         list_sessions_command: None,
                         session_id_pattern: None,
                         prompt_command: None,
@@ -554,7 +559,6 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
-            daemon_scrollback_bytes: None,
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
@@ -656,6 +660,7 @@ mod tests {
                 command: "aider".to_string(),
                 yolo_flag: Some("--yes".to_string()),
                 resume_flag: None,
+                interactive_resume_command: None,
                 list_sessions_command: None,
                 session_id_pattern: None,
                 prompt_command: None,
@@ -728,6 +733,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: None,
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -742,6 +748,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: None,
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -759,6 +766,7 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -770,12 +778,6 @@ mod tests {
     #[test]
     fn resolve_backend_returns_config_value_when_set() {
         let config = Config {
-            session_backend: Some("daemon".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(resolve_backend(&config), "daemon");
-
-        let config = Config {
             session_backend: Some("tmux".to_string()),
             ..Default::default()
         };
@@ -783,12 +785,39 @@ mod tests {
     }
 
     #[test]
-    fn resolve_backend_falls_back_to_tmux_detection_when_unset() {
+    fn resolve_backend_defaults_to_local_when_unset() {
         let config = Config::default();
         assert!(config.session_backend.is_none());
-        let result = resolve_backend(&config);
-        // Default is always daemon regardless of tmux availability
-        assert_eq!(result, "daemon");
+        assert_eq!(resolve_backend(&config), "local");
+    }
+
+    #[test]
+    fn provider_interactive_resume_command_round_trips() {
+        let provider = Provider {
+            command: "kiro-cli chat".to_string(),
+            yolo_flag: None,
+            resume_flag: None,
+            interactive_resume_command: Some(
+                "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
+            ),
+            list_sessions_command: None,
+            session_id_pattern: None,
+            prompt_command: None,
+            autonomous_prompt_template: None,
+        };
+        let json = serde_json::to_string(&provider).unwrap();
+        let parsed: Provider = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.interactive_resume_command,
+            Some("kiro-cli chat --trust-all-tools --resume-picker".to_string())
+        );
+    }
+
+    #[test]
+    fn provider_interactive_resume_command_defaults_to_none() {
+        let json = r#"{"command": "aider"}"#;
+        let parsed: Provider = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.interactive_resume_command, None);
     }
 
     #[test]
@@ -796,14 +825,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path();
 
-        // Save with session_backend = Some("daemon")
+        // Save with session_backend = Some("local")
         let config = Config {
-            session_backend: Some("daemon".to_string()),
+            session_backend: Some("local".to_string()),
             ..Default::default()
         };
         save(config_dir, &config).unwrap();
         let (loaded, _) = load(config_dir);
-        assert_eq!(loaded.session_backend, Some("daemon".to_string()));
+        assert_eq!(loaded.session_backend, Some("local".to_string()));
 
         // Save with session_backend = None (should be absent from JSON)
         let config = Config::default();
@@ -830,6 +859,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             prompt_command: None,
@@ -906,6 +936,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -921,6 +952,7 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -938,6 +970,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: None,
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -952,6 +985,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -1079,6 +1113,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             prompt_command: None,
@@ -1094,6 +1129,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,
@@ -1109,6 +1145,7 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
+            interactive_resume_command: None,
             list_sessions_command: None,
             session_id_pattern: None,
             prompt_command: None,

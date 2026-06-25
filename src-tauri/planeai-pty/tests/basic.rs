@@ -139,6 +139,79 @@ fn large_output_does_not_deadlock_sink() {
     );
 }
 
+/// Regression test: after pause/resume, output must arrive from the PTY.
+/// This catches the notify_one vs notify_all bug in FlowControl where only
+/// one of reader/flusher threads gets woken on resume.
+#[test]
+fn pause_resume_delivers_output() {
+    // Run multiple iterations to catch the non-deterministic race
+    for iteration in 0..20 {
+        let sink = Arc::new(CollectorSink {
+            events: Mutex::new(Vec::new()),
+        });
+        let config = LocalPtyConfig {
+            session_id: 200 + iteration,
+            command: Some("cat".to_string()),
+            cols: 80,
+            rows: 24,
+            ..Default::default()
+        };
+        let session = planeai_pty::LocalPtySession::spawn(config, sink.clone())
+            .expect("spawn should succeed");
+
+        // Let cat start up
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Pause flow — both reader and flusher will block
+        session.pause();
+
+        // Give threads time to hit wait_if_paused
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        // Write input that cat will echo back
+        let marker = format!("MARKER_{iteration}\n");
+        session
+            .write(marker.as_bytes())
+            .expect("write should succeed");
+
+        // Data is now in the PTY output buffer but flow is paused
+        std::thread::sleep(std::time::Duration::from_millis(30));
+
+        // Resume — both reader AND flusher must wake up
+        session.resume();
+
+        // Wait for the echoed output to arrive
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let expected = format!("MARKER_{iteration}");
+        loop {
+            let events = sink.events.lock().unwrap();
+            let output: String = events
+                .iter()
+                .filter_map(|e| match e {
+                    PtyEvent::Output { bytes, .. } => {
+                        Some(String::from_utf8_lossy(bytes).to_string())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if output.contains(&expected) {
+                break;
+            }
+            drop(events);
+            if std::time::Instant::now() > deadline {
+                panic!(
+                    "iteration {iteration}: output never arrived after resume. \
+                     Expected '{expected}' in output. This indicates the flusher \
+                     thread was not woken by resume (notify_one bug)."
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let _ = session.kill();
+    }
+}
+
 #[test]
 fn no_tauri_iced_dependency() {
     // This is a compile-time guarantee. If planeai-pty depended on tauri or iced,

@@ -164,8 +164,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
         )?;
     }
 
-    // Migrate direct backend → daemon
-    let _ = conn.execute_batch("UPDATE sessions SET backend = 'daemon' WHERE backend = 'direct'");
+    // Migrate legacy direct backend → local
+    let _ = conn.execute_batch("UPDATE sessions SET backend = 'local' WHERE backend = 'direct'");
     Ok(())
 }
 

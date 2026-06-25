@@ -14,12 +14,13 @@ use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
 use crate::session_backend::SessionBackend;
 #[cfg(not(windows))]
 use crate::tmux;
+use planeai_pty::FlowControl;
 
 /// Describes what command to run inside the PTY.
 pub enum PtyTarget {
     /// Attach to an existing tmux session.
     TmuxAttach { tmux_name: String },
-    /// Spawn a local shell command (used for extra tabs, not for session backends).
+    /// Spawn a command in a local PTY (shell tabs and agent sessions).
     Shell {
         command: String,
         args: Vec<String>,
@@ -30,38 +31,6 @@ pub enum PtyTarget {
         session_id: String,
         socket_path: PathBuf,
     },
-}
-
-/// Shared pause/resume state for a PTY reader thread.
-struct FlowControl {
-    paused: Mutex<bool>,
-    cond: Condvar,
-}
-
-impl FlowControl {
-    fn new() -> Self {
-        Self {
-            paused: Mutex::new(false),
-            cond: Condvar::new(),
-        }
-    }
-
-    fn pause(&self) {
-        *self.paused.lock().unwrap() = true;
-    }
-
-    fn resume(&self) {
-        let mut paused = self.paused.lock().unwrap();
-        *paused = false;
-        self.cond.notify_one();
-    }
-
-    fn wait_if_paused(&self) {
-        let mut paused = self.paused.lock().unwrap();
-        while *paused {
-            paused = self.cond.wait(paused).unwrap();
-        }
-    }
 }
 
 // Flusher coalesces output so bursts arrive as single chunks.
@@ -135,32 +104,15 @@ impl SessionBackend for DaemonBackend {
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: RwLock<Arc<dyn OutputObserver>>,
-    socket_path: Mutex<Option<String>>,
-    capture_file: Option<Arc<Mutex<std::fs::File>>>,
-    capture_session: Option<String>,
+    socket_path: std::sync::Mutex<Option<String>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
-        let (capture_file, capture_session) = match std::env::var("PLANEAI_BENCH_CAPTURE") {
-            Ok(path) => {
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .expect("failed to open PLANEAI_BENCH_CAPTURE file");
-                tracing::info!("bench capture writing to: {}", path);
-                let session_filter = std::env::var("PLANEAI_BENCH_CAPTURE_SESSION").ok();
-                (Some(Arc::new(Mutex::new(file))), session_filter)
-            }
-            Err(_) => (None, None),
-        };
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: RwLock::new(Arc::new(NoopObserver)),
-            socket_path: Mutex::new(None),
-            capture_file,
-            capture_session,
+            socket_path: std::sync::Mutex::new(None),
         }
     }
 
@@ -190,7 +142,6 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
-        // Resolve the command/args/cwd for the target
         let (command, args, cwd) = match target {
             PtyTarget::Shell { command, args, cwd } => (command, args, cwd),
             PtyTarget::TmuxAttach { tmux_name } => {
@@ -240,7 +191,6 @@ impl PtyManager {
     }
 
     /// Attach to a daemon-managed session via data connection.
-    /// Uses reader+flusher threads with coalescing (same pattern as local backend).
     fn attach_daemon(
         &self,
         session_id: &str,
@@ -265,11 +215,6 @@ impl PtyManager {
         let sid_clone = sid.clone();
         let observer = self.observer.read().unwrap().clone();
         let sessions_arc = self.sessions.clone();
-        let capture_d = match (&self.capture_file, &self.capture_session) {
-            (Some(f), None) => Some(f.clone()),
-            (Some(f), Some(s)) if s == session_id => Some(f.clone()),
-            _ => None,
-        };
 
         tauri::async_runtime::spawn(async move {
             let data_conn = match DataConnection::open(&socket_path, &sid_clone).await {
@@ -317,9 +262,6 @@ impl PtyManager {
                             if done_f.load(Ordering::Acquire) {
                                 if !g.is_empty() {
                                     let chunk = std::mem::take(&mut *g);
-                                    if let Some(ref cf) = capture_d {
-                                        let _ = cf.lock().unwrap().write_all(&chunk);
-                                    }
                                     let _ = on_data.send(Response::new(chunk));
                                 }
                                 if !cancelled_f.load(Ordering::Acquire) {
@@ -343,9 +285,6 @@ impl PtyManager {
                     let chunk = std::mem::take(&mut *lock.lock().unwrap());
                     if chunk.is_empty() {
                         continue;
-                    }
-                    if let Some(ref cf) = capture_d {
-                        let _ = cf.lock().unwrap().write_all(&chunk);
                     }
                     if on_data.send(Response::new(chunk)).is_err() {
                         break;

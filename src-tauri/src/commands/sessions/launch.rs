@@ -126,7 +126,7 @@ pub async fn launch_session(
 
         let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
-        let sb = cfg.daemon_scrollback_bytes.unwrap_or(1_048_576);
+        let sb = 1_048_576;
         let epd: Vec<String> = cfg
             .extra_path_dirs
             .iter()

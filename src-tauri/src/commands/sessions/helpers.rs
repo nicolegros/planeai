@@ -141,7 +141,6 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
-            daemon_scrollback_bytes: None,
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,

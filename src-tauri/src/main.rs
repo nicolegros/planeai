@@ -20,6 +20,7 @@ mod pty_planeai_core_adapter;
 mod session_backend;
 mod session_logs;
 mod session_ops;
+mod session_restart;
 mod startup;
 mod state;
 mod symphony;
