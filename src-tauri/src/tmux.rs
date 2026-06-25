@@ -77,17 +77,22 @@ pub fn create_session(
     } else {
         "kiro-cli chat".to_string()
     };
-    create_session_with_cmd(tmux_name, working_dir, &cmd, session_id)
+    create_session_with_cmd_and_path(tmux_name, working_dir, &cmd, session_id, &[])
 }
 
-/// Create a tmux session with a custom command.
-pub fn create_session_with_cmd(
+/// Create a tmux session with a custom command and extra PATH directories.
+pub fn create_session_with_cmd_and_path(
     tmux_name: &str,
     working_dir: &str,
     cmd: &str,
     session_id: &str,
+    extra_path_dirs: &[String],
 ) -> Result<(), String> {
     let env_flag = format!("PLANEAI_SESSION_ID={}", session_id);
+    let path_flag = format!(
+        "PATH={}",
+        planeai_core::command::augmented_path(extra_path_dirs)
+    );
     let args = vec![
         "new-session",
         "-d",
@@ -97,6 +102,8 @@ pub fn create_session_with_cmd(
         working_dir,
         "-e",
         &env_flag,
+        "-e",
+        &path_flag,
         cmd,
     ];
     let output = Command::new(tmux_bin())

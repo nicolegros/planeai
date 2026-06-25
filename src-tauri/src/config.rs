@@ -29,6 +29,8 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_scrollback_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_lines: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_mounted_terminals: Option<u32>,
@@ -92,15 +94,17 @@ fn default_font_family() -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Provider {
+    #[serde(default)]
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo_flag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_flag: Option<String>,
+    /// Command to resume interactively (picker) when no provider_session_id is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interactive_resume_command: Option<String>,
+    pub resume_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_sessions_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -192,6 +196,16 @@ pub fn config_dir(app_name: &str) -> PathBuf {
     }
 }
 
+impl Config {
+    /// Return extra_path_dirs with tildes expanded.
+    pub fn resolved_extra_path_dirs(&self) -> Vec<String> {
+        self.extra_path_dirs
+            .iter()
+            .map(|d| planeai_core::session_launch::expand_tilde(d))
+            .collect()
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let mut providers = HashMap::new();
@@ -201,9 +215,7 @@ impl Default for Config {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 resume_flag: Some("--resume-id".to_string()),
-                interactive_resume_command: Some(
-                    "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
-                ),
+                resume_command: Some("kiro-cli chat --resume".to_string()),
                 list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
                 session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
@@ -216,7 +228,7 @@ impl Default for Config {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                 resume_flag: None,
-                interactive_resume_command: Some("claude --resume".to_string()),
+                resume_command: Some("claude --resume".to_string()),
                 list_sessions_command: None,
                 session_id_pattern: None,
                 prompt_command: Some("-p {prompt}".to_string()),
@@ -229,7 +241,7 @@ impl Default for Config {
                 command: "copilot --resume".to_string(),
                 yolo_flag: Some("--allow-all-tools".to_string()),
                 resume_flag: None,
-                interactive_resume_command: None,
+                resume_command: None,
                 list_sessions_command: None,
                 session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
@@ -258,6 +270,7 @@ impl Default for Config {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            daemon_scrollback_bytes: None,
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
@@ -411,8 +424,17 @@ pub fn restart_command_for_provider(
     provider: &Provider,
     provider_session_id: Option<&str>,
 ) -> String {
-    resume_command_if_available(provider, provider_session_id)
-        .unwrap_or_else(|| provider.command.clone())
+    // If we have a stored session ID and a resume_flag, use exact resume
+    if let Some(cmd) = resume_command_if_available(provider, provider_session_id) {
+        return cmd;
+    }
+    // If no session ID but provider has a resume_command (interactive picker), use that
+    if provider_session_id.is_none() {
+        if let Some(ref resume_cmd) = provider.resume_command {
+            return resume_cmd.clone();
+        }
+    }
+    provider.command.clone()
 }
 
 /// Parse a provider session ID from command output using a regex pattern.
@@ -543,11 +565,7 @@ mod tests {
                         command: "claude".to_string(),
                         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                         resume_flag: None,
-                        interactive_resume_command: None,
-                        list_sessions_command: None,
-                        session_id_pattern: None,
-                        prompt_command: None,
-                        autonomous_prompt_template: None,
+                        ..Default::default()
                     },
                 );
                 m
@@ -559,6 +577,7 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            daemon_scrollback_bytes: None,
             scrollback_lines: None,
             max_mounted_terminals: None,
             web_links: None,
@@ -660,11 +679,7 @@ mod tests {
                 command: "aider".to_string(),
                 yolo_flag: Some("--yes".to_string()),
                 resume_flag: None,
-                interactive_resume_command: None,
-                list_sessions_command: None,
-                session_id_pattern: None,
-                prompt_command: None,
-                autonomous_prompt_template: None,
+                ..Default::default()
             },
         );
         config.default_provider = "aider".to_string();
@@ -733,11 +748,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: None,
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(launch_command(&provider, false), "kiro-cli chat");
     }
@@ -748,11 +759,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: None,
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(
             launch_command(&provider, true),
@@ -766,17 +773,19 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(launch_command(&provider, true), "aider");
     }
 
     #[test]
     fn resolve_backend_returns_config_value_when_set() {
+        let config = Config {
+            session_backend: Some("daemon".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_backend(&config), "daemon");
+
         let config = Config {
             session_backend: Some("tmux".to_string()),
             ..Default::default()
@@ -785,39 +794,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_backend_defaults_to_local_when_unset() {
+    fn resolve_backend_falls_back_to_local_when_unset() {
         let config = Config::default();
         assert!(config.session_backend.is_none());
-        assert_eq!(resolve_backend(&config), "local");
-    }
-
-    #[test]
-    fn provider_interactive_resume_command_round_trips() {
-        let provider = Provider {
-            command: "kiro-cli chat".to_string(),
-            yolo_flag: None,
-            resume_flag: None,
-            interactive_resume_command: Some(
-                "kiro-cli chat --trust-all-tools --resume-picker".to_string(),
-            ),
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
-        };
-        let json = serde_json::to_string(&provider).unwrap();
-        let parsed: Provider = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            parsed.interactive_resume_command,
-            Some("kiro-cli chat --trust-all-tools --resume-picker".to_string())
-        );
-    }
-
-    #[test]
-    fn provider_interactive_resume_command_defaults_to_none() {
-        let json = r#"{"command": "aider"}"#;
-        let parsed: Provider = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.interactive_resume_command, None);
+        let result = resolve_backend(&config);
+        assert_eq!(result, "local");
     }
 
     #[test]
@@ -825,14 +806,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path();
 
-        // Save with session_backend = Some("local")
+        // Save with session_backend = Some("daemon")
         let config = Config {
-            session_backend: Some("local".to_string()),
+            session_backend: Some("daemon".to_string()),
             ..Default::default()
         };
         save(config_dir, &config).unwrap();
         let (loaded, _) = load(config_dir);
-        assert_eq!(loaded.session_backend, Some("local".to_string()));
+        assert_eq!(loaded.session_backend, Some("daemon".to_string()));
 
         // Save with session_backend = None (should be absent from JSON)
         let config = Config::default();
@@ -859,11 +840,9 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
@@ -936,11 +915,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         let result = resume_command(&provider, "abc-123");
         assert_eq!(result, "kiro-cli chat --resume-id abc-123");
@@ -952,11 +927,7 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(
             resume_command_if_available(&provider, Some("abc-123")),
@@ -970,11 +941,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: None,
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(resume_command_if_available(&provider, None), None);
     }
@@ -985,11 +952,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         assert_eq!(
             resume_command_if_available(&provider, Some("abc-123")),
@@ -1113,11 +1076,9 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         let cmd = restart_command_for_provider(&provider, Some("f4165541-abc"));
         assert_eq!(cmd, "kiro-cli chat --resume-id f4165541-abc");
@@ -1129,11 +1090,7 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         let cmd = restart_command_for_provider(&provider, None);
         assert_eq!(cmd, "kiro-cli chat");
@@ -1145,11 +1102,7 @@ mod tests {
             command: "aider".to_string(),
             yolo_flag: None,
             resume_flag: None,
-            interactive_resume_command: None,
-            list_sessions_command: None,
-            session_id_pattern: None,
-            prompt_command: None,
-            autonomous_prompt_template: None,
+            ..Default::default()
         };
         let cmd = restart_command_for_provider(&provider, Some("some-id"));
         assert_eq!(cmd, "aider");

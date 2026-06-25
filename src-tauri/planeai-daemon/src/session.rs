@@ -47,17 +47,9 @@ impl DaemonSession {
             }
         };
 
+        // Determine whether to use argv-preserving spawn or shell-wrapped spawn.
         // If the caller already wrapped in a shell (e.g. /bin/sh -c "real command"),
-        // extract the real command to avoid double-wrapping.
-        let full_cmd =
-            if let Some(inner) = planeai_pty::platform::unwrap_shell_command(command, args) {
-                inner
-            } else if args.is_empty() {
-                command.to_string()
-            } else {
-                format!("{} {}", command, args.join(" "))
-            };
-
+        // extract the inner command for shell execution.
         let mut env_vec: Vec<(String, String)> =
             vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(env_map) = env {
@@ -66,22 +58,37 @@ impl DaemonSession {
             }
         }
 
-        let config = LocalPtyConfig {
-            session_id: 0,
-            command: Some(full_cmd),
-            cwd: cwd.map(PathBuf::from),
-            env: env_vec,
-            cols: 80,
-            rows: 24,
-            ..Default::default()
+        let config = if let Some(inner) = planeai_pty::platform::unwrap_shell_command(command, args)
+        {
+            // Shell-wrapped: use command string mode
+            LocalPtyConfig {
+                session_id: 0,
+                command: Some(inner),
+                cwd: cwd.map(PathBuf::from),
+                env: env_vec,
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            }
+        } else {
+            // Direct argv mode — preserves arg boundaries
+            LocalPtyConfig {
+                session_id: 0,
+                program: Some(command.to_string()),
+                args: args.iter().map(|s| s.to_string()).collect(),
+                cwd: cwd.map(PathBuf::from),
+                env: env_vec,
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            }
         };
 
         tracing::info!(
             session_id = %session_id,
             command,
+            args = ?args,
             cwd = cwd.unwrap_or("(none)"),
-            cols = 80,
-            rows = 24,
             "daemon session spawn"
         );
 

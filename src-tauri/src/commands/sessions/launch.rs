@@ -127,11 +127,7 @@ pub async fn launch_session(
         let he = provider_has_hook(&pk, &cfg);
         let be = config::resolve_backend(&cfg).to_string();
         let sb = 1_048_576;
-        let epd: Vec<String> = cfg
-            .extra_path_dirs
-            .iter()
-            .map(|d| crate::util::expand_tilde(d))
-            .collect();
+        let epd = cfg.resolved_extra_path_dirs();
         (c, pk, he, be, sb, epd)
     };
 
@@ -175,7 +171,13 @@ pub async fn launch_session(
         #[cfg(not(windows))]
         {
             let tn = tmux::session_name(&project_name);
-            tmux::create_session_with_cmd(&tn, &working_dir, &cmd, &session_id)?;
+            tmux::create_session_with_cmd_and_path(
+                &tn,
+                &working_dir,
+                &cmd,
+                &session_id,
+                &extra_path_dirs,
+            )?;
             Some(tn)
         }
         #[cfg(windows)]

@@ -10,6 +10,13 @@ pub fn build_command(cmd_str: &str) -> CommandBuilder {
     c
 }
 
+/// Build a CommandBuilder from a program and explicit argv (no shell wrapping).
+pub fn build_command_argv(program: &str, args: &[&str]) -> CommandBuilder {
+    let mut c = CommandBuilder::new(program);
+    c.args(args);
+    c
+}
+
 /// Platform-appropriate default shell fallback.
 pub fn default_shell() -> String {
     if cfg!(target_os = "macos") && Path::new("/bin/zsh").exists() {

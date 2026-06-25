@@ -135,7 +135,7 @@ impl Backend for TauriBackend {
         cmd: &str,
         session_id: &str,
     ) -> Result<(), String> {
-        crate::tmux::create_session_with_cmd(name, cwd, cmd, session_id)
+        crate::tmux::create_session_with_cmd_and_path(name, cwd, cmd, session_id, &[])
     }
 
     #[cfg(windows)]
@@ -153,13 +153,20 @@ impl Backend for TauriBackend {
         let socket_path = planeai_ipc::daemon_socket_path();
         let daemon_bin = crate::paths::resolve_daemon_binary(&self.app_handle);
         let scrollback = 1_048_576;
+        let extra_path_dirs = {
+            let cfg_state = self.app_handle.state::<crate::state::ConfigState>();
+            let cfg = cfg_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.resolved_extra_path_dirs()
+        };
 
         crate::daemon::ensure_running(&daemon_bin, &socket_path, scrollback)?;
 
-        let mut env = std::collections::HashMap::new();
-        env.insert("TERM", "xterm-256color");
-        env.insert("PLANEAI_SESSION_ID", session_id);
-        crate::daemon::spawn_session(session_id, cmd, cwd, Some(&env))
+        let mut path_buf = String::new();
+        let env =
+            planeai_core::command::build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+        let (program, args) = planeai_core::command::shell_args(cmd);
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        crate::daemon::spawn_session(session_id, program, &args_refs, cwd, Some(&env))
     }
 
     fn insert_session(&self, session: &NewSession) -> Result<(), String> {
@@ -501,9 +508,9 @@ mod tests {
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: None,
                 autonomous_prompt_template: None,
+                resume_command: None,
                 session_id_pattern: None,
                 resume_flag: None,
-                interactive_resume_command: None,
                 list_sessions_command: None,
             },
         );

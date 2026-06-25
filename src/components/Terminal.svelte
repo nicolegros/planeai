@@ -337,6 +337,36 @@
     }
   });
 
+  // Re-attach when session is restarted (exited → active)
+  let prevExited = exited;
+  $effect(() => {
+    if (prevExited && !exited && term && !skipAttach) {
+      if (attached) return;
+      const FLOW_HIGH = 32_000;
+      const FLOW_LOW = 8_000;
+      let pendingBytes = 0;
+      let isPaused = false;
+
+      const ch = new Channel<ArrayBuffer>();
+      ch.onmessage = (raw: ArrayBuffer) => {
+        const data = new Uint8Array(raw);
+        pendingBytes += data.byteLength;
+        if (pendingBytes > FLOW_HIGH && !isPaused) { isPaused = true; pty.pause(sessionId); }
+        term.write(data, () => {
+          pendingBytes = Math.max(pendingBytes - data.byteLength, 0);
+          if (isPaused && pendingBytes < FLOW_LOW) { isPaused = false; pty.resume(sessionId); }
+        });
+      };
+      pty.attach(sessionId, isDark(), ch).then(() => {
+        attached = true;
+        onAttached?.();
+        const { rows, cols } = term;
+        pty.resize(sessionId, rows, cols);
+      }).catch((e) => showSnackbar(String(e)));
+    }
+    prevExited = exited;
+  });
+
 
 </script>
 

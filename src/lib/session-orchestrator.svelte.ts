@@ -141,6 +141,12 @@ export async function loadSessions(): Promise<void> {
 
 export function selectSession(id: string): void {
   activeSessionId = id;
+  const session = sessions.find((s) => s.id === id);
+  if (session?.status === "exited") {
+    sessionsApi.restart(id).catch((e) => {
+      showSnackbar(`Restart failed: ${e}`);
+    });
+  }
   poolActivate(id);
   if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
   sessionsApi.acknowledge(id);
@@ -274,6 +280,14 @@ export function startEventListeners(): () => void {
     listen("sessions-changed", () => {
       if (getCycleState().isCycling) return;
       loadSessions();
+    }),
+  );
+
+  // Re-attach PTY when a session is restarted
+  unlisteners.push(
+    listen<{ session_id: string }>("session-restarted", async (event) => {
+      const { session_id } = event.payload;
+      sessions = sessions.map((x) => (x.id === session_id ? { ...x, status: "active" } : x));
     }),
   );
 

@@ -33,7 +33,10 @@ impl LocalPtySession {
             pixel_height: 0,
         })?;
 
-        let mut cmd = if let Some(ref cmd_str) = config.command {
+        let mut cmd = if let Some(ref prog) = config.program {
+            let args_refs: Vec<&str> = config.args.iter().map(|s| s.as_str()).collect();
+            crate::platform::build_command_argv(prog, &args_refs)
+        } else if let Some(ref cmd_str) = config.command {
             crate::platform::build_command(cmd_str)
         } else {
             let shell = config

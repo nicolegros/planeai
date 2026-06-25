@@ -128,18 +128,21 @@ fn main() {
                 &conn,
                 &cfg,
                 tmux::has_session,
-                tmux::create_session_with_cmd,
+                tmux::create_session_with_cmd_and_path,
             );
             #[cfg(windows)]
             let _ = startup::revive_sessions(
                 &conn,
                 &cfg,
                 |_| false,
-                |_, _, _, _| Err("tmux not available".to_string()),
+                |_, _, _, _, _| Err("tmux not available".to_string()),
             );
 
             // Reconcile daemon sessions (mark dead ones as exited)
             startup::reconcile_daemon_sessions(&conn, &cfg);
+
+            // Reconcile local sessions (cannot survive app restart)
+            startup::reconcile_local_sessions(&conn);
 
             // Stale worktree cleanup (fire-and-forget background thread)
             let cleanup_db_path = paths::db_path();

@@ -10,7 +10,12 @@ pub enum QueuePolicy {
 
 pub struct LocalPtyConfig {
     pub session_id: SessionId,
+    /// Shell-wrapped command string (legacy). Used if `program` is None.
     pub command: Option<String>,
+    /// Direct executable path (preferred over `command` for argv preservation).
+    pub program: Option<String>,
+    /// Arguments passed directly to program (no shell interpretation).
+    pub args: Vec<String>,
     pub shell: Option<String>,
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
@@ -28,6 +33,8 @@ impl Default for LocalPtyConfig {
         Self {
             session_id: 0,
             command: None,
+            program: None,
+            args: Vec::new(),
             shell: None,
             cwd: None,
             env: Vec::new(),

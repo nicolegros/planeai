@@ -94,8 +94,8 @@ pub fn restore_session(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // Restart relaunches the agent process and sets status to active
-    let ops = crate::session_ops::real_restart_ops();
-    let session = crate::session_ops::restart(&conn, &id, &cfg, &ops)?;
+    let ops = crate::session_restart::real_restart_ops();
+    let session = crate::session_restart::restart(&conn, &id, &cfg, &ops)?;
 
     // Register in NotifyState when restoring
     let project_name = db::get_project(&conn, &session.project_id)

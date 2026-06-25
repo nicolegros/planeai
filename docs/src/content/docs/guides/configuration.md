@@ -39,6 +39,8 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `prompt_command`             | Command to send a prompt to a running session          |
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task      |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations |
+| `resume_flag`                | Flag to resume a previous session (session ID appended automatically) |
+| `resume_command`             | Command to resume interactively (picker) when no stored session ID    |
 
 ## Session Backend
 
@@ -46,22 +48,26 @@ Controls how planeai manages terminal sessions.
 
 ```jsonc
 {
-  "session_backend": "auto", // "auto" | "tmux" | "direct"
+  "session_backend": "local", // "local" | "tmux" | "daemon"
 }
 ```
 
-| Value    | Behavior                                                |
-| -------- | ------------------------------------------------------- |
-| `auto`   | Uses tmux if available, falls back to direct            |
-| `tmux`   | Requires tmux — sessions persist across app restarts    |
-| `direct` | In-process PTY — sessions terminate when the app closes |
+| Value    | Behavior                                                         |
+| -------- | ---------------------------------------------------------------- |
+| `local`  | In-process PTY — lightweight, no external dependencies (default) |
+| `tmux`   | Requires tmux — sessions persist via tmux                        |
+| `daemon` | Built-in daemon process — sessions persist across app restarts (experimental) |
 
 :::tip
-Use `tmux` backend for production workflows. Sessions survive crashes and app restarts.
+The local backend is the default and recommended for most users. Sessions terminate when the app closes.
+:::
+
+:::caution
+The `daemon` backend is experimental. It provides session persistence across app restarts but may have stability issues.
 :::
 
 :::note
-tmux is not supported on Windows. The `direct` backend is used automatically on Windows regardless of this setting.
+tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
 ## Task Manager Integration

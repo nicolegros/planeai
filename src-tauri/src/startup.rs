@@ -18,13 +18,14 @@ pub fn revive_sessions<F, G>(
 ) -> Vec<String>
 where
     F: Fn(&str) -> bool,
-    G: Fn(&str, &str, &str, &str) -> Result<(), String>,
+    G: Fn(&str, &str, &str, &str, &[String]) -> Result<(), String>,
 {
     let sessions = match db::list_sessions(conn) {
         Ok(s) => s,
         Err(_) => return vec![],
     };
     let projects = db::list_projects(conn).unwrap_or_default();
+    let extra_path_dirs = cfg.resolved_extra_path_dirs();
     let mut failures = Vec::new();
 
     for session in &sessions {
@@ -53,7 +54,7 @@ where
             .unwrap_or("/");
         let cwd = session.worktree_path.as_deref().unwrap_or(project_path);
 
-        match create_tmux(tmux_name, cwd, &cmd, &session.id) {
+        match create_tmux(tmux_name, cwd, &cmd, &session.id, &extra_path_dirs) {
             Ok(()) => {
                 if session.status == "exited" {
                     let _ = db::restore_session(conn, &session.id);
@@ -71,6 +72,14 @@ where
     }
 
     failures
+}
+
+/// Reconcile local sessions: mark active local sessions as exited since they cannot survive app restart.
+pub fn reconcile_local_sessions(conn: &rusqlite::Connection) {
+    let _ = conn.execute(
+        "UPDATE sessions SET status = 'exited' WHERE backend = 'local' AND status = 'active'",
+        [],
+    );
 }
 
 /// Reconcile daemon sessions: mark sessions as exited if the daemon doesn't know about them.
@@ -323,7 +332,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -378,7 +387,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -427,7 +436,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -476,7 +485,7 @@ mod tests {
             &conn,
             &cfg,
             |_| false,
-            |_, _, _, _| Err("tmux not found".to_string()),
+            |_, _, _, _, _| Err("tmux not found".to_string()),
         );
 
         assert_eq!(failures, vec!["s1"]);
@@ -515,7 +524,7 @@ mod tests {
             &conn,
             &cfg,
             |_| true,
-            |tmux_name, cwd, cmd, session_id| {
+            |tmux_name, cwd, cmd, session_id, _extra_path_dirs| {
                 created.borrow_mut().push((
                     tmux_name.to_string(),
                     cwd.to_string(),
@@ -617,5 +626,55 @@ mod tests {
 
         let ns = notify_state.lock().unwrap();
         assert_eq!(ns.get_meta("s1").unwrap().name, "feature/cool");
+    }
+
+    #[test]
+    fn reconcile_local_sessions_marks_active_as_exited() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        db::create_session_with_id(
+            &conn,
+            "s1",
+            &project.id,
+            "local-sess",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "local",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        // Daemon session should be untouched
+        db::create_session_with_id(
+            &conn,
+            "s2",
+            &project.id,
+            "daemon-sess",
+            None,
+            "feat",
+            None,
+            Some("kiro"),
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+
+        reconcile_local_sessions(&conn);
+
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "exited"
+        );
+        assert_eq!(
+            db::get_session(&conn, "s2").unwrap().unwrap().status,
+            "active"
+        );
     }
 }

@@ -13,7 +13,7 @@ These are normal options users should configure.
 | ------------------------- | -------- | ------------ | --------------------------------------------- |
 | `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}     |
 | `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions |
-| `session_backend`         | string   | `"daemon"`   | Where sessions run: `daemon`, `tmux`, `local` |
+| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon` |
 | `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs    |
 | `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions     |
 | `appearance`              | object   | —            | Theme, dark/light mode, terminal themes       |
@@ -42,6 +42,7 @@ These are NOT in the config file by default. Used for debugging, migration, and 
 | `PLANEAI_LOCAL_PTY_CORE`     | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for local sessions         |
 | `PLANEAI_DAEMON_PTY_CORE`    | `legacy`, `planeai-pty` | `legacy` | Select PTY implementation for daemon sessions        |
 | `PLANEAI_SESSION_LOG_DIR`    | path                    | unset    | Override `session_log_dir` config (highest priority) |
+| `PLANEAI_DAEMON_LOG_DIR`     | path                    | `~/.planeai/logs` | Override daemon process log directory       |
 | `PLANEAI_EXTRA_PATH`         | colon-separated dirs    | unset    | Override `extra_path_dirs` config (highest priority) |
 | `PLANEAI_DOGFOOD_LOG_VIEWER` | `1`, `true`             | unset    | Enable in-app log viewer (Tauri only)                |
 | `PLANEAI_BENCH_REPLAY`       | path                    | unset    | Benchmark replay fixture                             |
@@ -74,17 +75,17 @@ These exist in the config file for compatibility but are migration-period option
 
 ### Values
 
-| Value    | Meaning                                              |
-| -------- | ---------------------------------------------------- |
-| `daemon` | Sessions run in the PlaneAI daemon process (default) |
-| `tmux`   | Sessions run in tmux (requires tmux installed)       |
-| `local`  | Sessions run as local child processes                |
+| Value    | Meaning                                                       |
+| -------- | ------------------------------------------------------------- |
+| `local`  | Sessions run as local child processes (default)               |
+| `tmux`   | Sessions run in tmux (requires tmux installed)                |
+| `daemon` | Sessions run in the PlaneAI daemon process (experimental)     |
 
 ### Policy
 
-- **`daemon` is always the default.** When `session_backend` is unset or null, daemon is used.
+- **`local` is always the default.** When `session_backend` is unset or null, local is used.
 - **`tmux` is explicit optional behavior.** It is never auto-detected or silently selected.
-- **`local` is available** for simple local process flows.
+- **`daemon` is experimental** and provides session persistence across app restarts.
 - PTY core selection (`local_pty_core`, `daemon_pty_core`) is a separate concern and must NOT be conflated with session backend.
 
 ### Naming decision

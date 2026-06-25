@@ -7,7 +7,8 @@ export type AppearanceMode = "system" | "light" | "dark";
 export interface Provider {
   command: string;
   yolo_flag: string | null;
-  interactive_resume_command?: string | null;
+  resume_flag?: string | null;
+  resume_command?: string | null;
   prompt_command?: string | null;
   autonomous_prompt_template?: string | null;
 }

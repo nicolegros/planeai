@@ -1,4 +1,4 @@
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::cleanup;
 use crate::db;
@@ -7,13 +7,20 @@ use crate::state::{ConfigState, DbState, PtyState};
 #[tauri::command]
 pub fn restart_session(
     session_id: String,
+    app: AppHandle,
     db_state: State<DbState>,
     config_state: State<ConfigState>,
 ) -> Result<db::Session, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    let ops = crate::session_ops::real_restart_ops();
-    crate::session_ops::restart(&conn, &session_id, &cfg, &ops)
+    let ops = crate::session_restart::real_restart_ops();
+    let session = crate::session_restart::restart(&conn, &session_id, &cfg, &ops)?;
+    // Emit event so frontend re-attaches the PTY to the restarted session
+    let _ = app.emit(
+        "session-restarted",
+        serde_json::json!({ "session_id": session_id }),
+    );
+    Ok(session)
 }
 
 #[tauri::command]
