@@ -467,7 +467,7 @@ pub fn should_accept_provider_session_id(
     }
 }
 
-/// Resolve the effective session backend: use config value if set, otherwise auto-detect.
+/// Resolve the effective session backend: use config value if set, otherwise default to local.
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
         Some(b) => b.as_str(),

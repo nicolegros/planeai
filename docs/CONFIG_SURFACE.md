@@ -13,7 +13,7 @@ These are normal options users should configure.
 | ------------------------- | -------- | ------------ | --------------------------------------------- |
 | `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}     |
 | `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions |
-| `session_backend`         | string   | `"daemon"`   | Where sessions run: `daemon`, `tmux`, `local` |
+| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon` |
 | `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs    |
 | `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions     |
 | `appearance`              | object   | —            | Theme, dark/light mode, terminal themes       |

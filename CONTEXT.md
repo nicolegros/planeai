@@ -93,7 +93,7 @@ For daemon-backend sessions, the CLI sends prompts via the daemon data connectio
 The effective backend is resolved once at app startup:
 
 ```
-config.session_backend ?? "daemon"
+config.session_backend ?? "local"
 ```
 
 - Config field absent → local (always the default)
@@ -104,13 +104,13 @@ Setting changes affect new sessions only. Existing sessions keep their backend.
 
 ### Backend comparison
 
-| Feature      | tmux                         | daemon                                                 |
-| ------------ | ---------------------------- | ------------------------------------------------------ |
-| Persistence  | Survives app quit            | Survives app quit                                      |
-| Dependencies | Requires tmux binary         | Built-in (planeai-daemon binary)                       |
-| CLI headless | Works (tmux manages process) | Works (daemon spawned on-demand)                       |
-| Scrollback   | Managed by tmux              | Ring buffer (configurable via daemon_scrollback_bytes) |
-| Platform     | macOS, Linux                 | macOS, Linux, Windows                                  |
+| Feature      | local (default)              | tmux                         | daemon                                                 |
+| ------------ | ---------------------------- | ---------------------------- | ------------------------------------------------------ |
+| Persistence  | Dies with app                | Survives app quit            | Survives app quit                                      |
+| Dependencies | None                         | Requires tmux binary         | Built-in (planeai-daemon binary)                       |
+| CLI headless | N/A                          | Works (tmux manages process) | Works (daemon spawned on-demand)                       |
+| Scrollback   | xterm.js buffer              | Managed by tmux              | Ring buffer (configurable via daemon_scrollback_bytes) |
+| Platform     | macOS, Linux, Windows        | macOS, Linux                 | macOS, Linux, Windows                                  |
 
 ### PTY architecture
 
@@ -132,12 +132,17 @@ Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
 
 ### Startup reconciliation (one-time, not polling)
 
+- Local sessions that were `active` → mark `exited` (local sessions cannot survive app restart)
 - Tmux sessions that were `active` → check `tmux has-session`; if false → mark `exited`; if true → leave as-is
 - Daemon sessions → left as-is (daemon manages their lifecycle)
 
 ### Restart
 
-Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For daemon, sends a spawn command to the daemon.
+Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For daemon, sends a spawn command to the daemon. For local, the session status is restored and a new PTY is spawned on attach.
+
+Provider resume is attempted on restart: if `resume_flag` + stored `provider_session_id` → resume command; if `resume_command` is set (interactive picker) → use that; otherwise → fresh provider command. If resume fails, automatically falls back to fresh launch.
+
+Selecting an exited session triggers restart automatically. The frontend re-attaches to the new PTY via the `session-restarted` event.
 
 ### DB columns
 
