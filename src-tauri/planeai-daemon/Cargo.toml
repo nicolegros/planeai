@@ -12,6 +12,7 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 planeai-ipc = { path = "../planeai-ipc", features = ["async"] }
+planeai-paths = { path = "../planeai-paths" }
 planeai-pty = { path = "../planeai-pty" }
 serde = { workspace = true }
 serde_json = { workspace = true }

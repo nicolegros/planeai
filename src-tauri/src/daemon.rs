@@ -19,11 +19,14 @@ pub fn ensure_running(
         let _ = std::fs::create_dir_all(parent);
     }
 
+    let log_dir = crate::paths::app_data_dir().join("logs");
+
     std::process::Command::new(daemon_bin)
         .arg("--socket-path")
         .arg(socket_path)
         .arg("--scrollback-bytes")
         .arg(scrollback_bytes.to_string())
+        .env("PLANEAI_DAEMON_LOG_DIR", &log_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

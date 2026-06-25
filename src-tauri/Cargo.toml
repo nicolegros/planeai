@@ -1,5 +1,5 @@
 [workspace]
-members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc", "planeai-pty"]
+members = ["planeai-core", "planeai-tasks", "planeai-daemon", "planeai-ipc", "planeai-pty", "planeai-paths"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -48,6 +48,7 @@ planeai-tasks = { path = "planeai-tasks" }
 planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
 planeai-pty = { path = "planeai-pty" }
+planeai-paths = { path = "planeai-paths" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }

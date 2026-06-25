@@ -17,10 +17,7 @@ fn default_log_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("PLANEAI_DAEMON_LOG_DIR") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
-    PathBuf::from(home).join(".planeai").join("logs")
+    planeai_paths::app_data_dir().join("logs")
 }
 
 #[derive(Parser)]

@@ -2989,6 +2989,7 @@ dependencies = [
  "planeai-core",
  "planeai-daemon",
  "planeai-ipc",
+ "planeai-paths",
  "planeai-pty",
  "planeai-tasks",
  "regex",
@@ -3036,6 +3037,7 @@ dependencies = [
  "chrono",
  "clap",
  "planeai-ipc",
+ "planeai-paths",
  "planeai-pty",
  "serde",
  "serde_json",
@@ -3056,6 +3058,10 @@ dependencies = [
  "tokio",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "planeai-paths"
+version = "0.1.0"
 
 [[package]]
 name = "planeai-pty"
