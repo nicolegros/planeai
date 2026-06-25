@@ -16,7 +16,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
     let ts: String = row.get(8)?;
     let issue_key: String = row.get(0)?;
     Ok(JiraIssue {
-        jira_project: row.get(1)?,
+        source_name: row.get(1)?,
         summary: row.get(2)?,
         description: row.get(3)?,
         status: row.get(4)?,
@@ -68,7 +68,7 @@ impl JiraRepository {
                 last_synced_at = excluded.last_synced_at",
             params![
                 issue.issue_key,
-                issue.jira_project,
+                issue.source_name,
                 issue.summary,
                 issue.description,
                 issue.status,
@@ -125,7 +125,7 @@ impl JiraRepository {
         }
     }
 
-    pub fn list_synced_keys(&self, jira_project: &str) -> Result<Vec<String>, Error> {
+    pub fn list_synced_keys(&self, source_name: &str) -> Result<Vec<String>, Error> {
         let conn = self
             .conn
             .lock()
@@ -133,7 +133,7 @@ impl JiraRepository {
         let mut stmt = conn.prepare(
             "SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'",
         )?;
-        let rows = stmt.query_map(params![jira_project], |row| row.get(0))?;
+        let rows = stmt.query_map(params![source_name], |row| row.get(0))?;
         let mut keys = Vec::new();
         for r in rows {
             keys.push(r?);
@@ -201,7 +201,7 @@ mod tests {
     fn sample_issue(key: &str) -> JiraIssue {
         JiraIssue {
             issue_key: key.to_string(),
-            jira_project: "PROJ".to_string(),
+            source_name: "PROJ".to_string(),
             summary: "Test issue".to_string(),
             description: "A description".to_string(),
             status: "To Do".to_string(),
@@ -293,7 +293,7 @@ mod tests {
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
 
         let mut other = sample_issue("OTHER-1");
-        other.jira_project = "OTHER".to_string();
+        other.source_name = "OTHER".to_string();
         repo.upsert_issue(&other).unwrap();
 
         repo.mark_stale(&["PROJ-2"]).unwrap();

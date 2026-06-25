@@ -28,7 +28,8 @@ impl SyncStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JiraIssue {
     pub issue_key: String,
-    pub jira_project: String,
+    /// The config source name this issue belongs to (stored as `jira_project` in DB for compat).
+    pub source_name: String,
     pub summary: String,
     pub description: String,
     pub status: String,

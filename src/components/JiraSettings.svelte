@@ -1,20 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { jira, projects } from "../lib/api";
-  import { getSettings, updateSettings, type JiraConfig, type JiraProjectMapping, type IntegrationsConfig } from "../lib/settings.svelte";
+  import { jira } from "../lib/api";
+  import { getSettings, updateSettings, type JiraConfig, type SyncSource, type IntegrationsConfig } from "../lib/settings.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { Button, Input, Select, Label, Checkbox } from "./ui";
+  import { Button, Input, Label, Checkbox } from "./ui";
   import type { JiraStatus, SyncResult } from "../lib/types";
-  import type { Project } from "../lib/types";
 
   const config = $derived(getSettings());
   const jiraConfig = $derived(config.integrations?.jira ?? null);
-  const projectsMap = $derived(jiraConfig?.projects ?? {});
+  const sourcesMap = $derived(jiraConfig?.sources ?? {});
 
   let status = $state<JiraStatus>({ connected: false, site: null });
   let connecting = $state(false);
   let syncing = $state(false);
-  let projectItems = $state<{ value: string; label: string }[]>([]);
 
   const planeaiStatuses = [
     { value: "todo", label: "todo" },
@@ -24,14 +22,11 @@
   ];
 
   onMount(async () => {
-    const [statusResult, projectsResult] = await Promise.allSettled([
-      jira.status(),
-      projects.list(),
-    ]);
-    if (statusResult.status === "fulfilled") status = statusResult.value;
-    else showSnackbar(String(statusResult.reason));
-    if (projectsResult.status === "fulfilled") projectItems = projectsResult.value.map((p: Project) => ({ value: p.name, label: p.name }));
-    else showSnackbar(String(projectsResult.reason));
+    const statusResult = await jira.status().catch((e: unknown) => {
+      showSnackbar(String(e));
+      return { connected: false, site: null } as JiraStatus;
+    });
+    status = statusResult;
   });
 
   function saveJira(patch: Partial<JiraConfig>) {
@@ -83,27 +78,27 @@
     }
   }
 
-  function addProject() {
-    const key = `project_${Object.keys(projectsMap).length + 1}`;
-    saveJira({ projects: { ...projectsMap, [key]: { jira_project: "", jql: "", status_map: {}, writeback: null } } });
+  function addSource() {
+    const key = `source_${Object.keys(sourcesMap).length + 1}`;
+    saveJira({ sources: { ...sourcesMap, [key]: { jql: "", status_map: {}, writeback: null } } });
   }
 
-  function removeProject(key: string) {
-    const updated = { ...projectsMap };
+  function removeSource(key: string) {
+    const updated = { ...sourcesMap };
     delete updated[key];
-    saveJira({ projects: updated });
+    saveJira({ sources: updated });
   }
 
-  function updateProject(key: string, patch: Partial<JiraProjectMapping>) {
-    saveJira({ projects: { ...projectsMap, [key]: { ...projectsMap[key], ...patch } } });
+  function updateSource(key: string, patch: Partial<SyncSource>) {
+    saveJira({ sources: { ...sourcesMap, [key]: { ...sourcesMap[key], ...patch } } });
   }
 
-  function renameProjectKey(oldKey: string, newKey: string) {
+  function renameSourceKey(oldKey: string, newKey: string) {
     if (!newKey || newKey === oldKey) return;
-    const updated = { ...projectsMap };
+    const updated = { ...sourcesMap };
     updated[newKey] = updated[oldKey];
     delete updated[oldKey];
-    saveJira({ projects: updated });
+    saveJira({ sources: updated });
   }
 </script>
 
@@ -137,57 +132,56 @@
   </div>
 </section>
 
-<!-- Project Mappings -->
+<!-- Sync Sources -->
 <section class="space-y-3">
-  <h2 class="text-sm font-medium text-t3 uppercase tracking-wide">Project Mappings</h2>
-  {#each Object.entries(projectsMap) as [key, mapping], i (key)}
+  <h2 class="text-sm font-medium text-t3 uppercase tracking-wide">Sync Sources</h2>
+  {#each Object.entries(sourcesMap) as [key, source], i (key)}
     <div class="rounded-lg border border-border p-4 space-y-3">
       <div class="flex items-center justify-between">
-        <span class="text-sm font-medium text-t1">Mapping: {key}</span>
-        <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeProject(key)} aria-label="Remove mapping {key}">Remove</button>
+        <span class="text-sm font-medium text-t1">Source: {key}</span>
+        <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeSource(key)} aria-label="Remove source {key}">Remove</button>
       </div>
 
       <div class="space-y-1">
-        <Label>planeai project</Label>
-        <Select items={projectItems} value={key} onValueChange={(v) => renameProjectKey(key, v)} placeholder="Select project" />
+        <Label for="source-name-{i}">Name</Label>
+        <Input id="source-name-{i}" value={key} onchange={(e) => renameSourceKey(key, e.currentTarget.value)} />
       </div>
 
       <div class="space-y-1">
-        <Label for="mapping-jira-{i}">Jira project key</Label>
-        <Input id="mapping-jira-{i}" value={mapping.jira_project} placeholder="PROJ" onchange={(e) => updateProject(key, { jira_project: e.currentTarget.value })} />
-      </div>
-
-      <div class="space-y-1">
-        <Label for="mapping-jql-{i}">JQL filter</Label>
-        <Input id="mapping-jql-{i}" value={mapping.jql ?? ""} placeholder="status != Done" onchange={(e) => updateProject(key, { jql: e.currentTarget.value })} />
+        <Label for="source-jql-{i}">JQL filter</Label>
+        <Input id="source-jql-{i}" value={source.jql ?? ""} placeholder="project = PROJ AND status != Done" onchange={(e) => updateSource(key, { jql: e.currentTarget.value })} />
       </div>
 
       <!-- Status Map -->
       <div class="space-y-2">
         <!-- svelte-ignore a11y_label_has_associated_control -->
         <label class="text-xs text-t3">Status map (Jira status → planeai status)</label>
-        {#each Object.entries(mapping.status_map ?? {}) as [jiraStatus, planeaiStatus], j (jiraStatus)}
+        {#each Object.entries(source.status_map ?? {}) as [jiraStatus, planeaiStatus], j (jiraStatus)}
           <div class="flex items-center gap-2">
             <Input value={jiraStatus} placeholder="Jira status" onchange={(e) => {
-              const map = { ...mapping.status_map };
+              const map = { ...(source.status_map ?? {}) };
               const val = map[jiraStatus];
               delete map[jiraStatus];
               if (e.currentTarget.value) map[e.currentTarget.value] = val;
-              updateProject(key, { status_map: map });
+              updateSource(key, { status_map: map });
             }} class="flex-1" aria-label="Jira status name" />
             <span class="text-xs text-t3">→</span>
-            <Select items={planeaiStatuses} value={planeaiStatus} onValueChange={(v) => {
-              updateProject(key, { status_map: { ...mapping.status_map, [jiraStatus]: v } });
-            }} class="flex-1" />
+            <select class="flex-1 rounded border border-border bg-surface-100 dark:bg-surface-800 px-2 py-1 text-sm" value={planeaiStatus} onchange={(e) => {
+              updateSource(key, { status_map: { ...(source.status_map ?? {}), [jiraStatus]: (e.currentTarget as HTMLSelectElement).value } });
+            }} aria-label="planeai status">
+              {#each planeaiStatuses as s}
+                <option value={s.value}>{s.label}</option>
+              {/each}
+            </select>
             <button class="text-xs text-red-500 hover:text-red-700" onclick={() => {
-              const map = { ...mapping.status_map };
+              const map = { ...(source.status_map ?? {}) };
               delete map[jiraStatus];
-              updateProject(key, { status_map: map });
+              updateSource(key, { status_map: map });
             }} aria-label="Remove status pair">×</button>
           </div>
         {/each}
         <button class="text-xs text-accent hover:underline" onclick={() => {
-          updateProject(key, { status_map: { ...mapping.status_map, "": "todo" } });
+          updateSource(key, { status_map: { ...(source.status_map ?? {}), "": "todo" } });
         }}>+ Add status pair</button>
       </div>
 
@@ -198,17 +192,17 @@
         <div class="grid grid-cols-2 gap-2">
           <div class="space-y-1">
             <Label for="wb-start-{i}">on_start</Label>
-            <Input id="wb-start-{i}" value={mapping.writeback?.on_start ?? ""} placeholder="In Progress" onchange={(e) => updateProject(key, { writeback: { ...mapping.writeback, on_start: e.currentTarget.value || null } })} />
+            <Input id="wb-start-{i}" value={source.writeback?.on_start ?? ""} placeholder="In Progress" onchange={(e) => updateSource(key, { writeback: { ...source.writeback, on_start: e.currentTarget.value || null } })} />
           </div>
           <div class="space-y-1">
             <Label for="wb-complete-{i}">on_complete</Label>
-            <Input id="wb-complete-{i}" value={mapping.writeback?.on_complete ?? ""} placeholder="Done" onchange={(e) => updateProject(key, { writeback: { ...mapping.writeback, on_complete: e.currentTarget.value || null } })} />
+            <Input id="wb-complete-{i}" value={source.writeback?.on_complete ?? ""} placeholder="Done" onchange={(e) => updateSource(key, { writeback: { ...source.writeback, on_complete: e.currentTarget.value || null } })} />
           </div>
         </div>
-        <Checkbox id="wb-comment-{i}" label="Add comment on transition" checked={mapping.writeback?.comment ?? false} onchange={() => updateProject(key, { writeback: { ...mapping.writeback, comment: !(mapping.writeback?.comment ?? false) } })} />
+        <Checkbox id="wb-comment-{i}" label="Add comment on transition" checked={source.writeback?.comment ?? false} onchange={() => updateSource(key, { writeback: { ...source.writeback, comment: !(source.writeback?.comment ?? false) } })} />
       </div>
     </div>
   {/each}
 
-  <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-t2 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={addProject}>+ Add Mapping</button>
+  <button class="px-4 py-2 rounded-md text-sm font-medium bg-surface-200 dark:bg-surface-800 text-t2 hover:bg-surface-300 dark:hover:bg-surface-700" onclick={addSource}>+ Add Source</button>
 </section>
