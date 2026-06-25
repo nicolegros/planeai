@@ -144,7 +144,7 @@
           {tab.index === activeTabIndex ? 'border-accent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
         onclick={() => onSelectTab(tab.index)}
       >
-        <Icon size={13} class="{tab.index === activeTabIndex ? 'text-accent' : 'text-t3'}" />
+        <Icon size={13} class={tab.index === activeTabIndex ? 'text-accent' : 'text-t3'} />
         {tab.label}
       </button>
     {/each}
