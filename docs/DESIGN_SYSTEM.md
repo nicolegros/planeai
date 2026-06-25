@@ -131,7 +131,7 @@ All icons from `@lucide/svelte`. Key icons:
 
 - **Sidebar focused:** Right border changes to `border-accent`
 - **Sidebar cursor (keyboard nav):** `ring-2 ring-accent` on the selected item
-- **Session preview (Cmd+{/}):** `ring-2 ring-accent` on the previewed item
+- **Session preview (Cmd/Ctrl+{/}):** `ring-2 ring-accent` on the previewed item
 - **Active session:** `bg-accent-bg` + 2px left accent bar
 
 ### Modals

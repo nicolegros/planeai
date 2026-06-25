@@ -202,7 +202,7 @@ $PLANEAI_SESSION_LOG_DIR/
 
 When `PLANEAI_DOGFOOD_LOG_VIEWER=1` is set:
 
-1. Open the command palette (`Cmd+K`)
+1. Open the command palette (`Cmd+K` / `Ctrl+K`)
 2. Search for "Session log viewer"
 3. The viewer shows all saved session logs
 
@@ -329,6 +329,8 @@ cargo run --release -p planeai-iced-spike --bin planeai-iced -- \
 | Cmd+R        | Refresh daemon session list               |
 | Cmd+A        | Attach to first unattached daemon session |
 | Cmd+N        | Spawn new daemon session                  |
+
+> On Linux/Windows, use Ctrl instead of Cmd.
 
 ### Reconnect Flow
 

@@ -21,7 +21,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Parallel agents** — run as many AI coding sessions as you need, side by side
 - **Persistent sessions** — agents keep running when you quit the app (tmux backend or experimental daemon backend)
 - **Provider-agnostic** — works with Kiro, Claude, Copilot, or any CLI agent
-- **Keyboard-first** — command menu (Cmd+K), shortcuts for every action
+- **Keyboard-first** — command menu (Cmd+K / Ctrl+K), shortcuts for every action
 - **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows
