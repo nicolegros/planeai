@@ -138,6 +138,14 @@ All icons from `@lucide/svelte`. Key icons:
 
 All modals use `ui/Dialog` or the same pattern: centered, no backdrop overlay, `border-border-s bg-panel shadow-lg`.
 
+### Form keyboard mode indicator
+
+Forms that use the form keyboard controller display a mode badge and mnemonic hints:
+
+- **Mode badge:** `NORMAL` (`bg-panel-hi text-t2`) or `INSERT` (`bg-accent-bg text-accent`), 10px mono uppercase.
+- **Mnemonic badges:** Inline `<span>` next to each label. In normal mode: `bg-accent-bg text-accent`; in insert mode: `bg-panel-hi text-t3`.
+- **Submit hint:** `MOD_ENTER_HINT` (⌘↵ / Ctrl+↵) shown inside the primary submit button at reduced opacity.
+
 ## Motion
 
 Minimal, purposeful animation only:
