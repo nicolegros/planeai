@@ -42,6 +42,7 @@
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
 
+  let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
   let renameValue = $state("");
@@ -200,6 +201,13 @@
 
   $effect(() => { clampIndex(flatNav.length); });
 
+  // Scroll selected item into view on keyboard navigation
+  $effect(() => {
+    const idx = getSelectedIndex();
+    if (zone !== "sidebar" || !navRef) return;
+    navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+  });
+
   // Auto-focus active session when sessions panel is toggled
   $effect(() => {
     if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") return;
@@ -340,7 +348,7 @@
   </div>
 
   <!-- Main content -->
-  <nav class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
+  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
@@ -357,6 +365,7 @@
         {@const isProjectSelected = zone === 'sidebar' && projectNavIdx === getSelectedIndex()}
         <div>
           <button
+            data-nav-index={projectNavIdx}
             class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isProjectSelected ? 'ring-2 ring-accent' : ''}"
             title={project.path}
             onclick={() => toggleSection(projectKey)}
@@ -391,6 +400,7 @@
                     <div class="flex items-center gap-1.5">
                       <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                       <button
+                        data-nav-index={globalIndex}
                         class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
                           {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                           {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
@@ -425,6 +435,7 @@
               {@const isStatusSelected = zone === 'sidebar' && statusNavIdx === getSelectedIndex()}
               <div>
                 <button
+                  data-nav-index={statusNavIdx}
                   class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-2 ring-accent' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
@@ -446,6 +457,7 @@
                         <div class="flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
+                            data-nav-index={taskNavIdx}
                             class="flex-1 min-w-0 text-left py-[6px] px-2 flex items-center gap-1.5 transition-colors rounded-lg
                               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
