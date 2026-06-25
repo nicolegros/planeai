@@ -635,20 +635,46 @@ mod tests {
         planeai_tasks::sqlite::migrate(&conn).unwrap();
         let project = db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         db::create_session_with_id(
-            &conn, "s1", &project.id, "local-sess", None, "main", None, Some("kiro"), "local",
-            false, None, None,
+            &conn,
+            "s1",
+            &project.id,
+            "local-sess",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "local",
+            false,
+            None,
+            None,
         )
         .unwrap();
         // Daemon session should be untouched
         db::create_session_with_id(
-            &conn, "s2", &project.id, "daemon-sess", None, "feat", None, Some("kiro"), "daemon",
-            false, None, None,
+            &conn,
+            "s2",
+            &project.id,
+            "daemon-sess",
+            None,
+            "feat",
+            None,
+            Some("kiro"),
+            "daemon",
+            false,
+            None,
+            None,
         )
         .unwrap();
 
         reconcile_local_sessions(&conn);
 
-        assert_eq!(db::get_session(&conn, "s1").unwrap().unwrap().status, "exited");
-        assert_eq!(db::get_session(&conn, "s2").unwrap().unwrap().status, "active");
+        assert_eq!(
+            db::get_session(&conn, "s1").unwrap().unwrap().status,
+            "exited"
+        );
+        assert_eq!(
+            db::get_session(&conn, "s2").unwrap().unwrap().status,
+            "active"
+        );
     }
 }

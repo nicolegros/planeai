@@ -405,7 +405,18 @@ mod tests {
 
         let id = "cccc3333-5555-6666-7777-888899990000";
         db::create_session_with_id(
-            &conn, id, pid, "local-restart", None, "main", None, None, "local", false, None, None,
+            &conn,
+            id,
+            pid,
+            "local-restart",
+            None,
+            "main",
+            None,
+            None,
+            "local",
+            false,
+            None,
+            None,
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();
