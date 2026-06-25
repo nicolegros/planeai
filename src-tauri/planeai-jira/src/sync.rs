@@ -112,7 +112,8 @@ impl JiraSync {
 
             match existing_task_key {
                 None => {
-                    let status = map_status(&issue.status, &source.status_map);
+                    let status =
+                        map_status(&issue.status, &source.status_map, &issue.status_category);
                     let priority = map_priority(issue.priority.as_deref());
                     let task = self.task_provider.create(CreateParams {
                         title: issue.summary.clone(),
@@ -129,7 +130,8 @@ impl JiraSync {
                 Some(task_key) => {
                     let task = self.task_provider.get(&task_key)?;
 
-                    let new_status = map_status(&issue.status, &source.status_map);
+                    let new_status =
+                        map_status(&issue.status, &source.status_map, &issue.status_category);
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
                         || task.status != new_status;
@@ -175,11 +177,20 @@ impl JiraSync {
     }
 }
 
-fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>) -> Status {
+fn map_status(
+    jira_status: &str,
+    status_map: &std::collections::HashMap<String, String>,
+    status_category: &str,
+) -> Status {
     status_map
         .get(jira_status)
         .and_then(|v| Status::parse(v))
-        .unwrap_or(Status::Todo)
+        .unwrap_or(match status_category {
+            "new" => Status::Todo,
+            "indeterminate" => Status::InProgress,
+            "done" => Status::Done,
+            _ => Status::Todo,
+        })
 }
 
 fn map_priority(name: Option<&str>) -> i32 {
@@ -207,19 +218,50 @@ mod tests {
     fn test_map_status_found() {
         let mut m = HashMap::new();
         m.insert("In Progress".to_string(), "in_progress".to_string());
-        assert_eq!(map_status("In Progress", &m), Status::InProgress);
+        assert_eq!(
+            map_status("In Progress", &m, "indeterminate"),
+            Status::InProgress
+        );
     }
 
     #[test]
     fn test_map_status_not_found_defaults_to_todo() {
-        assert_eq!(map_status("Unknown", &HashMap::new()), Status::Todo);
+        assert_eq!(map_status("Unknown", &HashMap::new(), "new"), Status::Todo);
     }
 
     #[test]
     fn test_map_status_invalid_mapped_value_defaults_to_todo() {
         let mut m = HashMap::new();
         m.insert("X".to_string(), "invalid_status".to_string());
-        assert_eq!(map_status("X", &m), Status::Todo);
+        assert_eq!(map_status("X", &m, "new"), Status::Todo);
+    }
+
+    #[test]
+    fn test_map_status_category_fallback_indeterminate() {
+        assert_eq!(
+            map_status("Custom Status", &HashMap::new(), "indeterminate"),
+            Status::InProgress
+        );
+    }
+
+    #[test]
+    fn test_map_status_category_fallback_done() {
+        assert_eq!(
+            map_status("Custom Done", &HashMap::new(), "done"),
+            Status::Done
+        );
+    }
+
+    #[test]
+    fn test_map_status_category_fallback_unknown() {
+        assert_eq!(map_status("Custom", &HashMap::new(), "other"), Status::Todo);
+    }
+
+    #[test]
+    fn test_map_status_explicit_map_takes_priority_over_category() {
+        let mut m = HashMap::new();
+        m.insert("Review".to_string(), "todo".to_string());
+        assert_eq!(map_status("Review", &m, "done"), Status::Todo);
     }
 
     #[test]
@@ -241,7 +283,7 @@ mod tests {
                 "description": {"type": "doc", "version": 1, "content": [
                     {"type": "paragraph", "content": [{"type": "text", "text": "desc"}]}
                 ]},
-                "status": {"name": status},
+                "status": {"name": status, "statusCategory": {"key": "new"}},
                 "priority": {"name": "High"},
                 "labels": ["backend"]
             }

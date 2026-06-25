@@ -32,6 +32,7 @@ pub struct FetchedIssue {
     pub summary: String,
     pub description: String,
     pub status: String,
+    pub status_category: String,
     pub priority: Option<String>,
     pub labels: Vec<String>,
 }
@@ -246,6 +247,13 @@ struct RawFields {
 #[derive(Deserialize)]
 struct StatusField {
     name: String,
+    #[serde(default, rename = "statusCategory")]
+    status_category: Option<StatusCategoryField>,
+}
+
+#[derive(Deserialize)]
+struct StatusCategoryField {
+    key: String,
 }
 
 #[derive(Deserialize)]
@@ -307,6 +315,13 @@ fn parse_page(page: &SearchResponse, issues: &mut Vec<FetchedIssue>) {
                 .as_ref()
                 .map(|s| s.name.clone())
                 .unwrap_or_default(),
+            status_category: raw
+                .fields
+                .status
+                .as_ref()
+                .and_then(|s| s.status_category.as_ref())
+                .map(|c| c.key.clone())
+                .unwrap_or_default(),
             priority: raw.fields.priority.as_ref().map(|p| p.name.clone()),
             labels: raw.fields.labels.clone().unwrap_or_default(),
         });
@@ -335,7 +350,7 @@ mod tests {
                 "description": {"type": "doc", "version": 1, "content": [
                     {"type": "paragraph", "content": [{"type": "text", "text": "desc text"}]}
                 ]},
-                "status": {"name": status},
+                "status": {"name": status, "statusCategory": {"key": "new"}},
                 "priority": {"name": "High"},
                 "labels": ["bug", "backend"]
             }
