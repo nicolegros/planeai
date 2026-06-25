@@ -616,13 +616,13 @@
   </FormDialog>
 {/if}
 
-{#if showPrPanel && activeSessionId && sessions.find(s => s.id === activeSessionId)?.pr_url}
+{#if showPrPanel && activeSession?.pr_url}
   <FormDialog title="Pull Request" onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}>
     <PrPanel
-      sessionId={activeSessionId}
-      prUrl={sessions.find(s => s.id === activeSessionId)!.pr_url!}
-      prState={sessions.find(s => s.id === activeSessionId)!.pr_state ?? null}
-      sessionName={sessions.find(s => s.id === activeSessionId)!.name}
+      sessionId={activeSession.id}
+      prUrl={activeSession.pr_url!}
+      prState={activeSession.pr_state ?? null}
+      sessionName={activeSession.name}
       onClose={() => { showPrPanel = false; tick().then(() => refocusTerminal()); }}
     />
   </FormDialog>

@@ -43,7 +43,6 @@
       { key: "r", toggle: markReady },
       { key: "f", toggle: sendFailuresToAgent },
       { key: "s", toggle: cycleStrategy },
-      { key: "d", toggle: () => markReady() },
     ],
     { wrapper: () => wrapperEl, onDismiss: onClose },
   );
