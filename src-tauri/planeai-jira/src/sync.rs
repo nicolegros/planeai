@@ -98,7 +98,7 @@ impl JiraSync {
             // Upsert raw issue into local store
             let jira_issue = crate::model::JiraIssue {
                 issue_key: issue.issue_key.clone(),
-                jira_project: name.to_string(),
+                source_name: name.to_string(),
                 summary: issue.summary.clone(),
                 description: issue.description.clone(),
                 status: issue.status.clone(),

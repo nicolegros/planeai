@@ -66,7 +66,7 @@ impl JiraState {
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
-            let source_name = self.repo.get_issue(&issue_key).ok()??.jira_project;
+            let source_name = self.repo.get_issue(&issue_key).ok()??.source_name;
             jira_cfg.sources.get(&source_name)?.writeback.clone()
         })();
         if let Some(wb_config) = wb_config {
