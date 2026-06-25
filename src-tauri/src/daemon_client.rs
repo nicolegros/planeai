@@ -249,8 +249,7 @@ fn spawn_detached(
     cmd.arg("--socket-path")
         .arg(socket_path)
         .arg("--scrollback-bytes")
-        .arg(scrollback_bytes.to_string())
-        .env("PLANEAI_DAEMON_LOG_DIR", crate::paths::app_data_dir().join("logs"));
+        .arg(scrollback_bytes.to_string());
 
     #[cfg(unix)]
     {
