@@ -2992,6 +2992,7 @@ dependencies = [
  "planeai-paths",
  "planeai-pty",
  "planeai-tasks",
+ "planeai-toon",
  "regex",
  "rusqlite",
  "serde",
@@ -3081,6 +3082,10 @@ dependencies = [
  "serde_json",
  "tempfile",
 ]
+
+[[package]]
+name = "planeai-toon"
+version = "0.1.0"
 
 [[package]]
 name = "plist"

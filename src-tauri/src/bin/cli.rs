@@ -25,6 +25,11 @@ enum Commands {
         #[command(subcommand)]
         action: SymphonyAction,
     },
+    /// Agent eXperience Interface — TOON output for autonomous agents
+    Axi {
+        #[command(subcommand)]
+        action: Option<AxiAction>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -92,6 +97,92 @@ enum SymphonyAction {
     Status,
     /// Stop the orchestrator daemon
     Stop,
+}
+
+#[derive(Subcommand)]
+enum AxiAction {
+    /// Task operations
+    Task {
+        #[command(subcommand)]
+        action: AxiTaskAction,
+    },
+    /// Session operations
+    Session {
+        #[command(subcommand)]
+        action: AxiSessionAction,
+    },
+    /// Project operations
+    Project {
+        #[command(subcommand)]
+        action: AxiProjectAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiTaskAction {
+    /// List tasks
+    #[command(name = "ls")]
+    List {
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Show task details
+    Show {
+        key: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Create a new task
+    Add {
+        title: String,
+        #[arg(long, default_value = "")]
+        desc: String,
+        #[arg(long, default_value_t = 0)]
+        priority: i32,
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        #[arg(long, value_delimiter = ',')]
+        blocked_by: Vec<String>,
+        #[arg(long)]
+        parent: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Move a task to a new status
+    Move {
+        key: String,
+        status: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiSessionAction {
+    /// List sessions
+    #[command(name = "ls")]
+    List {
+        #[arg(long)]
+        archived: bool,
+    },
+    /// Send a prompt to a running session
+    Prompt {
+        id: String,
+        text: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiProjectAction {
+    /// List projects
+    #[command(name = "ls")]
+    List,
 }
 
 #[derive(Subcommand)]
@@ -561,7 +652,190 @@ fn main() {
                 }
             }
         }
+        Commands::Axi { action } => {
+            let exit_code = run_axi(&conn, action);
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }
     }
+}
+
+fn run_axi(conn: &rusqlite::Connection, action: Option<AxiAction>) -> i32 {
+    let cwd = std::env::current_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let bin_path = collapse_home(&executable_path());
+
+    match action {
+        None => {
+            // Home view
+            let (output, code) = planeai::axi::home(conn, &cwd, &bin_path);
+            print!("{output}");
+            code
+        }
+        Some(AxiAction::Task { action }) => run_axi_task(conn, action, &cwd),
+        Some(AxiAction::Session { action }) => run_axi_session(conn, action),
+        Some(AxiAction::Project { action }) => run_axi_project(conn, action),
+    }
+}
+
+fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -> i32 {
+    let db_path = planeai_paths::db_path();
+
+    let project_flag = match &action {
+        AxiTaskAction::List { project, .. }
+        | AxiTaskAction::Show { project, .. }
+        | AxiTaskAction::Add { project, .. }
+        | AxiTaskAction::Move { project, .. } => project.as_deref(),
+    };
+
+    let prefix = match planeai::task_cli::resolve_prefix(conn, project_flag, cwd) {
+        Ok(p) => p,
+        Err(e) => {
+            let output = planeai_toon::render(&[
+                planeai_toon::field("error", planeai_toon::str_val(&e)),
+                planeai_toon::field(
+                    "help",
+                    planeai_toon::Value::List(vec![
+                        "Run `planeai-cli axi project ls` to see projects".into(),
+                    ]),
+                ),
+            ]);
+            print!("{output}");
+            return 1;
+        }
+    };
+
+    let repo = match planeai_tasks::sqlite::SqliteRepository::open(
+        db_path.to_str().unwrap(),
+        &prefix,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            print!("{}", planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(&e.to_string()))]));
+            return 1;
+        }
+    };
+
+    let (output, code) = match action {
+        AxiTaskAction::List { status, tags, .. } => {
+            planeai::axi::task_ls(&repo, status.as_deref(), &tags)
+        }
+        AxiTaskAction::Show { key, .. } => planeai::axi::task_show(&repo, &key),
+        AxiTaskAction::Add {
+            title,
+            desc,
+            priority,
+            tags,
+            blocked_by,
+            parent,
+            base_branch,
+            ..
+        } => {
+            let result = planeai::axi::task_add(
+                &repo,
+                planeai::task_cli::AddParams {
+                    title: &title,
+                    description: &desc,
+                    priority,
+                    tags: &tags,
+                    blocked_by: &blocked_by,
+                    parent: parent.as_deref(),
+                    base_branch: base_branch.as_deref(),
+                },
+            );
+            if code_of(&result) == 0 {
+                if let Some(key) = extract_key(&result.0) {
+                    planeai::task_cli::notify_task_changed(&key);
+                }
+            }
+            result
+        }
+        AxiTaskAction::Move { key, status, .. } => {
+            let result = planeai::axi::task_move(&repo, &key, &status);
+            if code_of(&result) == 0 {
+                planeai::task_cli::notify_task_changed(&key);
+            }
+            result
+        }
+    };
+    print!("{output}");
+    code
+}
+
+fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32 {
+    let (output, code) = match action {
+        AxiSessionAction::List { archived } => planeai::axi::session_ls(conn, archived),
+        AxiSessionAction::Prompt { id, text } => {
+            let prompt_text = match text {
+                Some(t) => t,
+                None => {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    if std::io::stdin().read_to_string(&mut buf).is_err() {
+                        let output = planeai_toon::render(&[planeai_toon::field(
+                            "error",
+                            planeai_toon::str_val("failed to read stdin"),
+                        )]);
+                        print!("{output}");
+                        return 1;
+                    }
+                    buf
+                }
+            };
+            let ops = planeai::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+            planeai::axi::session_prompt(conn, &id, &prompt_text, &ops)
+        }
+    };
+    print!("{output}");
+    code
+}
+
+fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {
+    let (output, code) = match action {
+        AxiProjectAction::List => planeai::axi::project_ls(conn),
+    };
+    print!("{output}");
+    code
+}
+
+fn code_of(result: &(String, i32)) -> i32 {
+    result.1
+}
+
+fn extract_key(toon_output: &str) -> Option<String> {
+    for line in toon_output.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("key: ") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+fn executable_path() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| std::env::args().next().unwrap_or_default())
+}
+
+fn collapse_home(path: &str) -> String {
+    if let Some(home) = dirs_home() {
+        if path.starts_with(&home) {
+            return format!("~{}", &path[home.len()..]);
+        }
+    }
+    path.to_string()
+}
+
+fn dirs_home() -> Option<String> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
 }
 
 fn notify_session_changed(session_id: &str) {
