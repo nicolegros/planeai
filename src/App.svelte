@@ -35,7 +35,7 @@
   import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
-  import PostMergePrompt from "./components/PostMergePrompt.svelte";
+  import PostMergePrompt, { focusMergePrompt } from "./components/PostMergePrompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -77,6 +77,12 @@
   );
 
   $effect(() => { if (showPrForm && prFormWrapper) prFormWrapper.focus(); });
+
+  function togglePrPanel() {
+    const s = sessions.find(x => x.id === activeSessionId);
+    if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
+    else if (activeSessionId) { openPrForm(); }
+  }
 
   async function openPrForm() {
     if (!activeSessionId) return;
@@ -226,11 +232,8 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
-        else if (action.type === "toggle_pr_panel") {
-          const s = sessions.find(x => x.id === activeSessionId);
-          if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
-          else if (activeSessionId) { openPrForm(); }
-        }
+        else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
+        else if (action.type === "focus_merge_prompt") { focusMergePrompt(); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
@@ -301,7 +304,7 @@
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
-    onTogglePrPanel={() => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); } }}
+    onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
   />
 
