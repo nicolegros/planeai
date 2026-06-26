@@ -616,6 +616,16 @@
     </section>
 
     <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Post-Merge Action</h2>
+      <Select
+        items={[{ value: "archive", label: "Archive" }, { value: "destroy", label: "Destroy" }, { value: "keep", label: "Keep" }]}
+        value={config.post_merge_action ?? "archive"}
+        onValueChange={(v) => updateSettings({ post_merge_action: v } as Partial<AppConfig>)}
+      />
+      <p class="text-xs text-t3">Action taken automatically 30s after a PR is merged if you don't interact with the prompt.</p>
+    </section>
+
+    <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Projects Base Path</h2>
       <div class="flex gap-2">
         <Input

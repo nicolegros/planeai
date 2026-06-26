@@ -14,9 +14,12 @@ import { initSession, getTabCount, destroySession as destroyTabState } from "./s
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
 import { clearComments } from "./review-comments.svelte";
 import { showSnackbar } from "./snackbar.svelte";
+import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
 import { preloadPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
+import { getProjects } from "./project-store.svelte";
+import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
 import {
   activateSession as poolActivate,
@@ -160,6 +163,7 @@ export function createSession(session: Session): void {
 
 export async function deleteSession(s: Session): Promise<void> {
   await sessionsApi.destroy(s.id);
+  dismissForSession(s.id);
   destroyTabState(s.id);
   clearComments(s.id);
   poolRemove(s.id);
@@ -173,6 +177,7 @@ export async function deleteSession(s: Session): Promise<void> {
 
 export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
+  dismissForSession(s.id);
   clearComments(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -296,6 +301,30 @@ export function startEventListeners(): () => void {
     listen<string>("session-created", async (event) => {
       await loadSessions();
       touchMru(event.payload);
+    }),
+  );
+
+  // PR merged — show post-merge prompt
+  unlisteners.push(
+    listen<{ session_id: string }>("pr-merged", (event) => {
+      const s = sessions.find((x) => x.id === event.payload.session_id);
+      if (s) {
+        showMergePrompt({
+          sessionId: s.id,
+          sessionName: s.name || s.branch,
+          taskKey: s.task_key,
+          onArchive: (id) => archiveSession(sessions.find((x) => x.id === id)!),
+          onDestroy: (id) => deleteSession(sessions.find((x) => x.id === id)!),
+          onTaskDone: s.task_key
+            ? async (id) => {
+                const sess = sessions.find((x) => x.id === id);
+                if (!sess?.task_key) return;
+                const proj = getProjects().find((p) => p.id === sess.project_id);
+                if (proj) await moveTask(sess.task_key, "done", proj.path);
+              }
+            : undefined,
+        });
+      }
     }),
   );
 

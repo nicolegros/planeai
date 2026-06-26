@@ -15,7 +15,7 @@
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
-  import { startPolling as startCiPolling } from "./lib/ci-checks.svelte";
+  import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -35,6 +35,8 @@
   import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
+  import PostMergePrompt from "./components/PostMergePrompt.svelte";
+  import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -76,6 +78,12 @@
   );
 
   $effect(() => { if (showPrForm && prFormWrapper) prFormWrapper.focus(); });
+
+  function togglePrPanel() {
+    const s = sessions.find(x => x.id === activeSessionId);
+    if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
+    else if (activeSessionId) { openPrForm(); }
+  }
 
   async function openPrForm() {
     if (!activeSessionId) return;
@@ -134,6 +142,14 @@
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
+  const ciStatus = $derived.by(() => {
+    if (!activeSessionId) return null;
+    const checks = getCiChecks(activeSessionId);
+    if (checks.length === 0) return null;
+    if (checks.some((c) => classifyCheck(c) === "fail")) return "failing" as const;
+    if (checks.every((c) => classifyCheck(c) !== "pending")) return "passing" as const;
+    return "pending" as const;
+  });
 
   // Session IDs in sidebar display order
   const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject(), !!getSettings().hide_done_tasks));
@@ -225,11 +241,8 @@
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
-        else if (action.type === "toggle_pr_panel") {
-          const s = sessions.find(x => x.id === activeSessionId);
-          if (s?.pr_url) { showPrPanel = !showPrPanel; }
-          else if (activeSessionId) { openPrForm(); }
-        }
+        else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
+        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
@@ -284,6 +297,7 @@
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
     prState={sessions.find(s => s.id === activeSessionId)?.pr_state ?? null}
+    {ciStatus}
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={titlebarTabs}
@@ -300,6 +314,7 @@
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
+    onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
   />
 
@@ -396,7 +411,7 @@
         <Terminal
           sessionId={ptyKey}
           visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           paused={poolIsPaused(session.id)}
@@ -636,3 +651,5 @@
     <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
+
+<PostMergePrompt />

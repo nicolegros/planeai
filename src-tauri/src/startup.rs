@@ -224,8 +224,15 @@ pub fn start_pr_poller(app_handle: &tauri::AppHandle) {
         };
         let mut changed = false;
         for session in &sessions {
+            let was_open = session.pr_state.as_deref() == Some("open");
             match poll_pr_for_session(&conn, &cfg, session) {
-                Ok(true) => changed = true,
+                Ok(true) => {
+                    changed = true;
+                    if was_open {
+                        let _ = app_handle
+                            .emit("pr-merged", serde_json::json!({ "session_id": session.id }));
+                    }
+                }
                 Err(e) => {
                     let _ = app_handle.emit("cleanup-error", e);
                 }
