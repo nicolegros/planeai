@@ -81,6 +81,6 @@ export interface JiraStatus {
 export interface SyncResult {
   created: number;
   updated: number;
-  stale: number;
+  done: number;
   errors: number;
 }

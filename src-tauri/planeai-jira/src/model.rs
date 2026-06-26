@@ -5,21 +5,21 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum SyncStatus {
     Synced,
-    Stale,
+    Departed,
 }
 
 impl SyncStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Synced => "synced",
-            Self::Stale => "stale",
+            Self::Departed => "departed",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "synced" => Some(Self::Synced),
-            "stale" => Some(Self::Stale),
+            "departed" | "stale" => Some(Self::Departed),
             _ => None,
         }
     }
