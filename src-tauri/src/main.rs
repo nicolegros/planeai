@@ -317,6 +317,7 @@ fn main() {
             edit_task_item,
             move_task_item,
             fire_task_notify_hook,
+            list_jira_tasks,
             fe_list_directory,
             fe_create_file,
             fe_create_directory,

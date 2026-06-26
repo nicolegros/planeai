@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams, DEFAULT_BASE_BRANCH};
@@ -114,6 +115,63 @@ impl SqliteRepository {
     pub fn open_in_memory(prefix: &str) -> Result<Self, Error> {
         let conn = Connection::open_in_memory().map_err(|e| Error::Storage(e.to_string()))?;
         Self::new(conn, prefix)
+    }
+
+    /// Fetch multiple tasks by key (cross-prefix, ignores project_prefix filter).
+    pub fn list_by_keys(&self, keys: &[&str]) -> Result<Vec<Task>, Error> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut tasks = Vec::new();
+        for key in keys {
+            match self.query_task(&conn, key, None) {
+                Ok(t) => tasks.push(t),
+                Err(Error::NotFound) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(tasks)
+    }
+
+    /// Count children for given parent keys (cross-prefix).
+    pub fn count_children(&self, parent_keys: &[&str]) -> Result<HashMap<String, usize>, Error> {
+        if parent_keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let ph: String = parent_keys
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT parent_key, COUNT(*) FROM tasks WHERE parent_key IN ({ph}) GROUP BY parent_key"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = parent_keys
+            .iter()
+            .map(|k| k as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut map = HashMap::new();
+        for r in rows {
+            let (k, c) = r.map_err(|e| Error::Storage(e.to_string()))?;
+            map.insert(k, c);
+        }
+        Ok(map)
     }
 
     fn next_key(&self, conn: &Connection) -> Result<String, Error> {
