@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::State;
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
@@ -11,6 +12,13 @@ use crate::state::{ConfigState, DbState};
 
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
+
+/// Response for list_jira_tasks: tasks + child counts derived in-memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JiraTasksResponse {
+    pub tasks: Vec<TaskItem>,
+    pub child_counts: HashMap<String, usize>,
+}
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,4 +219,45 @@ pub fn fire_task_notify_hook(
     }
     poll_pr_for_session(&conn, &cfg, &session)?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<JiraTasksResponse, String> {
+    let guard = jira.0.lock().await;
+    let state = match guard.as_ref() {
+        Some(s) => s,
+        None => {
+            return Ok(JiraTasksResponse {
+                tasks: Vec::new(),
+                child_counts: HashMap::new(),
+            })
+        }
+    };
+
+    let issue_keys = state
+        .repo
+        .list_all_issue_keys()
+        .map_err(|e| e.to_string())?;
+    if issue_keys.is_empty() {
+        return Ok(JiraTasksResponse {
+            tasks: Vec::new(),
+            child_counts: HashMap::new(),
+        });
+    }
+
+    let db_path = planeai_paths::db_path();
+    let db_path_str = db_path.to_str().ok_or("invalid db path")?;
+    // Prefix is unused — list_by_keys and count_children are cross-prefix queries.
+    let repo = SqliteRepository::open(db_path_str, "_").map_err(|e| e.to_string())?;
+
+    let key_refs: Vec<&str> = issue_keys.iter().map(|k| k.as_str()).collect();
+    let tasks = repo.list_by_keys(&key_refs).map_err(|e| e.to_string())?;
+
+    let task_keys: Vec<&str> = tasks.iter().map(|t| t.key.as_str()).collect();
+    let child_counts = repo.count_children(&task_keys).map_err(|e| e.to_string())?;
+
+    Ok(JiraTasksResponse {
+        tasks: tasks.into_iter().map(TaskItem::from).collect(),
+        child_counts,
+    })
 }

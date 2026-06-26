@@ -73,3 +73,8 @@ export interface SyncResult {
   done: number;
   errors: number;
 }
+
+export interface JiraTasksResponse {
+  tasks: TaskItem[];
+  child_counts: Record<string, number>;
+}

@@ -10,6 +10,7 @@ import type {
   CiCheck,
   JiraStatus,
   SyncResult,
+  JiraTasksResponse,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
@@ -161,6 +162,7 @@ export const jira = {
   disconnect: () => invoke("jira_disconnect"),
   syncNow: () => invoke<SyncResult>("jira_sync_now"),
   status: () => invoke<JiraStatus>("jira_status"),
+  listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
 };
 
 export const preferences = {

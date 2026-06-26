@@ -141,6 +141,20 @@ impl JiraRepository {
         Ok(keys)
     }
 
+    pub fn list_all_issue_keys(&self) -> Result<Vec<String>, Error> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut stmt = conn.prepare("SELECT issue_key FROM jira_issues")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut keys = Vec::new();
+        for r in rows {
+            keys.push(r?);
+        }
+        Ok(keys)
+    }
+
     pub fn get_task_issue_key(&self, task_key: &str) -> Result<Option<String>, Error> {
         let conn = self
             .conn
@@ -270,5 +284,22 @@ mod tests {
 
         let keys = repo.list_synced_keys("PROJ").unwrap();
         assert_eq!(keys, vec!["PROJ-1"]);
+    }
+
+    #[test]
+    fn list_all_issue_keys_returns_all() {
+        let repo = setup();
+        repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
+        repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
+
+        let mut other = sample_issue("OTHER-1");
+        other.jira_project = "OTHER".to_string();
+        repo.upsert_issue(&other).unwrap();
+
+        repo.mark_departed(&["PROJ-2"]).unwrap();
+
+        let mut keys = repo.list_all_issue_keys().unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["OTHER-1", "PROJ-1", "PROJ-2"]);
     }
 }
