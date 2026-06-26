@@ -9,19 +9,19 @@
 
 These are normal options users should configure.
 
-| Field                     | Type     | Default      | Description                                   |
-| ------------------------- | -------- | ------------ | --------------------------------------------- |
-| `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}     |
-| `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions |
-| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon` |
-| `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs    |
-| `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions     |
-| `appearance`              | object   | —            | Theme, dark/light mode, terminal themes       |
-| `terminal`                | object   | —            | font_family, font_size, option_as_meta        |
-| `projects_base_path`      | string   | unset        | Base directory for project worktrees          |
-| `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config      |
-| `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                       |
-| `scrollback_lines`        | number   | —            | Terminal scrollback line limit                |
+| Field                     | Type     | Default      | Description                                                         |
+| ------------------------- | -------- | ------------ | ------------------------------------------------------------------- |
+| `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}                           |
+| `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions                       |
+| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon`                       |
+| `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs                          |
+| `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions                           |
+| `appearance`              | object   | —            | Theme, dark/light mode, terminal themes                             |
+| `terminal`                | object   | —            | font_family, font_size, option_as_meta                              |
+| `projects_base_path`      | string   | unset        | Base directory for project worktrees                                |
+| `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config                            |
+| `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                             |
+| `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                      |
 | `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
 
 ### 2. Advanced compatibility config

@@ -229,10 +229,8 @@ pub fn start_pr_poller(app_handle: &tauri::AppHandle) {
                 Ok(true) => {
                     changed = true;
                     if was_open {
-                        let _ = app_handle.emit(
-                            "pr-merged",
-                            serde_json::json!({ "session_id": session.id }),
-                        );
+                        let _ = app_handle
+                            .emit("pr-merged", serde_json::json!({ "session_id": session.id }));
                     }
                 }
                 Err(e) => {

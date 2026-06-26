@@ -42,6 +42,7 @@ export type KeyboardAction =
   | { type: "toggle_sessions_panel" }
   | { type: "toggle_task_panel" }
   | { type: "toggle_pr_panel" }
+  | { type: "focus_merge_prompt" }
   | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
@@ -153,6 +154,11 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
   // Mod+R — refresh tasks
   if (mod && !e.shiftKey && key === "r") {
     return { type: "refresh_tasks" };
+  }
+
+  // Mod+U — focus merge prompt
+  if (mod && !e.shiftKey && key === "u") {
+    return { type: "focus_merge_prompt" };
   }
 
   // Mod+Shift+R — review changes (toggle diff/review tab)

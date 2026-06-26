@@ -84,14 +84,30 @@ function runDefault(): void {
   prompt = null;
   timer = null;
 
-  const taskThen = hasTask && onTaskDone ? onTaskDone(sessionId).catch(() => {}) : Promise.resolve();
+  const taskThen =
+    hasTask && onTaskDone ? onTaskDone(sessionId).catch(() => {}) : Promise.resolve();
 
   if (action === "archive") {
-    taskThen.then(() => onArchive(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success")).catch((e) => showSnackbar(String(e), "error"));
+    taskThen
+      .then(() => onArchive(sessionId))
+      .then(() =>
+        showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success"),
+      )
+      .catch((e) => showSnackbar(String(e), "error"));
   } else if (action === "destroy") {
-    taskThen.then(() => onDestroy(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session destroyed" : "Session auto-destroyed", "success")).catch((e) => showSnackbar(String(e), "error"));
+    taskThen
+      .then(() => onDestroy(sessionId))
+      .then(() =>
+        showSnackbar(
+          hasTask ? "Task done, session destroyed" : "Session auto-destroyed",
+          "success",
+        ),
+      )
+      .catch((e) => showSnackbar(String(e), "error"));
   } else if (hasTask && onTaskDone) {
-    taskThen.then(() => showSnackbar("Task marked done", "success")).catch((e) => showSnackbar(String(e), "error"));
+    taskThen
+      .then(() => showSnackbar("Task marked done", "success"))
+      .catch((e) => showSnackbar(String(e), "error"));
   }
 }
 
@@ -112,6 +128,12 @@ export function dismissForSession(sessionId: string): void {
 
 /** Focus coordination — component registers its focus function */
 let focusFn: (() => void) | null = null;
-export function registerFocus(fn: () => void) { focusFn = fn; }
-export function unregisterFocus() { focusFn = null; }
-export function focusMergePrompt() { focusFn?.(); }
+export function registerFocus(fn: () => void) {
+  focusFn = fn;
+}
+export function unregisterFocus() {
+  focusFn = null;
+}
+export function focusMergePrompt() {
+  focusFn?.();
+}
