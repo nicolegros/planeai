@@ -179,6 +179,65 @@ impl SqliteRepository {
                 .unwrap_or_else(|_| Utc::now()),
         })
     }
+
+    fn query_task(
+        &self,
+        conn: &Connection,
+        key: &str,
+        prefix_filter: Option<&str>,
+    ) -> Result<Task, Error> {
+        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match prefix_filter {
+            Some(p) => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+                vec![Box::new(key.to_string()), Box::new(p.to_string())],
+            ),
+            None => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1",
+                vec![Box::new(key.to_string())],
+            ),
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+
+        stmt.query_row(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i32>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
+            _ => Error::Storage(e.to_string()),
+        })
+        .and_then(
+            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
+                self.row_to_task(
+                    conn,
+                    TaskRow {
+                        key: k,
+                        title,
+                        description: desc,
+                        status,
+                        priority,
+                        parent_key: parent,
+                        base_branch,
+                        created_at: created,
+                        updated_at: updated,
+                    },
+                )
+            },
+        )
+    }
 }
 
 struct TaskRow {
@@ -194,19 +253,35 @@ struct TaskRow {
 }
 
 impl TaskProvider for SqliteRepository {
+    /// Create a new task.
+    ///
+    /// If `params.key` is `Some`, that key is used directly instead of auto-generating.
+    /// Idempotent: if the key already exists within this project, the existing task is
+    /// returned unchanged — the remaining `CreateParams` fields are silently discarded.
+    /// This supports Jira sync where repeated syncs for the same issue should not
+    /// duplicate tasks; the sync loop handles updates separately.
     fn create(&self, params: CreateParams) -> Result<Task, Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let key = self.next_key(&conn)?;
+        let key = match params.key {
+            Some(ref k) => k.clone(),
+            None => self.next_key(&conn)?,
+        };
         let now = Utc::now().to_rfc3339();
         let status = params.status.unwrap_or(Status::Todo);
 
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        let result = conn.execute(
+            "INSERT OR IGNORE INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![key, self.prefix, params.title, params.description, status.as_str(), params.priority, params.parent_key, params.base_branch, now, now],
         ).map_err(|e| Error::Storage(e.to_string()))?;
+
+        if result == 0 {
+            // Key already exists — idempotent create: return existing task only if it
+            // belongs to this project (prevents cross-project collision).
+            return self.query_task(&conn, &key, Some(&self.prefix));
+        }
 
         for bk in &params.blocked_by {
             conn.execute(
@@ -245,45 +320,7 @@ impl TaskProvider for SqliteRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1")
-            .map_err(|e| Error::Storage(e.to_string()))?;
-
-        stmt.query_row(params![key], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i32>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
-            _ => Error::Storage(e.to_string()),
-        })
-        .and_then(
-            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
-                self.row_to_task(
-                    &conn,
-                    TaskRow {
-                        key: k,
-                        title,
-                        description: desc,
-                        status,
-                        priority,
-                        parent_key: parent,
-                        base_branch,
-                        created_at: created,
-                        updated_at: updated,
-                    },
-                )
-            },
-        )
+        self.query_task(&conn, key, None)
     }
 
     fn list(&self, filter: ListFilter) -> Result<Vec<Task>, Error> {
@@ -892,5 +929,53 @@ mod tests {
         let tasks = r.list(ListFilter::default()).unwrap();
         assert_eq!(tasks[0].base_branch, "develop");
         assert_eq!(tasks[1].base_branch, "main");
+    }
+
+    #[test]
+    fn create_with_custom_key() {
+        let r = repo();
+        let task = r
+            .create(CreateParams {
+                key: Some("PES-3206".into()),
+                title: "Jira task".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(task.key, "PES-3206");
+        let fetched = r.get("PES-3206").unwrap();
+        assert_eq!(fetched.title, "Jira task");
+    }
+
+    #[test]
+    fn create_with_duplicate_key_is_idempotent() {
+        let r = repo();
+        let t1 = r
+            .create(CreateParams {
+                key: Some("PES-1".into()),
+                title: "Original".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let t2 = r
+            .create(CreateParams {
+                key: Some("PES-1".into()),
+                title: "Duplicate".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(t1.key, t2.key);
+        assert_eq!(t2.title, "Original"); // returns existing, not new
+    }
+
+    #[test]
+    fn create_without_key_still_auto_generates() {
+        let r = repo();
+        let t1 = r
+            .create(CreateParams {
+                title: "auto".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(t1.key, "TEST-1");
     }
 }
