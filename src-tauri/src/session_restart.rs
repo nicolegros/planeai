@@ -50,7 +50,6 @@ pub fn restart(
     let resume_cmd = if has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
-            None,
         ))
     } else {
         None

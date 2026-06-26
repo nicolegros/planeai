@@ -59,7 +59,7 @@ pub fn attach_session(
             .to_string();
 
         let cmd = if session.status == "exited" {
-            config::restart_command_for_provider(provider_def, None)
+            config::restart_command_for_provider(provider_def)
         } else {
             config::launch_command(provider_def, session.auto_approve)
         };

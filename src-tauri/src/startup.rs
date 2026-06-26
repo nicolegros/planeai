@@ -43,7 +43,6 @@ where
         let cmd = match cfg.providers.get(provider_key) {
             Some(provider_def) => config::restart_command_for_provider(
                 provider_def,
-                session.provider_session_id.as_deref(),
             ),
             None => continue,
         };

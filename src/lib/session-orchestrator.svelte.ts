@@ -153,12 +153,11 @@ export function selectSession(id: string): void {
       .restart(id)
       .then((updated) => {
         if (updated) sessions = sessions.map((x) => (x.id === id ? updated : x));
-        poolActivate(id);
+        if (activeSessionId === id) poolActivate(id);
       })
       .catch((e) => {
         showSnackbar(`Restart failed: ${e}`);
-        // Still activate pool so the user can see the exited terminal state
-        poolActivate(id);
+        if (activeSessionId === id) poolActivate(id);
       });
   } else {
     poolActivate(id);

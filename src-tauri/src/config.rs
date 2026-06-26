@@ -312,6 +312,9 @@ fn backfill_provider_defaults(config: &mut Config) {
             if provider.resume_flag.is_none() {
                 provider.resume_flag = default_provider.resume_flag.clone();
             }
+            if provider.resume_command.is_none() {
+                provider.resume_command = default_provider.resume_command.clone();
+            }
             if provider.list_sessions_command.is_none() {
                 provider.list_sessions_command = default_provider.list_sessions_command.clone();
             }
@@ -395,7 +398,6 @@ pub fn launch_command(provider: &Provider, yolo: bool) -> String {
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
 pub fn restart_command_for_provider(
     provider: &Provider,
-    _provider_session_id: Option<&str>,
 ) -> String {
     if let Some(ref resume_cmd) = provider.resume_command {
         return resume_cmd.clone();
@@ -502,6 +504,7 @@ mod tests {
                         command: "claude".to_string(),
                         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                         resume_flag: None,
+                        resume_command: Some("claude --resume".to_string()),
                         ..Default::default()
                     },
                 );
@@ -858,7 +861,7 @@ mod tests {
             ..Default::default()
         };
         // Even with a provider_session_id, uses interactive resume_command
-        let cmd = restart_command_for_provider(&provider, Some("f4165541-abc"));
+        let cmd = restart_command_for_provider(&provider);
         assert_eq!(cmd, "kiro-cli chat --resume");
     }
 
@@ -870,7 +873,7 @@ mod tests {
             resume_flag: Some("--resume-id".to_string()),
             ..Default::default()
         };
-        let cmd = restart_command_for_provider(&provider, None);
+        let cmd = restart_command_for_provider(&provider);
         assert_eq!(cmd, "kiro-cli chat");
     }
 
@@ -882,7 +885,7 @@ mod tests {
             resume_flag: None,
             ..Default::default()
         };
-        let cmd = restart_command_for_provider(&provider, Some("some-id"));
+        let cmd = restart_command_for_provider(&provider);
         assert_eq!(cmd, "aider");
     }
 
@@ -907,6 +910,10 @@ mod tests {
         assert!(warnings.is_empty());
         let kiro = config.providers.get("kiro").unwrap();
         assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
+        assert_eq!(
+            kiro.resume_command,
+            Some("kiro-cli chat --resume".to_string())
+        );
         assert_eq!(
             kiro.list_sessions_command,
             Some("kiro-cli chat --list-sessions".to_string())
