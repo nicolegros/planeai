@@ -121,6 +121,7 @@ async fn orchestrator_polls_dispatches_and_stops_on_channel_command() {
             status: "todo".into(),
             description: "desc".into(),
             priority: 1,
+            parent_key: None,
             blocked_by: vec![],
             subtasks: vec![],
             base_branch: "main".to_string(),
@@ -177,6 +178,7 @@ async fn orchestrator_kills_session_when_task_becomes_terminal() {
             status: "todo".into(),
             description: "".into(),
             priority: 1,
+            parent_key: None,
             blocked_by: vec![],
             subtasks: vec![],
             base_branch: "main".to_string(),
@@ -284,6 +286,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 title: "Task 1".into(),
                 status: "todo".into(),
                 priority: 1,
+                parent_key: None,
                 blocked_by: vec![],
                 subtasks: vec![],
                 ..Default::default()
@@ -293,6 +296,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 title: "Task 2".into(),
                 status: "todo".into(),
                 priority: 2,
+                parent_key: None,
                 blocked_by: vec![],
                 subtasks: vec![],
                 ..Default::default()
@@ -302,6 +306,7 @@ async fn orchestrator_reattaches_active_sessions_on_startup() {
                 title: "Task 3".into(),
                 status: "todo".into(),
                 priority: 3,
+                parent_key: None,
                 blocked_by: vec![],
                 subtasks: vec![],
                 ..Default::default()
@@ -429,6 +434,7 @@ async fn orchestrator_does_not_redispatch_task_with_exited_session() {
             title: "Settings UI".into(),
             status: "in_progress".into(),
             priority: 1,
+            parent_key: None,
             blocked_by: vec![],
             subtasks: vec![],
             ..Default::default()

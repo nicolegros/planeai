@@ -457,7 +457,7 @@
             <!-- Templates -->
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-t2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
+              <label class="text-xs text-t2 flex items-center gap-1">Branch template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Git branch name created for the session. Variables: {"{key}"}, {"{parent_key}"} (falls back to key), {"{title}"}, {"{status}"}, {"{description}"}, {"{priority}"}, {"{blocked_by}"}. Transforms: :slug, :lower, :upper</span></span></label>
               <Input value={taskManagement.templates?.branch || "{key:lower}/{title:slug}"} onchange={(e) => updateTmTemplate("branch", e.currentTarget.value)} class="font-mono" />
             </div>
             <div class="space-y-1">

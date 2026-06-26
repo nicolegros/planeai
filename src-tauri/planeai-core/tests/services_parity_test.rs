@@ -685,7 +685,7 @@ fn worktree_path_uses_shared_convention() {
 
 #[test]
 fn branch_name_from_task_key() {
-    let name = WorktreeService::branch_name("PLA-5", "abcd1234");
+    let name = WorktreeService::branch_name("PLA-5", None, "abcd1234");
     assert_eq!(name, "pla-5/abcd1234");
 }
 

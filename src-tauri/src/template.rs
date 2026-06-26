@@ -109,4 +109,27 @@ mod tests {
             "Task KAN-3: Add dark mode support\n\nWe need dark mode for accessibility."
         );
     }
+
+    #[test]
+    fn parent_key_resolves_in_branch_template() {
+        let mut v = vars();
+        v.insert("parent_key", "PES-3206");
+        let result = render("{parent_key:lower}/{title:slug}", &v);
+        assert_eq!(result, "pes-3206/add-dark-mode-support");
+    }
+
+    #[test]
+    fn missing_parent_key_resolves_empty_in_raw_template() {
+        let result = render("{parent_key}/{title:slug}", &vars());
+        assert_eq!(result, "/add-dark-mode-support");
+    }
+
+    #[test]
+    fn parent_key_fallback_to_key_when_caller_provides_it() {
+        // Callers should set parent_key = key when no parent exists
+        let mut v = vars();
+        v.insert("parent_key", "KAN-3");
+        let result = render("{parent_key:lower}/{title:slug}", &v);
+        assert_eq!(result, "kan-3/add-dark-mode-support");
+    }
 }
