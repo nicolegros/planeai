@@ -1,6 +1,6 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { RefreshCw } from "@lucide/svelte";
+  import { RefreshCw, ShieldAlert } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -23,6 +23,9 @@
   let allowedStrategies = $state<string[]>([]);
   let selectedStrategy = $state<string>(localStorage.getItem(STORAGE_KEY) || "squash");
   let wrapperEl = $state<HTMLDivElement | null>(null);
+  let mergeBlocked = $state(false);
+  let mergeBlockReasons = $state<string[]>([]);
+  let mergeBlockSettingsUrl = $state<string | null>(null);
 
   let checks = $derived(getCiChecks(sessionId));
   let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
@@ -35,6 +38,7 @@
 
   $effect(() => { if (wrapperEl) wrapperEl.focus(); });
   $effect(() => { fetchStrategies(); });
+  $effect(() => { if (!isMerged) fetchMergeState(); });
 
   const fk = createFormKeyboardController(
     () => [
@@ -79,8 +83,24 @@
       localStorage.setItem(STORAGE_KEY, selectedStrategy);
       showSnackbar("PR merged ✓", "success");
       onClose();
-    } catch (e) { showSnackbar(String(e), "error"); }
+    } catch (e) {
+      showSnackbar(String(e), "error");
+      fetchMergeState();
+    }
     finally { merging = false; }
+  }
+
+  async function fetchMergeState() {
+    try {
+      const state = await pr.getMergeState(sessionId);
+      mergeBlocked = state.blocked;
+      mergeBlockReasons = state.reasons;
+      mergeBlockSettingsUrl = state.settingsUrl;
+    } catch {
+      mergeBlocked = false;
+      mergeBlockReasons = [];
+      mergeBlockSettingsUrl = null;
+    }
   }
 
   async function markReady() {
@@ -154,6 +174,22 @@
         <button class="mt-2 w-full text-xs px-2 py-1.5 rounded-lg bg-status-exited/10 text-status-exited hover:bg-status-exited/20 disabled:opacity-50" disabled={sessionExited} onclick={sendFailuresToAgent}>
           Send failures to agent <span class="font-mono text-[10px] px-1 rounded {badge}">F</span>
         </button>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Merge block banner -->
+  {#if mergeBlocked && !isMerged}
+    <div class="py-3 border-b border-border bg-status-exited/8 -mx-5 px-5">
+      <div class="flex items-center gap-1.5 mb-1.5">
+        <ShieldAlert size={12} class="text-status-exited shrink-0" />
+        <span class="text-[11px] font-medium text-status-exited">Merge blocked</span>
+      </div>
+      {#each mergeBlockReasons as reason}
+        <p class="text-[11px] text-t2 ml-[18px]">• {reason}</p>
+      {/each}
+      {#if mergeBlockSettingsUrl}
+        <button class="mt-2 ml-[18px] text-[11px] text-accent hover:underline" onclick={() => openUrl(mergeBlockSettingsUrl!)}>View branch protection rules ↗</button>
       {/if}
     </div>
   {/if}

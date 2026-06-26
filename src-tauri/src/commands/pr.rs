@@ -469,10 +469,6 @@ pub async fn merge_pr(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let reasons = parse_merge_error(&stderr);
-        if !reasons.is_empty() {
-            return Err(format!("MERGE_BLOCKED:{}", reasons.join("|")));
-        }
         return Err(format!("merge failed: {stderr}"));
     }
 
@@ -548,27 +544,6 @@ fn parse_merge_block_reasons(view: &GhMergeStateView) -> Vec<String> {
         if state == "BLOCKED" && reasons.is_empty() {
             reasons.push("Linear history required or other branch protection rule".to_string());
         }
-    }
-    reasons
-}
-
-/// Parse the stderr from a failed `gh pr merge` for common protection messages.
-pub fn parse_merge_error(stderr: &str) -> Vec<String> {
-    let mut reasons = Vec::new();
-    let lower = stderr.to_lowercase();
-    if lower.contains("review") && (lower.contains("required") || lower.contains("approved")) {
-        reasons.push("Required reviews not met".to_string());
-    }
-    if lower.contains("check")
-        && (lower.contains("required") || lower.contains("failing") || lower.contains("pending"))
-    {
-        reasons.push("Required status checks not passing".to_string());
-    }
-    if lower.contains("linear history") || lower.contains("rebase") && lower.contains("required") {
-        reasons.push("Linear history required".to_string());
-    }
-    if reasons.is_empty() && (lower.contains("protected") || lower.contains("branch protection")) {
-        reasons.push("Blocked by branch protection rules".to_string());
     }
     reasons
 }
@@ -905,34 +880,6 @@ mod tests {
         let r: MergeStrategy = serde_json::from_str("\"rebase\"").unwrap();
         assert_eq!(r.as_gh_flag(), "--rebase");
         assert!(serde_json::from_str::<MergeStrategy>("\"fast-forward\"").is_err());
-    }
-
-    #[test]
-    fn parse_merge_error_reviews() {
-        let stderr = "Pull request #5 is not mergeable: review required";
-        let reasons = parse_merge_error(stderr);
-        assert!(reasons.iter().any(|r| r.contains("reviews")));
-    }
-
-    #[test]
-    fn parse_merge_error_checks() {
-        let stderr = "Pull request #5: required check 'build' is pending";
-        let reasons = parse_merge_error(stderr);
-        assert!(reasons.iter().any(|r| r.contains("checks")));
-    }
-
-    #[test]
-    fn parse_merge_error_linear_history() {
-        let stderr = "Pull request merge is blocked: linear history required";
-        let reasons = parse_merge_error(stderr);
-        assert!(reasons.iter().any(|r| r.contains("Linear history")));
-    }
-
-    #[test]
-    fn parse_merge_error_generic_protection() {
-        let stderr = "branch protection rule prevents merging";
-        let reasons = parse_merge_error(stderr);
-        assert!(reasons.iter().any(|r| r.contains("branch protection")));
     }
 
     #[test]
