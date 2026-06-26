@@ -73,3 +73,11 @@ export interface SyncResult {
   done: number;
   errors: number;
 }
+
+export interface JiraTaskItem {
+  key: string;
+  title: string;
+  status: string;
+  priority: number;
+  child_count: number;
+}
