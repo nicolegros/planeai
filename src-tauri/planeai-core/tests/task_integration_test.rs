@@ -82,6 +82,7 @@ fn resolve_task_launch_produces_worktree_mode() {
         task_title: "Do thing".to_string(),
         task_description: "Details here".to_string(),
         task_base_branch: "main".to_string(),
+        parent_key: None,
         provider_id: Some("test".to_string()),
         auto_approve: true,
         autonomous: false,
@@ -139,6 +140,7 @@ fn resolve_task_launch_autonomous_false_no_wrapper() {
         task_title: "Task".to_string(),
         task_description: "Desc".to_string(),
         task_base_branch: "main".to_string(),
+        parent_key: None,
         provider_id: None,
         auto_approve: false,
         autonomous: false,
@@ -180,6 +182,7 @@ fn resolve_task_launch_autonomous_true_applies_wrapper() {
         task_title: "Task".to_string(),
         task_description: "Desc".to_string(),
         task_base_branch: "main".to_string(),
+        parent_key: None,
         provider_id: None,
         auto_approve: false,
         autonomous: true,
@@ -299,12 +302,12 @@ fn fire_lifecycle_hook_moves_task_status() {
 
 #[test]
 fn branch_name_from_task_key_normalizes() {
-    let name = WorktreeService::branch_name("PLA-5", "abcd1234");
+    let name = WorktreeService::branch_name("PLA-5", None, "abcd1234");
     assert_eq!(name, "pla-5/abcd1234");
 }
 
 #[test]
 fn branch_name_from_task_key_with_spaces() {
-    let name = WorktreeService::branch_name("MY TASK-1", "12345678");
+    let name = WorktreeService::branch_name("MY TASK-1", None, "12345678");
     assert_eq!(name, "my-task-1/12345678");
 }

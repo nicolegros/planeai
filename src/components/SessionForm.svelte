@@ -92,7 +92,8 @@
 
   function renderTemplate(template: string, task: TaskItem): string {
     return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
-      const val = varName === "blocked_by" ? task.blocked_by?.join(", ") ?? "" : String((task as any)[varName] ?? "");
+      let val = varName === "blocked_by" ? task.blocked_by?.join(", ") ?? "" : String((task as any)[varName] ?? "");
+      if (varName === "parent_key" && !val) val = task.key;
       if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
       if (transform === "lower") return val.toLowerCase();
       if (transform === "upper") return val.toUpperCase();
