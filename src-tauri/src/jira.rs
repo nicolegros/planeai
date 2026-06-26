@@ -10,7 +10,6 @@ use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::paths;
 
 pub struct JiraState {
     pub sync: Option<Arc<JiraSync>>,
@@ -50,6 +49,7 @@ impl JiraState {
     }
 
     /// Trigger async writeback if this task is Jira-sourced. Non-blocking.
+    /// After PLA-148, the task key IS the Jira issue key for synced tasks.
     pub fn try_writeback(&self, task_key: &str, status: Status, config: &Config) {
         let action = match status {
             Status::InProgress => WritebackAction::Start,
@@ -60,21 +60,22 @@ impl JiraState {
             Some(wb) => wb.clone(),
             None => return,
         };
-        let issue_key = match self.repo.get_task_issue_key(task_key) {
-            Ok(Some(k)) => k,
+        // Check if this task_key corresponds to a known Jira issue
+        let issue = match self.repo.get_issue(task_key) {
+            Ok(Some(i)) => i,
             _ => return,
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
-            let issue_proj = self.repo.get_issue(&issue_key).ok()??.jira_project;
             jira_cfg
                 .projects
                 .values()
-                .find(|m| m.jira_project == issue_proj)?
+                .find(|m| m.jira_project == issue.jira_project)?
                 .writeback
                 .clone()
         })();
         if let Some(wb_config) = wb_config {
+            let issue_key = task_key.to_string();
             tokio::spawn(async move {
                 if let Err(e) = writeback
                     .on_status_change(&issue_key, action, &wb_config)
@@ -89,10 +90,10 @@ impl JiraState {
 
 pub fn init_jira(config: &Config) -> Option<JiraState> {
     let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
-    let token_dir = paths::app_data_dir().join("jira-tokens");
+    let token_dir = planeai_paths::app_data_dir().join("jira-tokens");
     let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
 
-    let db_path = paths::db_path();
+    let db_path = planeai_paths::db_path();
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -128,14 +129,18 @@ pub fn init_jira(config: &Config) -> Option<JiraState> {
 fn open_task_provider(
     config: &JiraConfig,
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {
-    let db_path = paths::db_path();
+    let db_path = planeai_paths::db_path();
     let path_str = db_path.to_str().ok_or("invalid db path")?;
-    // Use first project key as prefix; falls back to "JIRA" if no projects configured
+    // Derive prefix from the Jira site hostname for determinism.
+    // After PLA-148 all Jira tasks use explicit keys, so this only affects the
+    // task_projects registration (auto-generated keys are unused for Jira sync).
     let prefix = config
-        .projects
-        .keys()
+        .site
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('.')
         .next()
-        .map(|k| planeai_tasks::sqlite::derive_prefix(k))
+        .map(planeai_tasks::sqlite::derive_prefix)
         .unwrap_or_else(|| "JIRA".to_string());
     planeai_tasks::sqlite::SqliteRepository::open(path_str, &prefix)
         .map(|r| Arc::new(r) as Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>)

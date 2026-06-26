@@ -114,6 +114,7 @@ pub fn create_task_item(
     tracing::info!(title = %title, "create_task_item");
     let repo = resolve_repo(&db_state, &repo_path)?;
     repo.create(CreateParams {
+        key: None,
         title,
         description,
         status: None,
@@ -191,7 +192,7 @@ pub fn move_task_item(
     .map_err(|e| e.to_string())?;
 
     // Writeback hook — non-blocking
-    if let Ok(guard) = jira.0.lock() {
+    if let Ok(guard) = jira.0.try_lock() {
         if let Some(state) = guard.as_ref() {
             if let Ok(cfg) = config_state.0.lock() {
                 state.try_writeback(&key, s, &cfg);

@@ -111,8 +111,10 @@ pub fn task_show(repo: &dyn TaskProvider, key: &str) -> (String, i32) {
 pub fn task_add(repo: &dyn TaskProvider, params: crate::task_cli::AddParams) -> (String, i32) {
     use planeai_tasks::model::CreateParams;
     let task = match repo.create(CreateParams {
+        key: None,
         title: params.title.to_string(),
         description: params.description.to_string(),
+        status: None,
         priority: params.priority,
         tags: params.tags.to_vec(),
         blocked_by: params.blocked_by.to_vec(),
@@ -603,8 +605,10 @@ mod tests {
         use planeai_tasks::model::CreateParams;
         // Create a blocker first
         repo.create(CreateParams {
+            key: None,
             title: "Blocker task".into(),
             description: "".into(),
+            status: None,
             priority: 0,
             tags: vec![],
             blocked_by: vec![],
@@ -613,8 +617,10 @@ mod tests {
         })
         .unwrap();
         repo.create(CreateParams {
+            key: None,
             title: "Fix auth bug".into(),
             description: "Need to fix the login flow".into(),
+            status: None,
             priority: 2,
             tags: vec!["backend".into()],
             blocked_by: vec!["TST-1".into()],
@@ -644,8 +650,10 @@ mod tests {
         use planeai_tasks::model::CreateParams;
         let long_desc = "x".repeat(1000);
         repo.create(CreateParams {
+            key: None,
             title: "Long task".into(),
             description: long_desc,
+            status: None,
             priority: 0,
             tags: vec![],
             blocked_by: vec![],
