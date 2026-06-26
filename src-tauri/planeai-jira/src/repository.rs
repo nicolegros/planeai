@@ -81,14 +81,14 @@ impl JiraRepository {
         Ok(())
     }
 
-    pub fn mark_stale(&self, issue_keys: &[&str]) -> Result<(), Error> {
+    pub fn mark_departed(&self, issue_keys: &[&str]) -> Result<(), Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         for key in issue_keys {
             conn.execute(
-                "UPDATE jira_issues SET sync_status = 'stale' WHERE issue_key = ?1",
+                "UPDATE jira_issues SET sync_status = 'departed' WHERE issue_key = ?1",
                 params![key],
             )?;
         }
@@ -230,24 +230,24 @@ mod tests {
     }
 
     #[test]
-    fn mark_stale_sets_sync_status() {
+    fn mark_departed_sets_sync_status() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
 
-        repo.mark_stale(&["PROJ-1", "PROJ-2"]).unwrap();
+        repo.mark_departed(&["PROJ-1", "PROJ-2"]).unwrap();
 
         let i1 = repo.get_issue("PROJ-1").unwrap().unwrap();
         let i2 = repo.get_issue("PROJ-2").unwrap().unwrap();
-        assert_eq!(i1.sync_status, SyncStatus::Stale);
-        assert_eq!(i2.sync_status, SyncStatus::Stale);
+        assert_eq!(i1.sync_status, SyncStatus::Departed);
+        assert_eq!(i2.sync_status, SyncStatus::Departed);
     }
 
     #[test]
     fn mark_synced_updates_status_and_timestamp() {
         let repo = setup();
         let mut issue = sample_issue("PROJ-1");
-        issue.sync_status = SyncStatus::Stale;
+        issue.sync_status = SyncStatus::Departed;
         repo.upsert_issue(&issue).unwrap();
 
         repo.mark_synced("PROJ-1").unwrap();
@@ -266,7 +266,7 @@ mod tests {
         other.jira_project = "OTHER".to_string();
         repo.upsert_issue(&other).unwrap();
 
-        repo.mark_stale(&["PROJ-2"]).unwrap();
+        repo.mark_departed(&["PROJ-2"]).unwrap();
 
         let keys = repo.list_synced_keys("PROJ").unwrap();
         assert_eq!(keys, vec!["PROJ-1"]);

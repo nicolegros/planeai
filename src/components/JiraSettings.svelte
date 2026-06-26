@@ -75,7 +75,7 @@
     syncing = true;
     try {
       const result: SyncResult = await jira.syncNow();
-      showSnackbar(`${result.created} created, ${result.updated} updated, ${result.stale} stale`);
+      showSnackbar(`${result.created} created, ${result.updated} updated, ${result.done} done`);
     } catch (e) {
       showSnackbar(String(e));
     } finally {
