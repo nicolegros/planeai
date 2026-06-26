@@ -12,6 +12,8 @@ pub struct Task {
     #[serde(default)]
     pub priority: i32,
     #[serde(default)]
+    pub parent_key: Option<String>,
+    #[serde(default)]
     pub blocked_by: Vec<String>,
     #[serde(default)]
     pub subtasks: Vec<String>,

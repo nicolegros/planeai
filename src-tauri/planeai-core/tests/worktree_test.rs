@@ -111,13 +111,13 @@ fn short_id_strips_dashes() {
 
 #[test]
 fn branch_name_lowercases_and_joins_short_id() {
-    let name = WorktreeService::branch_name("PLA-42", "abcd1234");
+    let name = WorktreeService::branch_name("PLA-42", None, "abcd1234");
     assert_eq!(name, "pla-42/abcd1234");
 }
 
 #[test]
 fn branch_name_replaces_spaces_with_dashes() {
-    let name = WorktreeService::branch_name("My Task", "12345678");
+    let name = WorktreeService::branch_name("My Task", None, "12345678");
     assert_eq!(name, "my-task/12345678");
 }
 
@@ -366,7 +366,7 @@ fn tauri_and_iced_branch_names_match() {
 
     // Iced
     let short_id = WorktreeService::short_id(session_id);
-    let iced_branch = WorktreeService::branch_name(task_key, &short_id);
+    let iced_branch = WorktreeService::branch_name(task_key, None, &short_id);
 
     // Production (session.rs dispatch)
     let prod_short_id = &session_id.replace('-', "")[..8];
@@ -486,4 +486,24 @@ fn has_active_checkout_detects_null_worktree_path() {
     };
     SessionService::create(&conn, &params2).unwrap();
     assert!(SessionService::has_active_checkout(&conn, &project.id).unwrap());
+}
+
+// ─── branch_name with parent_key ─────────────────────────────────────────────
+
+#[test]
+fn branch_name_uses_parent_key_when_present() {
+    let name = WorktreeService::branch_name("SUB-1", Some("PES-3206"), "abcd1234");
+    assert_eq!(name, "pes-3206/abcd1234");
+}
+
+#[test]
+fn branch_name_falls_back_to_task_key() {
+    let name = WorktreeService::branch_name("PLA-42", None, "abcd1234");
+    assert_eq!(name, "pla-42/abcd1234");
+}
+
+#[test]
+fn branch_name_ignores_empty_parent_key() {
+    let name = WorktreeService::branch_name("PLA-42", Some(""), "abcd1234");
+    assert_eq!(name, "pla-42/abcd1234");
 }

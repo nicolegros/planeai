@@ -374,6 +374,7 @@ fn into_core_task(t: planeai_tasks::model::Task, subtasks: Vec<String>) -> Task 
         status: t.status.as_str().to_string(),
         description: t.description,
         priority: t.priority,
+        parent_key: t.parent_key,
         blocked_by: t.blocked_by,
         subtasks,
         base_branch: t.base_branch,
