@@ -34,10 +34,10 @@ pub fn attach_session(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
-    // Resolve pty_target and discovery_info in a single pass
-    let (pty_target, discovery_info) = if session.backend == "tmux" {
+    // Resolve pty_target, discovery_info, and agent_command in a single pass
+    let (pty_target, discovery_info, resolved_agent_command) = if session.backend == "tmux" {
         let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
-        (pty::PtyTarget::TmuxAttach { tmux_name }, None)
+        (pty::PtyTarget::TmuxAttach { tmux_name }, None, None)
     } else if session.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
         (
@@ -45,6 +45,7 @@ pub fn attach_session(
                 session_id: session_id.clone(),
                 socket_path,
             },
+            None,
             None,
         )
     } else {
@@ -101,7 +102,7 @@ pub fn attach_session(
             }),
             _ => None,
         };
-        (target, disc)
+        (target, disc, Some(cmd))
     };
 
     // Build env via prepare_session() for local/tmux targets (canonical PATH augmentation).
@@ -116,45 +117,20 @@ pub fn attach_session(
             .map(|p| p.path.as_str())
             .unwrap_or("/");
 
-        // For tmux, use a guaranteed-existing dir since prepare_session validates cwd.
         let cwd = if session.backend == "tmux" {
             std::env::temp_dir()
         } else {
             std::path::PathBuf::from(session.worktree_path.as_deref().unwrap_or(project_path))
         };
 
-        // For local backend, resolve the actual agent command for logging/validation.
-        // For tmux, the real command is built inside PtyManager; we just need the env.
-        let agent_command = if session.backend == "tmux" {
-            "tmux attach-session".to_string()
-        } else {
-            let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
-            let provider_def = cfg
-                .providers
-                .get(provider_key)
-                .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-            if session.status == "exited" {
-                // Use collision-checked resume_id (same logic as the pty_target resolution above)
-                let resume_id = session.provider_session_id.as_deref().and_then(|pid| {
-                    let count: i64 = conn
-                        .query_row(
-                            "SELECT COUNT(*) FROM sessions WHERE provider_session_id = ?1 AND status = 'active' AND id != ?2",
-                            rusqlite::params![pid, &session_id],
-                            |r| r.get(0),
-                        )
-                        .unwrap_or(0);
-                    if count > 0 { None } else { Some(pid) }
-                });
-                config::restart_command_for_provider(provider_def, resume_id)
-            } else {
-                config::launch_command(provider_def, session.auto_approve)
-            }
-        };
+        let agent_command = resolved_agent_command
+            .as_deref()
+            .unwrap_or("tmux attach-session");
 
         build_local_env(
             &session_id,
             cwd,
-            &agent_command,
+            agent_command,
             dark_mode.unwrap_or(true),
             extra_path_dirs,
         )?
