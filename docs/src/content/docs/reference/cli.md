@@ -146,10 +146,10 @@ List tasks with optional filters.
 planeai-cli task ls [--status <status>] [--tags <tags>] [--project <name>]
 ```
 
-| Flag       | Description                                     |
-| ---------- | ----------------------------------------------- |
+| Flag       | Description                                                  |
+| ---------- | ------------------------------------------------------------ |
 | `--status` | Filter by status: `todo`, `in_progress`, `in_review`, `done` |
-| `--tags`   | Comma-separated tags to filter by               |
+| `--tags`   | Comma-separated tags to filter by                            |
 
 ### `task move`
 

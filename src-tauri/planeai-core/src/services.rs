@@ -166,6 +166,20 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
 
     // Migrate legacy direct backend → local
     let _ = conn.execute_batch("UPDATE sessions SET backend = 'local' WHERE backend = 'direct'");
+
+    // Add status_changed_at column (tracks when status last changed, immune to unrelated updates)
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN status_changed_at TEXT");
+    let _ = conn.execute_batch(
+        "UPDATE sessions SET status_changed_at = updated_at WHERE status_changed_at IS NULL",
+    );
+    let _ = conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS sessions_status_changed_at
+         AFTER UPDATE OF status ON sessions
+         BEGIN
+           UPDATE sessions SET status_changed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = NEW.id;
+         END;",
+    );
+
     Ok(())
 }
 

@@ -6,7 +6,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
-  import { Select, Input, Button } from "./ui";
+  import { Select, Input, Button, Dialog } from "./ui";
   import { Palette, Bot, ListTodo, Settings } from "@lucide/svelte";
 
   const config = $derived(getSettings());
@@ -21,6 +21,39 @@
   let tmuxAvailable = $state(true);
   let cliInstalled = $state(false);
   let activeTab = $state("Appearance");
+
+  let staleWorktrees = $state<{ session_name: string; worktree_path: string; branch: string }[]>([]);
+  let showCleanupDialog = $state(false);
+  let cleanupMessage = $state("");
+
+  async function triggerCleanupPreview() {
+    cleanupMessage = "";
+    try {
+      const items = await preferences.listStaleWorktrees();
+      if (items.length === 0) {
+        cleanupMessage = "No stale worktrees found.";
+      } else {
+        staleWorktrees = items;
+        showCleanupDialog = true;
+      }
+    } catch (e) {
+      cleanupMessage = `Failed to list worktrees: ${e}`;
+    }
+  }
+
+  async function confirmCleanup() {
+    try {
+      const errors = await preferences.runStaleWorktreeCleanup();
+      cleanupMessage = errors.length
+        ? `Cleanup finished with ${errors.length} error(s).`
+        : "Cleanup complete.";
+    } catch (e) {
+      cleanupMessage = `Cleanup failed: ${e}`;
+    } finally {
+      showCleanupDialog = false;
+      staleWorktrees = [];
+    }
+  }
 
   const IS_MAC = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
 
@@ -598,6 +631,21 @@
 
     <!-- CLI -->
     <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Worktree Cleanup</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Remove stale worktrees</p>
+          <p class="text-xs text-t3">Deletes worktree directories for sessions inactive &gt;48h.</p>
+        </div>
+        <Button type="button" onclick={triggerCleanupPreview}>Clean up</Button>
+      </div>
+      {#if cleanupMessage}
+        <p class="text-xs text-t2">{cleanupMessage}</p>
+      {/if}
+    </section>
+
+    <!-- CLI -->
+    <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">CLI</h2>
       <div class="flex items-center justify-between">
         <div>
@@ -627,3 +675,24 @@
   </div>
   </div>
 </div>
+
+<Dialog open={showCleanupDialog} onOpenChange={(v) => { showCleanupDialog = v; }} title="Clean up worktrees" class="w-[480px] p-6 space-y-4">
+  <h2 class="text-sm font-semibold text-t1">The following worktrees will be removed:</h2>
+  <ul class="space-y-2 max-h-60 overflow-y-auto">
+    {#each staleWorktrees as wt (wt.worktree_path)}
+      <li class="text-xs border border-border rounded p-2">
+        <p class="font-medium text-t1">{wt.session_name || "(unnamed session)"}</p>
+        <p class="text-t3 font-mono">{wt.worktree_path}</p>
+        {#if wt.branch}<p class="text-t3">branch: {wt.branch}</p>{/if}
+      </li>
+    {/each}
+  </ul>
+  <p class="text-xs text-amber-600">⚠ This will delete the worktree directories. This cannot be undone.</p>
+  <div class="flex justify-end gap-2 pt-2">
+    <Button type="button" onclick={() => { showCleanupDialog = false; }}>Cancel</Button>
+    <button
+      class="px-4 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700"
+      onclick={confirmCleanup}
+    >Remove {staleWorktrees.length} worktree{staleWorktrees.length === 1 ? '' : 's'}</button>
+  </div>
+</Dialog>

@@ -324,6 +324,8 @@ fn main() {
             mark_pr_ready,
             check_cli_installed,
             install_cli,
+            list_stale_worktrees,
+            run_stale_worktree_cleanup,
             get_symphony_status,
             bench::bench_replay_file,
             bench::bench_fixture_info,
