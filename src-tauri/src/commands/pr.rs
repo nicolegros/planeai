@@ -516,7 +516,6 @@ struct GhMergeStateView {
     merge_state_status: Option<String>,
     review_decision: Option<String>,
     status_check_rollup: Option<Vec<GhCheckRun>>,
-    base_ref_name: Option<String>,
 }
 
 fn parse_merge_block_reasons(view: &GhMergeStateView) -> Vec<String> {
@@ -559,15 +558,17 @@ pub async fn get_merge_state(
         .await?
         .ok_or("not a GitHub repo")?;
 
-    let output = tokio::process::Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &ctx.branch,
-            "--json",
-            "mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName",
-        ])
-        .current_dir(&ctx.cwd)
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
+    cmd.args([
+        "pr",
+        "view",
+        &ctx.branch,
+        "--json",
+        "mergeStateStatus,reviewDecision,statusCheckRollup",
+    ])
+    .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
@@ -888,7 +889,6 @@ mod tests {
             merge_state_status: Some("BLOCKED".to_string()),
             review_decision: Some("REVIEW_REQUIRED".to_string()),
             status_check_rollup: None,
-            base_ref_name: Some("main".to_string()),
         };
         let reasons = parse_merge_block_reasons(&view);
         assert!(reasons.iter().any(|r| r.contains("Required reviews")));
@@ -900,7 +900,6 @@ mod tests {
             merge_state_status: Some("BLOCKED".to_string()),
             review_decision: Some("CHANGES_REQUESTED".to_string()),
             status_check_rollup: None,
-            base_ref_name: None,
         };
         let reasons = parse_merge_block_reasons(&view);
         assert!(reasons.iter().any(|r| r.contains("Changes requested")));
@@ -918,7 +917,6 @@ mod tests {
                 details_url: None,
                 workflow_name: None,
             }]),
-            base_ref_name: None,
         };
         let reasons = parse_merge_block_reasons(&view);
         assert!(reasons.iter().any(|r| r.contains("checks failing")));
@@ -930,7 +928,6 @@ mod tests {
             merge_state_status: Some("BLOCKED".to_string()),
             review_decision: None,
             status_check_rollup: None,
-            base_ref_name: None,
         };
         let reasons = parse_merge_block_reasons(&view);
         assert!(reasons.iter().any(|r| r.contains("Linear history")));
