@@ -179,22 +179,32 @@ pub fn move_task_item(
     tracing::info!(key = %key, status = %status, "move_task_item");
     let s = Status::parse(&status).ok_or_else(|| format!("invalid status: {status}"))?;
     let repo = resolve_repo(&db_state, &repo_path)?;
-    repo.update(
-        &key,
-        UpdateParams {
-            status: Some(s),
-            ..Default::default()
-        },
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())?;
+    let task = repo
+        .update(
+            &key,
+            UpdateParams {
+                status: Some(s),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
 
-    // Writeback hook — non-blocking
-    if let Ok(guard) = jira.0.try_lock() {
-        if let Some(state) = guard.as_ref() {
-            if let Ok(cfg) = config_state.0.lock() {
-                state.try_writeback(&key, s, &cfg);
+    let fire_writeback = |task_key: &str, st: Status| {
+        if let Ok(guard) = jira.0.try_lock() {
+            if let Some(state) = guard.as_ref() {
+                if let Ok(cfg) = config_state.0.lock() {
+                    state.try_writeback(task_key, st, &cfg);
+                }
             }
+        }
+    };
+
+    fire_writeback(&key, s);
+
+    if s == Status::Done {
+        if let Some(parent_key) = planeai_tasks::try_auto_complete_parent(&repo, &task) {
+            tracing::info!(parent_key = %parent_key, "auto-completed parent task");
+            fire_writeback(&parent_key, Status::Done);
         }
     }
 

@@ -14,6 +14,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
     let labels_json: String = row.get(6)?;
     let sync_status_str: String = row.get(7)?;
     let ts: String = row.get(8)?;
+    let source_name: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
     let issue_key: String = row.get(0)?;
     Ok(JiraIssue {
         jira_project: row.get(1)?,
@@ -36,6 +37,7 @@ fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
                 Utc::now()
             }),
         issue_key,
+        source_name,
     })
 }
 
@@ -55,8 +57,8 @@ impl JiraRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         conn.execute(
-            "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at, source_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(issue_key) DO UPDATE SET
                 jira_project = excluded.jira_project,
                 summary = excluded.summary,
@@ -65,7 +67,8 @@ impl JiraRepository {
                 priority = excluded.priority,
                 labels = excluded.labels,
                 sync_status = excluded.sync_status,
-                last_synced_at = excluded.last_synced_at",
+                last_synced_at = excluded.last_synced_at,
+                source_name = excluded.source_name",
             params![
                 issue.issue_key,
                 issue.jira_project,
@@ -76,6 +79,7 @@ impl JiraRepository {
                 labels_json,
                 issue.sync_status.as_str(),
                 issue.last_synced_at.to_rfc3339(),
+                issue.source_name,
             ],
         )?;
         Ok(())
@@ -113,7 +117,7 @@ impl JiraRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at FROM jira_issues WHERE issue_key = ?1",
+            "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at, source_name FROM jira_issues WHERE issue_key = ?1",
         )?;
 
         let result = stmt.query_row(params![issue_key], row_to_issue);
@@ -194,6 +198,7 @@ mod tests {
             labels: vec!["backend".to_string(), "urgent".to_string()],
             sync_status: SyncStatus::Synced,
             last_synced_at: Utc::now(),
+            source_name: "proj".to_string(),
         }
     }
 
@@ -301,5 +306,30 @@ mod tests {
         let mut keys = repo.list_all_issue_keys().unwrap();
         keys.sort();
         assert_eq!(keys, vec!["OTHER-1", "PROJ-1", "PROJ-2"]);
+    }
+
+    #[test]
+    fn source_name_round_trips_through_upsert_and_get() {
+        let repo = setup();
+        let mut issue = sample_issue("PROJ-1");
+        issue.source_name = "my-source".to_string();
+        repo.upsert_issue(&issue).unwrap();
+
+        let fetched = repo.get_issue("PROJ-1").unwrap().unwrap();
+        assert_eq!(fetched.source_name, "my-source");
+    }
+
+    #[test]
+    fn source_name_defaults_to_empty_for_legacy_issues() {
+        // Insert via raw SQL without source_name to simulate pre-migration row
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at) VALUES ('PROJ-1', 'PROJ', 'Legacy', '', 'To Do', 'High', '[]', 'synced', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        let repo = JiraRepository::new(conn).unwrap();
+        let fetched = repo.get_issue("PROJ-1").unwrap().unwrap();
+        assert_eq!(fetched.source_name, "");
     }
 }
