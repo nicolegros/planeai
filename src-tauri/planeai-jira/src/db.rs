@@ -31,6 +31,8 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             PRIMARY KEY (task_key),
             UNIQUE (issue_key)
         );",
+        // v3: source_name — identifies which config source this issue originated from
+        "ALTER TABLE jira_issues ADD COLUMN source_name TEXT NOT NULL DEFAULT '';",
     ];
 
     for (i, sql) in migrations.iter().enumerate() {

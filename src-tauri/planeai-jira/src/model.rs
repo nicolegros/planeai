@@ -36,4 +36,7 @@ pub struct JiraIssue {
     pub labels: Vec<String>,
     pub sync_status: SyncStatus,
     pub last_synced_at: DateTime<Utc>,
+    /// Config source alias (key in `JiraConfig.projects`) used for writeback lookup.
+    #[serde(default)]
+    pub source_name: String,
 }
