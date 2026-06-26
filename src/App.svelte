@@ -36,7 +36,7 @@
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
-  import { focusMergePrompt } from "./lib/post-merge-prompt.svelte";
+  import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -242,7 +242,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { focusMergePrompt(); }
+        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
