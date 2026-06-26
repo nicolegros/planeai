@@ -787,3 +787,64 @@ fn tauri_and_iced_produce_same_command_for_claude_task() {
 
     assert_eq!(tauri_result.command, iced_resolved.command_label);
 }
+
+// ─── Local target gets augmented PATH (parity with daemon) ───────────────────
+
+#[test]
+fn local_target_gets_augmented_path() {
+    let cwd = std::env::temp_dir();
+    let req = CreateSessionRequest {
+        session_id: "local-test".to_string(),
+        project_cwd: cwd,
+        session_target: SessionTarget::Local,
+        agent_command: "kiro-cli chat".to_string(),
+        env: HashMap::new(),
+        extra_path_dirs: vec!["/custom/bin".to_string()],
+        cols: 80,
+        rows: 24,
+        durable_logs: false,
+    };
+    let result = prepare_session(&req).unwrap();
+    assert!(
+        result.env.contains_key("PATH"),
+        "Local target must have PATH in env"
+    );
+    assert!(
+        result.env["PATH"].contains("/custom/bin"),
+        "PATH must include extra_path_dirs"
+    );
+}
+
+#[test]
+fn local_and_daemon_targets_produce_same_path() {
+    let cwd = std::env::temp_dir();
+    let extra = vec!["/custom/shims".to_string()];
+
+    let local_req = CreateSessionRequest {
+        session_id: "local-1".to_string(),
+        project_cwd: cwd.clone(),
+        session_target: SessionTarget::Local,
+        agent_command: "kiro-cli chat".to_string(),
+        env: HashMap::new(),
+        extra_path_dirs: extra.clone(),
+        cols: 80,
+        rows: 24,
+        durable_logs: false,
+    };
+
+    let daemon_req = CreateSessionRequest {
+        session_id: "daemon-1".to_string(),
+        project_cwd: cwd,
+        session_target: SessionTarget::Daemon,
+        agent_command: "kiro-cli chat".to_string(),
+        env: HashMap::new(),
+        extra_path_dirs: extra,
+        cols: 80,
+        rows: 24,
+        durable_logs: false,
+    };
+
+    let local_result = prepare_session(&local_req).unwrap();
+    let daemon_result = prepare_session(&daemon_req).unwrap();
+    assert_eq!(local_result.env["PATH"], daemon_result.env["PATH"]);
+}

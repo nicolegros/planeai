@@ -45,7 +45,6 @@ impl LocalPtySession {
                 .unwrap_or_else(crate::platform::default_shell);
             CommandBuilder::new(&shell)
         };
-        cmd.env("TERM", "xterm-256color");
         if let Some(ref cwd) = config.cwd {
             cmd.cwd(cwd);
         }

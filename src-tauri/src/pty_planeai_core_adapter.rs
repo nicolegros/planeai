@@ -77,24 +77,22 @@ pub struct PlaneaiPtyBackend {
 
 impl PlaneaiPtyBackend {
     /// Spawn a new local PTY session via planeai-pty and return a SessionBackend.
+    ///
+    /// `env` is the complete set of env vars to set on the PTY process.
+    /// Callers should use `prepare_session()` to build the canonical env (PATH, TERM, etc.)
+    /// and add any UI-specific vars (COLORFGBG, PLANEAI_SOCKET) before calling.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         session_id: &str,
         command: &str,
-        args: &[String],
         cwd: &str,
-        dark_mode: bool,
+        env: Vec<(String, String)>,
         app: AppHandle,
         on_data: Channel<Response>,
         cancelled: Arc<AtomicBool>,
         observer: Arc<dyn OutputObserver>,
-        socket_path: Option<&str>,
     ) -> Result<Self, String> {
-        let full_command = if args.is_empty() {
-            command.to_string()
-        } else {
-            format!("{} {}", command, args.join(" "))
-        };
+        let full_command = command.to_string();
 
         let tauri_sink: Arc<dyn PtyEventSink> = Arc::new(TauriPtySink::new(
             session_id.to_string(),
@@ -141,18 +139,6 @@ impl PlaneaiPtyBackend {
         } else {
             tauri_sink
         };
-
-        let mut env = vec![
-            ("TERM".to_string(), "xterm-256color".to_string()),
-            (
-                "COLORFGBG".to_string(),
-                if dark_mode { "15;0" } else { "0;15" }.to_string(),
-            ),
-            ("PLANEAI_SESSION_ID".to_string(), session_id.to_string()),
-        ];
-        if let Some(sock) = socket_path {
-            env.push(("PLANEAI_SOCKET".to_string(), sock.to_string()));
-        }
 
         let config = LocalPtyConfig {
             session_id: 0,

@@ -20,12 +20,9 @@ use planeai_pty::FlowControl;
 pub enum PtyTarget {
     /// Attach to an existing tmux session.
     TmuxAttach { tmux_name: String },
-    /// Spawn a command in a local PTY (shell tabs and agent sessions).
-    Shell {
-        command: String,
-        args: Vec<String>,
-        cwd: String,
-    },
+    /// Spawn a command string in a local PTY (shell tabs and agent sessions).
+    /// The command is wrapped in the platform shell (`bash -c` on Unix, `cmd /C` on Windows).
+    Shell { command: String, cwd: String },
     /// Attach to a daemon-managed session via data connection.
     Daemon {
         session_id: String,
@@ -104,7 +101,6 @@ impl SessionBackend for DaemonBackend {
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
     observer: RwLock<Arc<dyn OutputObserver>>,
-    socket_path: std::sync::Mutex<Option<String>>,
 }
 
 impl PtyManager {
@@ -112,7 +108,6 @@ impl PtyManager {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             observer: RwLock::new(Arc::new(NoopObserver)),
-            socket_path: std::sync::Mutex::new(None),
         }
     }
 
@@ -120,18 +115,18 @@ impl PtyManager {
         *self.observer.write().unwrap() = observer;
     }
 
-    pub fn set_socket_path(&self, path: String) {
-        *self.socket_path.lock().unwrap() = Some(path);
-    }
-
     /// Attach a PTY to a session. The command run inside depends on the PtyTarget variant.
+    ///
+    /// `env` is the pre-built environment for the PTY process.
+    /// For local/tmux shell targets, callers should use `prepare_session()` to build the
+    /// canonical env (PATH, TERM, PLANEAI_SESSION_ID) and add UI-specific vars on top.
     pub fn attach(
         &self,
         session_id: &str,
         target: PtyTarget,
-        dark_mode: bool,
         app: AppHandle,
         on_data: Channel<Response>,
+        env: Vec<(String, String)>,
     ) -> Result<(), String> {
         // Handle daemon target via async path
         if let PtyTarget::Daemon {
@@ -142,21 +137,20 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
-        let (command, args, cwd) = match target {
-            PtyTarget::Shell { command, args, cwd } => (command, args, cwd),
+        let (command, cwd) = match target {
+            PtyTarget::Shell { command, cwd } => (command, cwd),
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
                     let tmux_bin = tmux::tmux_bin().to_string();
-                    let target_arg = format!("={}", tmux_name);
-                    (
-                        tmux_bin,
-                        vec!["attach-session".to_string(), "-t".to_string(), target_arg],
-                        std::env::current_dir()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
-                    )
+                    // Quote tmux_name to prevent shell metacharacter injection.
+                    let escaped_name = tmux_name.replace('\'', "'\\''");
+                    let cmd = format!("{} attach-session -t '={}'", tmux_bin, escaped_name);
+                    let cwd = std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    (cmd, cwd)
                 }
                 #[cfg(windows)]
                 {
@@ -169,18 +163,8 @@ impl PtyManager {
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let observer = self.observer.read().unwrap().clone();
-        let socket_path = self.socket_path.lock().unwrap().clone();
         let backend = PlaneaiPtyBackend::spawn(
-            session_id,
-            &command,
-            &args,
-            &cwd,
-            dark_mode,
-            app,
-            on_data,
-            cancelled,
-            observer,
-            socket_path.as_deref(),
+            session_id, &command, &cwd, env, app, on_data, cancelled, observer,
         )?;
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
         if let Some(old) = sessions.get(session_id) {

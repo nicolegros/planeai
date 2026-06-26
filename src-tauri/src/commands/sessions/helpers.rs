@@ -1,7 +1,10 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::config;
 use crate::db;
+
+use planeai_core::session_launch::{prepare_session, CreateSessionRequest, SessionTarget};
 
 static KIRO_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
 static CLAUDE_HOOK_CACHE: Mutex<Option<bool>> = Mutex::new(None);
@@ -87,6 +90,40 @@ pub(crate) fn is_copilot_hook_installed() -> bool {
             });
         crate::notify::is_copilot_hook_installed_at(&copilot_dir)
     })
+}
+
+/// Build the canonical PTY environment for a local/tmux session via `prepare_session()`.
+///
+/// Includes augmented PATH, TERM, PLANEAI_SESSION_ID, COLORFGBG, and PLANEAI_SOCKET.
+pub(crate) fn build_local_env(
+    session_id: &str,
+    cwd: PathBuf,
+    agent_command: &str,
+    dark_mode: bool,
+    extra_path_dirs: Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut pre_env = std::collections::HashMap::new();
+    pre_env.insert(
+        "COLORFGBG".to_string(),
+        if dark_mode { "15;0" } else { "0;15" }.to_string(),
+    );
+    pre_env.insert(
+        "PLANEAI_SOCKET".to_string(),
+        planeai_ipc::address(planeai_ipc::Channel::Notify, &planeai_paths::app_data_dir()),
+    );
+    let req = CreateSessionRequest {
+        session_id: session_id.to_string(),
+        project_cwd: cwd,
+        session_target: SessionTarget::Local,
+        agent_command: agent_command.to_string(),
+        env: pre_env,
+        extra_path_dirs,
+        cols: 80,
+        rows: 24,
+        durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+    };
+    let result = prepare_session(&req).map_err(|e| e.to_string())?;
+    Ok(result.env.into_iter().collect())
 }
 
 #[cfg(test)]

@@ -4,15 +4,17 @@ use tauri::State;
 use crate::config;
 use crate::db;
 use crate::pty;
-use crate::state::{DbState, PtyState};
+use crate::state::{ConfigState, DbState, PtyState};
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_tab(
     session_id: String,
     tab_index: u32,
     dark_mode: Option<bool>,
     on_data: Channel<tauri::ipc::Response>,
     db_state: State<DbState>,
+    config_state: State<ConfigState>,
     state: State<PtyState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -57,15 +59,27 @@ pub fn spawn_tab(
         }
     } else {
         pty::PtyTarget::Shell {
-            command: shell,
-            args: vec!["-l".to_string()],
-            cwd,
+            command: format!("{} -l", shell),
+            cwd: cwd.clone(),
         }
     };
 
-    state
-        .0
-        .attach(&pty_key, target, dark_mode.unwrap_or(true), app, on_data)?;
+    // Build env for local shell tabs via prepare_session()
+    let env = if session.backend != "daemon" {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let extra_path_dirs = cfg.resolved_extra_path_dirs();
+        super::helpers::build_local_env(
+            &pty_key,
+            std::path::PathBuf::from(&cwd),
+            &format!("{} -l", shell),
+            dark_mode.unwrap_or(true),
+            extra_path_dirs,
+        )?
+    } else {
+        vec![]
+    };
+
+    state.0.attach(&pty_key, target, app, on_data, env)?;
 
     Ok(())
 }

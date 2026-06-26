@@ -563,7 +563,7 @@ target/release/planeai-workflow-smoke \
 
 **Date:** 2026-06-18
 
-Both Tauri and Iced workflow now create daemon sessions through the same shared service:
+Both Tauri and Iced workflow now create sessions (all backends: local, tmux, daemon) through the same shared service:
 
 ```
 planeai_core::session_launch::prepare_session(CreateSessionRequest) → CreateSessionResult

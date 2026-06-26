@@ -27,7 +27,9 @@ export function removeComment(sessionId: string, commentId: string): void {
 export function editComment(sessionId: string, commentId: string, newText: string): void {
   const list = commentsBySession[sessionId];
   if (!list) return;
-  commentsBySession[sessionId] = list.map((c) => (c.id === commentId ? { ...c, text: newText } : c));
+  commentsBySession[sessionId] = list.map((c) =>
+    c.id === commentId ? { ...c, text: newText } : c,
+  );
 }
 
 export function getComments(sessionId: string): ReviewComment[] {
