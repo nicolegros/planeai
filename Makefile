@@ -11,7 +11,7 @@ lint: ## Check formatting and clippy
 	pnpm exec svelte-check
 	pnpm fmt:check
 	cd src-tauri && cargo fmt --all -- --check
-	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev:
 	pnpm tauri dev --release
@@ -38,7 +38,7 @@ open: bundle
 
 test:
 	pnpm test
-	cd src-tauri && env -u PLANEAI_DAEMON_PTY_CORE -u PLANEAI_SESSION_LOG_DIR cargo test --workspace
+	cd src-tauri && env -u PLANEAI_DAEMON_PTY_CORE -u PLANEAI_SESSION_LOG_DIR JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo test --workspace
 
 test-e2e: build
 	./tests/e2e_session_persistence.sh

@@ -12,6 +12,7 @@
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import JiraSidebarSection from "./JiraSidebarSection.svelte";
+  import AssignJiraDialog from "./AssignJiraDialog.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -104,6 +105,34 @@
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
   let taskContextMenu = $state<{ x: number; y: number; task: TaskItem; projectPath: string } | null>(null);
+
+  // Jira task assignment
+  let assignTask = $state<TaskItem | null>(null);
+  let assignPreselectedProjectId = $state("");
+  let pendingAssignTask = $state<TaskItem | null>(null);
+  let projectIdsBeforeCreate = $state<Set<string>>(new Set());
+
+  function openAssignDialog(task: TaskItem) { assignTask = task; assignPreselectedProjectId = ""; }
+
+  function startNewProjectForAssign() {
+    if (assignTask) {
+      pendingAssignTask = assignTask;
+      projectIdsBeforeCreate = new Set(projects.map(p => p.id));
+    }
+    assignTask = null;
+    onAddProject();
+  }
+
+  // Re-open assign dialog after project creation with the new project pre-selected
+  $effect(() => {
+    if (!pendingAssignTask) return;
+    const newProject = projects.find(p => !projectIdsBeforeCreate.has(p.id));
+    if (newProject) {
+      assignTask = pendingAssignTask;
+      assignPreselectedProjectId = newProject.id;
+      pendingAssignTask = null;
+    }
+  });
 
   function onContextMenu(e: MouseEvent, session: Session) { e.preventDefault(); contextMenu = { x: e.clientX, y: e.clientY, session }; }
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
@@ -309,7 +338,7 @@
     }
 
     if (current.type === "jira_task") {
-      if (action.type === "select") onAssignJiraTask?.(current.task.key);
+      if (action.type === "select") openAssignDialog(current.task);
       return;
     }
 
@@ -531,9 +560,13 @@
         {zone}
         {flatNavIndex}
         onToggleSection={() => toggleSection("jira")}
-        onAssignJiraTask={(key) => onAssignJiraTask?.(key)}
+        onAssignJiraTask={(key) => {
+          const task = jiraTasks.find(t => t.key === key);
+          if (task) openAssignDialog(task);
+        }}
       />
     {/if}
+
   </nav>
 
   <!-- Preferences footer -->
@@ -610,4 +643,15 @@
       ...(taskContextMenu.task.status !== "done" ? [{ label: "→ Done", onSelect: () => moveTask(taskContextMenu!.task.key, "done") }] : []),
     ]}
   />
+{/if}
+
+<!-- Assign Jira task to project dialog -->
+{#if assignTask}
+<AssignJiraDialog
+  task={assignTask}
+  {projects}
+  preselectedProjectId={assignPreselectedProjectId}
+  onClose={() => { assignTask = null; }}
+  onNewProject={startNewProjectForAssign}
+/>
 {/if}
