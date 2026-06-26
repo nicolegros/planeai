@@ -87,11 +87,11 @@ function runDefault(): void {
   const taskThen = hasTask && onTaskDone ? onTaskDone(sessionId).catch(() => {}) : Promise.resolve();
 
   if (action === "archive") {
-    taskThen.then(() => onArchive(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success"));
+    taskThen.then(() => onArchive(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success")).catch((e) => showSnackbar(String(e), "error"));
   } else if (action === "destroy") {
-    taskThen.then(() => onDestroy(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session destroyed" : "Session auto-destroyed", "success"));
+    taskThen.then(() => onDestroy(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session destroyed" : "Session auto-destroyed", "success")).catch((e) => showSnackbar(String(e), "error"));
   } else if (hasTask && onTaskDone) {
-    taskThen.then(() => showSnackbar("Task marked done", "success"));
+    taskThen.then(() => showSnackbar("Task marked done", "success")).catch((e) => showSnackbar(String(e), "error"));
   }
 }
 
