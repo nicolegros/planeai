@@ -82,7 +82,7 @@ Present in details the tasks that will be created and ask for approval.
 
 ### 6. Create the tasks
 
-Use `planeai-cli task add` for each task:
+Use `planeai-cli axi task add` for each task:
 
 ```bash
 # Parent task

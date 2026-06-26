@@ -5,7 +5,7 @@ description: 'Create a single task in the internal task tracker. Use when the us
 
 ## What this does
 
-Create a single, well-formed task in the user's task board using the `planeai-cli task add` command. Translate whatever the user describes into a structured task with appropriate metadata.
+Create a single, well-formed task in the user's task board using the `planeai-cli axi task add` command. Translate whatever the user describes into a structured task with appropriate metadata.
 
 ## When NOT to use this
 
@@ -37,7 +37,7 @@ From the user's message, infer what metadata to attach:
 | `--blocked-by` | Only if the user explicitly names a task key that blocks this one (e.g., "this depends on PLA-5"). Comma-separated.                                                                                                                                                        |
 | `--parent`     | Only if the user explicitly says this is a subtask of an existing task.                                                                                                                                                                                                    |
 
-Don't force metadata that isn't there. A bare `planeai-cli task add "Title"` is perfectly fine.
+Don't force metadata that isn't there. A bare `planeai-cli axi task add "Title"` is perfectly fine.
 
 ### 3. Target the right project
 

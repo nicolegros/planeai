@@ -88,7 +88,7 @@ Confirm with the user before deleting unless they were explicit (e.g., "delete P
 ## Guidelines
 
 - When the user references a task by key, use that key directly.
-- When the user references a task vaguely ("that auth task"), run `planeai-cli task ls` to find it, then confirm the key before acting.
+- When the user references a task vaguely ("that auth task"), run `planeai-cli axi task ls` to find it, then confirm the key before acting.
 - After any operation, briefly confirm what happened (e.g., "Moved **PLA-3** to done.").
 - If a command fails, report the error and suggest a fix.
 - Use `--project <name>` only when the user names a specific project or context makes it clear.
