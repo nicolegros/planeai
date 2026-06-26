@@ -10,7 +10,6 @@ use rusqlite::Connection;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::paths;
 
 pub struct JiraState {
     pub sync: Option<Arc<JiraSync>>,
@@ -71,7 +70,7 @@ impl JiraState {
             jira_cfg
                 .projects
                 .values()
-                .find(|m| m.jira_project == issue.source_name)?
+                .find(|m| m.jira_project == issue.jira_project)?
                 .writeback
                 .clone()
         })();
@@ -91,10 +90,10 @@ impl JiraState {
 
 pub fn init_jira(config: &Config) -> Option<JiraState> {
     let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
-    let token_dir = paths::app_data_dir().join("jira-tokens");
+    let token_dir = planeai_paths::app_data_dir().join("jira-tokens");
     let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
 
-    let db_path = paths::db_path();
+    let db_path = planeai_paths::db_path();
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => {
@@ -130,7 +129,7 @@ pub fn init_jira(config: &Config) -> Option<JiraState> {
 fn open_task_provider(
     config: &JiraConfig,
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {
-    let db_path = paths::db_path();
+    let db_path = planeai_paths::db_path();
     let path_str = db_path.to_str().ok_or("invalid db path")?;
     // Derive prefix from the Jira site hostname for determinism.
     // After PLA-148 all Jira tasks use explicit keys, so this only affects the

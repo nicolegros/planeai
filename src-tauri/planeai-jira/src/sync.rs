@@ -158,7 +158,6 @@ impl JiraSync {
                     self.repo.mark_stale(&[&key])?;
                     result.stale += 1;
                 }
-                }
             } else {
                 self.repo.mark_stale(&[&key])?;
                 result.stale += 1;

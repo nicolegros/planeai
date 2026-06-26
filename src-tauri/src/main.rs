@@ -147,14 +147,29 @@ fn main() {
 
             // Stale worktree cleanup (fire-and-forget background thread)
             let cleanup_db_path = planeai_paths::db_path();
-            let cleanup_cfg = cfg.clone();
             std::thread::spawn(move || {
-                let cleanup_conn =
-                    rusqlite::Connection::open(&cleanup_db_path).expect("open db for cleanup");
-                let errors =
-                    crate::worktree::cleanup_stale_worktrees(&cleanup_conn, &cleanup_cfg);
+                let conn = match rusqlite::Connection::open(&cleanup_db_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("stale worktree cleanup: failed to open db: {e}");
+                        return;
+                    }
+                };
+                let errors = planeai_core::cleanup::cleanup_stale_worktrees(
+                    &conn,
+                    |project_path, wt_path| {
+                        if !std::path::Path::new(wt_path).exists() {
+                            return Ok(());
+                        }
+                        let _ = planeai_core::git::worktree_remove(project_path, wt_path);
+                        if std::path::Path::new(wt_path).exists() {
+                            std::fs::remove_dir_all(wt_path).map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    },
+                );
                 for e in &errors {
-                    tracing::warn!("stale worktree cleanup error: {e}");
+                    tracing::warn!("stale worktree cleanup: {e}");
                 }
                 if errors.is_empty() {
                     tracing::info!("stale worktree cleanup: complete");

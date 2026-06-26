@@ -180,12 +180,29 @@ impl SqliteRepository {
         })
     }
 
-    fn get_with_conn(&self, conn: &Connection, key: &str) -> Result<Task, Error> {
+    fn query_task(
+        &self,
+        conn: &Connection,
+        key: &str,
+        prefix_filter: Option<&str>,
+    ) -> Result<Task, Error> {
+        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match prefix_filter {
+            Some(p) => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+                vec![Box::new(key.to_string()), Box::new(p.to_string())],
+            ),
+            None => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1",
+                vec![Box::new(key.to_string())],
+            ),
+        };
         let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2")
+            .prepare(sql)
             .map_err(|e| Error::Storage(e.to_string()))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
 
-        stmt.query_row(params![key, self.prefix], |row| {
+        stmt.query_row(params_refs.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -263,7 +280,7 @@ impl TaskProvider for SqliteRepository {
         if result == 0 {
             // Key already exists — idempotent create: return existing task only if it
             // belongs to this project (prevents cross-project collision).
-            return self.get_with_conn(&conn, &key);
+            return self.query_task(&conn, &key, Some(&self.prefix));
         }
 
         for bk in &params.blocked_by {
@@ -303,45 +320,7 @@ impl TaskProvider for SqliteRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1")
-            .map_err(|e| Error::Storage(e.to_string()))?;
-
-        stmt.query_row(params![key], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i32>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
-            _ => Error::Storage(e.to_string()),
-        })
-        .and_then(
-            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
-                self.row_to_task(
-                    &conn,
-                    TaskRow {
-                        key: k,
-                        title,
-                        description: desc,
-                        status,
-                        priority,
-                        parent_key: parent,
-                        base_branch,
-                        created_at: created,
-                        updated_at: updated,
-                    },
-                )
-            },
-        )
+        self.query_task(&conn, key, None)
     }
 
     fn list(&self, filter: ListFilter) -> Result<Vec<Task>, Error> {
