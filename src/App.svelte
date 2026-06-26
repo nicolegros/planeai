@@ -228,7 +228,7 @@
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") {
           const s = sessions.find(x => x.id === activeSessionId);
-          if (s?.pr_url) { showPrPanel = !showPrPanel; }
+          if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); }
           else if (activeSessionId) { openPrForm(); }
         }
       },
@@ -301,6 +301,7 @@
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
+    onTogglePrPanel={() => { const s = sessions.find(x => x.id === activeSessionId); if (s?.pr_url) { showPrPanel = !showPrPanel; if (!showPrPanel) tick().then(() => refocusTerminal()); } }}
     {symphonyStatus}
   />
 
@@ -397,7 +398,7 @@
         <Terminal
           sessionId={ptyKey}
           visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           paused={poolIsPaused(session.id)}
