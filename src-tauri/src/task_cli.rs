@@ -40,6 +40,7 @@ pub fn run_task_add(repo: &dyn TaskProvider, params: AddParams) -> Result<String
     tracing::info!(params.title, params.priority, "creating task");
     let task = repo
         .create(CreateParams {
+            key: None,
             title: params.title.to_string(),
             description: params.description.to_string(),
             status: None,
