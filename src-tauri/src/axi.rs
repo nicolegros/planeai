@@ -1,6 +1,6 @@
 //! AXI subcommand implementations — TOON output for agent consumption.
 
-use planeai_tasks::model::{ListFilter, Status, Task};
+use planeai_tasks::model::{ListFilter, Status, Task, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_toon::{field, int_val, render, str_val, Field, Value};
 
@@ -52,7 +52,7 @@ pub fn task_ls(repo: &dyn TaskProvider, status: Option<&str>, tags: &[String]) -
         .collect();
 
     let count_msg = if status.is_some() {
-        format!("{} of {} total", rows.len(), total)
+        format!("{} matching", rows.len())
     } else {
         format!("{} total", total)
     };
@@ -101,7 +101,7 @@ pub fn task_add(repo: &dyn TaskProvider, params: crate::task_cli::AddParams) -> 
         tags: params.tags.to_vec(),
         blocked_by: params.blocked_by.to_vec(),
         parent_key: params.parent.map(|s| s.to_string()),
-        base_branch: params.base_branch.unwrap_or("main").to_string(),
+        base_branch: params.base_branch.unwrap_or(DEFAULT_BASE_BRANCH).to_string(),
     }) {
         Ok(t) => t,
         Err(e) => return (emit_error(&e.to_string(), &[]), 1),
@@ -439,8 +439,13 @@ fn truncate_desc(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_string();
     }
+    let end = s.char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= limit)
+        .last()
+        .unwrap_or(0);
     let total = s.len();
-    format!("{}... (truncated, {} chars total)", &s[..limit], total)
+    format!("{}... (truncated, {} chars total)", &s[..end], total)
 }
 
 fn emit_error(msg: &str, help: &[String]) -> String {
@@ -498,7 +503,7 @@ mod tests {
 
         let (output, code) = task_ls(&repo, Some("todo"), &[]);
         assert_eq!(code, 0);
-        assert!(output.contains("count: 1 of 1 total"));
+        assert!(output.contains("count: 1 matching"));
         assert!(output.contains("TST-2"));
         assert!(!output.contains("TST-1"));
     }
