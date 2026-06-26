@@ -264,7 +264,7 @@ pub async fn create_pr(
     if draft {
         args.push("--draft".to_string());
     }
-    let mut pr_cmd = tokio::process::Command::new("gh");
+    let mut pr_cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     pr_cmd.args(&args).current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut pr_cmd);
     let pr_output = pr_cmd
@@ -331,7 +331,7 @@ pub async fn get_ci_checks(
         return Ok(vec![]);
     }
 
-    let mut cmd = tokio::process::Command::new("gh");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
         .current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
@@ -379,7 +379,7 @@ pub async fn get_allowed_merge_strategies(
         .await?
         .ok_or("not a GitHub repo")?;
 
-    let mut cmd = tokio::process::Command::new("gh");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args([
         "api",
         &format!("repos/{repo}"),
@@ -452,7 +452,7 @@ pub async fn merge_pr(
 ) -> Result<(), String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let mut cmd = tokio::process::Command::new("gh");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args([
         "pr",
         "merge",
@@ -509,7 +509,7 @@ pub async fn mark_pr_ready(
 ) -> Result<(), String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let mut cmd = tokio::process::Command::new("gh");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args(["pr", "ready", &ctx.branch]).current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
