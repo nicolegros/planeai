@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects as projectsApi } from "../lib/api";
+  import { projects as projectsApi, jira as jiraApi } from "../lib/api";
   import type { TaskItem, Session, Project } from "../lib/types";
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
@@ -11,11 +11,13 @@
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
+  import JiraSidebarSection from "./JiraSidebarSection.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
+  import * as jiraTaskStore from "../lib/jira-task-store.svelte";
 
   interface Props {
     renamingSessionId: string | null;
@@ -31,9 +33,10 @@
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
+    onAssignJiraTask?: (jiraTaskKey: string) => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -42,6 +45,8 @@
   const agentStates = $derived(orchestrator.getAgentStates());
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
+  const jiraTasks = $derived(jiraTaskStore.getJiraTasks());
+  const jiraChildCounts = $derived(jiraTaskStore.getChildCounts());
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -61,6 +66,8 @@
     }
   }
   $effect(() => { if (projects.length) loadAutoModes(); });
+  let jiraConnected = $state(false);
+  $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);
@@ -164,7 +171,7 @@
   }
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string };
+  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of projects) {
@@ -185,6 +192,13 @@
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
     }
+    // Jira section
+    if (jiraTasks.length > 0) {
+      result.push({ type: "jira_header" });
+      if (!collapsedSections["jira"]) {
+        for (const t of jiraTasks) result.push({ type: "jira_task", task: t });
+      }
+    }
     return result;
   });
 
@@ -196,6 +210,8 @@
       else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
       else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
       else if (item.type === "task") map.set(`task:${item.task.key}`, i);
+      else if (item.type === "jira_header") map.set("jira_header", i);
+      else if (item.type === "jira_task") map.set(`jira:${item.task.key}`, i);
     });
     return map;
   });
@@ -288,6 +304,16 @@
       return;
     }
 
+    if (current.type === "jira_header") {
+      if (action.type === "select") toggleSection("jira");
+      return;
+    }
+
+    if (current.type === "jira_task") {
+      if (action.type === "select") onAssignJiraTask?.(current.task.key);
+      return;
+    }
+
     if (current.type === "orphan") {
       const session = current.session;
       if (action.type === "select") { onSelectSession(session.id); focusTerminal(); }
@@ -297,7 +323,7 @@
       else if (action.type === "restart") onRestartSession(session);
       else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
       else if (action.type === "review") { onSelectSession(session.id); orchestrator.toggleDiff(); }
-    } else {
+    } else if (current.type === "task") {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
@@ -315,6 +341,7 @@
     if (now - lastFocusRefresh < FOCUS_REFRESH_COOLDOWN_MS) return;
     lastFocusRefresh = now;
     taskStore.refresh(projects.map(p => p.path));
+    if (jiraConnected) jiraTaskStore.loadJiraTasks();
   }
 </script>
 
@@ -507,6 +534,17 @@
           {/if}
         </div>
       {/each}
+
+      <!-- Jira section -->
+      <JiraSidebarSection
+        tasks={jiraTasks}
+        childCounts={jiraChildCounts}
+        collapsed={collapsedSections["jira"] ?? false}
+        {zone}
+        {flatNavIndex}
+        onToggleSection={() => toggleSection("jira")}
+        onAssignJiraTask={(key) => onAssignJiraTask?.(key)}
+      />
     {/if}
   </nav>
 
