@@ -20,6 +20,8 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Primitive**       | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.                                                                                       |
 | **Theme mode**      | One of three states: `system`, `light`, `dark`. Persisted in localStorage. Controls which color palette is active.                                                                                                                                                                                    |
 | **Daemon**          | (Experimental) A background process (`planeai-daemon`) that manages session PTYs. Spawned on-demand by the CLI or GUI. Sessions survive indefinitely as long as the daemon is running.                                                                                                                |
+| **AXI**             | Agent eXperience Interface — a CLI subcommand (`planeai-cli axi`) that outputs TOON instead of JSON, optimised for autonomous agent consumption. Covers task, session, and project operations.                                                                                                        |
+| **TOON**            | A token-efficient text output format used by the AXI interface. Supports object fields, tabular arrays, and primitive arrays with minimal overhead. Implemented in the `planeai-toon` crate.                                                                                                          |
 
 ## Session lifecycle (v1)
 

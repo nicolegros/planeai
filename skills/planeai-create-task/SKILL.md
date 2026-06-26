@@ -5,7 +5,7 @@ description: 'Create a single task in the internal task tracker. Use when the us
 
 ## What this does
 
-Create a single, well-formed task in the user's task board using the `planeai-cli task add` command. Translate whatever the user describes into a structured task with appropriate metadata.
+Create a single, well-formed task in the user's task board using the `planeai-cli axi task add` command. Translate whatever the user describes into a structured task with appropriate metadata.
 
 ## When NOT to use this
 
@@ -37,7 +37,7 @@ From the user's message, infer what metadata to attach:
 | `--blocked-by` | Only if the user explicitly names a task key that blocks this one (e.g., "this depends on PLA-5"). Comma-separated.                                                                                                                                                        |
 | `--parent`     | Only if the user explicitly says this is a subtask of an existing task.                                                                                                                                                                                                    |
 
-Don't force metadata that isn't there. A bare `planeai-cli task add "Title"` is perfectly fine.
+Don't force metadata that isn't there. A bare `planeai-cli axi task add "Title"` is perfectly fine.
 
 ### 3. Target the right project
 
@@ -51,10 +51,10 @@ Otherwise, omit the flag and let planeai resolve from CWD (which is the default 
 ### 4. Run the command
 
 ```bash
-planeai-cli task add "Title here" [flags]
+planeai-cli axi task add "Title here" [--desc "..."] [--priority <int>] [--tags <a,b>] [--blocked-by <K1,K2>] [--parent <KEY>] [--project <name>]
 ```
 
-The command outputs JSON with the created task (including the auto-assigned key like `PLA-3`). Confirm the creation to the user with the key and a brief summary.
+The command outputs TOON with the created task (including the auto-assigned key like `PLA-3`) and a next-step hint. Confirm the creation to the user with the key and a brief summary.
 
 If the command fails (e.g., a referenced `--blocked-by` key doesn't exist), report the error clearly and suggest a fix.
 
@@ -69,17 +69,17 @@ After creation, tell the user the key and what was created. Keep it brief:
 **User:** "track a task for adding dark mode support to the settings page"
 
 ```bash
-planeai-cli task add "Add dark mode support to settings page" --tags ui
+planeai-cli axi task add "Add dark mode support to settings page" --tags ui
 ```
 
 **User:** "I need to fix that crash in the payment flow before release, it's urgent. The error is a nil pointer in checkout.go line 42"
 
 ```bash
-planeai-cli task add "Fix nil pointer crash in payment flow" --priority 1 --tags payments --desc "Nil pointer dereference in checkout.go:42. Needs fix before release."
+planeai-cli axi task add "Fix nil pointer crash in payment flow" --priority 1 --tags payments --desc "Nil pointer dereference in checkout.go:42. Needs fix before release."
 ```
 
 **User:** "add a task to the nomi project for migrating the budget chart"
 
 ```bash
-planeai-cli task add "Migrate budget chart" --project nomi --tags migration
+planeai-cli axi task add "Migrate budget chart" --project nomi --tags migration
 ```

@@ -1,3 +1,4 @@
+pub mod axi;
 pub mod bench;
 pub mod cleanup;
 pub mod cli;

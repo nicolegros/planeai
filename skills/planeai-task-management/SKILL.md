@@ -21,12 +21,19 @@ Manage existing tasks using `planeai-cli`. Covers viewing, updating, moving, and
 
 ## CLI Reference
 
+Use the AXI interface for token-efficient TOON output:
+
 ```
-planeai-cli task show <key>                   # View task details
-planeai-cli task ls [flags]                   # List tasks
-planeai-cli task edit <key> [flags]           # Update task fields
-planeai-cli task move <key> <status>          # Change task status
-planeai-cli task delete <key>                 # Delete a task
+planeai-cli axi task show <key>                   # View task details
+planeai-cli axi task ls [flags]                   # List tasks
+planeai-cli axi task move <key> <status>          # Change task status
+```
+
+For edit and delete (not yet in axi), use the JSON interface:
+
+```
+planeai-cli task edit <key> [flags]               # Update task fields
+planeai-cli task delete <key>                     # Delete a task
 ```
 
 ## Operations
@@ -34,7 +41,7 @@ planeai-cli task delete <key>                 # Delete a task
 ### Show a task
 
 ```bash
-planeai-cli task show <key>
+planeai-cli axi task show <key>
 ```
 
 Use when the user asks to see, view, or inspect a task.
@@ -42,7 +49,7 @@ Use when the user asks to see, view, or inspect a task.
 ### List tasks
 
 ```bash
-planeai-cli task ls [--status <status>] [--tags <a,b>] [--project <name>]
+planeai-cli axi task ls [--status <status>] [--tags <a,b>] [--project <name>]
 ```
 
 Use when the user asks what tasks exist, what's in a certain status, or wants an overview. Omit flags to list all tasks in the current project.
@@ -58,7 +65,7 @@ Only pass flags for fields the user wants to change. Don't overwrite fields unne
 ### Move a task
 
 ```bash
-planeai-cli task move <key> <status>
+planeai-cli axi task move <key> <status>
 ```
 
 Status values: `todo`, `in_progress`, `done`, `cancelled`.
@@ -81,7 +88,7 @@ Confirm with the user before deleting unless they were explicit (e.g., "delete P
 ## Guidelines
 
 - When the user references a task by key, use that key directly.
-- When the user references a task vaguely ("that auth task"), run `planeai-cli task ls` to find it, then confirm the key before acting.
+- When the user references a task vaguely ("that auth task"), run `planeai-cli axi task ls` to find it, then confirm the key before acting.
 - After any operation, briefly confirm what happened (e.g., "Moved **PLA-3** to done.").
 - If a command fails, report the error and suggest a fix.
 - Use `--project <name>` only when the user names a specific project or context makes it clear.

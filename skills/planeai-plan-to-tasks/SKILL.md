@@ -82,14 +82,14 @@ Present in details the tasks that will be created and ask for approval.
 
 ### 6. Create the tasks
 
-Use `planeai-cli task add` for each task:
+Use `planeai-cli axi task add` for each task:
 
 ```bash
 # Parent task
-planeai-cli task add "Parent title" --desc "..." --tags feature-name
+planeai-cli axi task add "Parent title" --desc "..." --tags feature-name
 
 # Subtasks (reference parent key)
-planeai-cli task add "Subtask title" --parent PLA-1 --desc "..." --blocked-by PLA-1
+planeai-cli axi task add "Subtask title" --parent PLA-1 --desc "..." --blocked-by PLA-1
 ```
 
 ### 7. Present the result
@@ -101,7 +101,7 @@ After all tasks are created, present a summary table showing:
 ## CLI Reference
 
 ```
-planeai-cli task add "Title" [flags]
+planeai-cli axi task add "Title" [flags]
 
 Flags:
   --desc <string>         Task description
@@ -110,11 +110,10 @@ Flags:
   --blocked-by <K1,K2>    Comma-separated blocker keys
   --parent <KEY>          Parent task key
   --project <name>        Target project (default: resolve from CWD)
-  --pretty                Human-readable output
 
-planeai-cli task show <key>
-planeai-cli task ls [--status <status>] [--tags <a,b>]
-planeai-cli task move <key> <status>
+planeai-cli axi task show <key>
+planeai-cli axi task ls [--status <status>] [--tags <a,b>]
+planeai-cli axi task move <key> <status>
 planeai-cli task edit <key> [--title ...] [--desc ...] [--priority ...] [--tags ...] [--blocked-by ...]
 planeai-cli task delete <key>
 ```

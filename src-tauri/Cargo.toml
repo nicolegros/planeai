@@ -6,6 +6,7 @@ members = [
   "planeai-ipc",
   "planeai-pty",
   "planeai-paths",
+  "planeai-toon",
 ]
 resolver = "2"
 
@@ -52,6 +53,7 @@ path = "src/bin/daemon.rs"
 [dependencies]
 planeai-core = { path = "planeai-core" }
 planeai-tasks = { path = "planeai-tasks" }
+planeai-toon = { path = "planeai-toon" }
 planeai-ipc = { path = "planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "planeai-daemon" }
 planeai-pty = { path = "planeai-pty" }

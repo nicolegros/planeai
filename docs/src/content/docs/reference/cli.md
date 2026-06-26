@@ -3,7 +3,7 @@ title: CLI Reference
 description: Command reference for planeai-cli — manage sessions, projects, tasks, and the orchestrator from the terminal.
 ---
 
-`planeai-cli` is a companion CLI that lets you script and automate planeai from the terminal. All commands output JSON by default and accept a `--pretty` flag for human-readable output.
+`planeai-cli` is a companion CLI that lets you script and automate planeai from the terminal. Most commands output JSON by default and accept a `--pretty` flag for human-readable output. The `axi` subcommand outputs TOON (a token-efficient text format) for agent consumption.
 
 ## Install
 
@@ -148,7 +148,7 @@ planeai-cli task ls [--status <status>] [--tags <tags>] [--project <name>]
 
 | Flag       | Description                                     |
 | ---------- | ----------------------------------------------- |
-| `--status` | Filter by status: `todo`, `in_progress`, `done` |
+| `--status` | Filter by status: `todo`, `in_progress`, `in_review`, `done` |
 | `--tags`   | Comma-separated tags to filter by               |
 
 ### `task move`
@@ -159,7 +159,7 @@ Move a task to a new status.
 planeai-cli task move <key> <status>
 ```
 
-Valid statuses: `todo`, `in_progress`, `done`.
+Valid statuses: `todo`, `in_progress`, `in_review`, `done`.
 
 ### `task edit`
 
@@ -206,6 +206,74 @@ Stop the orchestrator.
 
 ```bash
 planeai-cli symphony stop
+```
+
+---
+
+## `axi`
+
+Agent eXperience Interface — token-efficient TOON output designed for autonomous agents. Use `planeai-cli axi` instead of the JSON commands when building agent integrations.
+
+Running `planeai-cli axi` with no subcommand prints a context-aware home view (current project, open tasks, active sessions).
+
+### `axi task ls`
+
+List tasks (TOON tabular output).
+
+```bash
+planeai-cli axi task ls [--status <status>] [--tags <tags>] [--project <name>]
+```
+
+### `axi task show`
+
+Show task details.
+
+```bash
+planeai-cli axi task show <key> [--project <name>]
+```
+
+### `axi task add`
+
+Create a new task.
+
+```bash
+planeai-cli axi task add <title> [--desc "..."] [--priority <int>] [--tags <a,b>] [--blocked-by <K1,K2>] [--parent <KEY>] [--project <name>]
+```
+
+### `axi task move`
+
+Move a task to a new status.
+
+```bash
+planeai-cli axi task move <key> <status> [--project <name>]
+```
+
+Valid statuses: `todo`, `in_progress`, `in_review`, `done`.
+
+### `axi session ls`
+
+List sessions.
+
+```bash
+planeai-cli axi session ls [--archived]
+```
+
+### `axi session prompt`
+
+Send a prompt to a running session.
+
+```bash
+planeai-cli axi session prompt <id> [text]
+```
+
+If `text` is omitted, reads from stdin.
+
+### `axi project ls`
+
+List registered projects.
+
+```bash
+planeai-cli axi project ls
 ```
 
 ---
