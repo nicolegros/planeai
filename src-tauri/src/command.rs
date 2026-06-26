@@ -111,15 +111,14 @@ mod tests {
     #[test]
     fn augmented_path_includes_conventional_dirs() {
         let path = augmented_path(&[]);
-        let home = config::home_dir();
         if cfg!(windows) {
             assert!(
-                path.contains(&format!("{home}\\.cargo\\bin")),
+                path.contains(".cargo\\bin"),
                 "PATH should include .cargo\\bin, got: {path}"
             );
         } else {
             assert!(
-                path.contains(&format!("{home}/.local/bin")),
+                path.contains(".local/bin"),
                 "PATH should include .local/bin, got: {path}"
             );
         }

@@ -389,7 +389,11 @@ struct Project {
     prefix: String,
 }
 
-pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
+pub fn build_orchestrator_config(
+    config: &Config,
+    db: &Connection,
+    db_path: &std::path::Path,
+) -> Option<OrchestratorConfig> {
     let projects = load_auto_projects(db);
     if projects.is_empty() {
         return None;
@@ -420,7 +424,6 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
 
         // Build SqliteTaskSource from a new connection to the same DB
         let prefix = &project.prefix;
-        let db_path = planeai_paths::app_data_dir().join("planeai.db");
         let _ = std::fs::create_dir_all(db_path.parent().unwrap_or(std::path::Path::new(".")));
         let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix) {
             Ok(r) => r,
@@ -544,6 +547,7 @@ mod tests {
     fn build_orchestrator_config_uses_auto_dispatch_base_branch_override() {
         let config = minimal_config_with_auto_dispatch(Some("develop".to_string()));
 
+        let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
@@ -551,7 +555,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn);
+        let orch_config = build_orchestrator_config(&config, &conn, tmp.path());
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -562,6 +566,7 @@ mod tests {
     fn build_orchestrator_config_falls_back_to_main_when_no_base_branch_override() {
         let config = minimal_config_with_auto_dispatch(None);
 
+        let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
@@ -569,7 +574,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn);
+        let orch_config = build_orchestrator_config(&config, &conn, tmp.path());
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -586,6 +591,7 @@ mod tests {
             .unwrap()
             .autonomous_prompt_template = Some("Be autonomous.\n{prompt}".to_string());
 
+        let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
@@ -593,7 +599,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn).unwrap();
+        let orch = build_orchestrator_config(&config, &conn, tmp.path()).unwrap();
 
         assert_eq!(
             orch.projects[0].dispatch_config.prompt_wrapper,
@@ -610,6 +616,7 @@ mod tests {
         let mut config = minimal_config_with_auto_dispatch(None);
         config.providers.get_mut("kiro").unwrap().prompt_command = Some("{prompt}".to_string());
 
+        let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         conn.execute(
@@ -617,7 +624,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn).unwrap();
+        let orch = build_orchestrator_config(&config, &conn, tmp.path()).unwrap();
 
         assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);
         assert_eq!(
