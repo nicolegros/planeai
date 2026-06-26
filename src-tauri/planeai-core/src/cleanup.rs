@@ -70,8 +70,8 @@ pub fn cleanup_stale_worktrees(
          JOIN projects p ON p.id = s.project_id
          WHERE s.status IN ('exited', 'destroyed', 'archived')
            AND s.worktree_path IS NOT NULL
-           AND s.updated_at IS NOT NULL
-           AND s.updated_at < ?1",
+           AND COALESCE(s.status_changed_at, s.updated_at) IS NOT NULL
+           AND COALESCE(s.status_changed_at, s.updated_at) < ?1",
     ) {
         Ok(s) => s,
         Err(e) => {
@@ -109,4 +109,47 @@ pub fn cleanup_stale_worktrees(
     }
 
     errors
+}
+
+/// A stale worktree entry for preview before manual cleanup.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StaleWorktree {
+    pub session_name: String,
+    pub worktree_path: String,
+    pub branch: String,
+}
+
+/// List worktrees eligible for cleanup (same criteria as `cleanup_stale_worktrees`).
+pub fn list_stale_worktrees(conn: &rusqlite::Connection) -> Result<Vec<StaleWorktree>, String> {
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(48)).to_rfc3339();
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.name, s.worktree_path, s.branch FROM sessions s
+             JOIN projects p ON p.id = s.project_id
+             WHERE s.status IN ('exited', 'destroyed', 'archived')
+               AND s.worktree_path IS NOT NULL
+               AND COALESCE(s.status_changed_at, s.updated_at) IS NOT NULL
+               AND COALESCE(s.status_changed_at, s.updated_at) < ?1",
+        )
+        .map_err(|e| format!("query: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![cutoff], |row| {
+            Ok(StaleWorktree {
+                session_name: row.get(0)?,
+                worktree_path: row.get(1)?,
+                branch: row.get(2)?,
+            })
+        })
+        .map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))
+}
+
+/// Run the stale worktree cleanup (same as `cleanup_stale_worktrees`).
+/// Exposed under this name for the manual-trigger Tauri command.
+pub fn run_stale_worktree_cleanup(
+    conn: &rusqlite::Connection,
+    remove_worktree: impl Fn(&str, &str) -> Result<(), String>,
+) -> Vec<String> {
+    cleanup_stale_worktrees(conn, remove_worktree)
 }

@@ -154,6 +154,11 @@ export const preferences = {
   installCli: () => invoke("install_cli"),
   getLogDir: () => invoke<string>("get_log_dir"),
   getThemeCss: () => invoke<string>("get_theme_css"),
+  listStaleWorktrees: () =>
+    invoke<{ session_name: string; worktree_path: string; branch: string }[]>(
+      "list_stale_worktrees",
+    ),
+  runStaleWorktreeCleanup: () => invoke<string[]>("run_stale_worktree_cleanup"),
 };
 
 export interface SessionLogEntry {

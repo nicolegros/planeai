@@ -283,3 +283,98 @@ fn failed_removal_collects_error_and_continues() {
     assert_eq!(errors.len(), 1);
     assert!(errors[0].contains("permission denied"));
 }
+
+#[test]
+fn list_stale_worktrees_returns_matching_sessions() {
+    use planeai_core::cleanup::list_stale_worktrees;
+
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    let recent = (chrono::Utc::now() - chrono::Duration::hours(12)).to_rfc3339();
+
+    // Should be listed (old + exited + has worktree)
+    insert_session(
+        &conn,
+        "sess-1",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/a"),
+        &old,
+    );
+    // Should NOT be listed (too recent)
+    insert_session(
+        &conn,
+        "sess-2",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/b"),
+        &recent,
+    );
+    // Should NOT be listed (active)
+    insert_session(
+        &conn,
+        "sess-3",
+        &project.id,
+        "active",
+        Some("/tmp/wt/c"),
+        &old,
+    );
+
+    let result = list_stale_worktrees(&conn).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].session_name, "");
+    assert_eq!(result[0].worktree_path, "/tmp/wt/a");
+    assert_eq!(result[0].branch, "main");
+}
+
+#[test]
+fn run_stale_worktree_cleanup_removes_entries_from_list() {
+    use planeai_core::cleanup::{list_stale_worktrees, run_stale_worktree_cleanup};
+
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    insert_session(
+        &conn,
+        "sess-1",
+        &project.id,
+        "exited",
+        Some("/tmp/wt/a"),
+        &old,
+    );
+
+    // Before cleanup: one stale worktree
+    assert_eq!(list_stale_worktrees(&conn).unwrap().len(), 1);
+
+    // Run cleanup (noop remover — just marks as cleaned)
+    let errors = run_stale_worktree_cleanup(&conn, |_, _| Ok(()));
+    assert!(errors.is_empty());
+
+    // After cleanup: list is empty
+    assert_eq!(list_stale_worktrees(&conn).unwrap().len(), 0);
+}
+
+#[test]
+fn stale_check_uses_status_changed_at_not_updated_at() {
+    use planeai_core::cleanup::list_stale_worktrees;
+
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/myapp").unwrap();
+
+    let old = (chrono::Utc::now() - chrono::Duration::hours(72)).to_rfc3339();
+    let recent = (chrono::Utc::now() - chrono::Duration::hours(12)).to_rfc3339();
+
+    // Session with old status_changed_at but recent updated_at (simulates migration bump)
+    conn.execute(
+        "INSERT INTO sessions (id, project_id, name, branch, status, created_at, worktree_path, updated_at, status_changed_at)
+         VALUES (?1, ?2, '', 'main', 'destroyed', ?3, '/tmp/wt/a', ?4, ?5)",
+        rusqlite::params!["sess-1", project.id, &old, &recent, &old],
+    ).unwrap();
+
+    // Should be listed because status_changed_at is old, even though updated_at is recent
+    let result = list_stale_worktrees(&conn).unwrap();
+    assert_eq!(result.len(), 1);
+}
