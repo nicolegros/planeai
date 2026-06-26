@@ -48,9 +48,7 @@ pub fn restart(
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
     let has_resume_command = provider_def.resume_command.is_some();
     let resume_cmd = if has_resume_command {
-        Some(crate::config::restart_command_for_provider(
-            provider_def,
-        ))
+        Some(crate::config::restart_command_for_provider(provider_def))
     } else {
         None
     };

@@ -396,9 +396,7 @@ pub fn launch_command(provider: &Provider, yolo: bool) -> String {
 }
 
 /// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
-pub fn restart_command_for_provider(
-    provider: &Provider,
-) -> String {
+pub fn restart_command_for_provider(provider: &Provider) -> String {
     if let Some(ref resume_cmd) = provider.resume_command {
         return resume_cmd.clone();
     }

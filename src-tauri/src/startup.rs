@@ -41,9 +41,7 @@ where
         }
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let cmd = match cfg.providers.get(provider_key) {
-            Some(provider_def) => config::restart_command_for_provider(
-                provider_def,
-            ),
+            Some(provider_def) => config::restart_command_for_provider(provider_def),
             None => continue,
         };
         let project_path = projects

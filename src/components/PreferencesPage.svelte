@@ -404,15 +404,7 @@
               placeholder="e.g. --dangerously-skip-permissions"
             />
           </div>
-          <div class="space-y-1">
-            <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label class="text-xs text-t2">Resume flag (optional)</label>
-            <Input
-              bind:value={newProviderResumeFlag}
-              class="font-mono"
-              placeholder="e.g. --resume-id"
-            />
-          </div>
+
           <div class="flex gap-2">
             <button
               class="px-3 py-1.5 rounded text-sm font-medium bg-accent text-on-accent hover:opacity-90 disabled:opacity-50"
