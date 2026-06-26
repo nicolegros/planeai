@@ -96,8 +96,6 @@ pub struct Provider {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo_flag: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_flag: Option<String>,
     /// Command to resume interactively (picker) when no provider_session_id is stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
@@ -208,7 +206,6 @@ impl Default for Config {
             Provider {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
-                resume_flag: Some("--resume-id".to_string()),
                 resume_command: Some("kiro-cli chat --resume".to_string()),
                 list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
                 session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
@@ -221,7 +218,6 @@ impl Default for Config {
             Provider {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                resume_flag: None,
                 resume_command: Some("claude --resume".to_string()),
                 list_sessions_command: None,
                 session_id_pattern: None,
@@ -234,7 +230,6 @@ impl Default for Config {
             Provider {
                 command: "copilot --resume".to_string(),
                 yolo_flag: Some("--allow-all-tools".to_string()),
-                resume_flag: None,
                 resume_command: None,
                 list_sessions_command: None,
                 session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
@@ -309,9 +304,6 @@ fn backfill_provider_defaults(config: &mut Config) {
     let defaults = Config::default();
     for (key, default_provider) in &defaults.providers {
         if let Some(provider) = config.providers.get_mut(key) {
-            if provider.resume_flag.is_none() {
-                provider.resume_flag = default_provider.resume_flag.clone();
-            }
             if provider.resume_command.is_none() {
                 provider.resume_command = default_provider.resume_command.clone();
             }
@@ -403,7 +395,6 @@ pub fn restart_command_for_provider(provider: &Provider) -> String {
     provider.command.clone()
 }
 
-/// Parse a provider session ID from command output using a regex pattern.
 /// Resolve the effective session backend: use config value if set, otherwise default to local.
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
@@ -501,7 +492,6 @@ mod tests {
                     Provider {
                         command: "claude".to_string(),
                         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
-                        resume_flag: None,
                         resume_command: Some("claude --resume".to_string()),
                         ..Default::default()
                     },
@@ -616,7 +606,6 @@ mod tests {
             Provider {
                 command: "aider".to_string(),
                 yolo_flag: Some("--yes".to_string()),
-                resume_flag: None,
                 ..Default::default()
             },
         );
@@ -685,7 +674,6 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: None,
             ..Default::default()
         };
         assert_eq!(launch_command(&provider, false), "kiro-cli chat");
@@ -696,7 +684,6 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: None,
             ..Default::default()
         };
         assert_eq!(
@@ -710,7 +697,6 @@ mod tests {
         let provider = Provider {
             command: "aider".to_string(),
             yolo_flag: None,
-            resume_flag: None,
             ..Default::default()
         };
         assert_eq!(launch_command(&provider, true), "aider");
@@ -777,14 +763,12 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             ..Default::default()
         };
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.resume_flag, Some("--resume-id".to_string()));
         assert_eq!(
             parsed.list_sessions_command,
             Some("kiro-cli chat --list-sessions".to_string())
@@ -799,7 +783,6 @@ mod tests {
     fn provider_resume_fields_default_to_none_when_missing() {
         let json = r#"{"command": "aider"}"#;
         let parsed: Provider = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.resume_flag, None);
         assert_eq!(parsed.list_sessions_command, None);
         assert_eq!(parsed.session_id_pattern, None);
     }
@@ -808,7 +791,6 @@ mod tests {
     fn default_config_kiro_provider_has_resume_fields() {
         let config = Config::default();
         let kiro = config.providers.get("kiro").unwrap();
-        assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
         assert_eq!(
             kiro.list_sessions_command,
             Some("kiro-cli chat --list-sessions".to_string())
@@ -826,7 +808,6 @@ mod tests {
         let copilot = config.providers.get("copilot").unwrap();
         assert_eq!(copilot.command, "copilot --resume");
         assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
-        assert_eq!(copilot.resume_flag, None);
         assert_eq!(
             copilot.session_id_pattern,
             Some("--resume=([0-9a-f-]+)".to_string())
@@ -843,7 +824,6 @@ mod tests {
             claude.yolo_flag,
             Some("--dangerously-skip-permissions".to_string())
         );
-        assert_eq!(claude.resume_flag, None);
         assert_eq!(claude.prompt_command, Some("-p {prompt}".to_string()));
     }
 
@@ -852,7 +832,6 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
             resume_command: Some("kiro-cli chat --resume".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
@@ -868,23 +847,10 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
             ..Default::default()
         };
         let cmd = restart_command_for_provider(&provider);
         assert_eq!(cmd, "kiro-cli chat");
-    }
-
-    #[test]
-    fn restart_command_falls_back_to_fresh_when_no_resume_flag() {
-        let provider = Provider {
-            command: "aider".to_string(),
-            yolo_flag: None,
-            resume_flag: None,
-            ..Default::default()
-        };
-        let cmd = restart_command_for_provider(&provider);
-        assert_eq!(cmd, "aider");
     }
 
     #[test]
@@ -907,7 +873,6 @@ mod tests {
         let (config, warnings) = load(config_dir);
         assert!(warnings.is_empty());
         let kiro = config.providers.get("kiro").unwrap();
-        assert_eq!(kiro.resume_flag, Some("--resume-id".to_string()));
         assert_eq!(
             kiro.resume_command,
             Some("kiro-cli chat --resume".to_string())

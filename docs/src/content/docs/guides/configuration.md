@@ -33,13 +33,13 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 }
 ```
 
-| Field                        | Description                                                           |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `command`                    | Shell command to start a new agent session                            |
-| `prompt_command`             | Command to send a prompt to a running session                         |
-| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                     |
-| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations                |
-| `resume_command`             | Command to resume interactively when restarting an exited session      |
+| Field                        | Description                                                       |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `command`                    | Shell command to start a new agent session                        |
+| `prompt_command`             | Command to send a prompt to a running session                     |
+| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
+| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
+| `resume_command`             | Command to resume interactively when restarting an exited session |
 
 ## Session Backend
 

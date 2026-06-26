@@ -510,7 +510,6 @@ mod tests {
                 autonomous_prompt_template: None,
                 resume_command: None,
                 session_id_pattern: None,
-                resume_flag: None,
                 list_sessions_command: None,
             },
         );
