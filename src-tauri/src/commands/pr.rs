@@ -535,7 +535,10 @@ fn parse_merge_block_reasons(view: &GhMergeStateView) -> Vec<String> {
     if let Some(ref checks) = view.status_check_rollup {
         let failing = checks
             .iter()
-            .filter(|c| c.conclusion.as_deref() == Some("FAILURE") || c.conclusion.as_deref() == Some("failure"))
+            .filter(|c| {
+                c.conclusion.as_deref() == Some("FAILURE")
+                    || c.conclusion.as_deref() == Some("failure")
+            })
             .count();
         if failing > 0 {
             reasons.push(format!("Required checks failing ({failing})"));
@@ -556,7 +559,9 @@ pub fn parse_merge_error(stderr: &str) -> Vec<String> {
     if lower.contains("review") && (lower.contains("required") || lower.contains("approved")) {
         reasons.push("Required reviews not met".to_string());
     }
-    if lower.contains("check") && (lower.contains("required") || lower.contains("failing") || lower.contains("pending")) {
+    if lower.contains("check")
+        && (lower.contains("required") || lower.contains("failing") || lower.contains("pending"))
+    {
         reasons.push("Required status checks not passing".to_string());
     }
     if lower.contains("linear history") || lower.contains("rebase") && lower.contains("required") {
@@ -575,11 +580,16 @@ pub async fn get_merge_state(
 ) -> Result<MergeStateInfo, String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
-    let repo = resolve_github_repo(&ctx.cwd).await?.ok_or("not a GitHub repo")?;
+    let repo = resolve_github_repo(&ctx.cwd)
+        .await?
+        .ok_or("not a GitHub repo")?;
 
     let output = tokio::process::Command::new("gh")
         .args([
-            "pr", "view", &ctx.branch, "--json",
+            "pr",
+            "view",
+            &ctx.branch,
+            "--json",
             "mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName",
         ])
         .current_dir(&ctx.cwd)
@@ -588,21 +598,33 @@ pub async fn get_merge_state(
         .map_err(|e| format!("failed to run gh: {e}"))?;
 
     if !output.status.success() {
-        return Ok(MergeStateInfo { blocked: false, reasons: vec![], settings_url: None });
+        return Ok(MergeStateInfo {
+            blocked: false,
+            reasons: vec![],
+            settings_url: None,
+        });
     }
 
     let view: GhMergeStateView = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("failed to parse merge state: {e}"))?;
 
     let blocked = view.merge_state_status.as_deref() == Some("BLOCKED");
-    let reasons = if blocked { parse_merge_block_reasons(&view) } else { vec![] };
+    let reasons = if blocked {
+        parse_merge_block_reasons(&view)
+    } else {
+        vec![]
+    };
     let settings_url = if blocked {
         Some(format!("https://github.com/{repo}/settings/rules"))
     } else {
         None
     };
 
-    Ok(MergeStateInfo { blocked, reasons, settings_url })
+    Ok(MergeStateInfo {
+        blocked,
+        reasons,
+        settings_url,
+    })
 }
 
 #[tauri::command]
