@@ -16,7 +16,6 @@
   let newProviderName = $state("");
   let newProviderCommand = $state("");
   let newProviderYoloFlag = $state("");
-  let newProviderResumeFlag = $state("");
   let showAddProvider = $state(false);
   let tmuxAvailable = $state(true);
   let cliInstalled = $state(false);
@@ -147,13 +146,11 @@
     providers[newProviderName] = {
       command: newProviderCommand,
       yolo_flag: newProviderYoloFlag || null,
-      resume_flag: newProviderResumeFlag || null,
     };
     updateSettings({ providers } as Partial<AppConfig>);
     newProviderName = "";
     newProviderCommand = "";
     newProviderYoloFlag = "";
-    newProviderResumeFlag = "";
     showAddProvider = false;
   }
 
@@ -346,14 +343,6 @@
               />
             </div>
             <div class="space-y-1">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-t2 flex items-center gap-1">Resume flag (optional) <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Flag to resume a previous agent session. The stored session ID is appended automatically.</span></span></label>
-              <Input
-                value={provider.resume_flag || ""}
-                onchange={(e) => updateProvider(key, "resume_flag", e.currentTarget.value)}
-                class="font-mono"
-                placeholder="e.g. --resume-id"
-              />
             </div>
             <div class="space-y-1">
               <!-- svelte-ignore a11y_label_has_associated_control -->

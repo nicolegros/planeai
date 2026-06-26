@@ -179,6 +179,43 @@ describe("session-orchestrator", () => {
     });
   });
 
+  describe("selectSession exited daemon fix (PLA-169)", () => {
+    it("waits for restart before activating pool for exited sessions", async () => {
+      const { activateSession: poolActivate } = await import("../terminal-pool.svelte");
+      const poolMock = vi.mocked(poolActivate);
+
+      api.list.mockResolvedValue([
+        makeSession({ id: "s1", status: "active" }),
+        makeSession({ id: "s2", status: "exited", backend: "daemon" }),
+      ]);
+      api.restart.mockResolvedValue(makeSession({ id: "s2", status: "active", backend: "daemon" }));
+      await loadSessions();
+
+      poolMock.mockClear();
+      selectSession("s2");
+
+      // Pool should NOT be activated synchronously for exited sessions
+      expect(poolMock).not.toHaveBeenCalled();
+
+      // After restart resolves, pool is activated
+      await vi.waitFor(() => expect(poolMock).toHaveBeenCalledWith("s2"));
+    });
+
+    it("activates pool immediately for active sessions", async () => {
+      const { activateSession: poolActivate } = await import("../terminal-pool.svelte");
+      const poolMock = vi.mocked(poolActivate);
+
+      api.list.mockResolvedValue([makeSession({ id: "s1", status: "active" })]);
+      await loadSessions();
+
+      poolMock.mockClear();
+      selectSession("s1");
+
+      // Active sessions activate pool immediately
+      expect(poolMock).toHaveBeenCalledWith("s1");
+    });
+  });
+
   describe("unified tab cycling", () => {
     it("getUnifiedTabs returns shell tabs", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1", tab_count: 2 })]);

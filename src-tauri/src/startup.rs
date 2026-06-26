@@ -355,8 +355,11 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "planeai-myapp-abc");
         assert_eq!(calls[0].1, "/tmp/worktree");
-        assert!(calls[0].2.contains("--resume-id"));
-        assert!(calls[0].2.contains("sess-123"));
+        assert!(
+            calls[0].2.contains("--resume"),
+            "expected --resume in command, got: {}",
+            calls[0].2
+        );
         assert_eq!(calls[0].3, "s1");
         assert_eq!(
             db::get_session(&conn, "s1").unwrap().unwrap().status,

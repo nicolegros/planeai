@@ -46,12 +46,11 @@ pub fn restart(
         .providers
         .get(provider_key)
         .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-    let has_resume = session.provider_session_id.is_some() && provider_def.resume_flag.is_some();
     let has_resume_command = provider_def.resume_command.is_some();
-    let resume_cmd = if has_resume || has_resume_command {
+    let resume_cmd = if has_resume_command {
         Some(crate::config::restart_command_for_provider(
             provider_def,
-            session.provider_session_id.as_deref(),
+            None,
         ))
     } else {
         None
@@ -231,7 +230,7 @@ mod tests {
             session_id: &str,
             _extra_path_dirs: &[String],
         ) -> Result<(), String> {
-            if self.fail_resume && cmd.contains("--resume-id") {
+            if self.fail_resume && cmd.contains("--resume") {
                 return Err("resume failed".to_string());
             }
             self.calls.borrow_mut().push((
@@ -250,7 +249,7 @@ mod tests {
             cwd: &str,
             _extra_path_dirs: &[String],
         ) -> Result<(), String> {
-            if self.fail_resume && cmd.contains("--resume-id") {
+            if self.fail_resume && cmd.contains("--resume") {
                 return Err("resume failed".to_string());
             }
             self.daemon_calls.borrow_mut().push((
@@ -464,11 +463,53 @@ mod tests {
         // First call was resume (failed), second was fresh (succeeded)
         assert_eq!(ops.calls.borrow().len(), 1);
         let call = &ops.calls.borrow()[0];
-        // Fresh command should NOT contain --resume-id
+        // Fresh command should NOT contain --resume
         assert!(
-            !call.2.contains("--resume-id"),
+            !call.2.contains("--resume"),
             "expected fresh launch, got: {}",
             call.2
         );
+    }
+
+    #[test]
+    fn restart_daemon_session_uses_resume_command() {
+        // Regression test for PLA-169: daemon sessions must use the interactive
+        // resume command (e.g. "kiro-cli chat --resume") instead of a fresh launch.
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "cccc3333-5555-6666-7777-888899990000";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "daemon-resume",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "daemon",
+            false,
+            None,
+            None,
+        )
+        .unwrap();
+        db::mark_session_exited(&conn, id).unwrap();
+
+        let cfg = Config::default();
+        let ops = MockRestartOps::new();
+        let updated = restart(&conn, id, &cfg, &ops).unwrap();
+
+        assert_eq!(updated.status, "active");
+        assert_eq!(ops.daemon_calls.borrow().len(), 1);
+        let call = &ops.daemon_calls.borrow()[0];
+        assert!(
+            call.1.contains("--resume"),
+            "expected resume command, got: {}",
+            call.1
+        );
+        assert_eq!(call.1, "kiro-cli chat --resume");
     }
 }

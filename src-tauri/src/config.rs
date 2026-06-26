@@ -1,11 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock};
-
-/// Pre-compiled ANSI escape code regex (avoids recompilation per call).
-static ANSI_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\x1B\[[0-9;]*m").unwrap());
+use std::sync::OnceLock;
 
 /// Cached result of tmux availability check (runs once per process).
 static TMUX_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -396,75 +392,18 @@ pub fn launch_command(provider: &Provider, yolo: bool) -> String {
     }
 }
 
-/// Build a resume command: base command + resume_flag + provider_session_id.
-pub fn resume_command(provider: &Provider, provider_session_id: &str) -> String {
-    format!(
-        "{} {} {}",
-        provider.command,
-        provider.resume_flag.as_ref().unwrap(),
-        provider_session_id
-    )
-}
-
-/// Returns the resume command if both resume_flag and provider_session_id are available.
-pub fn resume_command_if_available(
-    provider: &Provider,
-    provider_session_id: Option<&str>,
-) -> Option<String> {
-    match (&provider.resume_flag, provider_session_id) {
-        (Some(_), Some(id)) => Some(resume_command(provider, id)),
-        _ => None,
-    }
-}
-
-/// Build the command for restarting a session: resume if possible, otherwise fresh launch.
+/// Build the command for restarting a session: use interactive resume if available, otherwise fresh launch.
 pub fn restart_command_for_provider(
     provider: &Provider,
-    provider_session_id: Option<&str>,
+    _provider_session_id: Option<&str>,
 ) -> String {
-    // If we have a stored session ID and a resume_flag, use exact resume
-    if let Some(cmd) = resume_command_if_available(provider, provider_session_id) {
-        return cmd;
-    }
-    // If no session ID but provider has a resume_command (interactive picker), use that
-    if provider_session_id.is_none() {
-        if let Some(ref resume_cmd) = provider.resume_command {
-            return resume_cmd.clone();
-        }
+    if let Some(ref resume_cmd) = provider.resume_command {
+        return resume_cmd.clone();
     }
     provider.command.clone()
 }
 
 /// Parse a provider session ID from command output using a regex pattern.
-/// Strips ANSI escape codes before matching. Returns the first capture group of the first match.
-pub fn parse_provider_session_id(output: &str, pattern: &str) -> Option<String> {
-    let stripped = ANSI_RE.replace_all(output, "");
-    let re = regex::Regex::new(pattern).ok()?;
-    re.captures(&stripped)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string())
-}
-
-/// Decide whether a discovered provider session ID should be accepted.
-/// - `discovered`: the ID just found from list_sessions_command output
-/// - `previous`: the previously stored provider_session_id (if any)
-/// - `is_resume`: whether this launch used --resume-id
-pub fn should_accept_provider_session_id(
-    discovered: Option<&str>,
-    previous: Option<&str>,
-    is_resume: bool,
-) -> bool {
-    match discovered {
-        None => false,
-        Some(id) => match (previous, is_resume) {
-            (Some(prev), true) => id == prev,
-            (None, true) => true,
-            (None, false) => true,
-            (Some(prev), false) => id != prev,
-        },
-    }
-}
-
 /// Resolve the effective session backend: use config value if set, otherwise default to local.
 pub fn resolve_backend(config: &Config) -> &str {
     match &config.session_backend {
@@ -908,182 +847,23 @@ mod tests {
     }
 
     #[test]
-    fn resume_command_appends_flag_and_session_id() {
+    fn restart_command_uses_resume_command_when_available() {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_flag: Some("--resume-id".to_string()),
-            ..Default::default()
-        };
-        let result = resume_command(&provider, "abc-123");
-        assert_eq!(result, "kiro-cli chat --resume-id abc-123");
-    }
-
-    #[test]
-    fn resume_command_returns_none_when_no_resume_flag() {
-        let provider = Provider {
-            command: "aider".to_string(),
-            yolo_flag: None,
-            resume_flag: None,
-            ..Default::default()
-        };
-        assert_eq!(
-            resume_command_if_available(&provider, Some("abc-123")),
-            None
-        );
-    }
-
-    #[test]
-    fn resume_command_returns_none_when_no_session_id() {
-        let provider = Provider {
-            command: "kiro-cli chat".to_string(),
-            yolo_flag: None,
-            resume_flag: Some("--resume-id".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(resume_command_if_available(&provider, None), None);
-    }
-
-    #[test]
-    fn resume_command_if_available_returns_command_when_both_present() {
-        let provider = Provider {
-            command: "kiro-cli chat".to_string(),
-            yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(
-            resume_command_if_available(&provider, Some("abc-123")),
-            Some("kiro-cli chat --resume-id abc-123".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_provider_session_id_extracts_uuid_from_output() {
-        let output = "Chat sessions for /some/path:\n\nChat SessionId: f4165541-f370-4fdd-9ccd-14b103a4f712\n  12 minutes ago | some description | 203 msgs | v2\n";
-        let pattern = "SessionId: ([a-f0-9-]+)";
-        let result = parse_provider_session_id(output, pattern);
-        assert_eq!(
-            result,
-            Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_provider_session_id_returns_first_match() {
-        let output = "Chat SessionId: aaaa-1111\nChat SessionId: bbbb-2222\n";
-        let pattern = "SessionId: ([a-f0-9-]+)";
-        let result = parse_provider_session_id(output, pattern);
-        assert_eq!(result, Some("aaaa-1111".to_string()));
-    }
-
-    #[test]
-    fn parse_provider_session_id_returns_none_when_no_match() {
-        let output = "No sessions found\n";
-        let pattern = "SessionId: ([a-f0-9-]+)";
-        let result = parse_provider_session_id(output, pattern);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn parse_provider_session_id_strips_ansi_codes() {
-        let output = "\x1B[38;5;141mChat SessionId: f4165541-f370-4fdd-9ccd-14b103a4f712\x1B[0m\n";
-        let pattern = "SessionId: ([a-f0-9-]+)";
-        let result = parse_provider_session_id(output, pattern);
-        assert_eq!(
-            result,
-            Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_provider_session_id_extracts_copilot_resume_id() {
-        let output = "  ╭─╮╭─╮   Changes    +0 -0\n  ╰─╯╰─╯   AI Credits 0 (73h 15m 23s)\n  ▄ ▒▙ ▄   Resume     copilot --resume=a7c77286-ccfc-419b-bd1a-47f88f3e683a\n   ▀▀▀▀\n";
-        let pattern = "--resume=([0-9a-f-]+)";
-        let result = parse_provider_session_id(output, pattern);
-        assert_eq!(
-            result,
-            Some("a7c77286-ccfc-419b-bd1a-47f88f3e683a".to_string())
-        );
-    }
-
-    #[test]
-    fn should_accept_session_id_fresh_launch_no_previous() {
-        // Fresh launch, no previous ID → accept any ID
-        assert!(should_accept_provider_session_id(
-            Some("new-id"),
-            None,
-            false
-        ));
-    }
-
-    #[test]
-    fn should_accept_session_id_fresh_launch_with_different_id() {
-        // Fresh launch, previous ID exists, new ID is different → accept
-        assert!(should_accept_provider_session_id(
-            Some("new-id"),
-            Some("old-id"),
-            false
-        ));
-    }
-
-    #[test]
-    fn should_reject_session_id_fresh_launch_with_same_id() {
-        // Fresh launch, previous ID exists, same ID returned → reject (stale)
-        assert!(!should_accept_provider_session_id(
-            Some("old-id"),
-            Some("old-id"),
-            false
-        ));
-    }
-
-    #[test]
-    fn should_accept_session_id_resume_with_same_id() {
-        // Resume, same ID returned → accept (expected)
-        assert!(should_accept_provider_session_id(
-            Some("old-id"),
-            Some("old-id"),
-            true
-        ));
-    }
-
-    #[test]
-    fn should_reject_session_id_when_none_discovered() {
-        // No ID discovered → reject regardless
-        assert!(!should_accept_provider_session_id(None, None, false));
-        assert!(!should_accept_provider_session_id(
-            None,
-            Some("old-id"),
-            true
-        ));
-    }
-
-    #[test]
-    fn should_reject_session_id_resume_with_different_id() {
-        // Resume, different ID returned → reject (belongs to another session)
-        assert!(!should_accept_provider_session_id(
-            Some("other-id"),
-            Some("old-id"),
-            true
-        ));
-    }
-
-    #[test]
-    fn restart_command_uses_resume_when_provider_session_id_available() {
-        let provider = Provider {
-            command: "kiro-cli chat".to_string(),
-            yolo_flag: Some("--trust-all-tools".to_string()),
-            resume_flag: Some("--resume-id".to_string()),
+            resume_command: Some("kiro-cli chat --resume".to_string()),
             list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
             session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             ..Default::default()
         };
+        // Even with a provider_session_id, uses interactive resume_command
         let cmd = restart_command_for_provider(&provider, Some("f4165541-abc"));
-        assert_eq!(cmd, "kiro-cli chat --resume-id f4165541-abc");
+        assert_eq!(cmd, "kiro-cli chat --resume");
     }
 
     #[test]
-    fn restart_command_falls_back_to_fresh_when_no_session_id() {
+    fn restart_command_falls_back_to_fresh_when_no_resume_command() {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),

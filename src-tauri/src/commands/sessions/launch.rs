@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 
@@ -11,73 +11,6 @@ use crate::tmux;
 use crate::util::sanitize_project_name;
 
 use super::helpers::{fire_task_hook, provider_has_hook};
-
-/// Background discovery of provider session ID with retry-backoff.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn discover_provider_session_id(
-    session_id: &str,
-    list_cmd: &str,
-    pattern: &str,
-    cwd: &str,
-    previous_id: Option<&str>,
-    is_resume: bool,
-    db_path: &std::path::Path,
-    app: &tauri::AppHandle,
-) {
-    let delays = [1, 2, 4];
-    let mut last_discovered: Option<String> = None;
-    for delay in &delays {
-        std::thread::sleep(std::time::Duration::from_secs(*delay));
-        eprintln!("[DEBUG-disc] attempt after {delay}s: running '{list_cmd}' in cwd '{cwd}'");
-        let output = match planeai_core::command::run_command(list_cmd, std::path::Path::new(cwd)) {
-            Ok(stdout) => stdout,
-            Err(e) => {
-                eprintln!("[DEBUG-disc] command failed: {e}");
-                continue;
-            }
-        };
-        eprintln!("[DEBUG-disc] success, stdout_len={}", output.len(),);
-        let discovered = config::parse_provider_session_id(&output, pattern);
-        eprintln!(
-            "[DEBUG-disc] parsed session_id={:?}, previous={:?}, is_resume={}",
-            discovered, previous_id, is_resume
-        );
-        if config::should_accept_provider_session_id(discovered.as_deref(), previous_id, is_resume)
-        {
-            eprintln!(
-                "[DEBUG-disc] accepted! storing provider_session_id={:?}",
-                discovered
-            );
-            if let Ok(conn) = rusqlite::Connection::open(db_path) {
-                let _ =
-                    db::set_provider_session_id(&conn, session_id, discovered.as_ref().unwrap());
-            }
-            return;
-        } else {
-            eprintln!("[DEBUG-disc] rejected (stale or no match)");
-            last_discovered = discovered;
-        }
-    }
-    if is_resume {
-        if let Some(new_id) = last_discovered {
-            eprintln!(
-                "[DEBUG-disc] resume failed, accepting new session id={}",
-                new_id
-            );
-            if let Ok(conn) = rusqlite::Connection::open(db_path) {
-                let _ = db::set_provider_session_id(&conn, session_id, &new_id);
-            }
-            return;
-        }
-    }
-    let _ = app.emit(
-        "provider-session-id-failed",
-        serde_json::json!({
-            "session_id": session_id,
-            "reason": "Could not discover provider session ID after retries"
-        }),
-    );
-}
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]

@@ -288,6 +288,7 @@ pub fn rename_session(conn: &Connection, id: &str, name: &str) -> Result<()> {
     planeai_core::services::SessionService::rename(conn, id, name)
 }
 
+#[allow(dead_code)]
 pub fn set_provider_session_id(
     conn: &Connection,
     id: &str,

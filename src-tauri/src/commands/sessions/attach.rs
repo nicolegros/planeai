@@ -1,5 +1,5 @@
 use tauri::ipc::Channel;
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::config;
 use crate::db;
@@ -7,15 +7,6 @@ use crate::pty;
 use crate::state::{ConfigState, DbState, NotifyHandle, PtyState};
 
 use super::helpers::{build_local_env, provider_has_hook};
-use super::launch::discover_provider_session_id;
-
-struct DiscoveryParams {
-    list_cmd: String,
-    pattern: String,
-    is_resume: bool,
-    previous_id: Option<String>,
-    cwd: String,
-}
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -34,10 +25,10 @@ pub fn attach_session(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
 
-    // Resolve pty_target, discovery_info, and agent_command in a single pass
-    let (pty_target, discovery_info, resolved_agent_command) = if session.backend == "tmux" {
+    // Resolve pty_target and agent_command based on backend type
+    let (pty_target, resolved_agent_command) = if session.backend == "tmux" {
         let tmux_name = session.tmux_name.ok_or("tmux session has no tmux_name")?;
-        (pty::PtyTarget::TmuxAttach { tmux_name }, None, None)
+        (pty::PtyTarget::TmuxAttach { tmux_name }, None)
     } else if session.backend == "daemon" {
         let socket_path = planeai_ipc::daemon_socket_path();
         (
@@ -45,7 +36,6 @@ pub fn attach_session(
                 session_id: session_id.clone(),
                 socket_path,
             },
-            None,
             None,
         )
     } else {
@@ -55,19 +45,6 @@ pub fn attach_session(
             .providers
             .get(provider_key)
             .ok_or_else(|| format!("Unknown provider: {provider_key}"))?;
-
-        let list_cmd = provider_def.list_sessions_command.clone();
-        let pattern = provider_def.session_id_pattern.clone();
-
-        let resume_id = session.provider_session_id.as_deref().and_then(|pid| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM sessions WHERE provider_session_id = ?1 AND status = 'active' AND id != ?2",
-                rusqlite::params![pid, &session_id],
-                |r| r.get(0),
-            ).unwrap_or(0);
-            if count > 0 { None } else { Some(pid) }
-        });
-        let is_resume = resume_id.is_some() && provider_def.resume_flag.is_some();
 
         let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
         let project_path = projects
@@ -82,27 +59,16 @@ pub fn attach_session(
             .to_string();
 
         let cmd = if session.status == "exited" {
-            config::restart_command_for_provider(provider_def, resume_id)
+            config::restart_command_for_provider(provider_def, None)
         } else {
             config::launch_command(provider_def, session.auto_approve)
         };
 
         let target = pty::PtyTarget::Shell {
             command: cmd.clone(),
-            cwd: cwd.clone(),
+            cwd,
         };
-
-        let disc = match (list_cmd, pattern) {
-            (Some(list_cmd), Some(pattern)) => Some(DiscoveryParams {
-                list_cmd,
-                pattern,
-                is_resume,
-                previous_id: session.provider_session_id.clone(),
-                cwd,
-            }),
-            _ => None,
-        };
-        (target, disc, Some(cmd))
+        (target, Some(cmd))
     };
 
     // Build env via prepare_session() for local/tmux targets (canonical PATH augmentation).
@@ -166,37 +132,6 @@ pub fn attach_session(
 
     if session.status == "exited" {
         db::restore_session(&conn, &session_id).map_err(|e| e.to_string())?;
-    }
-    drop(conn);
-
-    if let Some(params) = discovery_info {
-        eprintln!(
-            "[DEBUG-disc] spawning discovery thread for session={}, list_cmd='{}', cwd='{}'",
-            &session_id, &params.list_cmd, &params.cwd
-        );
-        let sid = session_id.clone();
-        let db_path = app
-            .path()
-            .app_data_dir()
-            .expect("app data dir")
-            .join("planeai.db");
-        std::thread::spawn(move || {
-            discover_provider_session_id(
-                &sid,
-                &params.list_cmd,
-                &params.pattern,
-                &params.cwd,
-                params.previous_id.as_deref(),
-                params.is_resume,
-                &db_path,
-                &app,
-            );
-        });
-    } else {
-        eprintln!(
-            "[DEBUG-disc] skipping discovery for session={}",
-            &session_id
-        );
     }
 
     Ok(())
