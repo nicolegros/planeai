@@ -15,7 +15,7 @@
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
-  import { startPolling as startCiPolling } from "./lib/ci-checks.svelte";
+  import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
   import { getSnackbarMessage, getSnackbarType, dismissSnackbar, showSnackbar } from "./lib/snackbar.svelte";
   import { Dialog } from "bits-ui";
   import Titlebar from "./components/Titlebar.svelte";
@@ -142,6 +142,14 @@
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
+  const ciStatus = $derived.by(() => {
+    if (!activeSessionId) return null;
+    const checks = getCiChecks(activeSessionId);
+    if (checks.length === 0) return null;
+    if (checks.some((c) => classifyCheck(c) === "fail")) return "failing" as const;
+    if (checks.every((c) => classifyCheck(c) !== "pending")) return "passing" as const;
+    return "pending" as const;
+  });
 
   // Session IDs in sidebar display order
   const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject(), !!getSettings().hide_done_tasks));
@@ -289,6 +297,7 @@
     {sidebarVisible}
     prUrl={sessions.find(s => s.id === activeSessionId)?.pr_url ?? null}
     prState={sessions.find(s => s.id === activeSessionId)?.pr_state ?? null}
+    {ciStatus}
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={titlebarTabs}

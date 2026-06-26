@@ -1,7 +1,6 @@
 <script lang="ts">
   import { IS_MAC, MOD_LABEL } from "../lib/keyboard";
   import { Bot, Terminal, GitCompare, FileCode } from "@lucide/svelte";
-  import { getCiChecks, classifyCheck } from "../lib/ci-checks.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
 
   interface Props {
@@ -12,6 +11,7 @@
     activeTabIndex: number;
     prUrl: string | null;
     prState: string | null;
+    ciStatus: "passing" | "failing" | "pending" | null;
     hasChanges: boolean;
     sessionId: string | null;
     symphonyStatus: { active: boolean; slots_used: number; max_concurrent: number } | null;
@@ -25,13 +25,10 @@
     onTogglePrPanel?: () => void;
   }
 
-  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel }: Props = $props();
+  let { projectName, sessionName, sidebarVisible, tabs, activeTabIndex, prUrl, prState, ciStatus, hasChanges, sessionId, symphonyStatus, runningCount, activeProvider, onSelectTab, onCloseTab, onAddTab, onCreatePr, onOpenCommand, onTogglePrPanel }: Props = $props();
 
   const platformPadding = IS_MAC ? "pl-[72px]" : "pr-36";
 
-  let checks = $derived(sessionId ? getCiChecks(sessionId) : []);
-  let failedCount = $derived(checks.filter((c) => classifyCheck(c) === "fail").length);
-  let allConcluded = $derived(checks.length > 0 && checks.every((c) => classifyCheck(c) !== "pending"));
   let isMerged = $derived(prState === "merged");
   let isDraft = $derived(prState === "draft");
 
@@ -91,8 +88,8 @@
       >
         <span class="size-[7px] rounded-full {isMerged ? 'bg-[#bc8cff]' : isDraft ? 'bg-t3' : prState === 'closed' ? 'bg-status-exited' : 'bg-status-running'}"></span>
         PR{prUrl?.match(/#(\d+)/)?.[0] ?? ''}
-        {#if checks.length > 0}
-          <span class="size-[5px] rounded-full {failedCount > 0 ? 'bg-status-exited' : allConcluded ? 'bg-status-running' : 'bg-status-review animate-pulse'}"></span>
+        {#if ciStatus}
+          <span class="size-[5px] rounded-full {ciStatus === 'failing' ? 'bg-status-exited' : ciStatus === 'passing' ? 'bg-status-running' : 'bg-status-review animate-pulse'}"></span>
         {/if}
       </button>
     {:else if hasChanges && onCreatePr}
