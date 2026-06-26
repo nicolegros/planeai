@@ -322,6 +322,7 @@ fn main() {
             get_allowed_merge_strategies,
             merge_pr,
             mark_pr_ready,
+            get_merge_state,
             check_cli_installed,
             install_cli,
             list_stale_worktrees,

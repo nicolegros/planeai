@@ -501,6 +501,108 @@ pub async fn merge_pr(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeStateInfo {
+    pub blocked: bool,
+    pub reasons: Vec<String>,
+    pub settings_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct GhMergeStateView {
+    merge_state_status: Option<String>,
+    review_decision: Option<String>,
+    status_check_rollup: Option<Vec<GhCheckRun>>,
+}
+
+fn parse_merge_block_reasons(view: &GhMergeStateView) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if let Some(ref decision) = view.review_decision {
+        match decision.as_str() {
+            "CHANGES_REQUESTED" => reasons.push("Changes requested by reviewer".to_string()),
+            "REVIEW_REQUIRED" => reasons.push("Required reviews not met".to_string()),
+            _ => {}
+        }
+    }
+    if let Some(ref checks) = view.status_check_rollup {
+        let failing = checks
+            .iter()
+            .filter(|c| {
+                c.conclusion.as_deref() == Some("FAILURE")
+                    || c.conclusion.as_deref() == Some("failure")
+            })
+            .count();
+        if failing > 0 {
+            reasons.push(format!("Required checks failing ({failing})"));
+        }
+    }
+    if let Some(ref state) = view.merge_state_status {
+        if state == "BLOCKED" && reasons.is_empty() {
+            reasons.push("Linear history required or other branch protection rule".to_string());
+        }
+    }
+    reasons
+}
+
+#[tauri::command]
+pub async fn get_merge_state(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<MergeStateInfo, String> {
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    let repo = resolve_github_repo(&ctx.cwd)
+        .await?
+        .ok_or("not a GitHub repo")?;
+
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
+    cmd.args([
+        "pr",
+        "view",
+        &ctx.branch,
+        "--json",
+        "mergeStateStatus,reviewDecision,statusCheckRollup",
+    ])
+    .current_dir(&ctx.cwd);
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(MergeStateInfo {
+            blocked: false,
+            reasons: vec![],
+            settings_url: None,
+        });
+    }
+
+    let view: GhMergeStateView = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse merge state: {e}"))?;
+
+    let blocked = view.merge_state_status.as_deref() == Some("BLOCKED");
+    let reasons = if blocked {
+        parse_merge_block_reasons(&view)
+    } else {
+        vec![]
+    };
+    let settings_url = if blocked {
+        Some(format!("https://github.com/{repo}/settings/rules"))
+    } else {
+        None
+    };
+
+    Ok(MergeStateInfo {
+        blocked,
+        reasons,
+        settings_url,
+    })
+}
+
 #[tauri::command]
 pub async fn mark_pr_ready(
     session_id: String,
@@ -779,5 +881,55 @@ mod tests {
         let r: MergeStrategy = serde_json::from_str("\"rebase\"").unwrap();
         assert_eq!(r.as_gh_flag(), "--rebase");
         assert!(serde_json::from_str::<MergeStrategy>("\"fast-forward\"").is_err());
+    }
+
+    #[test]
+    fn parse_merge_block_reasons_review_required() {
+        let view = GhMergeStateView {
+            merge_state_status: Some("BLOCKED".to_string()),
+            review_decision: Some("REVIEW_REQUIRED".to_string()),
+            status_check_rollup: None,
+        };
+        let reasons = parse_merge_block_reasons(&view);
+        assert!(reasons.iter().any(|r| r.contains("Required reviews")));
+    }
+
+    #[test]
+    fn parse_merge_block_reasons_changes_requested() {
+        let view = GhMergeStateView {
+            merge_state_status: Some("BLOCKED".to_string()),
+            review_decision: Some("CHANGES_REQUESTED".to_string()),
+            status_check_rollup: None,
+        };
+        let reasons = parse_merge_block_reasons(&view);
+        assert!(reasons.iter().any(|r| r.contains("Changes requested")));
+    }
+
+    #[test]
+    fn parse_merge_block_reasons_failing_checks() {
+        let view = GhMergeStateView {
+            merge_state_status: Some("BLOCKED".to_string()),
+            review_decision: None,
+            status_check_rollup: Some(vec![GhCheckRun {
+                name: "build".to_string(),
+                status: "completed".to_string(),
+                conclusion: Some("FAILURE".to_string()),
+                details_url: None,
+                workflow_name: None,
+            }]),
+        };
+        let reasons = parse_merge_block_reasons(&view);
+        assert!(reasons.iter().any(|r| r.contains("checks failing")));
+    }
+
+    #[test]
+    fn parse_merge_block_reasons_unknown_block() {
+        let view = GhMergeStateView {
+            merge_state_status: Some("BLOCKED".to_string()),
+            review_decision: None,
+            status_check_rollup: None,
+        };
+        let reasons = parse_merge_block_reasons(&view);
+        assert!(reasons.iter().any(|r| r.contains("Linear history")));
     }
 }
