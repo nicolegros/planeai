@@ -35,7 +35,8 @@
   import FormDialog from "./components/ui/FormDialog.svelte";
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
-  import PostMergePrompt, { focusMergePrompt } from "./components/PostMergePrompt.svelte";
+  import PostMergePrompt from "./components/PostMergePrompt.svelte";
+  import { focusMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";

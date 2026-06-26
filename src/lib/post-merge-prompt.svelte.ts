@@ -109,3 +109,9 @@ export function dismissForSession(sessionId: string): void {
     prompt = null;
   }
 }
+
+/** Focus coordination — component registers its focus function */
+let focusFn: (() => void) | null = null;
+export function registerFocus(fn: () => void) { focusFn = fn; }
+export function unregisterFocus() { focusFn = null; }
+export function focusMergePrompt() { focusFn?.(); }
