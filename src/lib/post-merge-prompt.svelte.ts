@@ -1,5 +1,6 @@
 /**
  * Post-merge prompt store — shows Archive/Destroy/Keep prompt when a PR is merged.
+ * When the session has a task, shows Done/Dismiss instead.
  * Default timeout action is configurable via settings.post_merge_action.
  */
 import { showSnackbar } from "./snackbar.svelte";
@@ -8,27 +9,38 @@ import { getSettings } from "./settings.svelte";
 export interface MergePrompt {
   sessionId: string;
   sessionName: string;
+  taskKey: string | null;
+  onArchive: (id: string) => Promise<void>;
+  onDestroy: (id: string) => Promise<void>;
+  onTaskDone: ((id: string) => Promise<void>) | null;
+}
+
+export interface MergePromptOptions {
+  sessionId: string;
+  sessionName: string;
+  taskKey: string | null;
+  onArchive: (id: string) => Promise<void>;
+  onDestroy: (id: string) => Promise<void>;
+  onTaskDone?: (id: string) => Promise<void>;
 }
 
 let prompt = $state<MergePrompt | null>(null);
 let timer: ReturnType<typeof setTimeout> | null = null;
-let onArchive: ((id: string) => Promise<void>) | null = null;
-let onDestroy: ((id: string) => Promise<void>) | null = null;
 
 export function getPrompt(): MergePrompt | null {
   return prompt;
 }
 
-export function showMergePrompt(
-  sessionId: string,
-  sessionName: string,
-  archiveFn: (id: string) => Promise<void>,
-  destroyFn: (id: string) => Promise<void>,
-): void {
+export function showMergePrompt(options: MergePromptOptions): void {
   clearTimer();
-  prompt = { sessionId, sessionName };
-  onArchive = archiveFn;
-  onDestroy = destroyFn;
+  prompt = {
+    sessionId: options.sessionId,
+    sessionName: options.sessionName,
+    taskKey: options.taskKey,
+    onArchive: options.onArchive,
+    onDestroy: options.onDestroy,
+    onTaskDone: options.onTaskDone ?? null,
+  };
 
   const action = getSettings().post_merge_action ?? "archive";
   if (action === "keep") return; // no timeout
@@ -36,19 +48,27 @@ export function showMergePrompt(
 }
 
 export async function handleArchive(): Promise<void> {
-  if (!prompt || !onArchive) return;
-  const id = prompt.sessionId;
+  if (!prompt) return;
+  const { sessionId, onArchive } = prompt;
   clearTimer();
   prompt = null;
-  await onArchive(id);
+  await onArchive(sessionId);
 }
 
 export async function handleDestroy(): Promise<void> {
-  if (!prompt || !onDestroy) return;
-  const id = prompt.sessionId;
+  if (!prompt) return;
+  const { sessionId, onDestroy } = prompt;
   clearTimer();
   prompt = null;
-  await onDestroy(id);
+  await onDestroy(sessionId);
+}
+
+export async function handleTaskDone(): Promise<void> {
+  if (!prompt?.onTaskDone) return;
+  const { sessionId, onTaskDone } = prompt;
+  clearTimer();
+  prompt = null;
+  await onTaskDone(sessionId);
 }
 
 export function handleKeep(): void {
@@ -59,14 +79,19 @@ export function handleKeep(): void {
 function runDefault(): void {
   if (!prompt) return;
   const action = getSettings().post_merge_action ?? "archive";
-  const id = prompt.sessionId;
+  const { sessionId, taskKey, onArchive, onDestroy, onTaskDone } = prompt;
+  const hasTask = !!taskKey;
   prompt = null;
   timer = null;
 
-  if (action === "archive" && onArchive) {
-    onArchive(id).then(() => showSnackbar("Session auto-archived", "success"));
-  } else if (action === "destroy" && onDestroy) {
-    onDestroy(id).then(() => showSnackbar("Session auto-destroyed", "success"));
+  const taskThen = hasTask && onTaskDone ? onTaskDone(sessionId).catch(() => {}) : Promise.resolve();
+
+  if (action === "archive") {
+    taskThen.then(() => onArchive(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success"));
+  } else if (action === "destroy") {
+    taskThen.then(() => onDestroy(sessionId)).then(() => showSnackbar(hasTask ? "Task done, session destroyed" : "Session auto-destroyed", "success"));
+  } else if (hasTask && onTaskDone) {
+    taskThen.then(() => showSnackbar("Task marked done", "success"));
   }
 }
 

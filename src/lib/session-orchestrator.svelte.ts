@@ -18,6 +18,8 @@ import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
 import { preloadPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
+import { getProjects } from "./project-store.svelte";
+import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
 import {
   activateSession as poolActivate,
@@ -307,12 +309,21 @@ export function startEventListeners(): () => void {
     listen<{ session_id: string }>("pr-merged", (event) => {
       const s = sessions.find((x) => x.id === event.payload.session_id);
       if (s) {
-        showMergePrompt(
-          s.id,
-          s.name || s.branch,
-          (id) => archiveSession(sessions.find((x) => x.id === id)!),
-          (id) => deleteSession(sessions.find((x) => x.id === id)!),
-        );
+        showMergePrompt({
+          sessionId: s.id,
+          sessionName: s.name || s.branch,
+          taskKey: s.task_key,
+          onArchive: (id) => archiveSession(sessions.find((x) => x.id === id)!),
+          onDestroy: (id) => deleteSession(sessions.find((x) => x.id === id)!),
+          onTaskDone: s.task_key
+            ? async (id) => {
+                const sess = sessions.find((x) => x.id === id);
+                if (!sess?.task_key) return;
+                const proj = getProjects().find((p) => p.id === sess.project_id);
+                if (proj) await moveTask(sess.task_key, "done", proj.path);
+              }
+            : undefined,
+        });
       }
     }),
   );
