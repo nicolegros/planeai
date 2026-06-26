@@ -835,7 +835,6 @@ The Iced workflow now operates on shared PlaneAI domain state:
 | Git worktree creation         | Needs branch picker / task dispatch UI |
 | Task assignment               | Needs task picker UI                   |
 | Lifecycle hooks               | Needs task integration                 |
-| Provider session ID discovery | Lower priority                         |
 
 ### Dogfooding guidance
 

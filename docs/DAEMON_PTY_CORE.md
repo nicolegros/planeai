@@ -192,9 +192,8 @@ Provider resume is a recovery path, not true live process persistence.
 
 When restarting a daemon session:
 
-1. If provider config has `resume_flag` + stored `provider_session_id` → use resume command
-2. If provider config has `resume_command` (interactive picker) → use that
-3. Otherwise → fresh provider command
+1. If provider config has `resume_command` (interactive picker) → use that
+2. Otherwise → fresh provider command
 
 If resume fails, automatically falls back to fresh command.
 
@@ -202,14 +201,12 @@ If resume fails, automatically falls back to fresh command.
 
 When a session transitions from exited to active (via restart):
 
-1. Backend emits `session-restarted` event with `{ session_id }`
-2. Session orchestrator updates status to "active"
-3. Terminal.svelte detects `exited → !exited` transition
-4. Closes old data connection state
-5. Opens new `pty.attach()` with flow control channel
-6. Replays buffer + resumes live output
+1. Session orchestrator calls `restart()` and defers terminal pool activation until the restart resolves
+2. On success, orchestrator updates session status to "active" and activates the terminal pool
+3. Terminal.svelte mounts and calls `pty.attach()` with flow control channel
+4. Replays buffer + resumes live output
 
-Double-attach is guarded by the `attached` state flag. Restart failures surface via `showSnackbar()`.
+This sequencing prevents the terminal from attaching to a still-exited daemon session (which would immediately EOF and re-emit pty-exited). Restart failures surface via `showSnackbar()`; the terminal pool is still activated so the user sees the session state.
 
 ## Architecture
 

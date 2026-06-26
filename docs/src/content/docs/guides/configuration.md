@@ -39,8 +39,7 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 | `prompt_command`             | Command to send a prompt to a running session                         |
 | `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                     |
 | `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations                |
-| `resume_flag`                | Flag to resume a previous session (session ID appended automatically) |
-| `resume_command`             | Command to resume interactively (picker) when no stored session ID    |
+| `resume_command`             | Command to resume interactively when restarting an exited session      |
 
 ## Session Backend
 
