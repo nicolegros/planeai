@@ -163,6 +163,8 @@ export const jira = {
   syncNow: () => invoke<SyncResult>("jira_sync_now"),
   status: () => invoke<JiraStatus>("jira_status"),
   listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
+  assign: (jiraTaskKey: string, projectId: string) =>
+    invoke<TaskItem>("assign_jira_task", { jiraTaskKey, projectId }),
 };
 
 export const preferences = {

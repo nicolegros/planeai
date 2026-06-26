@@ -126,7 +126,7 @@ pub fn init_jira(config: &Config) -> Option<JiraState> {
     Some(state)
 }
 
-fn open_task_provider(
+pub fn open_task_provider(
     config: &JiraConfig,
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {
     let db_path = planeai_paths::db_path();
