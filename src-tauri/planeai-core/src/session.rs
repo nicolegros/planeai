@@ -91,8 +91,18 @@ impl SessionDispatcher {
 
         tracing::info!(task_key = %task.key, session_id = %session_id, project = %self.project_name, "dispatching session");
 
-        // Build branch name from task key + short session id to avoid ref conflicts
-        let branch = format!("{}/{}", task.key.to_lowercase().replace(' ', "-"), short_id);
+        let effective_parent_key = task
+            .parent_key
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&task.key);
+
+        // Build branch name: use parent_key if present, else task key
+        let branch = format!(
+            "{}/{}",
+            effective_parent_key.to_lowercase().replace(' ', "-"),
+            short_id
+        );
 
         // Fetch base branch to ensure we have the latest remote ref
         let resolved_base = backend.fetch_base(&self.project_path, &task.base_branch)?;
@@ -110,6 +120,7 @@ impl SessionDispatcher {
             vars.insert("key", task.key.as_str());
             vars.insert("title", task.title.as_str());
             vars.insert("description", task.description.as_str());
+            vars.insert("parent_key", effective_parent_key);
             Some(template::render(tpl, &vars))
         } else {
             None
@@ -152,6 +163,7 @@ impl SessionDispatcher {
             vars.insert("title", task.title.as_str());
             vars.insert("description", task.description.as_str());
             vars.insert("status", task.status.as_str());
+            vars.insert("parent_key", effective_parent_key);
             template::render(tpl, &vars)
         } else {
             format!("{}: {}", task.key, task.title)

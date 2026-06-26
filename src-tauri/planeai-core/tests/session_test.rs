@@ -150,6 +150,7 @@ fn dispatch_creates_worktree_session_and_fires_on_start() {
         status: "todo".to_string(),
         description: "Full dark mode support".to_string(),
         priority: 1,
+        parent_key: None,
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
@@ -223,6 +224,7 @@ fn dispatch_uses_task_base_branch_when_present() {
         status: "todo".to_string(),
         description: String::new(),
         priority: 0,
+        parent_key: None,
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "develop".to_string(),
@@ -266,6 +268,7 @@ fn dispatch_fetches_base_before_worktree_creation() {
         status: "todo".to_string(),
         description: String::new(),
         priority: 0,
+        parent_key: None,
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "develop".to_string(),
@@ -346,6 +349,7 @@ fn make_task() -> Task {
         status: "todo".to_string(),
         description: String::new(),
         priority: 1,
+        parent_key: None,
         blocked_by: vec![],
         subtasks: vec![],
         base_branch: "main".to_string(),
@@ -387,4 +391,56 @@ fn dispatch_daemon_backend_calls_create_daemon_session() {
 
     let tmux = backend.tmux_sessions.lock().unwrap();
     assert_eq!(tmux.len(), 0);
+}
+
+#[test]
+fn dispatch_uses_parent_key_for_branch_name() {
+    let backend = RecordingBackend::default();
+    let dispatcher = make_dispatcher("kiro", "kiro-cli chat", Some("{prompt}"));
+
+    let task = Task {
+        key: "SUB-1".to_string(),
+        title: "Fix child bug".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 0,
+        parent_key: Some("PES-3206".to_string()),
+        blocked_by: vec![],
+        subtasks: vec![],
+        base_branch: "main".to_string(),
+    };
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert!(
+        session.branch.starts_with("pes-3206/"),
+        "expected branch to start with 'pes-3206/', got: {}",
+        session.branch
+    );
+}
+
+#[test]
+fn dispatch_without_parent_key_uses_task_key() {
+    let backend = RecordingBackend::default();
+    let dispatcher = make_dispatcher("kiro", "kiro-cli chat", None);
+
+    let task = Task {
+        key: "PLA-42".to_string(),
+        title: "Regular task".to_string(),
+        status: "todo".to_string(),
+        description: String::new(),
+        priority: 0,
+        parent_key: None,
+        blocked_by: vec![],
+        subtasks: vec![],
+        base_branch: "main".to_string(),
+    };
+
+    let session = dispatcher.dispatch(&task, &backend).unwrap();
+
+    assert!(
+        session.branch.starts_with("pla-42/"),
+        "expected branch to start with 'pla-42/', got: {}",
+        session.branch
+    );
 }

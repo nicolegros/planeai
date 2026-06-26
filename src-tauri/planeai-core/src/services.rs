@@ -757,8 +757,12 @@ impl WorktreeService {
     }
 
     /// Generate a branch name from task key and short id.
-    pub fn branch_name(task_key: &str, short_id: &str) -> String {
-        format!("{}/{}", task_key.to_lowercase().replace(' ', "-"), short_id)
+    /// If parent_key is provided, it is used instead of task_key for the branch prefix.
+    pub fn branch_name(task_key: &str, parent_key: Option<&str>, short_id: &str) -> String {
+        let key = parent_key
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(task_key);
+        format!("{}/{}", key.to_lowercase().replace(' ', "-"), short_id)
     }
 
     /// Compute the short_id from a session UUID (first 8 hex chars, dashes removed).
@@ -945,7 +949,7 @@ impl TaskService {
             description: request.task_description.clone(),
             status: planeai_tasks::model::Status::Todo,
             priority: 0,
-            parent_key: None,
+            parent_key: request.parent_key.clone(),
             blocked_by: Vec::new(),
             tags: Vec::new(),
             base_branch: request.task_base_branch.clone(),
@@ -970,7 +974,11 @@ impl TaskService {
             .map_err(|e| e.to_string())?;
 
         let short_id = WorktreeService::short_id(&resolved.request.session_id);
-        let branch_name = WorktreeService::branch_name(&request.task_key, &short_id);
+        let branch_name = WorktreeService::branch_name(
+            &request.task_key,
+            request.parent_key.as_deref(),
+            &short_id,
+        );
 
         let worktree_mode = WorktreeMode::Create {
             base_project_path: request.project_path.clone(),
@@ -994,6 +1002,7 @@ pub struct TaskLaunchRequest {
     pub task_title: String,
     pub task_description: String,
     pub task_base_branch: String,
+    pub parent_key: Option<String>,
     pub provider_id: Option<String>,
     pub auto_approve: bool,
     pub autonomous: bool,
