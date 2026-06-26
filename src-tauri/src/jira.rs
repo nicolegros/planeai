@@ -67,6 +67,17 @@ impl JiraState {
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
+            // Prefer source_name for direct lookup, fall back to jira_project match
+            if !issue.source_name.is_empty() {
+                if let Some(wb) = jira_cfg.projects.get(&issue.source_name) {
+                    return wb.writeback.clone();
+                }
+                tracing::debug!(
+                    task_key,
+                    source_name = %issue.source_name,
+                    "source_name not found in config, falling back to jira_project scan"
+                );
+            }
             jira_cfg
                 .projects
                 .values()

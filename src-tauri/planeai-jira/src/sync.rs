@@ -72,8 +72,8 @@ impl JiraSync {
             return Ok(result);
         }
 
-        for mapping in self.config.projects.values() {
-            match self.sync_project(mapping, &mut result).await {
+        for (source_name, mapping) in &self.config.projects {
+            match self.sync_project(source_name, mapping, &mut result).await {
                 Ok(()) => {}
                 Err(e) => {
                     warn!(project = %mapping.jira_project, error = %e, "sync failed for project, continuing");
@@ -87,6 +87,7 @@ impl JiraSync {
 
     async fn sync_project(
         &self,
+        source_name: &str,
         mapping: &crate::config::JiraProjectMapping,
         result: &mut SyncResult,
     ) -> Result<(), crate::Error> {
@@ -108,6 +109,7 @@ impl JiraSync {
                 labels: issue.labels.clone(),
                 sync_status: crate::model::SyncStatus::Synced,
                 last_synced_at: chrono::Utc::now(),
+                source_name: source_name.to_string(),
             };
             self.repo.upsert_issue(&jira_issue)?;
 
@@ -708,5 +710,26 @@ mod tests {
 
         let result = sync.sync_now().await.unwrap();
         assert_eq!(result.done, 1);
+    }
+
+    #[tokio::test]
+    async fn sync_stores_source_name_on_issues() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/jql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issues": [issue_json("PROJ-1", "Task", "To Do")]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = test_client(&server).await;
+        let (jira_repo, task_repo) = setup_db();
+        let sync = JiraSync::new(client, jira_repo.clone(), task_repo, test_config());
+
+        sync.sync_now().await.unwrap();
+
+        let issue = jira_repo.get_issue("PROJ-1").unwrap().unwrap();
+        assert_eq!(issue.source_name, "proj");
     }
 }
