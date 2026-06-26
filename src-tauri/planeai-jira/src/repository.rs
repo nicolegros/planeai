@@ -296,7 +296,7 @@ mod tests {
         other.jira_project = "OTHER".to_string();
         repo.upsert_issue(&other).unwrap();
 
-        repo.mark_stale(&["PROJ-2"]).unwrap();
+        repo.mark_departed(&["PROJ-2"]).unwrap();
 
         let mut keys = repo.list_all_issue_keys().unwrap();
         keys.sort();

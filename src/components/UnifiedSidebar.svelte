@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { projects as projectsApi } from "../lib/api";
-  import type { TaskItem, Session, Project, JiraTaskItem } from "../lib/types";
+  import { projects as projectsApi, jira as jiraApi } from "../lib/api";
+  import type { TaskItem, Session, Project } from "../lib/types";
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
@@ -11,6 +11,7 @@
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import TaskPanel from "./TaskPanel.svelte";
+  import JiraSidebarSection from "./JiraSidebarSection.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -44,6 +45,7 @@
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
   const jiraTasks = $derived(jiraTaskStore.getJiraTasks());
+  const jiraChildCounts = $derived(jiraTaskStore.getChildCounts());
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -63,7 +65,8 @@
     }
   }
   $effect(() => { if (projects.length) loadAutoModes(); });
-  $effect(() => { jiraTaskStore.loadJiraTasks(); });
+  let jiraConnected = $state(false);
+  $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);
@@ -101,7 +104,6 @@
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
   let taskContextMenu = $state<{ x: number; y: number; task: TaskItem; projectPath: string } | null>(null);
-  let jiraContextMenu = $state<{ x: number; y: number; task: JiraTaskItem } | null>(null);
 
   function onContextMenu(e: MouseEvent, session: Session) { e.preventDefault(); contextMenu = { x: e.clientX, y: e.clientY, session }; }
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
@@ -168,7 +170,7 @@
   }
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: JiraTaskItem };
+  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of projects) {
@@ -338,7 +340,7 @@
     if (now - lastFocusRefresh < FOCUS_REFRESH_COOLDOWN_MS) return;
     lastFocusRefresh = now;
     taskStore.refresh(projects.map(p => p.path));
-    jiraTaskStore.refresh();
+    if (jiraConnected) jiraTaskStore.loadJiraTasks();
   }
 </script>
 
@@ -522,54 +524,15 @@
       {/each}
 
       <!-- Jira section -->
-      {#if jiraTasks.length > 0}
-        {@const jiraCollapsed = collapsedSections["jira"] ?? false}
-        {@const jiraNavIdx = flatNavIndex.get("jira_header") ?? -1}
-        {@const isJiraSelected = zone === 'sidebar' && jiraNavIdx === getSelectedIndex()}
-        <div>
-          <button
-            data-nav-index={jiraNavIdx}
-            class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isJiraSelected ? 'ring-2 ring-accent' : ''}"
-            onclick={() => toggleSection("jira")}
-          >
-            {#if jiraCollapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
-            Jira
-            <span class="ml-auto font-normal text-t3">{jiraTasks.length}</span>
-          </button>
-
-          {#if !jiraCollapsed}
-            <ul class="space-y-0.5">
-              {#each jiraTasks as jTask (jTask.key)}
-                {@const jiraTaskNavIdx = flatNavIndex.get(`jira:${jTask.key}`) ?? -1}
-                {@const isJiraTaskSelected = zone === 'sidebar' && jiraTaskNavIdx === getSelectedIndex()}
-                <li>
-                  <div class="flex items-center gap-1.5">
-                    <button
-                      data-nav-index={jiraTaskNavIdx}
-                      class="flex-1 min-w-0 text-left py-[6px] px-2 flex items-center gap-1.5 transition-colors rounded-lg hover:bg-panel-hi {isJiraTaskSelected ? 'ring-2 ring-accent' : ''}"
-                      onclick={() => onAssignJiraTask?.(jTask.key)}
-                      oncontextmenu={(e) => { e.preventDefault(); jiraContextMenu = { x: e.clientX, y: e.clientY, task: jTask }; }}
-                    >
-                      {#if jTask.status === "done"}
-                        <CheckCircle2 class="size-3 shrink-0 text-status-running" />
-                      {:else if jTask.status === "in_progress" || jTask.status === "in_review"}
-                        <span class="size-2 shrink-0 rounded-full bg-status-running"></span>
-                      {:else}
-                        <span class="size-2 shrink-0 rounded-full bg-t3"></span>
-                      {/if}
-                      <span class="shrink-0 font-mono text-[10px] text-t3">{jTask.key}</span>
-                      <span class="truncate text-[12.5px] {jTask.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{jTask.title}</span>
-                      {#if jTask.child_count > 0}
-                        <span class="ml-auto shrink-0 font-mono text-[9px] text-t3 bg-panel-hi rounded px-[4px] py-[1px]">{jTask.child_count}</span>
-                      {/if}
-                    </button>
-                  </div>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
-      {/if}
+      <JiraSidebarSection
+        tasks={jiraTasks}
+        childCounts={jiraChildCounts}
+        collapsed={collapsedSections["jira"] ?? false}
+        {zone}
+        {flatNavIndex}
+        onToggleSection={() => toggleSection("jira")}
+        onAssignJiraTask={(key) => onAssignJiraTask?.(key)}
+      />
     {/if}
   </nav>
 
@@ -645,18 +608,6 @@
       ...(taskContextMenu.task.status !== "in_review" ? [{ label: "→ In Review", onSelect: () => moveTask(taskContextMenu!.task.key, "in_review") }] : []),
       ...(taskContextMenu.task.status !== "todo" ? [{ label: "→ Todo", onSelect: () => moveTask(taskContextMenu!.task.key, "todo") }] : []),
       ...(taskContextMenu.task.status !== "done" ? [{ label: "→ Done", onSelect: () => moveTask(taskContextMenu!.task.key, "done") }] : []),
-    ]}
-  />
-{/if}
-
-<!-- Jira task context menu -->
-{#if jiraContextMenu}
-  <ContextMenu
-    x={jiraContextMenu.x}
-    y={jiraContextMenu.y}
-    onClose={() => (jiraContextMenu = null)}
-    items={[
-      { label: "Assign to project", onSelect: () => onAssignJiraTask?.(jiraContextMenu!.task.key) },
     ]}
   />
 {/if}

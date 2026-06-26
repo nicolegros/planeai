@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::State;
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
@@ -12,14 +13,11 @@ use crate::state::{ConfigState, DbState};
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
 
-/// A Jira task with child count for the sidebar section.
+/// Response for list_jira_tasks: tasks + child counts derived in-memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JiraTaskItem {
-    pub key: String,
-    pub title: String,
-    pub status: String,
-    pub priority: i32,
-    pub child_count: usize,
+pub struct JiraTasksResponse {
+    pub tasks: Vec<TaskItem>,
+    pub child_counts: HashMap<String, usize>,
 }
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
@@ -224,11 +222,16 @@ pub fn fire_task_notify_hook(
 }
 
 #[tauri::command]
-pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<Vec<JiraTaskItem>, String> {
+pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<JiraTasksResponse, String> {
     let guard = jira.0.lock().await;
     let state = match guard.as_ref() {
         Some(s) => s,
-        None => return Ok(Vec::new()),
+        None => {
+            return Ok(JiraTasksResponse {
+                tasks: Vec::new(),
+                child_counts: HashMap::new(),
+            })
+        }
     };
 
     let issue_keys = state
@@ -236,77 +239,25 @@ pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<Vec<JiraTask
         .list_all_issue_keys()
         .map_err(|e| e.to_string())?;
     if issue_keys.is_empty() {
-        return Ok(Vec::new());
+        return Ok(JiraTasksResponse {
+            tasks: Vec::new(),
+            child_counts: HashMap::new(),
+        });
     }
 
     let db_path = planeai_paths::db_path();
     let db_path_str = db_path.to_str().ok_or("invalid db path")?;
-    let conn = rusqlite::Connection::open(db_path_str).map_err(|e| e.to_string())?;
+    // Prefix is unused — list_by_keys and count_children are cross-prefix queries.
+    let repo = SqliteRepository::open(db_path_str, "_").map_err(|e| e.to_string())?;
 
-    let placeholders: String = issue_keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql =
-        format!("SELECT key, title, status, priority FROM tasks WHERE key IN ({placeholders})");
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let params: Vec<&dyn rusqlite::types::ToSql> = issue_keys
-        .iter()
-        .map(|k| k as &dyn rusqlite::types::ToSql)
-        .collect();
-    let rows = stmt
-        .query_map(params.as_slice(), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i32>(3)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
+    let key_refs: Vec<&str> = issue_keys.iter().map(|k| k.as_str()).collect();
+    let tasks = repo.list_by_keys(&key_refs).map_err(|e| e.to_string())?;
 
-    let mut tasks: Vec<(String, String, String, i32)> = Vec::new();
-    for r in rows {
-        tasks.push(r.map_err(|e| e.to_string())?);
-    }
+    let task_keys: Vec<&str> = tasks.iter().map(|t| t.key.as_str()).collect();
+    let child_counts = repo.count_children(&task_keys).map_err(|e| e.to_string())?;
 
-    // Count children per parent
-    let task_keys: Vec<&str> = tasks.iter().map(|(k, _, _, _)| k.as_str()).collect();
-    let child_counts = if task_keys.is_empty() {
-        std::collections::HashMap::new()
-    } else {
-        let ph: String = task_keys.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let child_sql = format!(
-            "SELECT parent_key, COUNT(*) FROM tasks WHERE parent_key IN ({ph}) GROUP BY parent_key"
-        );
-        let mut child_stmt = conn.prepare(&child_sql).map_err(|e| e.to_string())?;
-        let child_params: Vec<&dyn rusqlite::types::ToSql> = task_keys
-            .iter()
-            .map(|k| k as &dyn rusqlite::types::ToSql)
-            .collect();
-        let child_rows = child_stmt
-            .query_map(child_params.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        let mut map = std::collections::HashMap::new();
-        for r in child_rows {
-            let (k, c) = r.map_err(|e| e.to_string())?;
-            map.insert(k, c);
-        }
-        map
-    };
-
-    let result = tasks
-        .into_iter()
-        .map(|(key, title, status, priority)| {
-            let child_count = child_counts.get(&key).copied().unwrap_or(0);
-            JiraTaskItem {
-                key,
-                title,
-                status,
-                priority,
-                child_count,
-            }
-        })
-        .collect();
-
-    Ok(result)
+    Ok(JiraTasksResponse {
+        tasks: tasks.into_iter().map(TaskItem::from).collect(),
+        child_counts,
+    })
 }

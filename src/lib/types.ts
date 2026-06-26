@@ -74,10 +74,7 @@ export interface SyncResult {
   errors: number;
 }
 
-export interface JiraTaskItem {
-  key: string;
-  title: string;
-  status: string;
-  priority: number;
-  child_count: number;
+export interface JiraTasksResponse {
+  tasks: TaskItem[];
+  child_counts: Record<string, number>;
 }

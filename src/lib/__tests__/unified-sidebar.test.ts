@@ -275,14 +275,6 @@ describe("unified sidebar logic", () => {
   });
 
   describe("jira section in flat nav", () => {
-    interface JiraTaskItem {
-      key: string;
-      title: string;
-      status: string;
-      priority: number;
-      child_count: number;
-    }
-
     type JiraNavItem =
       | { type: "project_header"; project: { id: string } }
       | { type: "orphan"; session: { id: string } }
@@ -291,8 +283,19 @@ describe("unified sidebar logic", () => {
       | { type: "jira_header" }
       | { type: "jira_task"; task: { key: string } };
 
-    function makeJiraTask(key: string, status: string, child_count = 0): JiraTaskItem {
-      return { key, title: "jira task", status, priority: 0, child_count };
+    function makeJiraTask(key: string, status: string): TaskItem {
+      return {
+        key,
+        title: "jira task",
+        status,
+        description: "",
+        priority: 0,
+        blocked_by: [],
+        tags: [],
+        parent_key: null,
+        url: null,
+        base_branch: "main",
+      };
     }
 
     it("jira section appears after projects when jira tasks exist", () => {
@@ -312,7 +315,7 @@ describe("unified sidebar logic", () => {
     it("jira section is omitted when no jira tasks", () => {
       const flatNav: JiraNavItem[] = [];
       flatNav.push({ type: "project_header", project: { id: "p1" } });
-      const jiraTasks: JiraTaskItem[] = [];
+      const jiraTasks: TaskItem[] = [];
       if (jiraTasks.length > 0) {
         flatNav.push({ type: "jira_header" });
       }
@@ -332,14 +335,14 @@ describe("unified sidebar logic", () => {
     });
 
     it("jira tasks remain visible regardless of child creation (Decision 16)", () => {
-      // A Jira task that has children should still appear in the Jira section
-      const jiraTasks = [makeJiraTask("PROJ-1", "in_progress", 3)];
+      // child_counts is a separate map, tasks always shown
+      const jiraTasks = [makeJiraTask("PROJ-1", "in_progress")];
+      const childCounts: Record<string, number> = { "PROJ-1": 3 };
       const flatNav: JiraNavItem[] = [];
-      // Jira section always shows all tasks, even those with children
       flatNav.push({ type: "jira_header" });
       for (const t of jiraTasks) flatNav.push({ type: "jira_task", task: { key: t.key } });
       expect(flatNav).toHaveLength(2);
-      expect(jiraTasks[0].child_count).toBe(3);
+      expect(childCounts["PROJ-1"]).toBe(3);
     });
 
     it("flatNavIndex includes jira items", () => {
