@@ -358,6 +358,7 @@ fn main() {
             jira_disconnect,
             jira_sync_now,
             jira_status,
+            assign_jira_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
