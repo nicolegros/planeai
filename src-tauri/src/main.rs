@@ -164,7 +164,7 @@ fn main() {
             let jira_state = jira::init_jira(&cfg);
 
             app.manage(ConfigState(Mutex::new(cfg)));
-            app.manage(commands::JiraHandle(Mutex::new(jira_state)));
+            app.manage(commands::JiraHandle(tokio::sync::Mutex::new(jira_state)));
 
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));

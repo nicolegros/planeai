@@ -50,6 +50,7 @@ impl JiraState {
     }
 
     /// Trigger async writeback if this task is Jira-sourced. Non-blocking.
+    /// After PLA-148, the task key IS the Jira issue key for synced tasks.
     pub fn try_writeback(&self, task_key: &str, status: Status, config: &Config) {
         let action = match status {
             Status::InProgress => WritebackAction::Start,
@@ -60,21 +61,22 @@ impl JiraState {
             Some(wb) => wb.clone(),
             None => return,
         };
-        let issue_key = match self.repo.get_task_issue_key(task_key) {
-            Ok(Some(k)) => k,
+        // Check if this task_key corresponds to a known Jira issue
+        let issue = match self.repo.get_issue(task_key) {
+            Ok(Some(i)) => i,
             _ => return,
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
-            let issue_proj = self.repo.get_issue(&issue_key).ok()??.jira_project;
             jira_cfg
                 .projects
                 .values()
-                .find(|m| m.jira_project == issue_proj)?
+                .find(|m| m.jira_project == issue.source_name)?
                 .writeback
                 .clone()
         })();
         if let Some(wb_config) = wb_config {
+            let issue_key = task_key.to_string();
             tokio::spawn(async move {
                 if let Err(e) = writeback
                     .on_status_change(&issue_key, action, &wb_config)
@@ -130,12 +132,16 @@ fn open_task_provider(
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {
     let db_path = paths::db_path();
     let path_str = db_path.to_str().ok_or("invalid db path")?;
-    // Use first project key as prefix; falls back to "JIRA" if no projects configured
+    // Derive prefix from the Jira site hostname for determinism.
+    // After PLA-148 all Jira tasks use explicit keys, so this only affects the
+    // task_projects registration (auto-generated keys are unused for Jira sync).
     let prefix = config
-        .projects
-        .keys()
+        .site
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('.')
         .next()
-        .map(|k| planeai_tasks::sqlite::derive_prefix(k))
+        .map(planeai_tasks::sqlite::derive_prefix)
         .unwrap_or_else(|| "JIRA".to_string());
     planeai_tasks::sqlite::SqliteRepository::open(path_str, &prefix)
         .map(|r| Arc::new(r) as Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>)

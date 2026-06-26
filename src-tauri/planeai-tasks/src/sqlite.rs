@@ -182,10 +182,10 @@ impl SqliteRepository {
 
     fn get_with_conn(&self, conn: &Connection, key: &str) -> Result<Task, Error> {
         let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1")
+            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2")
             .map_err(|e| Error::Storage(e.to_string()))?;
 
-        stmt.query_row(params![key], |row| {
+        stmt.query_row(params![key, self.prefix], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -236,6 +236,13 @@ struct TaskRow {
 }
 
 impl TaskProvider for SqliteRepository {
+    /// Create a new task.
+    ///
+    /// If `params.key` is `Some`, that key is used directly instead of auto-generating.
+    /// Idempotent: if the key already exists within this project, the existing task is
+    /// returned unchanged — the remaining `CreateParams` fields are silently discarded.
+    /// This supports Jira sync where repeated syncs for the same issue should not
+    /// duplicate tasks; the sync loop handles updates separately.
     fn create(&self, params: CreateParams) -> Result<Task, Error> {
         let conn = self
             .conn
@@ -254,7 +261,8 @@ impl TaskProvider for SqliteRepository {
         ).map_err(|e| Error::Storage(e.to_string()))?;
 
         if result == 0 {
-            // Key already exists — idempotent create: return existing task
+            // Key already exists — idempotent create: return existing task only if it
+            // belongs to this project (prevents cross-project collision).
             return self.get_with_conn(&conn, &key);
         }
 
