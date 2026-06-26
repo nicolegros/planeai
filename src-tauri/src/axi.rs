@@ -45,8 +45,16 @@ pub fn task_ls(repo: &dyn TaskProvider, status: Option<&str>, tags: &[String]) -
                 t.title.clone(),
                 t.status.as_str().to_string(),
                 t.priority.to_string(),
-                if t.tags.is_empty() { String::new() } else { t.tags.join(";") },
-                if t.blocked_by.is_empty() { String::new() } else { t.blocked_by.join(";") },
+                if t.tags.is_empty() {
+                    String::new()
+                } else {
+                    t.tags.join(";")
+                },
+                if t.blocked_by.is_empty() {
+                    String::new()
+                } else {
+                    t.blocked_by.join(";")
+                },
             ]
         })
         .collect();
@@ -87,7 +95,15 @@ pub fn task_ls(repo: &dyn TaskProvider, status: Option<&str>, tags: &[String]) -
 pub fn task_show(repo: &dyn TaskProvider, key: &str) -> (String, i32) {
     let task = match repo.get(key) {
         Ok(t) => t,
-        Err(e) => return (emit_error(&e.to_string(), &[format!("Run `planeai-cli axi task ls` to see available tasks")]), 1),
+        Err(e) => {
+            return (
+                emit_error(
+                    &e.to_string(),
+                    &["Run `planeai-cli axi task ls` to see available tasks".to_string()],
+                ),
+                1,
+            )
+        }
     };
     (render(&[field("task", task_detail_object(&task))]), 0)
 }
@@ -101,7 +117,10 @@ pub fn task_add(repo: &dyn TaskProvider, params: crate::task_cli::AddParams) -> 
         tags: params.tags.to_vec(),
         blocked_by: params.blocked_by.to_vec(),
         parent_key: params.parent.map(|s| s.to_string()),
-        base_branch: params.base_branch.unwrap_or(DEFAULT_BASE_BRANCH).to_string(),
+        base_branch: params
+            .base_branch
+            .unwrap_or(DEFAULT_BASE_BRANCH)
+            .to_string(),
     }) {
         Ok(t) => t,
         Err(e) => return (emit_error(&e.to_string(), &[]), 1),
@@ -135,12 +154,23 @@ pub fn task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> (String, i
     // Check for idempotent no-op
     let existing = match repo.get(key) {
         Ok(t) => t,
-        Err(e) => return (emit_error(&e.to_string(), &[format!("Run `planeai-cli axi task ls` to see available tasks")]), 1),
+        Err(e) => {
+            return (
+                emit_error(
+                    &e.to_string(),
+                    &["Run `planeai-cli axi task ls` to see available tasks".to_string()],
+                ),
+                1,
+            )
+        }
     };
 
     if existing.status == s {
         let mut fields = vec![field("task", task_detail_object(&existing))];
-        fields.push(field("note", str_val("already in requested status (no-op)")));
+        fields.push(field(
+            "note",
+            str_val("already in requested status (no-op)"),
+        ));
         return (render(&fields), 0);
     }
 
@@ -186,7 +216,11 @@ pub fn session_ls(conn: &rusqlite::Connection, archived: bool) -> (String, i32) 
                 s.task_key.clone().unwrap_or_default(),
                 s.worktree_path.clone().unwrap_or_default(),
                 s.base_branch.clone().unwrap_or_default(),
-                if s.auto_approve { "true".into() } else { "false".into() },
+                if s.auto_approve {
+                    "true".into()
+                } else {
+                    "false".into()
+                },
                 s.created_at.clone(),
             ]
         })
@@ -264,13 +298,25 @@ pub fn project_ls(conn: &rusqlite::Connection) -> (String, i32) {
 
     let rows: Vec<Vec<String>> = projects
         .iter()
-        .map(|p| vec![p.prefix.clone(), p.name.clone(), p.path.clone(), p.status.clone()])
+        .map(|p| {
+            vec![
+                p.prefix.clone(),
+                p.name.clone(),
+                p.path.clone(),
+                p.status.clone(),
+            ]
+        })
         .collect();
 
     let fields = vec![field(
         "projects",
         Value::Table {
-            columns: vec!["prefix".into(), "name".into(), "path".into(), "status".into()],
+            columns: vec![
+                "prefix".into(),
+                "name".into(),
+                "path".into(),
+                "status".into(),
+            ],
             rows,
         },
     )];
@@ -286,7 +332,10 @@ pub fn home(conn: &rusqlite::Connection, cwd: &str, bin_path: &str) -> (String, 
 
     let mut fields: Vec<Field> = vec![
         field("bin", str_val(bin_path)),
-        field("description", str_val("Orchestrate parallel AI coding agents with persistent sessions")),
+        field(
+            "description",
+            str_val("Orchestrate parallel AI coding agents with persistent sessions"),
+        ),
     ];
 
     let project = match project {
@@ -357,7 +406,12 @@ pub fn home(conn: &rusqlite::Connection, cwd: &str, bin_path: &str) -> (String, 
                 fields.push(field(
                     "tasks",
                     Value::Table {
-                        columns: vec!["key".into(), "title".into(), "status".into(), "priority".into()],
+                        columns: vec![
+                            "key".into(),
+                            "title".into(),
+                            "status".into(),
+                            "priority".into(),
+                        ],
                         rows,
                     },
                 ));
@@ -389,7 +443,13 @@ pub fn home(conn: &rusqlite::Connection, cwd: &str, bin_path: &str) -> (String, 
             fields.push(field(
                 "sessions",
                 Value::Table {
-                    columns: vec!["id".into(), "name".into(), "status".into(), "provider".into(), "branch".into()],
+                    columns: vec![
+                        "id".into(),
+                        "name".into(),
+                        "status".into(),
+                        "provider".into(),
+                        "branch".into(),
+                    ],
                     rows,
                 },
             ));
@@ -439,7 +499,8 @@ fn truncate_desc(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_string();
     }
-    let end = s.char_indices()
+    let end = s
+        .char_indices()
         .map(|(i, _)| i)
         .take_while(|&i| i <= limit)
         .last()
@@ -464,8 +525,7 @@ mod tests {
     use planeai_tasks::sqlite::SqliteRepository;
 
     fn setup_repo(prefix: &str) -> SqliteRepository {
-        let repo = SqliteRepository::open_in_memory(prefix).unwrap();
-        repo
+        SqliteRepository::open_in_memory(prefix).unwrap()
     }
 
     fn add_task(repo: &dyn TaskProvider, title: &str) {
@@ -486,9 +546,18 @@ mod tests {
         let (output, code) = task_ls(&repo, None, &[]);
         assert_eq!(code, 0);
         assert!(output.contains("count: 2 total"), "output was:\n{output}");
-        assert!(output.contains("tasks[2]{key,title,status,priority,tags,blocked_by}:"), "output was:\n{output}");
-        assert!(output.contains("TST-1,Fix auth bug,todo,0,,"), "output was:\n{output}");
-        assert!(output.contains("TST-2,Add pagination,todo,0,,"), "output was:\n{output}");
+        assert!(
+            output.contains("tasks[2]{key,title,status,priority,tags,blocked_by}:"),
+            "output was:\n{output}"
+        );
+        assert!(
+            output.contains("TST-1,Fix auth bug,todo,0,,"),
+            "output was:\n{output}"
+        );
+        assert!(
+            output.contains("TST-2,Add pagination,todo,0,,"),
+            "output was:\n{output}"
+        );
     }
 
     #[test]
@@ -496,10 +565,14 @@ mod tests {
         let repo = setup_repo("TST");
         add_task(&repo, "first");
         add_task(&repo, "second");
-        repo.update("TST-1", planeai_tasks::model::UpdateParams {
-            status: Some(Status::Done),
-            ..Default::default()
-        }).unwrap();
+        repo.update(
+            "TST-1",
+            planeai_tasks::model::UpdateParams {
+                status: Some(Status::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let (output, code) = task_ls(&repo, Some("todo"), &[]);
         assert_eq!(code, 0);
@@ -537,7 +610,8 @@ mod tests {
             blocked_by: vec![],
             parent_key: None,
             base_branch: "main".into(),
-        }).unwrap();
+        })
+        .unwrap();
         repo.create(CreateParams {
             title: "Fix auth bug".into(),
             description: "Need to fix the login flow".into(),
@@ -546,7 +620,8 @@ mod tests {
             blocked_by: vec!["TST-1".into()],
             parent_key: None,
             base_branch: "main".into(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let (output, code) = task_show(&repo, "TST-2");
         assert_eq!(code, 0);
@@ -554,7 +629,10 @@ mod tests {
         assert!(output.contains("title: Fix auth bug"), "output:\n{output}");
         assert!(output.contains("status: todo"), "output:\n{output}");
         assert!(output.contains("priority: 2"), "output:\n{output}");
-        assert!(output.contains("description: Need to fix the login flow"), "output:\n{output}");
+        assert!(
+            output.contains("description: Need to fix the login flow"),
+            "output:\n{output}"
+        );
         assert!(output.contains("tags[1]: backend"), "output:\n{output}");
         assert!(output.contains("blocked_by[1]: TST-1"), "output:\n{output}");
         assert!(output.contains("base_branch: main"), "output:\n{output}");
@@ -573,10 +651,14 @@ mod tests {
             blocked_by: vec![],
             parent_key: None,
             base_branch: "main".into(),
-        }).unwrap();
+        })
+        .unwrap();
 
         let (output, _) = task_show(&repo, "TST-1");
-        assert!(output.contains("truncated, 1000 chars total"), "output:\n{output}");
+        assert!(
+            output.contains("truncated, 1000 chars total"),
+            "output:\n{output}"
+        );
     }
 
     #[test]
@@ -599,7 +681,10 @@ mod tests {
         assert!(output.contains("title: New feature"), "output:\n{output}");
         assert!(output.contains("status: todo"), "output:\n{output}");
         assert!(output.contains("priority: 1"), "output:\n{output}");
-        assert!(output.contains("planeai-cli axi task move TST-1 in_progress"), "output:\n{output}");
+        assert!(
+            output.contains("planeai-cli axi task move TST-1 in_progress"),
+            "output:\n{output}"
+        );
     }
 
     #[test]

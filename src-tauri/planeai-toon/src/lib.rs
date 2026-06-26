@@ -20,7 +20,10 @@ pub enum Value {
     /// A nested object (ordered fields).
     Object(Vec<Field>),
     /// A tabular array of rows, each row being comma-delimited values.
-    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     /// A primitive array (inline comma-delimited values).
     Array(Vec<String>),
     /// A list array (multiline, one item per line with `- ` prefix).
@@ -89,7 +92,12 @@ fn render_field(out: &mut String, field: &Field, indent: usize) {
             for row in rows {
                 out.push_str(&pad);
                 out.push_str("  ");
-                out.push_str(&row.iter().map(|v| quote_table_cell(v)).collect::<Vec<_>>().join(","));
+                out.push_str(
+                    &row.iter()
+                        .map(|v| quote_table_cell(v))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                );
                 out.push('\n');
             }
         }
@@ -97,7 +105,13 @@ fn render_field(out: &mut String, field: &Field, indent: usize) {
             out.push_str(&pad);
             out.push_str(&field.key);
             out.push_str(&format!("[{}]: ", items.len()));
-            out.push_str(&items.iter().map(|v| quote_if_needed(v)).collect::<Vec<_>>().join(","));
+            out.push_str(
+                &items
+                    .iter()
+                    .map(|v| quote_if_needed(v))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             out.push('\n');
         }
         Value::List(items) => {
@@ -183,7 +197,10 @@ fn escape(s: &str) -> String {
 
 /// Helper to build a Field quickly.
 pub fn field(key: &str, value: Value) -> Field {
-    Field { key: key.to_string(), value }
+    Field {
+        key: key.to_string(),
+        value,
+    }
 }
 
 /// Helper to build a string Value.
@@ -204,7 +221,10 @@ mod tests {
     fn renders_simple_fields() {
         let doc = render(&[
             field("bin", str_val("~/.local/bin/planeai-cli")),
-            field("description", str_val("Orchestrate parallel AI coding agents")),
+            field(
+                "description",
+                str_val("Orchestrate parallel AI coding agents"),
+            ),
         ]);
         assert_eq!(
             doc,

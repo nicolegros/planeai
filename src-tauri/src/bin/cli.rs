@@ -172,10 +172,7 @@ enum AxiSessionAction {
         archived: bool,
     },
     /// Send a prompt to a running session
-    Prompt {
-        id: String,
-        text: Option<String>,
-    },
+    Prompt { id: String, text: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -709,16 +706,20 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
         }
     };
 
-    let repo = match planeai_tasks::sqlite::SqliteRepository::open(
-        db_path.to_str().unwrap(),
-        &prefix,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            print!("{}", planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(&e.to_string()))]));
-            return 1;
-        }
-    };
+    let repo =
+        match planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap(), &prefix) {
+            Ok(r) => r,
+            Err(e) => {
+                print!(
+                    "{}",
+                    planeai_toon::render(&[planeai_toon::field(
+                        "error",
+                        planeai_toon::str_val(&e.to_string())
+                    )])
+                );
+                return 1;
+            }
+        };
 
     let (output, code) = match action {
         AxiTaskAction::List { status, tags, .. } => {
