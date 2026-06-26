@@ -191,6 +191,7 @@
     <div class="flex gap-3 text-[10px] text-t3 font-mono">
       <span><span class="px-1 rounded {badge}">O</span> open</span>
       <span><span class="px-1 rounded {badge}">S</span> strategy</span>
+      <span><span class="px-1 rounded {badge}">M</span> merge</span>
       <span><span class="px-1 rounded {badge}">R</span> refresh</span>
       {#if checks.length > 0}<span><span class="px-1 rounded {badge}">1–{checks.length}</span> check</span>{/if}
       {#if isDraft}<span><span class="px-1 rounded {badge}">⇧R</span> ready</span>{/if}
