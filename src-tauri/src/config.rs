@@ -96,13 +96,9 @@ pub struct Provider {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yolo_flag: Option<String>,
-    /// Command to resume interactively (picker) when no provider_session_id is stored.
+    /// Command used when restarting an exited session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_sessions_command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id_pattern: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,8 +203,6 @@ impl Default for Config {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 resume_command: Some("kiro-cli chat --resume".to_string()),
-                list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
-                session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
                 autonomous_prompt_template: None,
             },
@@ -219,8 +213,6 @@ impl Default for Config {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                 resume_command: Some("claude --resume".to_string()),
-                list_sessions_command: None,
-                session_id_pattern: None,
                 prompt_command: Some("-p {prompt}".to_string()),
                 autonomous_prompt_template: None,
             },
@@ -231,8 +223,6 @@ impl Default for Config {
                 command: "copilot --resume".to_string(),
                 yolo_flag: Some("--allow-all-tools".to_string()),
                 resume_command: None,
-                list_sessions_command: None,
-                session_id_pattern: Some("--resume=([0-9a-f-]+)".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
                 autonomous_prompt_template: None,
             },
@@ -306,12 +296,6 @@ fn backfill_provider_defaults(config: &mut Config) {
         if let Some(provider) = config.providers.get_mut(key) {
             if provider.resume_command.is_none() {
                 provider.resume_command = default_provider.resume_command.clone();
-            }
-            if provider.list_sessions_command.is_none() {
-                provider.list_sessions_command = default_provider.list_sessions_command.clone();
-            }
-            if provider.session_id_pattern.is_none() {
-                provider.session_id_pattern = default_provider.session_id_pattern.clone();
             }
         }
     }
@@ -763,19 +747,14 @@ mod tests {
         let provider = Provider {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
-            list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
-            session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
+            resume_command: Some("kiro-cli chat --resume".to_string()),
             ..Default::default()
         };
         let json = serde_json::to_string(&provider).unwrap();
         let parsed: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            parsed.list_sessions_command,
-            Some("kiro-cli chat --list-sessions".to_string())
-        );
-        assert_eq!(
-            parsed.session_id_pattern,
-            Some("SessionId: ([a-f0-9-]+)".to_string())
+            parsed.resume_command,
+            Some("kiro-cli chat --resume".to_string())
         );
     }
 
@@ -783,8 +762,7 @@ mod tests {
     fn provider_resume_fields_default_to_none_when_missing() {
         let json = r#"{"command": "aider"}"#;
         let parsed: Provider = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.list_sessions_command, None);
-        assert_eq!(parsed.session_id_pattern, None);
+        assert_eq!(parsed.resume_command, None);
     }
 
     #[test]
@@ -792,14 +770,9 @@ mod tests {
         let config = Config::default();
         let kiro = config.providers.get("kiro").unwrap();
         assert_eq!(
-            kiro.list_sessions_command,
-            Some("kiro-cli chat --list-sessions".to_string())
+            kiro.resume_command,
+            Some("kiro-cli chat --resume".to_string())
         );
-        assert!(kiro
-            .session_id_pattern
-            .as_ref()
-            .unwrap()
-            .contains("SessionId"));
     }
 
     #[test]
@@ -808,10 +781,6 @@ mod tests {
         let copilot = config.providers.get("copilot").unwrap();
         assert_eq!(copilot.command, "copilot --resume");
         assert_eq!(copilot.yolo_flag, Some("--allow-all-tools".to_string()));
-        assert_eq!(
-            copilot.session_id_pattern,
-            Some("--resume=([0-9a-f-]+)".to_string())
-        );
         assert_eq!(copilot.prompt_command, Some("{prompt}".to_string()));
     }
 
@@ -833,8 +802,6 @@ mod tests {
             command: "kiro-cli chat".to_string(),
             yolo_flag: Some("--trust-all-tools".to_string()),
             resume_command: Some("kiro-cli chat --resume".to_string()),
-            list_sessions_command: Some("kiro-cli chat --list-sessions".to_string()),
-            session_id_pattern: Some("SessionId: ([a-f0-9-]+)".to_string()),
             ..Default::default()
         };
         // Even with a provider_session_id, uses interactive resume_command
@@ -876,35 +843,6 @@ mod tests {
         assert_eq!(
             kiro.resume_command,
             Some("kiro-cli chat --resume".to_string())
-        );
-        assert_eq!(
-            kiro.list_sessions_command,
-            Some("kiro-cli chat --list-sessions".to_string())
-        );
-        assert!(kiro.session_id_pattern.is_some());
-    }
-
-    #[test]
-    fn load_backfills_copilot_session_id_pattern() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path();
-
-        let old_config = r#"{
-            "providers": {
-                "copilot": {
-                    "command": "copilot --resume",
-                    "yolo_flag": "--allow-all-tools"
-                }
-            },
-            "default_provider": "copilot"
-        }"#;
-        fs::write(config_dir.join("config.json"), old_config).unwrap();
-
-        let (config, _) = load(config_dir);
-        let copilot = config.providers.get("copilot").unwrap();
-        assert_eq!(
-            copilot.session_id_pattern,
-            Some("--resume=([0-9a-f-]+)".to_string())
         );
     }
 

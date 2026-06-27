@@ -167,6 +167,11 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Migrate legacy direct backend → local
     let _ = conn.execute_batch("UPDATE sessions SET backend = 'local' WHERE backend = 'direct'");
 
+    // Track whether a session has been attached at least once (avoids time-based heuristic)
+    let _ = conn.execute_batch(
+        "ALTER TABLE sessions ADD COLUMN attached_once INTEGER NOT NULL DEFAULT 0",
+    );
+
     // Add status_changed_at column (tracks when status last changed, immune to unrelated updates)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN status_changed_at TEXT");
     let _ = conn.execute_batch(
@@ -217,10 +222,11 @@ pub struct SessionRecord {
     pub pr_state: Option<String>,
     pub mru_position: Option<i64>,
     pub auto_dispatched: bool,
+    pub attached_once: bool,
 }
 
 /// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
-const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched";
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
     Ok(SessionRecord {
@@ -243,6 +249,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
         pr_state: row.get(16)?,
         mru_position: row.get(17)?,
         auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
+        attached_once: row.get::<_, bool>(19).unwrap_or(false),
     })
 }
 
@@ -494,6 +501,7 @@ impl SessionService {
             pr_state: None,
             mru_position: None,
             auto_dispatched: params.auto_dispatched,
+            attached_once: false,
         })
     }
 
@@ -715,6 +723,15 @@ impl SessionService {
             |r| r.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Mark a session as having been attached at least once.
+    pub fn mark_attached(conn: &Connection, session_id: &str) -> SqlResult<()> {
+        conn.execute(
+            "UPDATE sessions SET attached_once = 1 WHERE id = ?1 AND attached_once = 0",
+            params![session_id],
+        )?;
+        Ok(())
     }
 }
 

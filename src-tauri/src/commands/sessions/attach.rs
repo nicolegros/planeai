@@ -58,14 +58,7 @@ pub fn attach_session(
             .unwrap_or(project_path)
             .to_string();
 
-        let is_first_attach = chrono::Utc::now()
-            .signed_duration_since(
-                chrono::DateTime::parse_from_rfc3339(&session.created_at)
-                    .unwrap_or_default()
-                    .to_utc(),
-            )
-            .num_seconds()
-            < 10;
+        let is_first_attach = !session.attached_once;
 
         let cmd = if is_first_attach {
             config::launch_command(provider_def, session.auto_approve)
@@ -116,6 +109,8 @@ pub fn attach_session(
     state
         .0
         .attach(&session_id, pty_target, app.clone(), on_data, env)?;
+
+    db::mark_attached(&conn, &session_id).map_err(|e| e.to_string())?;
 
     {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;

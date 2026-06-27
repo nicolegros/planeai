@@ -208,6 +208,7 @@ mod tests {
             base_branch: None,
             pr_url: None,
             pr_state: None,
+            attached_once: false,
         }
     }
 

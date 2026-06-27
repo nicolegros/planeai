@@ -22,11 +22,12 @@ pub struct Session {
     pub base_branch: Option<String>,
     pub pr_url: Option<String>,
     pub pr_state: Option<String>,
+    pub attached_once: bool,
 }
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -48,6 +49,7 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         base_branch: row.get(14)?,
         pr_url: row.get(15)?,
         pr_state: row.get(16)?,
+        attached_once: row.get(17)?,
     })
 }
 
@@ -139,6 +141,7 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         base_branch: r.base_branch,
         pr_url: r.pr_url,
         pr_state: r.pr_state,
+        attached_once: r.attached_once,
     }
 }
 
@@ -311,6 +314,10 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
 
 pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
     planeai_core::services::SessionService::update_pr_state(conn, id, pr_url, pr_state)
+}
+
+pub fn mark_attached(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::SessionService::mark_attached(conn, id)
 }
 
 #[cfg(test)]
