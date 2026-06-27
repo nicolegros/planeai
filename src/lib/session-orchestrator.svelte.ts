@@ -73,7 +73,6 @@ let symphonyStatus = $state<{ active: boolean; slots_used: number; max_concurren
   null,
 );
 let reviewReady = $state<Record<string, boolean>>({});
-let pendingResume = $state<Set<string>>(new Set());
 
 // ─── Testing helper ──────────────────────────────────────────────────────────
 
@@ -84,7 +83,6 @@ export function _resetForTests(): void {
   agentStates = {};
   symphonyStatus = null;
   reviewReady = {};
-  pendingResume = new Set();
   tabLayoutReset();
 }
 
@@ -114,17 +112,6 @@ export function getReviewReady(): Record<string, boolean> {
 export function clearReviewReady(sessionId: string): void {
   const { [sessionId]: _, ...rest } = reviewReady;
   reviewReady = rest;
-}
-
-/** Returns true (once) if this session should use resume command on next attach. */
-export function consumePendingResume(sessionId: string): boolean {
-  if (pendingResume.has(sessionId)) {
-    const next = new Set(pendingResume);
-    next.delete(sessionId);
-    pendingResume = next;
-    return true;
-  }
-  return false;
 }
 
 export function getCiStatus(sessionId: string): "passing" | "failing" | "running" | null {
@@ -166,7 +153,6 @@ export function selectSession(id: string): void {
       .restart(id)
       .then((updated) => {
         if (updated) sessions = sessions.map((x) => (x.id === id ? updated : x));
-        pendingResume = new Set([...pendingResume, id]);
         if (activeSessionId === id) poolActivate(id);
       })
       .catch((e) => {
@@ -215,7 +201,6 @@ export async function archiveSession(s: Session): Promise<void> {
 export async function restartSession(s: Session): Promise<void> {
   const updated = await sessionsApi.restart(s.id);
   sessions = sessions.map((x) => (x.id === s.id ? updated : x));
-  pendingResume = new Set([...pendingResume, s.id]);
   selectSession(s.id);
 }
 

@@ -13,7 +13,6 @@ use super::helpers::{build_local_env, provider_has_hook};
 pub fn attach_session(
     session_id: String,
     dark_mode: Option<bool>,
-    use_resume: Option<bool>,
     on_data: Channel<tauri::ipc::Response>,
     db_state: State<DbState>,
     config_state: State<ConfigState>,
@@ -21,7 +20,6 @@ pub fn attach_session(
     notify: State<NotifyHandle>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let use_resume = use_resume.unwrap_or(false);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     let session = db::get_session(&conn, &session_id)
         .map_err(|e| e.to_string())?
@@ -60,10 +58,19 @@ pub fn attach_session(
             .unwrap_or(project_path)
             .to_string();
 
-        let cmd = if session.status == "exited" || use_resume {
-            config::restart_command_for_provider(provider_def)
-        } else {
+        let is_first_attach = chrono::Utc::now()
+            .signed_duration_since(
+                chrono::DateTime::parse_from_rfc3339(&session.created_at)
+                    .unwrap_or_default()
+                    .to_utc(),
+            )
+            .num_seconds()
+            < 10;
+
+        let cmd = if is_first_attach {
             config::launch_command(provider_def, session.auto_approve)
+        } else {
+            config::restart_command_for_provider(provider_def)
         };
 
         let target = pty::PtyTarget::Shell {

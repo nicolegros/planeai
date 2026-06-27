@@ -54,7 +54,14 @@ pub fn restart(
     };
     let fresh_cmd = crate::config::launch_command(provider_def, session.auto_approve);
 
-    tracing::debug!(backend = %session.backend, ?resume_cmd, %fresh_cmd, "commands resolved");
+    tracing::info!(
+        backend = %session.backend,
+        provider = %provider_key,
+        ?resume_cmd,
+        %fresh_cmd,
+        resume_command_configured = ?provider_def.resume_command,
+        "restart: commands resolved"
+    );
 
     let extra_path_dirs = config.resolved_extra_path_dirs();
 
@@ -92,7 +99,7 @@ pub fn restart(
 
     // Fallback: if resume failed, retry with fresh command
     let spawn_result = if spawn_result.is_err() && resume_cmd.is_some() {
-        tracing::warn!(err = ?spawn_result, "resume failed, falling back to fresh launch");
+        tracing::warn!(err = ?spawn_result, %fresh_cmd, "resume failed, falling back to fresh launch");
         try_spawn(&fresh_cmd)
     } else {
         spawn_result
