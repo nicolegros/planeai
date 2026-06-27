@@ -3,6 +3,7 @@
   import { RefreshCw, ShieldAlert } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { refreshPrComments } from "../lib/pr-comments.svelte";
+  import { hasConflicts } from "../lib/ci-checks.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
@@ -34,7 +35,7 @@
   let checksPassing = $derived(checks.length === 0 || (allConcluded && failedCount === 0));
   let isMerged = $derived(prState === "merged");
   let isDraft = $derived(prState === "draft");
-  let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging);
+  let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging && !hasConflicts(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
 
   $effect(() => { if (wrapperEl) wrapperEl.focus(); });
