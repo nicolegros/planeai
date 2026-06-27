@@ -10,7 +10,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, Send, Check, AlertTriangle, ExternalLink } from "@lucide/svelte";
+  import { MessageSquare, Send, Check, AlertTriangle } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
@@ -19,7 +19,6 @@
   import Button from "./ui/Button.svelte";
   import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
   import { hasConflicts } from "../lib/ci-checks.svelte";
-  import { openUrl } from "@tauri-apps/plugin-opener";
 
   interface Props {
     repoPath: string;
@@ -88,7 +87,6 @@
     getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
   );
   let conflicted = $derived(hasConflicts(sessionId));
-  let prUrl = $derived(getActiveSession()?.pr_url ?? null);
   let contentTop = $derived(conflicted ? 76 : 42);
 
 
@@ -701,11 +699,6 @@
       <div class="absolute top-[42px] left-0 right-0 z-10 flex items-center gap-2 px-4 py-2 bg-[rgba(234,179,8,0.12)] border-b border-[rgba(234,179,8,0.3)]">
         <AlertTriangle class="size-4 text-[#eab308] shrink-0" />
         <span class="text-[12.5px] text-[#eab308] font-medium">This PR has merge conflicts</span>
-        {#if prUrl}
-          <button class="ml-auto flex items-center gap-1.5 text-[11.5px] font-medium text-accent hover:underline" onclick={() => openUrl(prUrl!)}>
-            Open in GitHub <ExternalLink class="size-3" />
-          </button>
-        {/if}
       </div>
     {/if}
 
