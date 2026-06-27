@@ -9,19 +9,19 @@ use crate::state::{ConfigState, DbState};
 use crate::commands::sessions::helpers::{resolve_task_manager, session_cwd};
 
 /// Common session context needed by PR commands.
-struct SessionContext {
-    cwd: String,
-    branch: String,
-    pr_url: Option<String>,
-    task_key: Option<String>,
-    base_branch: Option<String>,
-    name: String,
-    project_id: String,
+pub(super) struct SessionContext {
+    pub(super) cwd: String,
+    pub(super) branch: String,
+    pub(super) pr_url: Option<String>,
+    pub(super) task_key: Option<String>,
+    pub(super) base_branch: Option<String>,
+    pub(super) name: String,
+    pub(super) project_id: String,
 }
 
 /// Resolve session from DB, returning the fields PR commands need.
 /// Locks and releases the DB mutex immediately.
-fn resolve_session_context(
+pub(super) fn resolve_session_context(
     db_state: &State<'_, DbState>,
     session_id: &str,
 ) -> Result<SessionContext, String> {
@@ -104,7 +104,7 @@ fn parse_github_repo(url: &str) -> Option<String> {
 }
 
 /// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
-async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
+pub(super) async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
@@ -633,85 +633,6 @@ pub async fn mark_pr_ready(
 
     let _ = app.emit("sessions-changed", ());
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PrCommentInfo {
-    pub comment_count: usize,
-    pub review_decision: Option<String>,
-    pub pr_url: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhPrComments {
-    comments: Vec<serde_json::Value>,
-    reviews: Vec<GhReview>,
-    review_decision: Option<String>,
-    url: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhReview {
-    state: Option<String>,
-}
-
-#[tauri::command]
-pub async fn get_pr_comments(
-    session_id: String,
-    db_state: State<'_, DbState>,
-) -> Result<PrCommentInfo, String> {
-    let ctx = resolve_session_context(&db_state, &session_id)?;
-
-    if resolve_github_repo(&ctx.cwd).await?.is_none() {
-        return Ok(PrCommentInfo {
-            comment_count: 0,
-            review_decision: None,
-            pr_url: None,
-        });
-    }
-
-    let output = tokio::process::Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &ctx.branch,
-            "--json",
-            "comments,reviews,reviewDecision,url",
-        ])
-        .current_dir(&ctx.cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to run gh: {e}"))?;
-
-    if !output.status.success() {
-        return Ok(PrCommentInfo {
-            comment_count: 0,
-            review_decision: None,
-            pr_url: ctx.pr_url,
-        });
-    }
-
-    let data: GhPrComments = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("failed to parse pr comments: {e}"))?;
-
-    let comment_count = data.comments.len()
-        + data
-            .reviews
-            .iter()
-            .filter(|r| {
-                r.state
-                    .as_deref()
-                    .is_some_and(|s| !s.eq_ignore_ascii_case("APPROVED") && !s.eq_ignore_ascii_case("PENDING"))
-            })
-            .count();
-
-    Ok(PrCommentInfo {
-        comment_count,
-        review_decision: data.review_decision,
-        pr_url: data.url.or(ctx.pr_url),
-    })
 }
 
 #[cfg(test)]

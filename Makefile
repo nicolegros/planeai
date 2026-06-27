@@ -14,7 +14,7 @@ lint: ## Check formatting and clippy
 	cd src-tauri && cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev:
-	pnpm tauri dev --release
+	RUST_LOG=planeai=debug pnpm tauri dev --release
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 	cd src-tauri && \

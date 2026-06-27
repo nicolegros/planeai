@@ -7,6 +7,7 @@ pub mod files;
 pub mod git;
 pub mod notify;
 pub mod pr;
+pub mod pr_comments;
 pub mod projects;
 pub mod sessions;
 pub mod symphony;
@@ -22,8 +23,9 @@ pub use git::*;
 pub use notify::*;
 pub use pr::{
     create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,
-    get_merge_state, get_pr_comments, mark_pr_ready, merge_pr,
+    get_merge_state, mark_pr_ready, merge_pr,
 };
+pub use pr_comments::get_pr_comments;
 pub use projects::*;
 pub use sessions::*;
 pub use symphony::*;

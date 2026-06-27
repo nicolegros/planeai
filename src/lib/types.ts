@@ -61,9 +61,3 @@ export interface CiCheck {
   conclusion: string | null;
   url: string | null;
 }
-
-export interface PrCommentInfo {
-  comment_count: number;
-  review_decision: string | null;
-  pr_url: string | null;
-}

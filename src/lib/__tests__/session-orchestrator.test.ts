@@ -33,6 +33,10 @@ vi.mock("../api", () => ({
     acknowledge: vi.fn(() => Promise.resolve()),
     saveMruOrder: vi.fn(() => Promise.resolve()),
   },
+  pr: {
+    getCiChecks: vi.fn(() => Promise.resolve([])),
+    getPrComments: vi.fn(() => Promise.resolve(0)),
+  },
   pty: { closeTab: vi.fn(() => Promise.resolve()) },
   symphony: { getStatus: vi.fn(() => Promise.resolve("null")) },
   tasks: { fireNotifyHook: vi.fn(() => Promise.resolve()) },
