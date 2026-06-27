@@ -168,9 +168,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute_batch("UPDATE sessions SET backend = 'local' WHERE backend = 'direct'");
 
     // Track whether a session has been attached at least once (avoids time-based heuristic)
-    let _ = conn.execute_batch(
-        "ALTER TABLE sessions ADD COLUMN attached_once INTEGER NOT NULL DEFAULT 0",
-    );
+    let _ = conn
+        .execute_batch("ALTER TABLE sessions ADD COLUMN attached_once INTEGER NOT NULL DEFAULT 0");
 
     // Add status_changed_at column (tracks when status last changed, immune to unrelated updates)
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN status_changed_at TEXT");
