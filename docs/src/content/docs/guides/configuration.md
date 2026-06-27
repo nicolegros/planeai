@@ -22,6 +22,8 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
       "autonomous_prompt_template": "Complete this task: {{task.title}}\n\n{{task.description}}",
       // Flag to enable autonomous/yolo mode (no confirmations)
       "yolo_flag": "--trust",
+      // Command used when restarting an exited session
+      "resume_command": "kiro-cli chat --resume",
     },
     "claude": {
       "command": "claude",

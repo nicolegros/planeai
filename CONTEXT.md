@@ -85,7 +85,7 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 | `busy`              | Hook → GUI       | `{"event":"busy","session_id":"..."}`              | Agent started working                                          |
 | `session_created`   | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}`   | New session created, GUI should refresh                        |
 | `session_changed`   | CLI → GUI        | `{"event":"session_changed","session_id":"..."}`   | Session state changed (archived/destroyed), GUI should refresh |
-| `session_restarted` | Backend → GUI    | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI should re-attach PTY             |
+| `session_restarted` | Backend → GUI    | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI updates status to active         |
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
 For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
@@ -153,6 +153,7 @@ Selecting an exited session triggers restart automatically. The terminal pool ac
 - `backend TEXT NOT NULL DEFAULT 'tmux'` — set at creation time, values: `'local'`, `'tmux'`, or `'daemon'`
 - `status TEXT NOT NULL DEFAULT 'active'` — updated on exit/delete
 - `tmux_name TEXT` — NULL for daemon sessions, populated for tmux sessions
+- `attached_once INTEGER NOT NULL DEFAULT 0` — set to 1 on first attach; determines whether attach runs launch command (0) or resume command (1)
 
 ### Preferences UI
 
