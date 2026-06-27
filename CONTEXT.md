@@ -9,7 +9,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Project**         | A git repository registered with planeai. Stores a repo path and display name. The top-level organizational unit.                                                                                                                                                                                     |
 | **Session**         | A single agent working on a single task within a project. Backed by a local PTY (default), tmux session, or the planeai daemon. Contains one terminal pane running the agent CLI.                                                                                                                     |
 | **Session backend** | The process hosting strategy for a session: `local` (in-process PTY, default), `tmux` (survives app quit, requires tmux binary), or `daemon` (survives app quit, built-in, experimental). Resolved at session creation from the global setting.                                                       |
-| **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command`, optional `yolo_flag`, optional `resume_flag` + `resume_command` for session resume. Multiple providers can be configured; one is the `default_provider`.                                                   |
+| **Provider**        | A CLI-based AI coding agent (e.g., Kiro, Claude Code, Aider). Defined by a base `command`, optional `yolo_flag`, optional `resume_command` for session resume. Multiple providers can be configured; one is the `default_provider`.                                                                   |
 | **Config file**     | The single source of truth for all user preferences and provider definitions. Lives at `$XDG_CONFIG_HOME/planeai/config.json` (default `~/.config/planeai/config.json`). JSONC for reading, pretty JSON for writing.                                                                                  |
 | **Yolo mode**       | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                                                                                                  |
 | **Focus zone**      | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd/Ctrl+B, Cmd/Ctrl+N, Cmd/Ctrl+Shift+P, Cmd/Ctrl+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                                                                       |
@@ -85,7 +85,7 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 | `busy`              | Hook → GUI       | `{"event":"busy","session_id":"..."}`              | Agent started working                                          |
 | `session_created`   | CLI/Daemon → GUI | `{"event":"session_created","session_id":"..."}`   | New session created, GUI should refresh                        |
 | `session_changed`   | CLI → GUI        | `{"event":"session_changed","session_id":"..."}`   | Session state changed (archived/destroyed), GUI should refresh |
-| `session_restarted` | Backend → GUI    | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI should re-attach PTY             |
+| `session_restarted` | Backend → GUI    | `{"event":"session-restarted","session_id":"..."}` | Exited session restarted, GUI updates status to active         |
 
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
 For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
@@ -144,15 +144,16 @@ Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
 
 Exited sessions can be restarted: same session identity (name, project, worktree), clean terminal buffer, status returns to `active`. For tmux, creates a new tmux session with the same name. For daemon, sends a spawn command to the daemon. For local, the session status is restored and a new PTY is spawned on attach.
 
-Provider resume is attempted on restart: if `resume_flag` + stored `provider_session_id` → resume command; if `resume_command` is set (interactive picker) → use that; otherwise → fresh provider command. If resume fails, automatically falls back to fresh launch.
+Provider resume is attempted on restart: if `resume_command` is set → use that; otherwise → fresh provider command. If resume fails, automatically falls back to fresh launch.
 
-Selecting an exited session triggers restart automatically. The frontend re-attaches to the new PTY via the `session-restarted` event.
+Selecting an exited session triggers restart automatically. The terminal pool activation is deferred until restart completes, preventing attach-to-exited-session loops (especially on daemon backend).
 
 ### DB columns
 
 - `backend TEXT NOT NULL DEFAULT 'tmux'` — set at creation time, values: `'local'`, `'tmux'`, or `'daemon'`
 - `status TEXT NOT NULL DEFAULT 'active'` — updated on exit/delete
 - `tmux_name TEXT` — NULL for daemon sessions, populated for tmux sessions
+- `attached_once INTEGER NOT NULL DEFAULT 0` — set to 1 on first attach; determines whether attach runs launch command (0) or resume command (1)
 
 ### Preferences UI
 

@@ -22,6 +22,8 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
       "autonomous_prompt_template": "Complete this task: {{task.title}}\n\n{{task.description}}",
       // Flag to enable autonomous/yolo mode (no confirmations)
       "yolo_flag": "--trust",
+      // Command used when restarting an exited session
+      "resume_command": "kiro-cli chat --resume",
     },
     "claude": {
       "command": "claude",
@@ -33,14 +35,13 @@ Each provider defines how planeai launches and communicates with an AI agent CLI
 }
 ```
 
-| Field                        | Description                                                           |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `command`                    | Shell command to start a new agent session                            |
-| `prompt_command`             | Command to send a prompt to a running session                         |
-| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                     |
-| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations                |
-| `resume_flag`                | Flag to resume a previous session (session ID appended automatically) |
-| `resume_command`             | Command to resume interactively (picker) when no stored session ID    |
+| Field                        | Description                                                       |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `command`                    | Shell command to start a new agent session                        |
+| `prompt_command`             | Command to send a prompt to a running session                     |
+| `autonomous_prompt_template` | Template rendered when auto-dispatch sends a task                 |
+| `yolo_flag`                  | Flag appended in autonomous mode to skip confirmations            |
+| `resume_command`             | Command to resume interactively when restarting an exited session |
 
 ## Session Backend
 

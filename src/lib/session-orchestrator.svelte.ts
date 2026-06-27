@@ -146,11 +146,22 @@ export function selectSession(id: string): void {
   activeSessionId = id;
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
-    sessionsApi.restart(id).catch((e) => {
-      showSnackbar(`Restart failed: ${e}`);
-    });
+    // Await restart before activating the terminal pool. Without this,
+    // the terminal mounts and attaches to the still-exited daemon session,
+    // gets an immediate EOF, and re-emits pty-exited — causing a loop.
+    sessionsApi
+      .restart(id)
+      .then((updated) => {
+        if (updated) sessions = sessions.map((x) => (x.id === id ? updated : x));
+        if (activeSessionId === id) poolActivate(id);
+      })
+      .catch((e) => {
+        showSnackbar(`Restart failed: ${e}`);
+        if (activeSessionId === id) poolActivate(id);
+      });
+  } else {
+    poolActivate(id);
   }
-  poolActivate(id);
   if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
   sessionsApi.acknowledge(id);
 }

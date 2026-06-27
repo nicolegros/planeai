@@ -41,10 +41,7 @@ where
         }
         let provider_key = session.provider.as_deref().unwrap_or(&cfg.default_provider);
         let cmd = match cfg.providers.get(provider_key) {
-            Some(provider_def) => config::restart_command_for_provider(
-                provider_def,
-                session.provider_session_id.as_deref(),
-            ),
+            Some(provider_def) => config::restart_command_for_provider(provider_def),
             None => continue,
         };
         let project_path = projects
@@ -355,8 +352,11 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "planeai-myapp-abc");
         assert_eq!(calls[0].1, "/tmp/worktree");
-        assert!(calls[0].2.contains("--resume-id"));
-        assert!(calls[0].2.contains("sess-123"));
+        assert!(
+            calls[0].2.contains("--resume"),
+            "expected --resume in command, got: {}",
+            calls[0].2
+        );
         assert_eq!(calls[0].3, "s1");
         assert_eq!(
             db::get_session(&conn, "s1").unwrap().unwrap().status,

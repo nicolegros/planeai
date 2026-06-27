@@ -135,7 +135,9 @@ export const pr = {
   merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
   markReady: (sessionId: string) => invoke("mark_pr_ready", { sessionId }),
   getMergeState: (sessionId: string) =>
-    invoke<{ blocked: boolean; reasons: string[]; settingsUrl: string | null }>("get_merge_state", { sessionId }),
+    invoke<{ blocked: boolean; reasons: string[]; settingsUrl: string | null }>("get_merge_state", {
+      sessionId,
+    }),
   getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
 };
 

@@ -830,12 +830,11 @@ The Iced workflow now operates on shared PlaneAI domain state:
 
 ### What's deferred (next milestone)
 
-| Concern                       | Blocker                                |
-| ----------------------------- | -------------------------------------- |
-| Git worktree creation         | Needs branch picker / task dispatch UI |
-| Task assignment               | Needs task picker UI                   |
-| Lifecycle hooks               | Needs task integration                 |
-| Provider session ID discovery | Lower priority                         |
+| Concern               | Blocker                                |
+| --------------------- | -------------------------------------- |
+| Git worktree creation | Needs branch picker / task dispatch UI |
+| Task assignment       | Needs task picker UI                   |
+| Lifecycle hooks       | Needs task integration                 |
 
 ### Dogfooding guidance
 

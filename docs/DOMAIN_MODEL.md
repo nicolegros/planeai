@@ -126,7 +126,7 @@ Tauri still owns:
 
 - `db::migrate()` (superset: includes settings table, tmux_name NOT NULL migration)
 - Project create/archive/delete (UI-specific flows not yet extracted)
-- MRU ordering, PR state updates, provider_session_id discovery
+- MRU ordering, PR state updates
 
 ## What Remains Prototype-Only (Iced)
 
@@ -143,9 +143,8 @@ Tauri still owns:
 1. **Worktree creation** — Iced doesn't create worktrees. Next milestone.
 2. **Task dispatch** — Iced doesn't assign tasks to sessions. Next milestone.
 3. **Lifecycle hooks** — Iced doesn't fire on_start/on_complete hooks. Requires task integration.
-4. **Provider session ID discovery** — Iced doesn't track the agent's internal session ID.
-5. **Notify hooks** — Iced doesn't detect agent completion signals.
-6. **PR integration** — Iced doesn't track PR status.
+4. **Notify hooks** — Iced doesn't detect agent completion signals.
+5. **PR integration** — Iced doesn't track PR status.
 
 ## Running Tests
 
