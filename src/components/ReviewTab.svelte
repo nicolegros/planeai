@@ -89,6 +89,7 @@
   );
   let conflicted = $derived(hasConflicts(sessionId));
   let prUrl = $derived(getActiveSession()?.pr_url ?? null);
+  let contentTop = $derived(conflicted ? 76 : 42);
 
 
   // ─── Core Functions ─────────────────────────────────────────────────────────
@@ -710,7 +711,7 @@
 
     <!-- Comment input -->
     {#if showCommentInput}
-      <div class="absolute left-0 right-0 z-20 p-3 border-b border-border bg-chrome" style:top="{conflicted ? 76 : 42}px">
+      <div class="absolute left-0 right-0 z-20 p-3 border-b border-border bg-chrome" style:top="{contentTop}px">
         {#if commentType !== "file"}
           <div class="text-[10px] text-t3 mb-1.5">● {editingCommentId ? "Edit note" : "Review note"} · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
         {/if}
@@ -734,13 +735,13 @@
     {/if}
 
     <!-- CodeView container -->
-    <div bind:this={viewerRoot} class="absolute inset-0 overflow-auto" style:top="{conflicted ? 76 : 42}px"></div>
+    <div bind:this={viewerRoot} class="absolute inset-0 overflow-auto" style:top="{contentTop}px"></div>
 
     <!-- Loading states -->
     {#if loading}
-      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main z-[5]" style:top="{conflicted ? 76 : 42}px">Loading diff…</div>
+      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">Loading diff…</div>
     {:else if files.length === 0}
-      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{conflicted ? 76 : 42}px">No changes on this branch</div>
+      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
     {/if}
 
   </div>
