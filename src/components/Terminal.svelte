@@ -21,11 +21,12 @@
     exited?: boolean;
     skipAttach?: boolean;
     paused?: boolean;
+    useResume?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, paused = false, onUserInput, onAttached }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, paused = false, useResume = false, onUserInput, onAttached }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -243,7 +244,7 @@
       });
     } else if (!exited) {
       // Attach immediately in onMount to avoid $effect double-fire
-      pty.attach(sessionId, isDark(), onData).then(() => {
+      pty.attach(sessionId, isDark(), onData, useResume).then(() => {
         attached = true;
         onAttached?.();
         const { rows, cols } = term;

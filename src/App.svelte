@@ -415,6 +415,7 @@
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           paused={poolIsPaused(session.id)}
+          useResume={tab.index === 0 && orchestrator.consumePendingResume(session.id)}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
           onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); }}
         />

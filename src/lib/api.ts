@@ -48,8 +48,12 @@ export const projects = {
 
 export const pty = {
   write: (sessionId: string, data: number[]) => invoke("write_to_pty", { sessionId, data }),
-  attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
-    invoke("attach_session", { sessionId, darkMode, onData }),
+  attach: (
+    sessionId: string,
+    darkMode: boolean,
+    onData: Channel<ArrayBuffer>,
+    useResume?: boolean,
+  ) => invoke("attach_session", { sessionId, darkMode, useResume: useResume ?? null, onData }),
   spawnTab: (
     sessionId: string,
     tabIndex: number,
