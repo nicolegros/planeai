@@ -9,6 +9,7 @@ import {
   getCiStatus as _getCiStatus,
   updateSessions as updateCiSessions,
 } from "./ci-checks.svelte";
+import { updateSessions as updatePrCommentSessions } from "./pr-comments.svelte";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
 import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
@@ -128,6 +129,7 @@ export function toggleDiff(): void {
 export async function loadSessions(): Promise<void> {
   sessions = await sessionsApi.list();
   updateCiSessions(sessions);
+  updatePrCommentSessions(sessions);
   for (const s of sessions) {
     if (getTabCount(s.id) === 0) initSession(s.id, s.tab_count);
   }

@@ -319,6 +319,7 @@ fn main() {
             generate_pr_defaults,
             get_ci_checks,
             get_ci_failure_logs,
+            get_pr_comments,
             get_allowed_merge_strategies,
             merge_pr,
             mark_pr_ready,

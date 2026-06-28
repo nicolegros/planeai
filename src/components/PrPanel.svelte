@@ -2,6 +2,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { RefreshCw, ShieldAlert } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
+  import { refreshPrComments } from "../lib/pr-comments.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
@@ -44,7 +45,7 @@
     () => [
       { key: "o", toggle: () => openUrl(prUrl) },
       { key: "m", toggle: doMerge },
-      { key: "r", toggle: () => refreshCiChecks(sessionId) },
+      { key: "r", toggle: () => { refreshCiChecks(sessionId); refreshPrComments(sessionId); } },
       { key: "R", toggle: markReady },
       { key: "f", toggle: sendFailuresToAgent },
       { key: "s", toggle: cycleStrategy },
@@ -149,7 +150,7 @@
     <div class="py-3 border-b border-border">
       <div class="flex items-center mb-2">
         <span class="text-[10px] font-semibold tracking-[.06em] uppercase text-t3">Checks</span>
-        <button class="ml-auto text-t3 hover:text-t2" onclick={() => refreshCiChecks(sessionId)}><RefreshCw size={11} /></button>
+        <button class="ml-auto text-t3 hover:text-t2" onclick={() => { refreshCiChecks(sessionId); refreshPrComments(sessionId); }}><RefreshCw size={11} /></button>
         <span class="ml-2 font-mono text-[10px] text-status-running">{checks.filter(c => classifyCheck(c) === 'pass').length} passed</span>
       </div>
       <div class="flex flex-col gap-1.5">

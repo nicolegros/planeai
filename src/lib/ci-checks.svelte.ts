@@ -1,9 +1,6 @@
 import { pr } from "./api";
-import type { CiCheck, Session } from "./types";
-
-let ciChecks = $state<Record<string, CiCheck[]>>({});
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let activeSessions: Session[] = [];
+import type { CiCheck } from "./types";
+import { createPoller } from "./poller.svelte";
 
 export type CiConclusion = "pass" | "fail" | "pending";
 
@@ -32,87 +29,25 @@ function deriveOverall(checks: CiCheck[]): CiOverall {
   return "passing";
 }
 
-export function getCiChecks(sessionId: string): CiCheck[] {
-  return ciChecks[sessionId] ?? [];
-}
-
-export function getCiStatus(sessionId: string): CiOverall {
-  return deriveOverall(ciChecks[sessionId] ?? []);
-}
-
-export function refreshCiChecks(sessionId: string): void {
-  fetchChecks(sessionId);
-}
-
-export function startPolling(sessions: Session[]): () => void {
-  activeSessions = sessions;
-  pollAll();
-  pollTimer = setInterval(pollAll, 60_000);
-  let lastFocusPoll = 0;
-  const onFocus = () => {
-    const now = Date.now();
-    if (now - lastFocusPoll < 5_000) return;
-    lastFocusPoll = now;
-    pollAll();
-  };
-  window.addEventListener("focus", onFocus);
-  return () => {
-    stopPolling();
-    window.removeEventListener("focus", onFocus);
-  };
-}
-
-export function updateSessions(sessions: Session[]): void {
-  activeSessions = sessions;
-  // Clear concluded checks so next poll re-fetches (handles agent push → new CI run)
-  let invalidated = false;
-  for (const id of Object.keys(ciChecks)) {
-    const checks = ciChecks[id];
-    if (checks && checks.length > 0 && checks.every((c) => c.conclusion !== null)) {
-      delete ciChecks[id];
-      invalidated = true;
+const poller = createPoller<CiCheck[]>({
+  fetch: pr.getCiChecks,
+  shouldSkip: (_id, current) =>
+    !!current && current.length > 0 && current.every((c) => c.conclusion !== null),
+  onUpdateSessions: (state) => {
+    let changed = false;
+    const next = { ...state };
+    for (const [id, checks] of Object.entries(next)) {
+      if (checks && checks.length > 0 && checks.every((c) => c.conclusion !== null)) {
+        delete next[id];
+        changed = true;
+      }
     }
-  }
-  if (invalidated) ciChecks = { ...ciChecks };
-}
+    return changed ? next : state;
+  },
+});
 
-function stopPolling(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-async function pollAll(): Promise<void> {
-  const targets = activeSessions.filter((s) => {
-    if (s.status !== "active" || !s.pr_url) return false;
-    const existing = ciChecks[s.id];
-    // Skip if all checks already concluded
-    if (existing && existing.length > 0 && existing.every((c) => c.conclusion !== null))
-      return false;
-    return true;
-  });
-  if (targets.length === 0) return;
-  const results = await Promise.allSettled(
-    targets.map(async (s) => {
-      const checks = await pr.getCiChecks(s.id);
-      return { id: s.id, checks };
-    }),
-  );
-  const next: Record<string, CiCheck[]> = { ...ciChecks };
-  for (const r of results) {
-    if (r.status === "fulfilled") {
-      next[r.value.id] = r.value.checks;
-    }
-  }
-  ciChecks = next;
-}
-
-async function fetchChecks(sessionId: string): Promise<void> {
-  try {
-    const checks = await pr.getCiChecks(sessionId);
-    ciChecks = { ...ciChecks, [sessionId]: checks };
-  } catch {
-    // gh not available or no checks
-  }
-}
+export const getCiChecks = (sessionId: string): CiCheck[] => poller.get(sessionId) ?? [];
+export const getCiStatus = (sessionId: string): CiOverall => deriveOverall(getCiChecks(sessionId));
+export const refreshCiChecks = poller.refresh;
+export const startPolling = poller.startPolling;
+export const updateSessions = poller.updateSessions;

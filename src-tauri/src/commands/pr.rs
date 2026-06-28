@@ -9,19 +9,19 @@ use crate::state::{ConfigState, DbState};
 use crate::commands::sessions::helpers::{resolve_task_manager, session_cwd};
 
 /// Common session context needed by PR commands.
-struct SessionContext {
-    cwd: String,
-    branch: String,
-    pr_url: Option<String>,
-    task_key: Option<String>,
-    base_branch: Option<String>,
-    name: String,
-    project_id: String,
+pub(super) struct SessionContext {
+    pub(super) cwd: String,
+    pub(super) branch: String,
+    pub(super) pr_url: Option<String>,
+    pub(super) task_key: Option<String>,
+    pub(super) base_branch: Option<String>,
+    pub(super) name: String,
+    pub(super) project_id: String,
 }
 
 /// Resolve session from DB, returning the fields PR commands need.
 /// Locks and releases the DB mutex immediately.
-fn resolve_session_context(
+pub(super) fn resolve_session_context(
     db_state: &State<'_, DbState>,
     session_id: &str,
 ) -> Result<SessionContext, String> {
@@ -104,7 +104,7 @@ fn parse_github_repo(url: &str) -> Option<String> {
 }
 
 /// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
-async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
+pub(super) async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
