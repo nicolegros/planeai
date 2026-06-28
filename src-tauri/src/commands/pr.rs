@@ -360,23 +360,41 @@ async fn get_pr_status_inner(
     tracing::debug!(session_id = %session_id, branch = %ctx.branch, cwd = %ctx.cwd, "get_pr_status called");
     if !std::path::Path::new(&ctx.cwd).exists() {
         tracing::warn!(session_id = %session_id, cwd = %ctx.cwd, "cwd does not exist, skipping pr status");
-        return Ok(PrStatus { checks: vec![], conflicting: false });
+        return Ok(PrStatus {
+            checks: vec![],
+            conflicting: false,
+        });
     }
     if resolve_github_repo(&ctx.cwd).await?.is_none() {
         tracing::debug!("not a GitHub remote, skipping pr status");
-        return Ok(PrStatus { checks: vec![], conflicting: false });
+        return Ok(PrStatus {
+            checks: vec![],
+            conflicting: false,
+        });
     }
 
     let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
-    cmd.args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup,mergeable,mergeStateStatus"])
-        .current_dir(&ctx.cwd);
+    cmd.args([
+        "pr",
+        "view",
+        &ctx.branch,
+        "--json",
+        "statusCheckRollup,mergeable,mergeStateStatus",
+    ])
+    .current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
-    let output = cmd.output().await.map_err(|e| format!("failed to run gh: {e}"))?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::warn!(stderr = %stderr, "gh pr view failed");
-        return Ok(PrStatus { checks: vec![], conflicting: false });
+        return Ok(PrStatus {
+            checks: vec![],
+            conflicting: false,
+        });
     }
 
     let pr_view: GhPrView = serde_json::from_slice(&output.stdout)
@@ -397,7 +415,10 @@ async fn get_pr_status_inner(
         .collect();
 
     tracing::debug!(session_id = %session_id, check_count = checks.len(), conflicting = %conflicting, "pr status fetched");
-    Ok(PrStatus { checks, conflicting })
+    Ok(PrStatus {
+        checks,
+        conflicting,
+    })
 }
 
 #[tauri::command]

@@ -33,7 +33,10 @@ const poller = createPoller<PrStatus>({
   fetch: pr.getPrStatus,
   // Keep polling if conflicting (to detect resolution) or if checks are still pending
   shouldSkip: (_id, current) =>
-    !!current && current.checks.length > 0 && current.checks.every((c) => c.conclusion !== null) && !current.conflicting,
+    !!current &&
+    current.checks.length > 0 &&
+    current.checks.every((c) => c.conclusion !== null) &&
+    !current.conflicting,
   onUpdateSessions: (state) => {
     let changed = false;
     const next = { ...state };
@@ -49,7 +52,8 @@ const poller = createPoller<PrStatus>({
 
 export const getCiChecks = (sessionId: string): CiCheck[] => poller.get(sessionId)?.checks ?? [];
 export const getCiStatus = (sessionId: string): CiOverall => deriveOverall(getCiChecks(sessionId));
-export const hasConflicts = (sessionId: string): boolean => poller.get(sessionId)?.conflicting ?? false;
+export const hasConflicts = (sessionId: string): boolean =>
+  poller.get(sessionId)?.conflicting ?? false;
 export const refreshCiChecks = poller.refresh;
 export const startPolling = poller.startPolling;
 export const updateSessions = poller.updateSessions;
