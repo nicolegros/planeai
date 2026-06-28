@@ -325,6 +325,14 @@ struct GhCheckRun {
 #[serde(rename_all = "camelCase")]
 struct GhPrView {
     status_check_rollup: Vec<GhCheckRun>,
+    mergeable: Option<String>,
+    merge_state_status: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PrStatus {
+    pub checks: Vec<CiCheck>,
+    pub conflicting: bool,
 }
 
 #[tauri::command]
@@ -332,84 +340,50 @@ pub async fn get_merge_conflict_status(
     session_id: String,
     db_state: State<'_, DbState>,
 ) -> Result<bool, String> {
-    let ctx = resolve_session_context(&db_state, &session_id)?;
-    tracing::debug!(session_id = %session_id, branch = %ctx.branch, cwd = %ctx.cwd, "get_merge_conflict_status called");
-    if !std::path::Path::new(&ctx.cwd).exists() {
-        tracing::warn!(session_id = %session_id, cwd = %ctx.cwd, "cwd does not exist, skipping conflict check");
-        return Ok(false);
-    }
-    if resolve_github_repo(&ctx.cwd).await?.is_none() {
-        tracing::debug!("not a GitHub remote, skipping conflict check");
-        return Ok(false);
-    }
-    let output = tokio::process::Command::new(crate::command::resolve("gh"))
-        .args([
-            "pr",
-            "view",
-            &ctx.branch,
-            "--json",
-            "mergeable,mergeStateStatus",
-        ])
-        .current_dir(&ctx.cwd)
-        .output()
-        .await
-        .map_err(|e| format!("failed to run gh: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!(stderr = %stderr, "gh pr view failed for conflict check");
-        return Ok(false);
-    }
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse error: {e}"))?;
-    let conflicting = parsed
-        .get("mergeable")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| s == "CONFLICTING")
-        || parsed
-            .get("mergeStateStatus")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| s == "DIRTY");
-    tracing::debug!(session_id = %session_id, conflicting = %conflicting, "conflict check result");
-    Ok(conflicting)
+    let status = get_pr_status_inner(&db_state, &session_id).await?;
+    Ok(status.conflicting)
 }
 
 #[tauri::command]
-pub async fn get_ci_checks(
+pub async fn get_pr_status(
     session_id: String,
     db_state: State<'_, DbState>,
-) -> Result<Vec<CiCheck>, String> {
-    let ctx = resolve_session_context(&db_state, &session_id)?;
+) -> Result<PrStatus, String> {
+    get_pr_status_inner(&db_state, &session_id).await
+}
 
-    tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_ci_checks called");
-
-    // Only run for GitHub-hosted repos
+async fn get_pr_status_inner(
+    db_state: &State<'_, DbState>,
+    session_id: &str,
+) -> Result<PrStatus, String> {
+    let ctx = resolve_session_context(db_state, session_id)?;
+    tracing::debug!(session_id = %session_id, branch = %ctx.branch, cwd = %ctx.cwd, "get_pr_status called");
+    if !std::path::Path::new(&ctx.cwd).exists() {
+        tracing::warn!(session_id = %session_id, cwd = %ctx.cwd, "cwd does not exist, skipping pr status");
+        return Ok(PrStatus { checks: vec![], conflicting: false });
+    }
     if resolve_github_repo(&ctx.cwd).await?.is_none() {
-        tracing::debug!("not a GitHub remote, skipping CI checks");
-        return Ok(vec![]);
+        tracing::debug!("not a GitHub remote, skipping pr status");
+        return Ok(PrStatus { checks: vec![], conflicting: false });
     }
 
     let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
-    cmd.args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup"])
+    cmd.args(["pr", "view", &ctx.branch, "--json", "statusCheckRollup,mergeable,mergeStateStatus"])
         .current_dir(&ctx.cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("failed to run gh: {e}"))?;
+    let output = cmd.output().await.map_err(|e| format!("failed to run gh: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::warn!(stderr = %stderr, "gh pr view failed");
-        return Ok(vec![]);
+        return Ok(PrStatus { checks: vec![], conflicting: false });
     }
 
     let pr_view: GhPrView = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("failed to parse pr view: {e}"))?;
 
-    tracing::debug!(
-        count = pr_view.status_check_rollup.len(),
-        "ci checks fetched"
-    );
+    let conflicting = pr_view.mergeable.as_deref() == Some("CONFLICTING")
+        || pr_view.merge_state_status.as_deref() == Some("DIRTY");
 
     let checks: Vec<CiCheck> = pr_view
         .status_check_rollup
@@ -422,7 +396,17 @@ pub async fn get_ci_checks(
         })
         .collect();
 
-    Ok(checks)
+    tracing::debug!(session_id = %session_id, check_count = checks.len(), conflicting = %conflicting, "pr status fetched");
+    Ok(PrStatus { checks, conflicting })
+}
+
+#[tauri::command]
+pub async fn get_ci_checks(
+    session_id: String,
+    db_state: State<'_, DbState>,
+) -> Result<Vec<CiCheck>, String> {
+    let status = get_pr_status_inner(&db_state, &session_id).await?;
+    Ok(status.checks)
 }
 
 #[tauri::command]

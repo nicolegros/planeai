@@ -29,15 +29,20 @@ function deriveOverall(checks: CiCheck[]): CiOverall {
   return "passing";
 }
 
-const poller = createPoller<CiCheck[]>({
-  fetch: pr.getCiChecks,
+interface PrStatus {
+  checks: CiCheck[];
+  conflicting: boolean;
+}
+
+const poller = createPoller<PrStatus>({
+  fetch: pr.getPrStatus,
   shouldSkip: (_id, current) =>
-    !!current && current.length > 0 && current.every((c) => c.conclusion !== null),
+    !!current && current.checks.length > 0 && current.checks.every((c) => c.conclusion !== null) && !current.conflicting,
   onUpdateSessions: (state) => {
     let changed = false;
     const next = { ...state };
-    for (const [id, checks] of Object.entries(next)) {
-      if (checks && checks.length > 0 && checks.every((c) => c.conclusion !== null)) {
+    for (const [id, status] of Object.entries(next)) {
+      if (status && status.checks.length > 0 && status.checks.every((c) => c.conclusion !== null)) {
         delete next[id];
         changed = true;
       }
@@ -46,8 +51,9 @@ const poller = createPoller<CiCheck[]>({
   },
 });
 
-export const getCiChecks = (sessionId: string): CiCheck[] => poller.get(sessionId) ?? [];
+export const getCiChecks = (sessionId: string): CiCheck[] => poller.get(sessionId)?.checks ?? [];
 export const getCiStatus = (sessionId: string): CiOverall => deriveOverall(getCiChecks(sessionId));
+export const hasConflicts = (sessionId: string): boolean => poller.get(sessionId)?.conflicting ?? false;
 export const refreshCiChecks = poller.refresh;
 export const startPolling = poller.startPolling;
 export const updateSessions = poller.updateSessions;

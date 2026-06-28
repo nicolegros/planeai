@@ -322,6 +322,7 @@ fn main() {
             get_pr_comments,
             get_allowed_merge_strategies,
             get_merge_conflict_status,
+            get_pr_status,
             merge_pr,
             mark_pr_ready,
             get_merge_state,
