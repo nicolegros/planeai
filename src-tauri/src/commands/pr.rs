@@ -105,13 +105,17 @@ fn parse_github_repo(url: &str) -> Option<String> {
 
 /// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
 pub(super) async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
         .await
         .map_err(|e| format!("failed to get remote: {e}"))?;
+    if !output.status.success() {
+        tracing::debug!(cwd = %cwd, "git remote get-url origin failed, not a git repo or no origin");
+        return Ok(None);
+    }
     let remote_url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(parse_github_repo(&remote_url))
 }
@@ -322,7 +326,11 @@ pub async fn get_merge_conflict_status(
     db_state: State<'_, DbState>,
 ) -> Result<bool, String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
-    tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_merge_conflict_status called");
+    tracing::debug!(session_id = %session_id, branch = %ctx.branch, cwd = %ctx.cwd, "get_merge_conflict_status called");
+    if !std::path::Path::new(&ctx.cwd).exists() {
+        tracing::warn!(session_id = %session_id, cwd = %ctx.cwd, "cwd does not exist, skipping conflict check");
+        return Ok(false);
+    }
     if resolve_github_repo(&ctx.cwd).await?.is_none() {
         tracing::debug!("not a GitHub remote, skipping conflict check");
         return Ok(false);
