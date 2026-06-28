@@ -31,6 +31,7 @@ function deriveOverall(checks: CiCheck[]): CiOverall {
 
 const poller = createPoller<PrStatus>({
   fetch: pr.getPrStatus,
+  // Keep polling if conflicting (to detect resolution) or if checks are still pending
   shouldSkip: (_id, current) =>
     !!current && current.checks.length > 0 && current.checks.every((c) => c.conclusion !== null) && !current.conflicting,
   onUpdateSessions: (state) => {
