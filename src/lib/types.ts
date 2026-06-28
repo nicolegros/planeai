@@ -61,3 +61,8 @@ export interface CiCheck {
   conclusion: string | null;
   url: string | null;
 }
+
+export interface PrStatus {
+  checks: CiCheck[];
+  conflicting: boolean;
+}

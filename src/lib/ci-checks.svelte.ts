@@ -1,5 +1,5 @@
 import { pr } from "./api";
-import type { CiCheck } from "./types";
+import type { CiCheck, PrStatus } from "./types";
 import { createPoller } from "./poller.svelte";
 
 export type CiConclusion = "pass" | "fail" | "pending";
@@ -27,11 +27,6 @@ function deriveOverall(checks: CiCheck[]): CiOverall {
   if (checks.some((c) => classifyCheck(c) === "fail")) return "failing";
   if (checks.some((c) => classifyCheck(c) === "pending")) return "running";
   return "passing";
-}
-
-interface PrStatus {
-  checks: CiCheck[];
-  conflicting: boolean;
 }
 
 const poller = createPoller<PrStatus>({

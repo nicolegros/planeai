@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
-import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck } from "./types";
+import type { Session, Project, TaskItem, DirEntry, ChangedFile, FileDiff, CiCheck, PrStatus } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
 export interface LaunchSessionParams {
@@ -134,7 +134,7 @@ export const pr = {
   getMergeConflictStatus: (sessionId: string) =>
     invoke<boolean>("get_merge_conflict_status", { sessionId }),
   getPrStatus: (sessionId: string) =>
-    invoke<{ checks: CiCheck[]; conflicting: boolean }>("get_pr_status", { sessionId }),
+    invoke<PrStatus>("get_pr_status", { sessionId }),
   getAllowedStrategies: (sessionId: string) =>
     invoke<string[]>("get_allowed_merge_strategies", { sessionId }),
   merge: (sessionId: string, strategy: string) => invoke("merge_pr", { sessionId, strategy }),
