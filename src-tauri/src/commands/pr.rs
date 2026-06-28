@@ -327,7 +327,7 @@ pub async fn get_merge_conflict_status(
         tracing::debug!("not a GitHub remote, skipping conflict check");
         return Ok(false);
     }
-    let output = tokio::process::Command::new("gh")
+    let output = tokio::process::Command::new(crate::command::resolve("gh"))
         .args([
             "pr",
             "view",
