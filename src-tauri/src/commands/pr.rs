@@ -105,13 +105,20 @@ fn parse_github_repo(url: &str) -> Option<String> {
 
 /// Resolve the GitHub "owner/repo" from the origin remote in the given directory.
 pub(super) async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, String> {
+    if !std::path::Path::new(cwd).exists() {
+        tracing::debug!(cwd = %cwd, "cwd does not exist, skipping remote resolution");
+        return Ok(None);
+    }
     let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
     planeai_core::command::no_window_tokio(&mut cmd);
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("failed to get remote: {e}"))?;
+    let output = match cmd.output().await {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(cwd = %cwd, error = %e, "failed to spawn git for remote resolution");
+            return Ok(None);
+        }
+    };
     if !output.status.success() {
         tracing::debug!(cwd = %cwd, "git remote get-url origin failed, not a git repo or no origin");
         return Ok(None);
