@@ -10,7 +10,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, Send, Check } from "@lucide/svelte";
+  import { MessageSquare, Send, Check, AlertTriangle } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
@@ -18,6 +18,7 @@
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
   import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
+  import { hasConflicts } from "../lib/ci-checks.svelte";
 
   interface Props {
     repoPath: string;
@@ -85,6 +86,8 @@
   let currentFileComments = $derived(
     getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
   );
+  let conflicted = $derived(hasConflicts(sessionId));
+  let contentTop = $derived(conflicted ? 76 : 42); // 42px toolbar; +34px conflict banner
 
 
   // ─── Core Functions ─────────────────────────────────────────────────────────
@@ -691,9 +694,17 @@
       {/if}
     </div>
 
+    <!-- Conflict warning banner -->
+    {#if conflicted}
+      <div class="absolute top-[42px] left-0 right-0 z-10 flex items-center gap-2 px-4 py-2 bg-[rgba(234,179,8,0.12)] border-b border-[rgba(234,179,8,0.3)]">
+        <AlertTriangle class="size-4 text-[#eab308] shrink-0" />
+        <span class="text-[12.5px] text-[#eab308] font-medium">This PR has merge conflicts</span>
+      </div>
+    {/if}
+
     <!-- Comment input -->
     {#if showCommentInput}
-      <div class="absolute top-[42px] left-0 right-0 z-20 p-3 border-b border-border bg-chrome">
+      <div class="absolute left-0 right-0 z-20 p-3 border-b border-border bg-chrome" style:top="{contentTop}px">
         {#if commentType !== "file"}
           <div class="text-[10px] text-t3 mb-1.5">● {editingCommentId ? "Edit note" : "Review note"} · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
         {/if}
@@ -717,13 +728,13 @@
     {/if}
 
     <!-- CodeView container -->
-    <div bind:this={viewerRoot} class="absolute inset-0 top-[42px] overflow-auto"></div>
+    <div bind:this={viewerRoot} class="absolute inset-0 overflow-auto" style:top="{contentTop}px"></div>
 
     <!-- Loading states -->
     {#if loading}
-      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-t3 bg-main z-[5]">Loading diff…</div>
+      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">Loading diff…</div>
     {:else if files.length === 0}
-      <div class="absolute inset-0 top-[42px] flex items-center justify-center text-t3 bg-main">No changes on this branch</div>
+      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
     {/if}
 
   </div>

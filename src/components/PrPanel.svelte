@@ -1,8 +1,9 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { RefreshCw, ShieldAlert } from "@lucide/svelte";
+  import { RefreshCw, ShieldAlert, AlertTriangle } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { refreshPrComments } from "../lib/pr-comments.svelte";
+  import { hasConflicts } from "../lib/ci-checks.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getActiveSession } from "../lib/session-orchestrator.svelte";
@@ -34,7 +35,7 @@
   let checksPassing = $derived(checks.length === 0 || (allConcluded && failedCount === 0));
   let isMerged = $derived(prState === "merged");
   let isDraft = $derived(prState === "draft");
-  let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging);
+  let canMerge = $derived(prUrl && !isMerged && !isDraft && checksPassing && !merging && !hasConflicts(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
 
   $effect(() => { if (wrapperEl) wrapperEl.focus(); });
@@ -176,6 +177,17 @@
           Send failures to agent <span class="font-mono text-[10px] px-1 rounded {badge}">F</span>
         </button>
       {/if}
+    </div>
+  {/if}
+
+  <!-- Conflict banner -->
+  {#if hasConflicts(sessionId) && !isMerged}
+    <div class="py-3 border-b border-border bg-[rgba(234,179,8,0.08)] -mx-5 px-5">
+      <div class="flex items-center gap-1.5">
+        <AlertTriangle size={12} class="text-[#eab308] shrink-0" />
+        <span class="text-[11px] font-medium text-[#eab308]">PR has merge conflicts</span>
+      </div>
+      <p class="text-[11px] text-t2 ml-[18px] mt-1">Resolve conflicts on GitHub or rebase locally before merging.</p>
     </div>
   {/if}
 
