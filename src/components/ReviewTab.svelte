@@ -87,7 +87,7 @@
     getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
   );
   let conflicted = $derived(hasConflicts(sessionId));
-  let contentTop = $derived(conflicted ? 76 : 42);
+  let contentTop = $derived(conflicted ? 76 : 42); // 42px toolbar; +34px conflict banner
 
 
   // ─── Core Functions ─────────────────────────────────────────────────────────
