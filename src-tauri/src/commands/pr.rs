@@ -322,7 +322,9 @@ pub async fn get_merge_conflict_status(
     db_state: State<'_, DbState>,
 ) -> Result<bool, String> {
     let ctx = resolve_session_context(&db_state, &session_id)?;
+    tracing::debug!(session_id = %session_id, branch = %ctx.branch, "get_merge_conflict_status called");
     if resolve_github_repo(&ctx.cwd).await?.is_none() {
+        tracing::debug!("not a GitHub remote, skipping conflict check");
         return Ok(false);
     }
     let output = tokio::process::Command::new("gh")
@@ -338,6 +340,8 @@ pub async fn get_merge_conflict_status(
         .await
         .map_err(|e| format!("failed to run gh: {e}"))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(stderr = %stderr, "gh pr view failed for conflict check");
         return Ok(false);
     }
     let parsed: serde_json::Value =
@@ -350,6 +354,7 @@ pub async fn get_merge_conflict_status(
             .get("mergeStateStatus")
             .and_then(|v| v.as_str())
             .is_some_and(|s| s == "DIRTY");
+    tracing::debug!(session_id = %session_id, conflicting = %conflicting, "conflict check result");
     Ok(conflicting)
 }
 
