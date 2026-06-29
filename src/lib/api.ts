@@ -76,6 +76,7 @@ export const pty = {
 export const config = {
   get: () => invoke<AppConfig>("get_config"),
   update: (newConfig: AppConfig) => invoke("update_config", { newConfig }),
+  refresh: () => invoke<AppConfig>("refresh_config"),
 };
 
 export const tasks = {

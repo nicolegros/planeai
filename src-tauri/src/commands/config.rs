@@ -4,6 +4,23 @@ use crate::config;
 use crate::state::ConfigState;
 
 #[tauri::command]
+pub fn refresh_config(
+    state: State<ConfigState>,
+    app: tauri::AppHandle,
+) -> Result<config::Config, String> {
+    let config_dir = config::config_dir(&app.package_info().name);
+    tracing::info!("refreshing config from disk");
+    let new_config = config::refresh(&config_dir).map_err(|e| {
+        tracing::warn!("config refresh failed: {e}");
+        e
+    })?;
+    let mut cfg = state.0.lock().map_err(|e| e.to_string())?;
+    *cfg = new_config.clone();
+    tracing::info!("config refreshed successfully");
+    Ok(new_config)
+}
+
+#[tauri::command]
 pub fn get_config(state: State<ConfigState>) -> Result<config::Config, String> {
     let cfg = state.0.lock().map_err(|e| e.to_string())?;
     Ok(cfg.clone())

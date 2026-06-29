@@ -404,6 +404,16 @@ pub fn tmux_available() -> bool {
     false
 }
 
+/// Re-read config from disk. On success returns the new config; on any warning/error returns Err
+/// (caller should keep the previous config).
+pub fn refresh(config_dir: &Path) -> Result<Config, String> {
+    let (config, warnings) = load(config_dir);
+    if let Some(w) = warnings.into_iter().next() {
+        return Err(w);
+    }
+    Ok(config)
+}
+
 /// Merge user config over defaults. Struct-like top-level keys (appearance, terminal)
 /// get their sub-keys merged with defaults. Everything else is replaced by the overlay.
 fn merge_top_level(base: serde_json::Value, overlay: serde_json::Value) -> serde_json::Value {
@@ -970,5 +980,35 @@ mod tests {
             tm.templates.unwrap().branch.unwrap(),
             "{key:lower}/{title:slug}"
         );
+    }
+
+    #[test]
+    fn refresh_returns_updated_config_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        // Write initial config
+        let mut config = Config::default();
+        config.appearance.mode = "light".to_string();
+        save(config_dir, &config).unwrap();
+
+        // Modify file on disk externally
+        config.appearance.mode = "dark".to_string();
+        save(config_dir, &config).unwrap();
+
+        let refreshed = refresh(config_dir).unwrap();
+        assert_eq!(refreshed.appearance.mode, "dark");
+    }
+
+    #[test]
+    fn refresh_returns_error_on_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        fs::write(config_dir.join("config.json"), "not valid {{{").unwrap();
+
+        let result = refresh(config_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parse"));
     }
 }
