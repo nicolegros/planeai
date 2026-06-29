@@ -59,7 +59,6 @@ export interface AppConfig {
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;
   scrollback_lines?: number | null;
-  max_mounted_terminals?: number | null;
   web_links?: boolean | null;
   auto_open_review?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;

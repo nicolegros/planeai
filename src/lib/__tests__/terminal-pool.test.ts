@@ -1,89 +1,44 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { getPoolState, activateSession, removeSession, MAX_MOUNTED } from "../terminal-pool.svelte";
+import { getMruList, activateSession, removeSession, isMounted } from "../mru.svelte";
 
-describe("terminal-pool", () => {
+describe("mru pool", () => {
   beforeEach(() => {
-    // Reset pool state by removing all sessions
-    const state = getPoolState();
-    for (const id of state.mounted) {
-      removeSession(id);
-    }
+    for (const id of getMruList()) removeSession(id);
   });
 
-  it("mounts the active session", () => {
+  it("activates and mounts a session", () => {
     activateSession("s1");
-    const state = getPoolState();
-    expect(state.mounted).toContain("s1");
-    expect(state.active).toBe("s1");
+    expect(getMruList()).toContain("s1");
+    expect(isMounted("s1")).toBe(true);
   });
 
-  it("keeps MRU neighbors mounted (up to MAX_MOUNTED)", () => {
-    activateSession("s1");
-    activateSession("s2");
-    activateSession("s3");
-    const state = getPoolState();
-    // s3 is active, s2 is MRU-1, s1 is MRU-2
-    expect(state.active).toBe("s3");
-    expect(state.mounted).toContain("s3");
-    expect(state.mounted).toContain("s2");
-    expect(state.mounted.length).toBeLessThanOrEqual(MAX_MOUNTED);
-  });
-
-  it("unmounts sessions beyond MAX_MOUNTED", () => {
-    // Activate more than MAX_MOUNTED sessions
+  it("keeps all sessions mounted regardless of count", () => {
     activateSession("s1");
     activateSession("s2");
     activateSession("s3");
     activateSession("s4");
-    const state = getPoolState();
-    expect(state.mounted.length).toBeLessThanOrEqual(MAX_MOUNTED);
-    // s4 is active, s3 and s2 are neighbors
-    expect(state.mounted).toContain("s4");
-    expect(state.mounted).toContain("s3");
-    // s1 should be evicted
-    expect(state.mounted).not.toContain("s1");
+    expect(isMounted("s1")).toBe(true);
+    expect(isMounted("s2")).toBe(true);
+    expect(isMounted("s3")).toBe(true);
+    expect(isMounted("s4")).toBe(true);
   });
 
-  it("switching back promotes a session without exceeding MAX_MOUNTED", () => {
+  it("promotes activated session to front of MRU", () => {
     activateSession("s1");
     activateSession("s2");
-    activateSession("s3");
-    activateSession("s4");
-    // Now switch back to s1
     activateSession("s1");
-    const state = getPoolState();
-    expect(state.active).toBe("s1");
-    expect(state.mounted).toContain("s1");
-    expect(state.mounted.length).toBeLessThanOrEqual(MAX_MOUNTED);
+    expect(getMruList()[0]).toBe("s1");
   });
 
-  it("removeSession evicts from mounted set", () => {
+  it("removeSession evicts from MRU", () => {
     activateSession("s1");
     activateSession("s2");
     removeSession("s1");
-    const state = getPoolState();
-    expect(state.mounted).not.toContain("s1");
+    expect(isMounted("s1")).toBe(false);
+    expect(isMounted("s2")).toBe(true);
   });
 
-  it("isMounted returns correct state for each session", () => {
-    activateSession("s1");
-    activateSession("s2");
-    activateSession("s3");
-    activateSession("s4");
-    const state = getPoolState();
-    expect(state.mounted).toContain("s4");
-    expect(state.mounted).toContain("s3");
-    expect(state.mounted).not.toContain("s1");
-  });
-
-  it("shouldPause returns true for mounted but non-active sessions", () => {
-    activateSession("s1");
-    activateSession("s2");
-    activateSession("s3");
-    const state = getPoolState();
-    // s3 is active (not paused), s2 is mounted but paused
-    expect(state.active).toBe("s3");
-    expect(state.paused).toContain("s2");
-    expect(state.paused).not.toContain("s3");
+  it("isMounted returns false for unknown sessions", () => {
+    expect(isMounted("unknown")).toBe(false);
   });
 });

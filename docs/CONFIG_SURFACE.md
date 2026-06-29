@@ -28,11 +28,10 @@ These are normal options users should configure.
 
 Power-user options. Not required for normal use.
 
-| Field                   | Type   | Default | Description                               |
-| ----------------------- | ------ | ------- | ----------------------------------------- |
-| `max_mounted_terminals` | number | —       | Limit concurrent mounted terminal widgets |
-| `web_links`             | bool   | —       | Enable clickable links in terminal output |
-| `vim_mode`              | bool   | false   | Enable vim-style key bindings             |
+| Field       | Type | Default | Description                               |
+| ----------- | ---- | ------- | ----------------------------------------- |
+| `web_links` | bool | —       | Enable clickable links in terminal output |
+| `vim_mode`  | bool | false   | Enable vim-style key bindings             |
 
 ### 3. Env-only debug/rollback flags
 

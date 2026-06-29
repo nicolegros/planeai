@@ -40,7 +40,7 @@
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
-  import { isMounted as poolIsMounted, isPaused as poolIsPaused } from "./lib/terminal-pool.svelte";
+  import { isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
@@ -417,7 +417,6 @@
           focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
-          paused={poolIsPaused(session.id)}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
           onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); }}
         />

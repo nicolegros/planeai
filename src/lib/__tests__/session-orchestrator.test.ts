@@ -21,7 +21,14 @@ vi.mock("../settings.svelte", () => ({
 vi.mock("../tab-switcher.svelte", () => ({
   getCycleState: vi.fn(() => ({ isCycling: false, cycleList: [], index: 0, isVisible: false })),
 }));
-vi.mock("../terminal-pool.svelte", () => ({ activateSession: vi.fn(), removeSession: vi.fn() }));
+vi.mock("../mru.svelte", () => ({
+  activateSession: vi.fn(),
+  removeSession: vi.fn(),
+  touchMru: vi.fn(),
+  getMruList: vi.fn(() => []),
+  flushMru: vi.fn(() => Promise.resolve()),
+  seedMru: vi.fn(),
+}));
 
 vi.mock("../api", () => ({
   sessions: {
@@ -185,7 +192,7 @@ describe("session-orchestrator", () => {
 
   describe("selectSession exited daemon fix (PLA-169)", () => {
     it("waits for restart before activating pool for exited sessions", async () => {
-      const { activateSession: poolActivate } = await import("../terminal-pool.svelte");
+      const { activateSession: poolActivate } = await import("../mru.svelte");
       const poolMock = vi.mocked(poolActivate);
 
       api.list.mockResolvedValue([
@@ -206,7 +213,7 @@ describe("session-orchestrator", () => {
     });
 
     it("activates pool immediately for active sessions", async () => {
-      const { activateSession: poolActivate } = await import("../terminal-pool.svelte");
+      const { activateSession: poolActivate } = await import("../mru.svelte");
       const poolMock = vi.mocked(poolActivate);
 
       api.list.mockResolvedValue([makeSession({ id: "s1", status: "active" })]);
