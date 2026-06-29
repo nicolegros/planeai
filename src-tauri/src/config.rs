@@ -1065,4 +1065,34 @@ mod tests {
         );
         assert!(mapping.writeback.as_ref().unwrap().comment);
     }
+
+    #[test]
+    fn refresh_returns_updated_config_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        // Write initial config
+        let mut config = Config::default();
+        config.appearance.mode = "light".to_string();
+        save(config_dir, &config).unwrap();
+
+        // Modify file on disk externally
+        config.appearance.mode = "dark".to_string();
+        save(config_dir, &config).unwrap();
+
+        let refreshed = refresh(config_dir).unwrap();
+        assert_eq!(refreshed.appearance.mode, "dark");
+    }
+
+    #[test]
+    fn refresh_returns_error_on_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path();
+
+        fs::write(config_dir.join("config.json"), "not valid {{{").unwrap();
+
+        let result = refresh(config_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parse"));
+    }
 }
