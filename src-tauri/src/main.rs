@@ -279,6 +279,7 @@ fn main() {
             get_config,
             get_log_dir,
             update_config,
+            refresh_config,
             get_theme_css,
             list_themes,
             launch_session,

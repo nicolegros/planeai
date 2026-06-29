@@ -128,6 +128,13 @@ export async function loadSettings(): Promise<void> {
   applyDarkClass();
 }
 
+export async function refreshSettings(): Promise<void> {
+  config = await configApi.refresh();
+  applyDarkClass();
+  loadTheme();
+  emit("settings-changed");
+}
+
 export async function updateSettings(patch: Partial<AppConfig>): Promise<void> {
   const prevTheme = config.appearance.theme;
   config = { ...config, ...patch };

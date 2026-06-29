@@ -4,10 +4,11 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { loadSettings, getSettings, updateSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
+  import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
   import { loadTheme } from "../lib/theme-loader";
+  import { showSnackbar } from "../lib/snackbar.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
-  import { Palette, Bot, ListTodo, Settings } from "@lucide/svelte";
+  import { Palette, Bot, ListTodo, Settings, RefreshCw } from "@lucide/svelte";
 
   const config = $derived(getSettings());
   let fontItems = $state<{ value: string; label: string }[]>([]);
@@ -126,6 +127,15 @@
   async function openLogFolder() {
     const logDir = await preferences.getLogDir();
     await revealItemInDir(logDir);
+  }
+
+  async function refreshConfig() {
+    try {
+      await refreshSettings();
+      showSnackbar("Config reloaded from disk", "success");
+    } catch (e) {
+      showSnackbar(`Failed to refresh config: ${e}`, "error");
+    }
   }
 
   function setAppearance(mode: AppearanceMode) {
@@ -533,6 +543,17 @@
     {/if}
 
     {#if activeTab === "More"}
+    <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Config File</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Reload config from disk</p>
+          <p class="text-xs text-t3">Re-read ~/.config/planeai/config.json and apply changes.</p>
+        </div>
+        <Button type="button" onclick={refreshConfig}><RefreshCw size={14} class="inline mr-1" />Refresh</Button>
+      </div>
+    </section>
+
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Session Backend</h2>
       <div class="flex gap-2">
