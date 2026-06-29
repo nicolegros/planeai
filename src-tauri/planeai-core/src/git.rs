@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::process::Command;
 
 use crate::command::no_window;
@@ -22,8 +23,8 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
 
-    let mut local = Vec::new();
-    let mut remote = Vec::new();
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let Some((short, full)) = line.split_once(' ') else {
@@ -35,17 +36,16 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
         }
         if full.starts_with("refs/remotes/") {
             let name = short.split_once('/').map(|x| x.1).unwrap_or(short);
-            remote.push(name.to_string());
+            if seen.insert(name.to_string()) {
+                result.push(format!("remote:{name}"));
+            }
         } else {
-            local.push(short.to_string());
+            seen.insert(short.to_string());
+            result.push(short.to_string());
         }
     }
 
-    for name in remote {
-        local.push(format!("remote:{name}"));
-    }
-
-    Ok(local)
+    Ok(result)
 }
 
 /// Checkout an existing branch or create a new one (optionally from a start point).
@@ -446,6 +446,14 @@ mod tests {
             .unwrap();
     }
 
+    fn git(path: &std::path::Path, args: &[&str]) {
+        Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+    }
+
     fn init_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         Command::new("git")
@@ -814,6 +822,79 @@ mod tests {
         let (old, new) = parse_rename_path("src/repo/mod.rs => crates/persistence/src/lib.rs");
         assert_eq!(old, "src/repo/mod.rs");
         assert_eq!(new, "crates/persistence/src/lib.rs");
+    }
+
+    #[test]
+    fn list_branches_deduplicates_remotes() {
+        let remote1 = tempfile::tempdir().unwrap();
+        git(remote1.path(), &["init", "--bare", "-b", "main"]);
+        let remote2 = tempfile::tempdir().unwrap();
+        git(remote2.path(), &["init", "--bare", "-b", "main"]);
+
+        // Seed both remotes with a shared commit + a branch only on remote2
+        let seed = tempfile::tempdir().unwrap();
+        git(seed.path(), &["init", "-b", "main"]);
+        configure_git_identity(seed.path());
+        git(seed.path(), &["commit", "--allow-empty", "-m", "init"]);
+        git(
+            seed.path(),
+            &["remote", "add", "r1", remote1.path().to_str().unwrap()],
+        );
+        git(seed.path(), &["push", "r1", "main"]);
+        git(
+            seed.path(),
+            &["remote", "add", "r2", remote2.path().to_str().unwrap()],
+        );
+        git(seed.path(), &["push", "r2", "main"]);
+        git(seed.path(), &["checkout", "-b", "feat/only-r2"]);
+        git(seed.path(), &["commit", "--allow-empty", "-m", "feat"]);
+        git(seed.path(), &["push", "r2", "feat/only-r2"]);
+
+        // Clone from remote1, add remote2, fetch all
+        let repo = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args([
+                "clone",
+                remote1.path().to_str().unwrap(),
+                repo.path().to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        configure_git_identity(repo.path());
+        git(
+            repo.path(),
+            &[
+                "remote",
+                "add",
+                "upstream",
+                remote2.path().to_str().unwrap(),
+            ],
+        );
+        git(repo.path(), &["fetch", "--all"]);
+
+        let result = list_branches(repo.path().to_str().unwrap()).unwrap();
+
+        assert!(
+            !result.iter().any(|b| b == "remote:main"),
+            "remote:main should not appear when main exists locally: {:?}",
+            result
+        );
+        assert_eq!(
+            result
+                .iter()
+                .filter(|b| *b == "remote:feat/only-r2")
+                .count(),
+            1,
+            "remote:feat/only-r2 should appear exactly once: {:?}",
+            result
+        );
+        let unique: HashSet<&String> = result.iter().collect();
+        assert_eq!(
+            unique.len(),
+            result.len(),
+            "all entries should be unique: {:?}",
+            result
+        );
     }
 
     #[test]
