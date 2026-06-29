@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::process::Command;
 
 use crate::command::no_window;
@@ -41,8 +42,12 @@ pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
         }
     }
 
+    let local_set: HashSet<String> = local.iter().cloned().collect();
+    let mut seen_remote = HashSet::new();
     for name in remote {
-        local.push(format!("remote:{name}"));
+        if !local_set.contains(&name) && seen_remote.insert(name.clone()) {
+            local.push(format!("remote:{name}"));
+        }
     }
 
     Ok(local)
@@ -814,6 +819,102 @@ mod tests {
         let (old, new) = parse_rename_path("src/repo/mod.rs => crates/persistence/src/lib.rs");
         assert_eq!(old, "src/repo/mod.rs");
         assert_eq!(new, "crates/persistence/src/lib.rs");
+    }
+
+    #[test]
+    fn list_branches_deduplicates_remotes() {
+        // Create two bare remotes
+        let remote1 = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .current_dir(remote1.path())
+            .output()
+            .unwrap();
+        let remote2 = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--bare", "-b", "main"])
+            .current_dir(remote2.path())
+            .output()
+            .unwrap();
+
+        // Seed remote1 with a commit
+        let seed = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        configure_git_identity(seed.path());
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["remote", "add", "r1", remote1.path().to_str().unwrap()])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "r1", "main"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["remote", "add", "r2", remote2.path().to_str().unwrap()])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "r2", "main"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        // Push a branch only to remote2
+        Command::new("git")
+            .args(["checkout", "-b", "feat/only-r2"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "feat"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "r2", "feat/only-r2"])
+            .current_dir(seed.path())
+            .output()
+            .unwrap();
+
+        // Clone from remote1, add remote2, fetch all
+        let repo = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["clone", remote1.path().to_str().unwrap(), repo.path().to_str().unwrap()])
+            .output()
+            .unwrap();
+        configure_git_identity(repo.path());
+        Command::new("git")
+            .args(["remote", "add", "upstream", remote2.path().to_str().unwrap()])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["fetch", "--all"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+
+        let result = list_branches(repo.path().to_str().unwrap()).unwrap();
+
+        // "main" exists locally, so no "remote:main" should appear
+        assert!(!result.iter().any(|b| b == "remote:main"), "remote:main should be deduplicated because main exists locally: {:?}", result);
+        // feat/only-r2 doesn't exist locally, so it should appear once as remote
+        let remote_feat_count = result.iter().filter(|b| *b == "remote:feat/only-r2").count();
+        assert_eq!(remote_feat_count, 1, "remote:feat/only-r2 should appear exactly once: {:?}", result);
+        // No duplicate values at all
+        let unique: HashSet<&String> = result.iter().collect();
+        assert_eq!(unique.len(), result.len(), "all entries should be unique: {:?}", result);
     }
 
     #[test]
