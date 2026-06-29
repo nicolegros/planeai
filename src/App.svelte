@@ -34,6 +34,7 @@
   import KeyboardShortcuts from "./components/KeyboardShortcuts.svelte";
   import SharedDialog from "./components/ui/Dialog.svelte";
   import FormDialog from "./components/ui/FormDialog.svelte";
+  import { Input, Label, Button, Checkbox } from "./components/ui";
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
@@ -593,21 +594,21 @@
     <div bind:this={prFormWrapper} tabindex="-1" onkeydown={prFk.handleKeydown} onfocusin={prFk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
       <form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitPr(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submitPr(); } }}>
         <div class="space-y-1" data-field="pr-title">
-          <label class="text-xs font-medium text-t2 mb-1 block">Title <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></label>
-          <input type="text" bind:value={prTitle} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+          <Label>Title <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">T</span></Label>
+          <Input bind:value={prTitle} />
         </div>
         <div class="space-y-1" data-field="pr-body">
-          <label class="text-xs font-medium text-t2 mb-1 block">Body <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></label>
-          <textarea bind:value={prBody} rows="10" class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
+          <Label>Body <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">B</span></Label>
+          <textarea bind:value={prBody} rows="10" class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-y focus:outline-none focus:ring-1 focus:ring-accent font-mono text-xs"></textarea>
         </div>
         <div class="space-y-1" data-field="pr-base">
-          <label class="text-xs font-medium text-t2 mb-1 block">Base branch <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span></label>
-          <input type="text" bind:value={prBaseBranch} class="w-full px-2 py-1.5 text-sm rounded border border-border bg-panel-hi text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
+          <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">A</span></Label>
+          <Input bind:value={prBaseBranch} />
         </div>
-        <label class="flex items-center gap-2 text-xs text-t2">
-          <input type="checkbox" bind:checked={prDraft} class="rounded border-border" />
-          Draft PR <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
-        </label>
+        <div class="flex items-center gap-4">
+          <Checkbox id="pr-draft" label="Draft PR" bind:checked={prDraft} tabindex={-1} />
+          <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
+        </div>
         {#if prError}
           <p class="text-xs text-status-exited">{prError}</p>
         {/if}
@@ -622,10 +623,10 @@
             {/if}
           </div>
           <div class="flex gap-2">
-            <button type="button" class="px-2 py-1 text-xs rounded border border-border text-t2 hover:bg-panel-hi" onclick={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>Cancel</button>
-            <button type="submit" class="px-2 py-1 text-xs rounded bg-accent text-on-accent hover:opacity-90 disabled:opacity-50" disabled={prSubmitting || !prTitle.trim()}>
-              {prSubmitting ? "Creating…" : "Create"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
-            </button>
+            <Button type="button" onclick={() => { showPrForm = false; tick().then(() => refocusTerminal()); }}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={prSubmitting || !prTitle.trim()}>
+              {prSubmitting ? "Creating…" : "Create"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>
+            </Button>
           </div>
         </div>
       </form>
