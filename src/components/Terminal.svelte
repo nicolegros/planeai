@@ -59,7 +59,6 @@
       fontFamily: terminalFontStack(s.terminal.font_family),
       theme: themeColors,
       scrollback: s.scrollback_lines ?? SCROLLBACK_LINES,
-      convertEol: true,
       scrollOnUserInput: false,
       allowProposedApi: true,
       macOptionIsMeta: s.terminal.option_as_meta,
