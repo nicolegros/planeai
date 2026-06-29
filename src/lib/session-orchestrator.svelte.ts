@@ -12,7 +12,14 @@ import {
 import { updateSessions as updatePrCommentSessions } from "./pr-comments.svelte";
 import type { Session } from "./types";
 import { initSession, getTabCount, destroySession as destroyTabState } from "./session-tabs.svelte";
-import { touchMru, getMruList, flushMru, seedMru } from "./mru.svelte";
+import {
+  touchMru,
+  getMruList,
+  flushMru,
+  seedMru,
+  activateSession as poolActivate,
+  removeSession as poolRemove,
+} from "./mru.svelte";
 import { clearComments } from "./review-comments.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
@@ -22,10 +29,6 @@ import { playTaskComplete } from "./soundPlayer";
 import { getProjects } from "./project-store.svelte";
 import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
-import {
-  activateSession as poolActivate,
-  removeSession as poolRemove,
-} from "./terminal-pool.svelte";
 import {
   cleanup as tabLayoutCleanup,
   resetAll as tabLayoutReset,

@@ -179,7 +179,6 @@ mod tests {
             pr_status: None,
             hide_done_tasks: None,
             scrollback_lines: None,
-            max_mounted_terminals: None,
             web_links: None,
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
