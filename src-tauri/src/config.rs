@@ -404,11 +404,11 @@ pub fn tmux_available() -> bool {
     false
 }
 
-/// Re-read config from disk. On success returns the new config; on parse error returns Err
-/// with the error message (caller should keep the previous config).
+/// Re-read config from disk. On success returns the new config; on any warning/error returns Err
+/// (caller should keep the previous config).
 pub fn refresh(config_dir: &Path) -> Result<Config, String> {
     let (config, warnings) = load(config_dir);
-    if let Some(w) = warnings.into_iter().find(|w| w.contains("parse")) {
+    if let Some(w) = warnings.into_iter().next() {
         return Err(w);
     }
     Ok(config)
