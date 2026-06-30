@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::command::no_window;
+use crate::command::{augmented_path, no_window};
 
 pub mod branch;
 pub mod commits;
@@ -11,10 +11,13 @@ pub use branch::*;
 pub use commits::*;
 pub use diff::*;
 
-/// Create a `git` Command with CREATE_NO_WINDOW on Windows.
+/// Create a `git` Command with CREATE_NO_WINDOW on Windows and an augmented
+/// PATH that includes conventional developer directories (e.g. /opt/homebrew/bin,
+/// ~/.local/bin) so git can be found when launched from a GUI app.
 fn git_cmd() -> Command {
     let mut cmd = Command::new("git");
     no_window(&mut cmd);
+    cmd.env("PATH", augmented_path(&[]));
     cmd
 }
 
