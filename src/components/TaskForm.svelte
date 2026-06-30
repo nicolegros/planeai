@@ -53,20 +53,38 @@
   $effect(() => {
     if (formProjectPath) {
       projectsApi.listBranches(formProjectPath).then(
-        (b) => (branches = b.map((s) => {
-          const remote = s.startsWith("remote:");
-          const name = remote ? s.slice(7) : s;
-          return { value: name, label: name };
-        })),
+        (b) => {
+          const seen = new Set<string>();
+          branches = b
+            .map((s) => {
+              const remote = s.startsWith("remote:");
+              const name = remote ? s.slice(7) : s;
+              return { value: name, label: name };
+            })
+            .filter((item) => {
+              if (seen.has(item.value)) return false;
+              seen.add(item.value);
+              return true;
+            });
+        },
         () => (branches = []),
       );
     }
   });
 
-  // Derive task items for parent_key and blocked_by comboboxes
-  const projectTasks = $derived(
-    tasks.length > 0 ? tasks : (taskStore.getTasksForProject(formProjectPath) ?? [])
-  );
+  // Derive task items for parent_key and blocked_by comboboxes — scoped to current project
+  const projectTasks = $derived.by(() => {
+    // Prefer tasks for the selected project path; fall back to all tasks passed in
+    const fromStore = taskStore.getTasksForProject(formProjectPath);
+    const pool = fromStore.length > 0 ? fromStore : tasks;
+    // Deduplicate by key (safety net against flat() duplicates)
+    const seen = new Set<string>();
+    return pool.filter((t) => {
+      if (seen.has(t.key)) return false;
+      seen.add(t.key);
+      return true;
+    });
+  });
 
   const parentItems = $derived(
     projectTasks
