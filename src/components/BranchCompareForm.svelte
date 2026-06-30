@@ -80,7 +80,7 @@
   });
 </script>
 
-<FormDialog title="Compare Branches" onClose={onCancel} preventAutoFocus>
+<FormDialog title="Compare Branches" onClose={onCancel}>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div bind:this={wrapperEl} tabindex="0" onkeydown={(e) => { handleFormKeydown(e); fk.handleKeydown(e); }} onfocusin={(e) => { if (e.target === wrapperEl) return; fk.handleFocusin(e); }} class="outline-none px-5 pb-5" data-form-keyboard>
