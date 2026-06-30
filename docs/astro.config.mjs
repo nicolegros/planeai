@@ -16,12 +16,14 @@ export default defineConfig({
       ],
       sidebar: [
         { label: "Getting Started", slug: "getting-started" },
+        { label: "Concepts", slug: "concepts" },
         {
           label: "Guides",
           items: [
             { label: "Configuration", slug: "guides/configuration" },
-            { label: "Theming", slug: "guides/theming" },
+            { label: "Task Management", slug: "guides/task-management" },
             { label: "Auto-Dispatch", slug: "guides/auto-dispatch" },
+            { label: "Theming", slug: "guides/theming" },
           ],
         },
         {
