@@ -170,6 +170,11 @@
 
 /* Border color override is in overrides.css (imported after tailwind processing) */
 
+/* CodeMirror layout — constrain height so internal .cm-scroller handles overflow */
+.cm-editor {
+  height: 100%;
+}
+
 /* CodeMirror syntax highlighting — classHighlighter applies .tok-* classes */
 .tok-keyword {
   color: var(--editor-keyword, var(--editor-foreground));
