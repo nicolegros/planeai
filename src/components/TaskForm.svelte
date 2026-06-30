@@ -126,6 +126,7 @@
           priority: formPriority,
           tags: formTags,
           blockedBy: formBlockedBy,
+          parentKey: formParentKey || null,
           baseBranch: formBaseBranch,
         });
       } else {
@@ -140,7 +141,7 @@
           tags: formTags,
           blockedBy: formBlockedBy,
           parentKey: formParentKey || null,
-          baseBranch: formBaseBranch,
+          baseBranch: formBaseBranch || null,
         });
       }
       onSubmitted();

@@ -107,6 +107,7 @@ pub fn create_task_item(
     priority: i32,
     tags: Vec<String>,
     blocked_by: Vec<String>,
+    parent_key: Option<String>,
     base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     tracing::info!(title = %title, "create_task_item");
@@ -117,7 +118,7 @@ pub fn create_task_item(
         priority,
         tags,
         blocked_by,
-        parent_key: None,
+        parent_key,
         base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
     })
     .map(TaskItem::from)
@@ -135,10 +136,19 @@ pub fn edit_task_item(
     priority: Option<i32>,
     tags: Option<Vec<String>>,
     blocked_by: Option<Vec<String>>,
-    parent_key: Option<Option<String>>,
+    // Frontend sends: undefined/absent = don't touch, null = clear, "KEY" = set
+    // Tauri deserializes all of these as Option<String> (absent→None, null→None, "KEY"→Some("KEY"))
+    // So we use a separate bool flag to distinguish "clear" from "don't touch"
+    parent_key: Option<String>,
+    clear_parent: Option<bool>,
     base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     let repo = resolve_repo(&db_state, &repo_path)?;
+    let resolved_parent_key = if clear_parent.unwrap_or(false) {
+        Some(None) // explicitly clear
+    } else {
+        parent_key.map(Some) // set to value, or None = don't touch
+    };
     repo.update(
         &key,
         UpdateParams {
@@ -147,7 +157,7 @@ pub fn edit_task_item(
             priority,
             tags,
             blocked_by,
-            parent_key,
+            parent_key: resolved_parent_key,
             base_branch,
             ..Default::default()
         },

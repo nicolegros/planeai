@@ -68,6 +68,7 @@ export async function createTask(params: {
   priority: number;
   tags: string[];
   blockedBy: string[];
+  parentKey?: string | null;
   baseBranch?: string;
 }): Promise<void> {
   await tasksApi.create(params);
