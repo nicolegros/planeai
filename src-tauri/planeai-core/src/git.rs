@@ -195,12 +195,23 @@ fn parse_rename_path(raw: &str) -> (String, String) {
     (raw.to_string(), raw.to_string())
 }
 
-/// Get the list of changed files between a base branch and the current working tree.
-/// Includes committed changes on the branch + uncommitted modifications + untracked files.
-pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<ChangedFile>, String> {
+/// Get the list of changed files between a base branch and the current working tree (or a specific head ref).
+/// When `head_ref` is None: includes committed changes on the branch + uncommitted modifications + untracked files.
+/// When `head_ref` is Some: shows only committed changes between base and the specified ref.
+pub fn get_changed_files(
+    repo_path: &str,
+    base_branch: &str,
+    head_ref: Option<&str>,
+) -> Result<Vec<ChangedFile>, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
+
+    let diff_range = match head_ref {
+        Some(h) => format!("{resolved}..{h}"),
+        None => resolved.clone(),
+    };
+
     let output = git_cmd()
-        .args(["diff", "--numstat", &resolved])
+        .args(["diff", "--numstat", &diff_range])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -232,7 +243,7 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 
     // Get status for each file
     let status_output = git_cmd()
-        .args(["diff", "--name-status", &resolved])
+        .args(["diff", "--name-status", &diff_range])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -256,29 +267,31 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
         }
     }
 
-    // Include untracked files as Added
-    let untracked_output = git_cmd()
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| format!("failed to run git: {e}"))?;
+    // Include untracked files only when comparing to working tree (head_ref is None)
+    if head_ref.is_none() {
+        let untracked_output = git_cmd()
+            .args(["ls-files", "--others", "--exclude-standard"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
 
-    if untracked_output.status.success() {
-        for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
-            let path = line.trim().to_string();
-            if path.is_empty() {
-                continue;
+        if untracked_output.status.success() {
+            for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
+                let path = line.trim().to_string();
+                if path.is_empty() {
+                    continue;
+                }
+                let content = std::fs::read_to_string(std::path::Path::new(repo_path).join(&path))
+                    .unwrap_or_default();
+                let additions = content.lines().count() as u32;
+                files.push(ChangedFile {
+                    path,
+                    status: "A".to_string(),
+                    additions,
+                    deletions: 0,
+                    old_path: None,
+                });
             }
-            let content = std::fs::read_to_string(std::path::Path::new(repo_path).join(&path))
-                .unwrap_or_default();
-            let additions = content.lines().count() as u32;
-            files.push(ChangedFile {
-                path,
-                status: "A".to_string(),
-                additions,
-                deletions: 0,
-                old_path: None,
-            });
         }
     }
 
@@ -286,13 +299,15 @@ pub fn get_changed_files(repo_path: &str, base_branch: &str) -> Result<Vec<Chang
 }
 
 /// Get the original and modified content of a file for diff display.
-/// Original = content at the base branch, Modified = current working tree content.
+/// When `head_ref` is None: Original = content at the base branch, Modified = current working tree content.
+/// When `head_ref` is Some: Original = content at base, Modified = content at head ref.
 /// For renames, `old_path` specifies the path in the base branch.
 pub fn get_file_diff(
     repo_path: &str,
     base_branch: &str,
     file_path: &str,
     old_path: Option<&str>,
+    head_ref: Option<&str>,
 ) -> Result<FileDiff, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
     let base_file_path = old_path.unwrap_or(file_path);
@@ -309,9 +324,25 @@ pub fn get_file_diff(
         String::new()
     };
 
-    // Get modified content from working tree
-    let full_path = std::path::Path::new(repo_path).join(file_path);
-    let modified = std::fs::read_to_string(&full_path).unwrap_or_default();
+    // Get modified content: from head ref if specified, otherwise from working tree
+    let modified = match head_ref {
+        Some(h) => {
+            let output = git_cmd()
+                .args(["show", &format!("{h}:{file_path}")])
+                .current_dir(repo_path)
+                .output()
+                .map_err(|e| format!("failed to run git: {e}"))?;
+            if output.status.success() {
+                String::from_utf8_lossy(&output.stdout).to_string()
+            } else {
+                String::new()
+            }
+        }
+        None => {
+            let full_path = std::path::Path::new(repo_path).join(file_path);
+            std::fs::read_to_string(&full_path).unwrap_or_default()
+        }
+    };
 
     let language = detect_language(file_path);
 
@@ -324,26 +355,41 @@ pub fn get_file_diff(
 
 /// Get the unified diff patch for a single file. Uses native git diff which is
 /// much faster than recomputing the diff in JavaScript.
+/// When `head_ref` is None: diffs base against working tree.
+/// When `head_ref` is Some: diffs base..head (committed only).
 pub fn get_file_patch(
     repo_path: &str,
     base_branch: &str,
     file_path: &str,
     old_path: Option<&str>,
+    head_ref: Option<&str>,
 ) -> Result<String, String> {
     let resolved = resolve_base_branch(repo_path, base_branch)?;
     let base_file_path = old_path.unwrap_or(file_path);
 
+    let diff_range = match head_ref {
+        Some(h) => format!("{resolved}..{h}"),
+        None => resolved.clone(),
+    };
+
     // Try tracked file diff first
     let output = git_cmd()
-        .args(["diff", "--no-color", "-U3", &resolved, "--", base_file_path])
+        .args([
+            "diff",
+            "--no-color",
+            "-U3",
+            &diff_range,
+            "--",
+            base_file_path,
+        ])
         .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
     let patch = String::from_utf8_lossy(&output.stdout).to_string();
 
-    // If empty, file might be untracked — generate a diff against /dev/null
-    if patch.trim().is_empty() {
+    // If empty and comparing to working tree, file might be untracked — generate a diff against /dev/null
+    if patch.trim().is_empty() && head_ref.is_none() {
         let full_path = std::path::Path::new(repo_path).join(file_path);
         let content = std::fs::read_to_string(&full_path).unwrap_or_default();
         if content.is_empty() {
@@ -373,11 +419,52 @@ pub fn get_all_file_patches(
     repo_path: &str,
     base_branch: &str,
     files: &[(String, Option<String>)],
+    head_ref: Option<&str>,
 ) -> Result<Vec<String>, String> {
     files
         .iter()
-        .map(|(path, old_path)| get_file_patch(repo_path, base_branch, path, old_path.as_deref()))
+        .map(|(path, old_path)| {
+            get_file_patch(repo_path, base_branch, path, old_path.as_deref(), head_ref)
+        })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CommitEntry {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+}
+
+/// List the last N commits on the current branch.
+pub fn list_commits(repo_path: &str, limit: u32) -> Result<Vec<CommitEntry>, String> {
+    let output = git_cmd()
+        .args(["log", "--format=%H %h %s", &format!("-{limit}")])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let mut commits = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // Format: full_sha short_sha subject (subject may contain spaces)
+        let mut parts = line.splitn(3, ' ');
+        let sha = parts.next().unwrap_or("").to_string();
+        let short_sha = parts.next().unwrap_or("").to_string();
+        let subject = parts.next().unwrap_or("").to_string();
+        if !sha.is_empty() {
+            commits.push(CommitEntry {
+                sha,
+                short_sha,
+                subject,
+            });
+        }
+    }
+
+    Ok(commits)
 }
 
 /// Detect the default branch of a repo (main, master, etc.).
@@ -615,7 +702,7 @@ mod tests {
     #[test]
     fn get_changed_files_returns_modified_and_added_files() {
         let repo = init_repo_with_feature_branch();
-        let files = get_changed_files(repo.path().to_str().unwrap(), "main").unwrap();
+        let files = get_changed_files(repo.path().to_str().unwrap(), "main", None).unwrap();
         assert_eq!(files.len(), 2);
 
         let modified = files.iter().find(|f| f.path == "existing.txt").unwrap();
@@ -637,7 +724,7 @@ mod tests {
         // Add an untracked file (not staged or committed)
         fs::write(repo.path().join("untracked.txt"), "line1\nline2\n").unwrap();
 
-        let files = get_changed_files(repo.path().to_str().unwrap(), "main").unwrap();
+        let files = get_changed_files(repo.path().to_str().unwrap(), "main", None).unwrap();
         let untracked = files.iter().find(|f| f.path == "untracked.txt").unwrap();
         assert_eq!(untracked.status, "A");
         assert_eq!(untracked.additions, 2);
@@ -647,8 +734,14 @@ mod tests {
     #[test]
     fn get_file_diff_returns_original_and_modified_for_modified_file() {
         let repo = init_repo_with_feature_branch();
-        let diff =
-            get_file_diff(repo.path().to_str().unwrap(), "main", "existing.txt", None).unwrap();
+        let diff = get_file_diff(
+            repo.path().to_str().unwrap(),
+            "main",
+            "existing.txt",
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(diff.original, "hello\n");
         assert_eq!(diff.modified, "hello\nworld\n");
         assert_eq!(diff.language, "plaintext");
@@ -657,8 +750,14 @@ mod tests {
     #[test]
     fn get_file_diff_returns_empty_original_for_new_file() {
         let repo = init_repo_with_feature_branch();
-        let diff =
-            get_file_diff(repo.path().to_str().unwrap(), "main", "new_file.txt", None).unwrap();
+        let diff = get_file_diff(
+            repo.path().to_str().unwrap(),
+            "main",
+            "new_file.txt",
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(diff.original, "");
         assert_eq!(diff.modified, "brand new\n");
     }
@@ -701,7 +800,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let diff = get_file_diff(p.to_str().unwrap(), "main", "doomed.txt", None).unwrap();
+        let diff = get_file_diff(p.to_str().unwrap(), "main", "doomed.txt", None, None).unwrap();
         assert_eq!(diff.original, "will be deleted\n");
         assert_eq!(diff.modified, "");
     }
@@ -745,7 +844,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let files = get_changed_files(p.to_str().unwrap(), "main").unwrap();
+        let files = get_changed_files(p.to_str().unwrap(), "main", None).unwrap();
         let renamed = files
             .iter()
             .find(|f| f.path == "crates/client/src/auth.rs")
@@ -804,6 +903,7 @@ mod tests {
             "main",
             "crates/lib.rs",
             Some("src/lib.rs"),
+            None,
         )
         .unwrap();
         assert_eq!(diff.original, "original content\n");
@@ -895,6 +995,168 @@ mod tests {
             "all entries should be unique: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn get_file_patch_with_head_ref_uses_ref_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "base\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "init"]);
+        git(p, &["checkout", "-b", "feat"]);
+        fs::write(p.join("file.txt"), "changed\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "change"]);
+        // Uncommitted change — should NOT appear in patch
+        fs::write(p.join("file.txt"), "uncommitted\n").unwrap();
+
+        let patch =
+            get_file_patch(p.to_str().unwrap(), "main", "file.txt", None, Some("HEAD")).unwrap();
+        assert!(
+            patch.contains("+changed"),
+            "patch should contain committed change: {}",
+            patch
+        );
+        assert!(
+            !patch.contains("+uncommitted"),
+            "patch should NOT contain uncommitted change: {}",
+            patch
+        );
+    }
+
+    #[test]
+    fn get_file_patch_with_head_ref_none_includes_uncommitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "base\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "init"]);
+        git(p, &["checkout", "-b", "feat"]);
+        fs::write(p.join("file.txt"), "uncommitted\n").unwrap();
+
+        let patch = get_file_patch(p.to_str().unwrap(), "main", "file.txt", None, None).unwrap();
+        assert!(
+            patch.contains("+uncommitted"),
+            "patch should contain uncommitted change: {}",
+            patch
+        );
+    }
+
+    #[test]
+    fn get_file_diff_with_head_ref_uses_committed_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "base\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "init"]);
+        git(p, &["checkout", "-b", "feat"]);
+        fs::write(p.join("file.txt"), "committed\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "change"]);
+        // Working tree has different content that should be ignored
+        fs::write(p.join("file.txt"), "uncommitted\n").unwrap();
+
+        let diff =
+            get_file_diff(p.to_str().unwrap(), "main", "file.txt", None, Some("HEAD")).unwrap();
+        assert_eq!(diff.original, "base\n");
+        assert_eq!(diff.modified, "committed\n");
+    }
+
+    #[test]
+    fn get_file_diff_with_head_ref_none_uses_working_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "base\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "init"]);
+        git(p, &["checkout", "-b", "feat"]);
+        fs::write(p.join("file.txt"), "working\n").unwrap();
+
+        let diff = get_file_diff(p.to_str().unwrap(), "main", "file.txt", None, None).unwrap();
+        assert_eq!(diff.original, "base\n");
+        assert_eq!(diff.modified, "working\n");
+    }
+
+    #[test]
+    fn get_changed_files_with_head_ref_shows_only_committed_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        fs::write(p.join("file.txt"), "v1\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "init"]);
+        // Create two commits on a feature branch
+        git(p, &["checkout", "-b", "feat"]);
+        fs::write(p.join("file.txt"), "v2\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "second"]);
+        fs::write(p.join("file.txt"), "v3\n").unwrap();
+        fs::write(p.join("new.txt"), "hello\n").unwrap();
+        git(p, &["add", "."]);
+        git(p, &["commit", "-m", "third"]);
+        // Also add an uncommitted change that should NOT appear
+        fs::write(p.join("uncommitted.txt"), "wip\n").unwrap();
+
+        // Compare main..HEAD (should show committed changes only, not uncommitted)
+        let files = get_changed_files(p.to_str().unwrap(), "main", Some("HEAD")).unwrap();
+        assert!(
+            files.iter().any(|f| f.path == "file.txt"),
+            "should include file.txt: {:?}",
+            files
+        );
+        assert!(
+            files.iter().any(|f| f.path == "new.txt"),
+            "should include new.txt: {:?}",
+            files
+        );
+        assert!(
+            !files.iter().any(|f| f.path == "uncommitted.txt"),
+            "should NOT include uncommitted.txt: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn get_changed_files_with_head_ref_none_includes_uncommitted() {
+        let repo = init_repo_with_feature_branch();
+        // Add an uncommitted file
+        fs::write(repo.path().join("uncommitted.txt"), "wip\n").unwrap();
+
+        let files = get_changed_files(repo.path().to_str().unwrap(), "main", None).unwrap();
+        assert!(
+            files.iter().any(|f| f.path == "uncommitted.txt"),
+            "should include uncommitted.txt when head_ref is None: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn list_commits_returns_recent_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-b", "main"]);
+        configure_git_identity(p);
+        git(p, &["commit", "--allow-empty", "-m", "first commit"]);
+        git(p, &["commit", "--allow-empty", "-m", "second commit"]);
+        git(p, &["commit", "--allow-empty", "-m", "third commit"]);
+
+        let commits = list_commits(p.to_str().unwrap(), 2).unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].subject, "third commit");
+        assert_eq!(commits[1].subject, "second commit");
+        assert!(!commits[0].sha.is_empty());
+        assert!(!commits[0].short_sha.is_empty());
+        assert!(commits[0].sha.len() > commits[0].short_sha.len());
     }
 
     #[test]

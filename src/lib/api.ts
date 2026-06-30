@@ -9,6 +9,7 @@ import type {
   FileDiff,
   CiCheck,
   PrStatus,
+  CommitEntry,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
@@ -118,14 +119,50 @@ export const fileExplorer = {
 };
 
 export const git = {
-  getChangedFiles: (repoPath: string, baseBranch: string) =>
-    invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch }),
-  getFileDiff: (repoPath: string, baseBranch: string, filePath: string, oldPath: string | null) =>
-    invoke<FileDiff>("get_file_diff", { repoPath, baseBranch, filePath, oldPath }),
-  getFilePatch: (repoPath: string, baseBranch: string, filePath: string, oldPath: string | null) =>
-    invoke<string>("get_file_patch", { repoPath, baseBranch, filePath, oldPath }),
-  getAllFilePatches: (repoPath: string, baseBranch: string, files: [string, string | null][]) =>
-    invoke<string[]>("get_all_file_patches", { repoPath, baseBranch, files }),
+  getChangedFiles: (repoPath: string, baseBranch: string, headRef?: string | null) =>
+    invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch, headRef: headRef ?? null }),
+  getFileDiff: (
+    repoPath: string,
+    baseBranch: string,
+    filePath: string,
+    oldPath: string | null,
+    headRef?: string | null,
+  ) =>
+    invoke<FileDiff>("get_file_diff", {
+      repoPath,
+      baseBranch,
+      filePath,
+      oldPath,
+      headRef: headRef ?? null,
+    }),
+  getFilePatch: (
+    repoPath: string,
+    baseBranch: string,
+    filePath: string,
+    oldPath: string | null,
+    headRef?: string | null,
+  ) =>
+    invoke<string>("get_file_patch", {
+      repoPath,
+      baseBranch,
+      filePath,
+      oldPath,
+      headRef: headRef ?? null,
+    }),
+  getAllFilePatches: (
+    repoPath: string,
+    baseBranch: string,
+    files: [string, string | null][],
+    headRef?: string | null,
+  ) =>
+    invoke<string[]>("get_all_file_patches", {
+      repoPath,
+      baseBranch,
+      files,
+      headRef: headRef ?? null,
+    }),
+  listCommits: (repoPath: string, limit: number) =>
+    invoke<CommitEntry[]>("list_commits", { repoPath, limit }),
   listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
   readFile: (filePath: string) => invoke<string>("read_file", { filePath }),
   writeFile: (filePath: string, content: string) => invoke("write_file", { filePath, content }),

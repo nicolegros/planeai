@@ -62,6 +62,12 @@ export interface CiCheck {
   url: string | null;
 }
 
+export interface CommitEntry {
+  sha: string;
+  short_sha: string;
+  subject: string;
+}
+
 export interface PrStatus {
   checks: CiCheck[];
   conflicting: boolean;

@@ -9,14 +9,15 @@ planeai includes a built-in task tracker designed for AI agent workflows. Tasks 
 
 Tasks appear in the sidebar, grouped by project and status. Each status group shows tasks sorted by priority (highest first):
 
-| Status | Meaning |
-|--------|---------|
-| **Todo** | Ready to be worked on |
-| **In Progress** | An agent is actively working on it |
-| **In Review** | Work is done, waiting for human review |
-| **Done** | Completed |
+| Status          | Meaning                                |
+| --------------- | -------------------------------------- |
+| **Todo**        | Ready to be worked on                  |
+| **In Progress** | An agent is actively working on it     |
+| **In Review**   | Work is done, waiting for human review |
+| **Done**        | Completed                              |
 
 Click any task to interact with it:
+
 - If the task has a linked session → jumps to that session's terminal
 - If the task has no session → starts a new session for it (creates a worktree, launches the agent, and sends the task description as the initial prompt)
 
@@ -73,17 +74,17 @@ Once installed, agents that support skill/tool loading (like Kiro or Claude) can
 
 ## Task fields in detail
 
-| Field | Purpose |
-|-------|---------|
-| **Key** | Auto-assigned identifier (e.g., `PLA-1`). Used to reference tasks everywhere. |
-| **Title** | Short, actionable. Starts with a verb. |
+| Field           | Purpose                                                                         |
+| --------------- | ------------------------------------------------------------------------------- |
+| **Key**         | Auto-assigned identifier (e.g., `PLA-1`). Used to reference tasks everywhere.   |
+| **Title**       | Short, actionable. Starts with a verb.                                          |
 | **Description** | Full context for the agent. Include file paths, acceptance criteria, decisions. |
-| **Priority** | Numeric (0 = default). Higher values get dispatched before lower ones. |
-| **Status** | `todo` → `in_progress` → `in_review` → `done` |
-| **Blocked by** | Task keys that must complete first. Blocked tasks are skipped by auto-dispatch. |
-| **Parent** | Groups subtasks under a parent for hierarchy. |
-| **Tags** | Comma-separated labels for filtering (e.g., `backend`, `auth`, `tech-debt`). |
-| **Base branch** | Git branch used as the starting point for the task's worktree. |
+| **Priority**    | Numeric (0 = default). Higher values get dispatched before lower ones.          |
+| **Status**      | `todo` → `in_progress` → `in_review` → `done`                                   |
+| **Blocked by**  | Task keys that must complete first. Blocked tasks are skipped by auto-dispatch. |
+| **Parent**      | Groups subtasks under a parent for hierarchy.                                   |
+| **Tags**        | Comma-separated labels for filtering (e.g., `backend`, `auth`, `tech-debt`).    |
+| **Base branch** | Git branch used as the starting point for the task's worktree.                  |
 
 ## Linking tasks to sessions
 
@@ -107,20 +108,20 @@ Hooks run shell commands at task state transitions. Configure them in **Preferen
       "on_start": "echo 'Starting {{task.key}}'",
       "on_complete": "git add -A && git commit -m 'feat({{task.key | slugify}}): {{task.title}}'",
       "on_notify": "say '{{task.key}} needs attention'",
-      "on_restart": "git stash && git pull --rebase"
-    }
-  }
+      "on_restart": "git stash && git pull --rebase",
+    },
+  },
 }
 ```
 
-| Hook | Fires when |
-|------|-----------|
-| `on_start` | A task is dispatched to an agent session |
+| Hook          | Fires when                                                |
+| ------------- | --------------------------------------------------------- |
+| `on_start`    | A task is dispatched to an agent session                  |
 | `on_complete` | The agent signals it's done (session archived or deleted) |
-| `on_notify` | The agent signals idle (needs attention) |
-| `on_restart` | A failed task's session is restarted |
-| `on_pr_open` | A pull request is opened for the session's branch |
-| `on_pr_merge` | The pull request is merged |
+| `on_notify`   | The agent signals idle (needs attention)                  |
+| `on_restart`  | A failed task's session is restarted                      |
+| `on_pr_open`  | A pull request is opened for the session's branch         |
+| `on_pr_merge` | The pull request is merged                                |
 
 Hooks run in the working directory of the task's git worktree. They support the same `{{template}}` syntax as other planeai templates (see [Configuration](/planeai/guides/configuration/)).
 
@@ -151,8 +152,8 @@ You also need the global auto-dispatch configuration — either toggle it in **P
     "enabled": true,
     "poll_interval_ms": 5000,
     "max_concurrent": 3,
-    "provider": "claude"
-  }
+    "provider": "claude",
+  },
 }
 ```
 

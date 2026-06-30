@@ -259,7 +259,7 @@ export function startEventListeners(): () => void {
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
           git
-            .getChangedFiles(session.worktree_path, session.base_branch)
+            .getChangedFiles(session.worktree_path, session.base_branch, null)
             .then((files) => {
               if (files.length === 0) return;
               // Preload all patches so ReviewTab opens instantly

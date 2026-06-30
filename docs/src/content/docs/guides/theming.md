@@ -14,8 +14,8 @@ Alternatively, set the theme in your config file:
 ```jsonc
 {
   "appearance": {
-    "theme": "catppuccin"
-  }
+    "theme": "catppuccin",
+  },
 }
 ```
 
@@ -25,13 +25,13 @@ Themes live in `~/.config/planeai/themes/` (or `%APPDATA%\planeai\themes\` on Wi
 
 ## Bundled themes
 
-| Theme | Description |
-|-------|-------------|
-| `default` | Monochrome design system (GitHub-inspired) |
-| `github` | GitHub Light / Dark |
+| Theme        | Description                                 |
+| ------------ | ------------------------------------------- |
+| `default`    | Monochrome design system (GitHub-inspired)  |
+| `github`     | GitHub Light / Dark                         |
 | `catppuccin` | Catppuccin Latte (light) / Macchiato (dark) |
-| `dracula` | Dracula color palette |
-| `one` | Atom One Light / Dark |
+| `dracula`    | Dracula color palette                       |
+| `one`        | Atom One Light / Dark                       |
 
 ## Creating a custom theme
 
@@ -66,95 +66,95 @@ Each theme defines variables in `:root` (light mode) and `.dark` (dark mode):
 
 ### UI role tokens
 
-| Token | Description |
-|-------|-------------|
-| `--color-canvas` | Base page background |
-| `--color-chrome` | Chrome/header background |
-| `--color-sidebar` | Sidebar background |
-| `--color-main` | Main content area background |
-| `--color-panel` | Panel/card background |
-| `--color-panel-hi` | Elevated panel (hover states, highlights) |
-| `--color-t1` | Primary text |
-| `--color-t2` | Secondary text |
-| `--color-t3` | Muted text (hints, placeholders) |
-| `--color-border` | Default border (subtle) |
-| `--color-border-s` | Strong border (more visible) |
-| `--color-accent` | Primary accent color |
-| `--color-on-accent` | Text color on accent backgrounds |
+| Token               | Description                                     |
+| ------------------- | ----------------------------------------------- |
+| `--color-canvas`    | Base page background                            |
+| `--color-chrome`    | Chrome/header background                        |
+| `--color-sidebar`   | Sidebar background                              |
+| `--color-main`      | Main content area background                    |
+| `--color-panel`     | Panel/card background                           |
+| `--color-panel-hi`  | Elevated panel (hover states, highlights)       |
+| `--color-t1`        | Primary text                                    |
+| `--color-t2`        | Secondary text                                  |
+| `--color-t3`        | Muted text (hints, placeholders)                |
+| `--color-border`    | Default border (subtle)                         |
+| `--color-border-s`  | Strong border (more visible)                    |
+| `--color-accent`    | Primary accent color                            |
+| `--color-on-accent` | Text color on accent backgrounds                |
 | `--color-accent-bg` | Accent tint background (selections, highlights) |
-| `--color-scrim` | Modal/overlay backdrop |
+| `--color-scrim`     | Modal/overlay backdrop                          |
 
 ### Status colors
 
-| Token | Description |
-|-------|-------------|
+| Token                    | Description                      |
+| ------------------------ | -------------------------------- |
 | `--color-status-running` | Active/running indicator (green) |
-| `--color-status-review` | Needs review indicator (amber) |
-| `--color-status-exited` | Error/exited indicator (red) |
-| `--color-status-idle` | Idle/inactive indicator (gray) |
+| `--color-status-review`  | Needs review indicator (amber)   |
+| `--color-status-exited`  | Error/exited indicator (red)     |
+| `--color-status-idle`    | Idle/inactive indicator (gray)   |
 
 ### Radii
 
-| Token | Description |
-|-------|-------------|
-| `--radius-base` | Small elements (buttons, inputs) |
+| Token                | Description                      |
+| -------------------- | -------------------------------- |
+| `--radius-base`      | Small elements (buttons, inputs) |
 | `--radius-container` | Large containers (cards, panels) |
 
 ### Terminal colors (16 ANSI + chrome)
 
-| Token | Description |
-|-------|-------------|
-| `--terminal-background` | Terminal background |
-| `--terminal-foreground` | Terminal foreground |
-| `--terminal-cursor` | Cursor color |
-| `--terminal-selection` | Selection background |
-| `--terminal-black` | ANSI black |
-| `--terminal-red` | ANSI red |
-| `--terminal-green` | ANSI green |
-| `--terminal-yellow` | ANSI yellow |
-| `--terminal-blue` | ANSI blue |
-| `--terminal-magenta` | ANSI magenta |
-| `--terminal-cyan` | ANSI cyan |
-| `--terminal-white` | ANSI white |
-| `--terminal-bright-*` | Bright variants (×8) |
+| Token                   | Description          |
+| ----------------------- | -------------------- |
+| `--terminal-background` | Terminal background  |
+| `--terminal-foreground` | Terminal foreground  |
+| `--terminal-cursor`     | Cursor color         |
+| `--terminal-selection`  | Selection background |
+| `--terminal-black`      | ANSI black           |
+| `--terminal-red`        | ANSI red             |
+| `--terminal-green`      | ANSI green           |
+| `--terminal-yellow`     | ANSI yellow          |
+| `--terminal-blue`       | ANSI blue            |
+| `--terminal-magenta`    | ANSI magenta         |
+| `--terminal-cyan`       | ANSI cyan            |
+| `--terminal-white`      | ANSI white           |
+| `--terminal-bright-*`   | Bright variants (×8) |
 
 ### Diff colors
 
-| Token | Description |
-|-------|-------------|
-| `--diff-add-bg` | Added line background |
-| `--diff-del-bg` | Deleted line background |
-| `--diff-add-color` | Added line text color |
+| Token              | Description             |
+| ------------------ | ----------------------- |
+| `--diff-add-bg`    | Added line background   |
+| `--diff-del-bg`    | Deleted line background |
+| `--diff-add-color` | Added line text color   |
 | `--diff-del-color` | Deleted line text color |
 
 ### Editor colors
 
-| Token | Description |
-|-------|-------------|
-| `--editor-background` | Editor background |
-| `--editor-foreground` | Editor text |
-| `--editor-selection` | Selection background |
-| `--editor-line-number` | Line number gutter |
-| `--editor-added` | Added text in editor |
-| `--editor-deleted` | Deleted text in editor |
-| `--editor-added-bg` | Added line background in editor |
-| `--editor-deleted-bg` | Deleted line background in editor |
+| Token                  | Description                       |
+| ---------------------- | --------------------------------- |
+| `--editor-background`  | Editor background                 |
+| `--editor-foreground`  | Editor text                       |
+| `--editor-selection`   | Selection background              |
+| `--editor-line-number` | Line number gutter                |
+| `--editor-added`       | Added text in editor              |
+| `--editor-deleted`     | Deleted text in editor            |
+| `--editor-added-bg`    | Added line background in editor   |
+| `--editor-deleted-bg`  | Deleted line background in editor |
 
 ### Syntax highlighting
 
-| Token | Description |
-|-------|-------------|
-| `--editor-keyword` | Keywords (`if`, `return`, `import`) |
-| `--editor-string` | String literals |
-| `--editor-comment` | Comments |
-| `--editor-number` | Numeric literals |
-| `--editor-variable` | Variables |
-| `--editor-type` | Type annotations |
-| `--editor-function` | Function names |
-| `--editor-property` | Object properties |
-| `--editor-operator` | Operators |
-| `--editor-punctuation` | Brackets, semicolons |
-| `--editor-meta` | Meta/decorators |
+| Token                  | Description                         |
+| ---------------------- | ----------------------------------- |
+| `--editor-keyword`     | Keywords (`if`, `return`, `import`) |
+| `--editor-string`      | String literals                     |
+| `--editor-comment`     | Comments                            |
+| `--editor-number`      | Numeric literals                    |
+| `--editor-variable`    | Variables                           |
+| `--editor-type`        | Type annotations                    |
+| `--editor-function`    | Function names                      |
+| `--editor-property`    | Object properties                   |
+| `--editor-operator`    | Operators                           |
+| `--editor-punctuation` | Brackets, semicolons                |
+| `--editor-meta`        | Meta/decorators                     |
 
 ## Minimal theme example
 
