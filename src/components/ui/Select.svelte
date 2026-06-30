@@ -33,6 +33,30 @@
     search === "" ? items : items.filter((i) => i.label.toLowerCase().includes(search.toLowerCase()))
   );
 
+  function handleKeydown(e: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+    if (e.key === "Escape") {
+      if (open) {
+        e.stopPropagation();
+        open = false;
+        search = "";
+      }
+      // When closed, let Escape propagate to form-keyboard controller
+      return;
+    }
+    if (e.key === "Enter" && filtered.length === 1) {
+      e.preventDefault();
+      value = filtered[0].value;
+      onValueChange?.(value);
+      open = false;
+    }
+    onkeydown?.(e);
+  }
+
+  function clearValue() {
+    value = "";
+    onValueChange?.("");
+  }
+
   $effect(() => {
     const node = contentRef;
     if (!node) return;
@@ -50,21 +74,28 @@
 </script>
 
 <Combobox.Root type="single" {allowDeselect} bind:value bind:open {onValueChange} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
-  <Combobox.Input
-    onfocus={() => { open = true; }}
-    oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}
-    onkeydown={(e) => {
-      if (e.key === "Enter" && filtered.length === 1) { e.preventDefault(); value = filtered[0].value; onValueChange?.(value); open = false; }
-      onkeydown?.(e);
-    }}
-    {placeholder}
-    autocomplete="off"
-    autocorrect="off"
-    autocapitalize="off"
-    spellcheck={false}
-    data-form-type="other"
-    class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent {className}"
-  />
+  <div class="relative">
+    <Combobox.Input
+      onfocus={() => { open = true; }}
+      oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}
+      onkeydown={handleKeydown}
+      {placeholder}
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck={false}
+      data-form-type="other"
+      class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent {allowDeselect && value ? 'pr-8' : ''} {className}"
+    />
+    {#if allowDeselect && value}
+      <button
+        type="button"
+        class="absolute right-2 top-1/2 -translate-y-1/2 text-t3 hover:text-t1 transition-colors text-sm leading-none"
+        onclick={clearValue}
+        aria-label="Clear selection"
+      >×</button>
+    {/if}
+  </div>
   <Combobox.Portal>
     <Combobox.Content loop bind:ref={contentRef} class="z-[100] w-[var(--bits-combobox-anchor-width)] max-h-48 overflow-y-auto rounded border border-border bg-panel shadow-lg" sideOffset={4}>
       {#each filtered as item (item.value)}
