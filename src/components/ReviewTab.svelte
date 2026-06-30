@@ -19,6 +19,8 @@
   import Button from "./ui/Button.svelte";
   import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
   import { hasConflicts } from "../lib/ci-checks.svelte";
+  import BranchCompareForm from "./BranchCompareForm.svelte";
+  import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
 
   interface Props {
     repoPath: string;
@@ -36,6 +38,12 @@
   let loading = $state(true);
   let diffStyle = $state<"split" | "unified">("split");
   let sidebarWidth = $state(getLayoutWidth("diff-sidebar", 256));
+  let showCompareForm = $state(false);
+
+  // Comparison state — reactive derivation from the per-session store
+  let comparison = $derived(getComparison(sessionId, baseBranch));
+  let effectiveBase = $derived(comparison.baseRef);
+  let effectiveHead = $derived(comparison.headRef);
 
   // Focus state
   let showCommentInput = $state(false);
@@ -99,7 +107,7 @@
   async function refresh() {
     loading = true;
     try {
-      files = await git.getChangedFiles(repoPath, baseBranch);
+      files = await git.getChangedFiles(repoPath, effectiveBase, effectiveHead);
       if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
       if (files.length > 0) {
         await loadAllDiffs();
@@ -123,7 +131,7 @@
     } else {
       // Single batch IPC call — one invoke, one deserialization
       const fileArgs: [string, string | null][] = files.map((f) => [f.path, f.old_path ?? null]);
-      patches = await git.getAllFilePatches(repoPath, baseBranch, fileArgs);
+      patches = await git.getAllFilePatches(repoPath, effectiveBase, fileArgs, effectiveHead);
     }
 
     if (!viewer) return;
@@ -287,7 +295,7 @@
     const filePaths = [...new Set(comments.map((c) => c.filePath))];
     const fileDiffs = new Map<string, FileDiffData>();
     await Promise.all(filePaths.map(async (path) => {
-      try { const diff = await git.getFileDiff(repoPath, baseBranch, path, null); fileDiffs.set(path, diff); } catch {}
+      try { const diff = await git.getFileDiff(repoPath, effectiveBase, path, null, effectiveHead); fileDiffs.set(path, diff); } catch {}
     }));
     const serialized = serializeComments(comments, fileDiffs);
     const bytes = Array.from(new TextEncoder().encode(serialized));
@@ -452,6 +460,7 @@
     if (!visible || getActiveZone() !== "terminal") return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); sendFeedback(); return; }
     if (showCommentInput) return;
+    if (showCompareForm) return;
 
     // Global keys (both modes)
     if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
@@ -482,6 +491,7 @@
     if (e.key === "u" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleDiffStyle(); return; }
     if (e.key === "m" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); toggleViewed(selectedIndex, true); return; }
     if (e.key === "r" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); refresh(); return; }
+    if (e.key === "B" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); showCompareForm = !showCompareForm; return; }
     if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); onEditFile?.(files[selectedIndex].path); return; }
 
     // List mode
@@ -682,6 +692,14 @@
         <span class="text-[11px] text-status-exited">−{files[selectedIndex]?.deletions ?? 0}</span>
       {/if}
       <div class="flex-1"></div>
+      <!-- Comparison label -->
+      <button
+        class="font-mono text-[11px] px-2 py-1 rounded-md text-t2 hover:text-t1 hover:bg-panel-hi transition-colors"
+        onclick={() => { showCompareForm = !showCompareForm; }}
+        title="Change comparison (B)"
+      >
+        {formatComparison(comparison)}
+      </button>
       <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5">
         <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "unified"; toggleDiffStyle(); }}>Unified</button>
         <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "split"; toggleDiffStyle(); }}>Split</button>
@@ -700,6 +718,22 @@
         <AlertTriangle class="size-4 text-[#eab308] shrink-0" />
         <span class="text-[12.5px] text-[#eab308] font-medium">This PR has merge conflicts</span>
       </div>
+    {/if}
+
+    <!-- Branch compare form -->
+    {#if showCompareForm}
+      <BranchCompareForm
+        {repoPath}
+        {baseBranch}
+        currentBase={effectiveBase}
+        currentHead={effectiveHead}
+        onConfirm={(baseRef, headRef) => {
+          setComparison(sessionId, { baseRef, headRef });
+          showCompareForm = false;
+          refresh();
+        }}
+        onCancel={() => { showCompareForm = false; }}
+      />
     {/if}
 
     <!-- Comment input -->
@@ -769,4 +803,19 @@
     </ul>
   </div>
 </div>
+
+{#if showCompareForm}
+  <BranchCompareForm
+    {repoPath}
+    {baseBranch}
+    currentBase={effectiveBase}
+    currentHead={effectiveHead}
+    onConfirm={(baseRef, headRef) => {
+      setComparison(sessionId, { baseRef, headRef });
+      showCompareForm = false;
+      refresh();
+    }}
+    onCancel={() => { showCompareForm = false; }}
+  />
+{/if}
 

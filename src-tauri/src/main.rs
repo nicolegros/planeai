@@ -272,6 +272,7 @@ fn main() {
             get_file_patch,
             get_all_file_patches,
             detect_default_branch,
+            list_commits,
             list_files,
             read_file,
             write_file,

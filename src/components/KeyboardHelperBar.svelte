@@ -31,6 +31,7 @@
     { k: "]/[", l: "Hunk" },
     { k: "c", l: "Comment" },
     { k: "E", l: "Edit" },
+    { k: "B", l: "Compare" },
     { k: "u", l: "Unified/Split" },
     { k: "m", l: "Viewed" },
     { k: "Esc", l: "Back" },
