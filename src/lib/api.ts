@@ -89,6 +89,7 @@ export const tasks = {
     priority: number;
     tags: string[];
     blockedBy: string[];
+    parentKey?: string | null;
     baseBranch?: string;
   }) => invoke("create_task_item", params),
   edit: (params: {
@@ -101,7 +102,14 @@ export const tasks = {
     blockedBy: string[] | null;
     parentKey?: string | null;
     baseBranch?: string | null;
-  }) => invoke("edit_task_item", params),
+  }) => {
+    const { parentKey, ...rest } = params;
+    return invoke("edit_task_item", {
+      ...rest,
+      parentKey: parentKey || undefined,
+      clearParent: parentKey === null,
+    });
+  },
   move: (key: string, status: string, repoPath: string) =>
     invoke("move_task_item", { key, status, repoPath }),
   fireNotifyHook: (sessionId: string) => invoke("fire_task_notify_hook", { sessionId }),

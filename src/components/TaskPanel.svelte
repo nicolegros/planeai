@@ -1,13 +1,12 @@
 <script lang="ts">
   import type { TaskItem, Session, Project } from "../lib/types";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { focusTerminal, getActiveZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { Button, Input, Label, ContextMenu, Select } from "./ui";
-  import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import { Button, ContextMenu } from "./ui";
+  import TaskForm from "./TaskForm.svelte";
   import { ChevronDown, ChevronRight, Lightbulb, LoaderCircle } from "@lucide/svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import * as projectStore from "../lib/project-store.svelte";
@@ -38,27 +37,7 @@
 
   // Modal state
   let modalMode = $state<"create" | "edit" | null>(null);
-  let formTitle = $state("");
-  let formDescription = $state("");
-  let formPriority = $state(0);
-  let formKey = $state("");
-  let formProjectPath = $state("");
-  let formBaseBranch = $state("main");
-  let taskFormWrapper = $state<HTMLDivElement | null>(null);
-
-  $effect(() => { if (taskFormWrapper) taskFormWrapper.focus(); });
-
-  const taskFk = createFormKeyboardController(
-    () => [
-      { key: "t", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
-      { key: "d", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
-      { key: "p", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
-      { key: "b", ref: () => taskFormWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
-    ],
-    { wrapper: () => taskFormWrapper, onDismiss: () => { modalMode = null; focusTerminal(); } },
-  );
-
-  const taskBadge = $derived(taskFk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
+  let editingTask = $state<TaskItem | null>(null);
 
   // Context menu
   let contextMenu = $state<{ x: number; y: number; task: TaskItem } | null>(null);
@@ -125,20 +104,12 @@
   }
 
   export function openCreate() {
-    formTitle = "";
-    formDescription = "";
-    formPriority = 0;
-    formBaseBranch = "main";
-    formProjectPath = projects[0]?.path ?? "";
+    editingTask = null;
     modalMode = "create";
   }
 
   export function openEdit(task: TaskItem) {
-    formKey = task.key;
-    formTitle = task.title;
-    formDescription = task.description;
-    formPriority = task.priority;
-    formBaseBranch = task.base_branch;
+    editingTask = task;
     modalMode = "edit";
   }
 
@@ -149,30 +120,6 @@
       await taskStore.moveTask(key, status, repoPath);
       onSessionsChanged?.();
     } catch (e: any) { showSnackbar(e.toString()); }
-  }
-
-  async function handleSubmit() {
-    if (!formTitle.trim()) return;
-    try {
-      if (modalMode === "create") {
-        const repoPath = formProjectPath || projects[0]?.path;
-        if (!repoPath) return;
-        await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [], baseBranch: formBaseBranch });
-      } else if (modalMode === "edit") {
-        const repoPath = repoPathForTask(formKey);
-        if (!repoPath) return;
-        await taskStore.editTask({ repoPath, key: formKey, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: null, blockedBy: null, baseBranch: formBaseBranch });
-      }
-      modalMode = null;
-    } catch (e: any) { showSnackbar(e.toString()); }
-  }
-
-  function autofocusForm(node: HTMLFormElement) {
-    requestAnimationFrame(() => node.querySelector<HTMLInputElement>("input")?.focus());
-  }
-
-  function autoResize(node: HTMLTextAreaElement) {
-    requestAnimationFrame(() => { node.style.height = 'auto'; node.style.height = node.scrollHeight + 'px'; });
   }
 
   function contextMenuItems(task: TaskItem) {
@@ -371,72 +318,25 @@
 {#if modalMode !== null}
 <div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
   <div class="w-[36rem] p-6 rounded-lg border border-border bg-panel shadow-lg">
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div bind:this={taskFormWrapper} tabindex="-1" onkeydown={taskFk.handleKeydown} onfocusin={taskFk.handleFocusin} class="outline-none" data-form-keyboard>
-  <form
-    class="space-y-4"
-    onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-    onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
-  >
-    <h2 class="text-lg font-semibold text-t1">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
-
-    {#if modalMode === "create" && projects.length > 1}
-      <div class="space-y-1">
-        <Label>Project</Label>
-        <Select
-          items={projects.map(p => ({ value: p.path, label: p.name }))}
-          bind:value={formProjectPath}
-          placeholder="Select project…"
-        />
-      </div>
-    {/if}
-
-    <div class="space-y-1" data-field="title">
-      <Label>Title <span class="font-mono text-[10px] px-1 rounded {taskBadge}">T</span></Label>
-      <Input bind:value={formTitle} placeholder="Task title" />
-    </div>
-
-    <div class="space-y-1" data-field="desc">
-      <Label>Description <span class="font-mono text-[10px] px-1 rounded {taskBadge}">D</span></Label>
-      <textarea
-        bind:value={formDescription}
-        placeholder="Optional description"
-        class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
-        rows="3"
-        oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
-        use:autoResize
-      ></textarea>
-    </div>
-
-    <div class="space-y-1" data-field="priority">
-      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {taskBadge}">P</span></Label>
-      <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
-    </div>
-
-    <div class="space-y-1" data-field="base">
-      <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {taskBadge}">B</span></Label>
-      <Input bind:value={formBaseBranch} placeholder="main" />
-    </div>
-
-    <!-- Footer with mode indicator -->
-    <div class="flex items-center justify-between pt-2 border-t border-border">
-      <div class="flex items-center gap-2">
-        {#if taskFk.mode === "insert"}
-          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
-          <span class="text-[10px] text-t3">esc → normal mode</span>
-        {:else}
-          <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
-          <span class="text-[10px] text-t3">press a key to focus field</span>
-        {/if}
-      </div>
-      <div class="flex gap-2">
-        <Button type="button" onclick={() => { modalMode = null; focusTerminal(); }}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>{modalMode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
-      </div>
-    </div>
-  </form>
+    <h2 class="text-lg font-semibold text-t1 px-5 pb-2">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
+    <TaskForm
+      mode={modalMode}
+      projects={projects.map(p => ({ id: "", name: p.name, path: p.path }))}
+      tasks={Object.values(tasksByProject).flat()}
+      initial={modalMode === "edit" && editingTask ? {
+        key: editingTask.key,
+        title: editingTask.title,
+        description: editingTask.description,
+        priority: editingTask.priority,
+        parentKey: editingTask.parent_key,
+        blockedBy: editingTask.blocked_by,
+        tags: editingTask.tags,
+        baseBranch: editingTask.base_branch,
+        projectPath: repoPathForTask(editingTask.key) ?? projects[0]?.path ?? "",
+      } : { projectPath: projects[0]?.path ?? "" }}
+      onSubmitted={() => { modalMode = null; focusTerminal(); }}
+      onCancel={() => { modalMode = null; focusTerminal(); }}
+    />
   </div>
-</div>
 </div>
 {/if}
