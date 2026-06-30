@@ -20,6 +20,8 @@
   let open = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
   let contentRef = $state<HTMLElement | null>(null);
+  // Internal dummy value — we never actually use bits-ui's value tracking
+  let internalValue = $state("");
 
   const filtered = $derived(
     (search === "" ? items : items.filter((i) => i.label.toLowerCase().includes(search.toLowerCase())))
@@ -35,6 +37,15 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (open) {
+        e.stopPropagation();
+        open = false;
+        search = "";
+      }
+      // Let Escape propagate to the form-keyboard controller when dropdown is already closed
+      return;
+    }
     if (e.key === "Backspace" && search === "" && values.length > 0) {
       values = values.slice(0, -1);
     }
@@ -44,9 +55,14 @@
     if (val && !values.includes(val)) {
       values = [...values, val];
     }
+    // Reset internal state so the combobox doesn't think it has a value selected
+    internalValue = "";
     search = "";
-    // Keep focus on the input after selection
-    requestAnimationFrame(() => inputEl?.focus());
+    // Keep dropdown open and refocus input for rapid multi-select
+    requestAnimationFrame(() => {
+      inputEl?.focus();
+      open = true;
+    });
   }
 
   function focusInput() {
@@ -72,11 +88,12 @@
 
 <Combobox.Root
   type="single"
-  allowDeselect={false}
+  allowDeselect
+  bind:value={internalValue}
   bind:open
   onValueChange={handleSelect}
   inputValue={open ? undefined : ""}
-  onOpenChangeComplete={(o) => { if (!o) search = ""; }}
+  onOpenChangeComplete={(o) => { if (!o) { search = ""; internalValue = ""; } }}
 >
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
