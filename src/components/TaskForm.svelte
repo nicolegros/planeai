@@ -113,8 +113,11 @@
 
   const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
 
+  let submitting = $state(false);
+
   async function handleSubmit() {
-    if (!formTitle.trim()) return;
+    if (!formTitle.trim() || submitting) return;
+    submitting = true;
     try {
       if (mode === "create") {
         const repoPath = formProjectPath || projects[0]?.path;
@@ -147,6 +150,7 @@
       onSubmitted();
     } catch (e: any) {
       showSnackbar(e.toString());
+      submitting = false;
     }
   }
 
@@ -166,7 +170,6 @@
     class="space-y-4"
     use:autofocusForm
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-    onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
   >
     {#if mode === "create" && projects.length > 1}
       <div class="space-y-1">
