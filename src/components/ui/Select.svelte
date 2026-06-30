@@ -43,6 +43,10 @@
       // When closed, let Escape propagate to form-keyboard controller
       return;
     }
+    if (e.key === "Backspace" && allowDeselect && e.currentTarget.value === "" && value) {
+      clearValue();
+      return;
+    }
     if (e.key === "Enter" && filtered.length === 1) {
       e.preventDefault();
       value = filtered[0].value;
