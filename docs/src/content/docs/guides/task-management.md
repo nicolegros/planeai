@@ -63,7 +63,13 @@ planeai ships with agent skills that let a running agent create follow-up tasks 
 
 This enables a flywheel: you describe a feature to one agent, it breaks the work into tasks, and auto-dispatch assigns those tasks to other agents running in parallel.
 
-The skills are available in the `skills/` directory of your planeai installation. Agents that support skill/tool loading (like Kiro or Claude with MCP) can use them automatically.
+Install the skills with:
+
+```bash
+skl install nicolegros/planeai --all
+```
+
+Once installed, agents that support skill/tool loading (like Kiro or Claude) can use them automatically.
 
 ## Task fields in detail
 
