@@ -160,7 +160,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div bind:this={formWrapper} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+<div bind:this={formWrapper} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
   <form
     class="space-y-4"
     use:autofocusForm
