@@ -1,46 +1,134 @@
 <script lang="ts">
-  import type { Project } from "../lib/types";
-  import { Button, Input, Label, Select } from "./ui";
+  import type { Project, TaskItem } from "../lib/types";
+  import { projects as projectsApi } from "../lib/api";
+  import { Button, Input, Label, Select, PillInput, PillCombobox } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
   interface Props {
+    mode: "create" | "edit";
     projects: Project[];
-    onCreated: () => void;
+    tasks?: TaskItem[];
+    /** Pre-fill values for edit mode */
+    initial?: {
+      key?: string;
+      title?: string;
+      description?: string;
+      priority?: number;
+      parentKey?: string | null;
+      blockedBy?: string[];
+      tags?: string[];
+      baseBranch?: string;
+      projectPath?: string;
+    };
+    onSubmitted: () => void;
     onCancel: () => void;
   }
 
-  let { projects, onCreated, onCancel }: Props = $props();
+  let { mode, projects, tasks = [], initial = {}, onSubmitted, onCancel }: Props = $props();
 
-  let formTitle = $state("");
-  let formDescription = $state("");
-  let formPriority = $state(0);
-  let formBaseBranch = $state("main");
-  let formProjectPath = $state(projects[0]?.path ?? "");
+  // svelte-ignore state_referenced_locally
+  let formTitle = $state(initial.title ?? "");
+  // svelte-ignore state_referenced_locally
+  let formDescription = $state(initial.description ?? "");
+  // svelte-ignore state_referenced_locally
+  let formPriority = $state(initial.priority ?? 0);
+  // svelte-ignore state_referenced_locally
+  let formParentKey = $state(initial.parentKey ?? "");
+  // svelte-ignore state_referenced_locally
+  let formBlockedBy = $state<string[]>(initial.blockedBy ?? []);
+  // svelte-ignore state_referenced_locally
+  let formTags = $state<string[]>(initial.tags ?? []);
+  // svelte-ignore state_referenced_locally
+  let formBaseBranch = $state(initial.baseBranch ?? "main");
+  // svelte-ignore state_referenced_locally
+  let formProjectPath = $state(initial.projectPath ?? projects[0]?.path ?? "");
   let formWrapper = $state<HTMLDivElement | null>(null);
+
+  let branches = $state<{ value: string; label: string }[]>([]);
+
+  // Fetch branches eagerly on open and when project changes
+  $effect(() => {
+    if (formProjectPath) {
+      projectsApi.listBranches(formProjectPath).then(
+        (b) => (branches = b.map((s) => {
+          const remote = s.startsWith("remote:");
+          const name = remote ? s.slice(7) : s;
+          return { value: name, label: name };
+        })),
+        () => (branches = []),
+      );
+    }
+  });
+
+  // Derive task items for parent_key and blocked_by comboboxes
+  const projectTasks = $derived(
+    tasks.length > 0 ? tasks : (taskStore.getTasksForProject(formProjectPath) ?? [])
+  );
+
+  const parentItems = $derived(
+    projectTasks
+      .filter((t) => t.key !== initial.key) // Can't be own parent
+      .map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` }))
+  );
+
+  const blockerItems = $derived(
+    projectTasks
+      .filter((t) => t.key !== initial.key) // Can't block self
+      .map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` }))
+  );
 
   const fk = createFormKeyboardController(
     () => [
       { key: "t", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
       { key: "d", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
       { key: "p", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
+      { key: "r", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='parent'] input") ?? null },
+      { key: "k", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='blocked'] input") ?? null },
+      { key: "g", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='tags'] input") ?? null },
       { key: "b", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
     ],
-    { wrapper: () => formWrapper, onDismiss: onCancel },
+    { wrapper: () => formWrapper, onDismiss: () => onCancel() },
   );
 
   const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
 
   async function handleSubmit() {
     if (!formTitle.trim()) return;
-    const repoPath = formProjectPath || projects[0]?.path;
-    if (!repoPath) return;
     try {
-      await taskStore.createTask({ repoPath, title: formTitle.trim(), description: formDescription, priority: formPriority, tags: [], blockedBy: [], baseBranch: formBaseBranch });
-      onCreated();
-    } catch (e: any) { showSnackbar(e.toString()); }
+      if (mode === "create") {
+        const repoPath = formProjectPath || projects[0]?.path;
+        if (!repoPath) return;
+        await taskStore.createTask({
+          repoPath,
+          title: formTitle.trim(),
+          description: formDescription,
+          priority: formPriority,
+          tags: formTags,
+          blockedBy: formBlockedBy,
+          baseBranch: formBaseBranch,
+        });
+      } else {
+        const repoPath = formProjectPath || projects[0]?.path;
+        if (!repoPath || !initial.key) return;
+        await taskStore.editTask({
+          repoPath,
+          key: initial.key,
+          title: formTitle.trim(),
+          description: formDescription,
+          priority: formPriority,
+          tags: formTags,
+          blockedBy: formBlockedBy,
+          parentKey: formParentKey || null,
+          baseBranch: formBaseBranch,
+        });
+      }
+      onSubmitted();
+    } catch (e: any) {
+      showSnackbar(e.toString());
+    }
   }
 
   function autofocusForm(node: HTMLFormElement) {
@@ -48,7 +136,7 @@
   }
 
   function autoResize(node: HTMLTextAreaElement) {
-    requestAnimationFrame(() => { node.style.height = 'auto'; node.style.height = node.scrollHeight + 'px'; });
+    requestAnimationFrame(() => { node.style.height = "auto"; node.style.height = node.scrollHeight + "px"; });
   }
 </script>
 
@@ -61,7 +149,7 @@
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
     onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); handleSubmit(); } }}
   >
-    {#if projects.length > 1}
+    {#if mode === "create" && projects.length > 1}
       <div class="space-y-1">
         <Label>Project</Label>
         <Select
@@ -84,7 +172,7 @@
         placeholder="Optional description"
         class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[4rem] max-h-[50vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
         rows="3"
-        oninput={(e) => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
+        oninput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }}
         use:autoResize
       ></textarea>
     </div>
@@ -94,9 +182,40 @@
       <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
+    <div class="space-y-1" data-field="parent">
+      <Label>Parent <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
+      <Select
+        items={parentItems}
+        bind:value={formParentKey}
+        allowDeselect={true}
+        placeholder="No parent (top-level)"
+        emptyText="No tasks available"
+      />
+    </div>
+
+    <div class="space-y-1" data-field="blocked">
+      <Label>Blocked by <span class="font-mono text-[10px] px-1 rounded {badge}">K</span></Label>
+      <PillCombobox
+        items={blockerItems}
+        bind:values={formBlockedBy}
+        placeholder="Search tasks…"
+        emptyText="No tasks available"
+      />
+    </div>
+
+    <div class="space-y-1" data-field="tags">
+      <Label>Tags <span class="font-mono text-[10px] px-1 rounded {badge}">G</span></Label>
+      <PillInput bind:values={formTags} placeholder="Type and press Enter" />
+    </div>
+
     <div class="space-y-1" data-field="base">
       <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
-      <Input bind:value={formBaseBranch} placeholder="main" />
+      <Select
+        items={branches}
+        bind:value={formBaseBranch}
+        placeholder="main"
+        emptyText="No branches found"
+      />
     </div>
 
     <div class="flex items-center justify-between pt-2 border-t border-border">
@@ -111,7 +230,9 @@
       </div>
       <div class="flex gap-2">
         <Button type="button" onclick={onCancel}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>Create <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>
+          {mode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+        </Button>
       </div>
     </div>
   </form>

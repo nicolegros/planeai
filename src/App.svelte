@@ -364,8 +364,10 @@
     {#if showTaskForm}
     <FormDialog title="New Task" onClose={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}>
       <TaskForm
+        mode="create"
         {projects}
-        onCreated={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
+        tasks={taskStore.getAllTasks()}
+        onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>

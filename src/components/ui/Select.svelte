@@ -15,10 +15,11 @@
     onkeydown?: (e: KeyboardEvent & { currentTarget: HTMLInputElement }) => void;
     placeholder?: string;
     emptyText?: string;
+    allowDeselect?: boolean;
     class?: string;
   }
 
-  let { items, value = $bindable(""), onValueChange, onInput, onkeydown, placeholder = "", emptyText = "No results", class: className = "" }: Props = $props();
+  let { items, value = $bindable(""), onValueChange, onInput, onkeydown, placeholder = "", emptyText = "No results", allowDeselect = false, class: className = "" }: Props = $props();
 
   let search = $state("");
   let open = $state(false);
@@ -48,7 +49,7 @@
   });
 </script>
 
-<Combobox.Root type="single" allowDeselect={false} bind:value bind:open {onValueChange} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
+<Combobox.Root type="single" {allowDeselect} bind:value bind:open {onValueChange} {inputValue} onOpenChangeComplete={(o) => { if (!o) search = ""; }}>
   <Combobox.Input
     onfocus={() => { open = true; }}
     oninput={(e) => { search = e.currentTarget.value; onInput?.(search); }}

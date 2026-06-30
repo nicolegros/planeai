@@ -3,6 +3,8 @@ export { default as Input } from "./Input.svelte";
 export { default as Label } from "./Label.svelte";
 export { default as Checkbox } from "./Checkbox.svelte";
 export { default as Select } from "./Select.svelte";
+export { default as PillInput } from "./PillInput.svelte";
+export { default as PillCombobox } from "./PillCombobox.svelte";
 export { default as Dialog } from "./Dialog.svelte";
 export { default as ContextMenu } from "./ContextMenu.svelte";
 export { default as ResizeHandle } from "./ResizeHandle.svelte";

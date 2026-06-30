@@ -9,6 +9,9 @@ vi.mock("../../lib/api", () => ({
     create: vi.fn(() => Promise.resolve()),
     edit: vi.fn(() => Promise.resolve()),
   },
+  projects: {
+    listBranches: vi.fn(() => Promise.resolve(["main", "develop"])),
+  },
 }));
 
 vi.mock("../../lib/snackbar.svelte", () => ({
@@ -80,9 +83,38 @@ vi.mock("../../lib/task-store.svelte", () => ({
         tags: [],
         parent_key: null,
         url: null,
+        base_branch: "main",
       },
     ],
   }),
+  getTasksForProject: (path: string) => path === "/tmp/myapp" ? [
+    {
+      key: "TASK-1",
+      title: "Fix bug",
+      status: "in_progress",
+      description: "",
+      priority: 1,
+      blocked_by: [],
+      tags: [],
+      parent_key: null,
+      url: null,
+      base_branch: "main",
+    },
+  ] : [],
+  getAllTasks: () => [
+    {
+      key: "TASK-1",
+      title: "Fix bug",
+      status: "in_progress",
+      description: "",
+      priority: 1,
+      blocked_by: [],
+      tags: [],
+      parent_key: null,
+      url: null,
+      base_branch: "main",
+    },
+  ],
   isLoading: () => false,
   moveTask: (key: string, status: string, repoPath: string) => mockMoveTask(key, status, repoPath),
   createTask: vi.fn(() => Promise.resolve()),
