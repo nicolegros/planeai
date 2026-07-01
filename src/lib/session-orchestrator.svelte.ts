@@ -167,8 +167,11 @@ export function selectSession(id: string): void {
   } else {
     poolActivate(id);
   }
-  if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
-  sessionsApi.acknowledge(id);
+  if (agentStates[id]) {
+    clearAgentState(id);
+  } else {
+    sessionsApi.acknowledge(id);
+  }
 }
 
 export function createSession(session: Session): void {
@@ -218,6 +221,7 @@ export function jumpToSession(index: number): void {
 export function clearAgentState(sessionId: string): void {
   const { [sessionId]: _, ...rest } = agentStates;
   agentStates = rest;
+  sessionsApi.acknowledge(sessionId);
 }
 export function updateSessionStatus(sessionId: string, status: string): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
@@ -251,30 +255,31 @@ export function startEventListeners(): () => void {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
       if (event.payload.state === "Idle") {
         playTaskComplete();
-        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
-          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
-        });
-        // Auto-open review tab when agent finishes
+        // Defer heavy I/O (hooks, git diff, patch preloading) so the UI repaints
+        // immediately — without this, typing lags while IPC calls serialize.
         const sid = event.payload.session_id;
-        const session = sessions.find((s) => s.id === sid);
-        if (session?.worktree_path && session.base_branch) {
-          git
-            .getChangedFiles(session.worktree_path, session.base_branch, null)
-            .then((files) => {
-              if (files.length === 0) return;
-              // Preload all patches so ReviewTab opens instantly
-              preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
-              if (sid === activeSessionId) {
-                if (getSettings().auto_open_review !== false) {
-                  // Defer to next frame so state updates don't block the current tick
-                  requestAnimationFrame(() => toggleDiff());
+        setTimeout(() => {
+          tasks.fireNotifyHook(sid).catch((err) => {
+            if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
+          });
+          const session = sessions.find((s) => s.id === sid);
+          if (session?.worktree_path && session.base_branch) {
+            git
+              .getChangedFiles(session.worktree_path, session.base_branch, null)
+              .then((files) => {
+                if (files.length === 0) return;
+                preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
+                if (sid === activeSessionId) {
+                  if (getSettings().auto_open_review !== false) {
+                    requestAnimationFrame(() => toggleDiff());
+                  }
+                } else {
+                  reviewReady = { ...reviewReady, [sid]: true };
                 }
-              } else {
-                reviewReady = { ...reviewReady, [sid]: true };
-              }
-            })
-            .catch(() => {});
-        }
+              })
+              .catch(() => {});
+          }
+        }, 0);
       }
     }),
   );

@@ -66,8 +66,14 @@ pub(crate) fn is_kiro_hook_installed() -> bool {
     let mut cache = KIRO_HOOK_CACHE.lock().unwrap();
     *cache.get_or_insert_with(|| {
         let home = config::home_dir();
-        let path = std::path::PathBuf::from(format!("{home}/.kiro/agents/default.json"));
-        crate::notify::is_kiro_hook_installed_at(&path)
+        // Check v2 agent config location
+        let v2_path = std::path::PathBuf::from(format!("{home}/.kiro/agents/default.json"));
+        if crate::notify::is_kiro_hook_installed_at(&v2_path) {
+            return true;
+        }
+        // Check v3 hooks directory
+        let v3_dir = std::path::PathBuf::from(format!("{home}/.kiro/hooks"));
+        planeai_core::notify::is_kiro_v3_hook_installed_at(&v3_dir)
     })
 }
 

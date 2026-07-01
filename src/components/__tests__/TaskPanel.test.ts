@@ -87,20 +87,23 @@ vi.mock("../../lib/task-store.svelte", () => ({
       },
     ],
   }),
-  getTasksForProject: (path: string) => path === "/tmp/myapp" ? [
-    {
-      key: "TASK-1",
-      title: "Fix bug",
-      status: "in_progress",
-      description: "",
-      priority: 1,
-      blocked_by: [],
-      tags: [],
-      parent_key: null,
-      url: null,
-      base_branch: "main",
-    },
-  ] : [],
+  getTasksForProject: (path: string) =>
+    path === "/tmp/myapp"
+      ? [
+          {
+            key: "TASK-1",
+            title: "Fix bug",
+            status: "in_progress",
+            description: "",
+            priority: 1,
+            blocked_by: [],
+            tags: [],
+            parent_key: null,
+            url: null,
+            base_branch: "main",
+          },
+        ]
+      : [],
   getAllTasks: () => [
     {
       key: "TASK-1",

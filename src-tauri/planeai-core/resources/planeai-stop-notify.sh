@@ -5,9 +5,10 @@ SESSION_ID="${PLANEAI_SESSION_ID:-$(tmux show-environment PLANEAI_SESSION_ID 2>/
 [ -z "$SESSION_ID" ] && exit 0
 SOCK="${PLANEAI_SOCKET:-$HOME/Library/Application Support/ca.nicolegros.planeai/notify.sock}"
 EVENT=$(jq -r '.hook_event_name // ""' 2>/dev/null)
+# Handle both camelCase (Kiro CLI v2) and PascalCase (Kiro CLI v3) event names
 case "$EVENT" in
-  stop) E="stop" ;;
-  userPromptSubmit) E="busy" ;;
+  stop|Stop) E="stop" ;;
+  userPromptSubmit|UserPromptSubmit) E="busy" ;;
   *)    E="notification" ;;
 esac
 [ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null

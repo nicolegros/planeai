@@ -128,6 +128,27 @@ impl NotifyState {
     }
 
     pub fn notify_output(&mut self, session_id: &str) {
+        // For hook-enabled sessions, PTY output should not override the idle state.
+        // The hook is the authoritative signal for when the agent stops — PTY output
+        // is just terminal rendering noise that may trail after the stop hook fires.
+        let hook_enabled = self.meta.get(session_id).is_some_and(|m| m.hook_enabled);
+        if hook_enabled && self.get_state(session_id) == Some(AgentState::Idle) {
+            self.last_output
+                .insert(session_id.to_string(), Instant::now());
+            return;
+        }
+
+        self.states.insert(session_id.to_string(), AgentState::Busy);
+        self.last_output
+            .insert(session_id.to_string(), Instant::now());
+        self.idle_since.remove(session_id);
+        self.notified.remove(session_id);
+    }
+
+    /// Transition to Busy from an authoritative hook signal (e.g., userPromptSubmit).
+    /// Unlike `notify_output`, this always cancels any pending debounce and resets state,
+    /// regardless of hook_enabled status.
+    pub fn notify_busy(&mut self, session_id: &str) {
         self.states.insert(session_id.to_string(), AgentState::Busy);
         self.last_output
             .insert(session_id.to_string(), Instant::now());
@@ -239,6 +260,30 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
 
 // ─── Hook detection ──────────────────────────────────────────────────────────
 
+/// Case-insensitive lookup in a JSON object for a key.
+fn get_ignore_case<'a>(
+    obj: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    obj.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v)
+}
+
+/// Check if a v3 hooks array contains a trigger with the given name (case-insensitive)
+/// whose action command contains the planeai notify marker.
+fn has_v3_notify_trigger(hooks: &[serde_json::Value], trigger_name: &str) -> bool {
+    hooks.iter().any(|h| {
+        let trigger = h.get("trigger").and_then(|t| t.as_str()).unwrap_or("");
+        let cmd = h
+            .get("action")
+            .and_then(|a| a.get("command"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        trigger.eq_ignore_ascii_case(trigger_name) && cmd.contains("planeai-stop-notify")
+    })
+}
+
 pub fn is_kiro_hook_installed_at(config_path: &Path) -> bool {
     let Ok(content) = std::fs::read_to_string(config_path) else {
         return false;
@@ -252,18 +297,60 @@ pub fn is_kiro_hook_installed_at(config_path: &Path) -> bool {
     let Some(hooks) = v.get("hooks").and_then(|h| h.as_object()) else {
         return false;
     };
-    ["stop", "userPromptSubmit"].iter().all(|event| {
-        hooks
-            .get(*event)
-            .and_then(|a| a.as_array())
-            .is_some_and(|arr| {
-                arr.iter().any(|h| {
-                    h.get("command")
-                        .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.contains("planeai-stop-notify"))
-                })
+    let has_stop = get_ignore_case(hooks, "stop")
+        .and_then(|a| a.as_array())
+        .is_some_and(|arr| {
+            arr.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.contains("planeai-stop-notify"))
             })
-    })
+        });
+    let has_prompt = get_ignore_case(hooks, "userPromptSubmit")
+        .and_then(|a| a.as_array())
+        .is_some_and(|arr| {
+            arr.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.contains("planeai-stop-notify"))
+            })
+        });
+    has_stop && has_prompt
+}
+
+/// Check if the planeai notification hook is installed in the Kiro CLI v3 hooks directory.
+///
+/// v3 hooks live in `.kiro/hooks/<name>.json` with schema:
+/// ```json
+/// { "version": "v1", "hooks": [{ "trigger": "Stop", "action": { "type": "command", "command": "..." } }] }
+/// ```
+pub fn is_kiro_v3_hook_installed_at(hooks_dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(hooks_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !content.contains("planeai-stop-notify") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(hooks) = v.get("hooks").and_then(|h| h.as_array()) else {
+            continue;
+        };
+        if has_v3_notify_trigger(hooks, "Stop") && has_v3_notify_trigger(hooks, "UserPromptSubmit")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn is_claude_hook_installed_at(settings_path: &Path) -> bool {
@@ -296,7 +383,12 @@ pub fn is_copilot_hook_installed_at(copilot_dir: &Path) -> bool {
 pub fn is_hook_installed_for_provider(command: &str) -> bool {
     let home = std::env::var("HOME").unwrap_or_default();
     if command.contains("kiro") {
-        is_kiro_hook_installed_at(&Path::new(&home).join(".kiro/agents/default.json"))
+        // Check v2 agent config location
+        if is_kiro_hook_installed_at(&Path::new(&home).join(".kiro/agents/default.json")) {
+            return true;
+        }
+        // Check v3 hooks directory
+        is_kiro_v3_hook_installed_at(&Path::new(&home).join(".kiro/hooks"))
     } else if command.contains("claude") {
         is_claude_hook_installed_at(&Path::new(&home).join(".claude/settings.json"))
     } else if command.contains("copilot") {
@@ -323,6 +415,32 @@ pub fn install_all_hooks(home: &str) -> Result<(), String> {
     }
     install_copilot_hook(home)?;
     Ok(())
+}
+
+/// Refresh hook script files to the latest bundled version.
+///
+/// Called on every app startup to ensure script content stays in sync with
+/// the app version. Only writes scripts for hooks that are already installed
+/// (detected via `is_*_hook_installed_at`). Does not modify agent/settings
+/// config files — those are managed by `install_*_hook`.
+pub fn refresh_hook_scripts(home: &str) {
+    let kiro_config = std::path::Path::new(home).join(".kiro/agents/default.json");
+    let kiro_v3_dir = std::path::Path::new(home).join(".kiro/hooks");
+    if is_kiro_hook_installed_at(&kiro_config) || is_kiro_v3_hook_installed_at(&kiro_v3_dir) {
+        let _ = install_kiro_hook(home);
+    }
+
+    let claude_settings = std::path::Path::new(home).join(".claude/settings.json");
+    if is_claude_hook_installed_at(&claude_settings) {
+        let _ = install_claude_hook(home);
+    }
+
+    let copilot_dir = std::env::var("COPILOT_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.copilot")));
+    if is_copilot_hook_installed_at(&copilot_dir) {
+        let _ = install_copilot_hook(home);
+    }
 }
 
 pub fn install_kiro_hook(home: &str) -> Result<(), String> {
@@ -608,13 +726,30 @@ mod tests {
     }
 
     #[test]
-    fn debounced_stop_cancelled_by_output() {
+    fn debounced_stop_not_cancelled_by_pty_output() {
+        // For hook-enabled sessions, PTY output should NOT cancel a pending debounce.
+        // Only an explicit busy hook signal (notify_busy) should cancel it.
         let mut state = NotifyState::new();
         state.register_session("s1", "test", "project", true);
         state.notify_output("s1");
         state.notify_stop_debounced("s1");
         state.advance_time("s1", Duration::from_secs(1));
+        // PTY output arrives (terminal rendering trailing bytes) — should NOT cancel debounce
         state.notify_output("s1");
+        state.advance_time("s1", Duration::from_secs(1));
+        assert!(state.check_debounce("s1"));
+    }
+
+    #[test]
+    fn debounced_stop_cancelled_by_busy_hook() {
+        // An explicit busy hook signal (notify_busy) SHOULD cancel the debounce.
+        let mut state = NotifyState::new();
+        state.register_session("s1", "test", "project", true);
+        state.notify_output("s1");
+        state.notify_stop_debounced("s1");
+        state.advance_time("s1", Duration::from_secs(1));
+        // Busy hook fires (user submitted a new prompt)
+        state.notify_busy("s1");
         state.advance_time("s1", Duration::from_secs(2));
         assert!(!state.check_debounce("s1"));
     }
@@ -764,6 +899,66 @@ mod tests {
     fn detect_kiro_hook_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_kiro_hook_installed_at(&dir.path().join("nope.json")));
+    }
+
+    #[test]
+    fn detect_kiro_hook_pascal_case_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("default.json");
+        let config = serde_json::json!({
+            "name": "default",
+            "hooks": {
+                "Stop": [{ "command": "/path/to/planeai-stop-notify.sh" }],
+                "UserPromptSubmit": [{ "command": "/path/to/planeai-stop-notify.sh" }]
+            }
+        });
+        std::fs::write(&config_path, serde_json::to_string(&config).unwrap()).unwrap();
+        assert!(is_kiro_hook_installed_at(&config_path));
+    }
+
+    #[test]
+    fn detect_kiro_v3_hook_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_dir = dir.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let hook = serde_json::json!({
+            "version": "v1",
+            "hooks": [
+                { "name": "planeai-stop", "trigger": "Stop", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } },
+                { "name": "planeai-busy", "trigger": "UserPromptSubmit", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } }
+            ]
+        });
+        std::fs::write(
+            hooks_dir.join("planeai-notify.json"),
+            serde_json::to_string(&hook).unwrap(),
+        )
+        .unwrap();
+        assert!(is_kiro_v3_hook_installed_at(&hooks_dir));
+    }
+
+    #[test]
+    fn detect_kiro_v3_hook_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_kiro_v3_hook_installed_at(&dir.path().join("hooks")));
+    }
+
+    #[test]
+    fn detect_kiro_v3_hook_missing_trigger() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_dir = dir.path().join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let hook = serde_json::json!({
+            "version": "v1",
+            "hooks": [
+                { "name": "planeai-stop", "trigger": "Stop", "action": { "type": "command", "command": "/path/to/planeai-stop-notify.sh" } }
+            ]
+        });
+        std::fs::write(
+            hooks_dir.join("planeai-notify.json"),
+            serde_json::to_string(&hook).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_kiro_v3_hook_installed_at(&hooks_dir));
     }
 
     #[test]

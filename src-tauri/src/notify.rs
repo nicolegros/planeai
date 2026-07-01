@@ -52,11 +52,13 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
     let listener =
         IpcListener::bind(Channel::Notify, app_dir).expect("failed to bind notify IPC listener");
 
+    tracing::info!(path = %app_dir.join("notify.sock").display(), "notify socket listener started");
+
     thread::spawn(move || loop {
         let stream = match listener.accept() {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[notify] accept error: {e}");
+                tracing::warn!("notify accept error: {e}");
                 continue;
             }
         };
@@ -66,6 +68,7 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
             if line.is_empty() {
                 continue;
             }
+            tracing::debug!(raw_line = %line, "socket message received");
             let msg = parse_notify_message(&line);
             if msg.session_id.is_empty() {
                 continue;
@@ -78,11 +81,11 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
 fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHandle) {
     match msg.event {
         NotifyEvent::SessionCreated => {
-            eprintln!("[notify] session_created: {}", msg.session_id);
+            tracing::info!(session_id = %msg.session_id, "session created via socket");
             let _ = app.emit("session-created", msg.session_id.clone());
         }
         NotifyEvent::SessionChanged => {
-            eprintln!("[notify] session_changed: {}", msg.session_id);
+            tracing::info!(session_id = %msg.session_id, "session changed via socket");
             let _ = app.emit("sessions-changed", ());
         }
         NotifyEvent::Busy => {
@@ -91,8 +94,8 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .get_meta(&msg.session_id)
                 .map(|m| m.name.as_str())
                 .unwrap_or("?");
-            eprintln!("[notify] \"{name}\" is now busy (hook)");
-            s.notify_output(&msg.session_id);
+            tracing::info!(session_id = %msg.session_id, name, "agent busy (hook signal)");
+            s.notify_busy(&msg.session_id);
             drop(s);
             emit_state_change(app, &msg.session_id, AgentState::Busy);
         }
@@ -103,7 +106,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                     .get_meta(&msg.session_id)
                     .map(|m| m.name.as_str())
                     .unwrap_or("?");
-                eprintln!("[notify] \"{name}\" received immediate signal (notification)");
+                tracing::info!(session_id = %msg.session_id, name, "immediate notification signal received");
                 s.notify_stop_immediate(&msg.session_id)
             };
             if fired {
@@ -119,10 +122,10 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 .unwrap_or_else(|| "?".into());
             let hook_enabled = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
             if hook_enabled {
-                eprintln!("[notify] \"{name}\" received stop (debouncing 2s)");
+                tracing::info!(session_id = %msg.session_id, %name, "stop received, debouncing 2s");
                 s.notify_stop_debounced(&msg.session_id);
             } else {
-                eprintln!("[notify] \"{name}\" received stop (immediate, no hook)");
+                tracing::info!(session_id = %msg.session_id, %name, "stop received, firing immediately (no hook)");
                 let fired = s.notify_stop(&msg.session_id);
                 drop(s);
                 if fired {
@@ -136,10 +139,7 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                 let pty_state = app.state::<crate::state::PtyState>();
                 let payload = format!("{}\n", text);
                 if let Err(e) = pty_state.0.write(&msg.session_id, payload.as_bytes()) {
-                    eprintln!(
-                        "[notify] send_prompt write failed for {}: {e}",
-                        msg.session_id
-                    );
+                    tracing::warn!(session_id = %msg.session_id, error = %e, "send_prompt write failed");
                 }
             }
         }
@@ -173,7 +173,7 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     .map(|m| m.name.clone())
                     .unwrap_or_else(|| "?".into())
             };
-            eprintln!("[notify] \"{name}\" notifying (idle timeout)");
+            tracing::info!(%session_id, %name, "idle timeout, firing notification");
             emit_state_change(&app, &session_id, AgentState::Idle);
             fire_notification(&app, &session_id, &state);
         }
@@ -205,12 +205,18 @@ fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyStat
     };
 
     use tauri_plugin_notification::NotificationExt;
-    let _ = app
+    match app
         .notification()
         .builder()
         .title(&title)
         .body(&body)
-        .show();
+        .show()
+    {
+        Ok(_) => tracing::info!(%session_id, %title, %body, "OS notification sent"),
+        Err(e) => {
+            tracing::warn!(%session_id, %title, error = %e, "OS notification failed")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -277,15 +283,15 @@ mod tests {
     }
 
     #[test]
-    fn debounced_stop_cancelled_by_output() {
+    fn debounced_stop_not_cancelled_by_pty_output() {
         let mut state = NotifyState::new();
         state.register_session("s1", "test", "project", true);
         state.notify_output("s1");
         state.notify_stop_debounced("s1");
         state.advance_time("s1", Duration::from_secs(1));
         state.notify_output("s1");
-        state.advance_time("s1", Duration::from_secs(2));
-        assert!(!state.check_debounce("s1"));
+        state.advance_time("s1", Duration::from_secs(1));
+        assert!(state.check_debounce("s1"));
     }
 
     #[test]
