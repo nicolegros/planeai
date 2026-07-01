@@ -203,6 +203,7 @@ export const pr = {
 export const notify = {
   isInstalled: () => invoke<boolean>("is_notify_hook_installed"),
   install: () => invoke("install_notify_hook"),
+  getAgentStates: () => invoke<Record<string, string>>("get_agent_states"),
 };
 
 export const symphony = {

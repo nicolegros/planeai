@@ -11,5 +11,6 @@ case "$EVENT" in
   UserPromptSubmit|userPromptSubmit) E="busy" ;;
   *)    E="notification" ;;
 esac
-[ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null
+# Background the socket write so we don't block the agent's terminal
+[ -S "$SOCK" ] && printf '{"session_id":"%s","event":"%s"}\n' "$SESSION_ID" "$E" | nc -U "$SOCK" -w1 2>/dev/null &
 exit 0

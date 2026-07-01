@@ -296,6 +296,7 @@ fn main() {
             check_session_alive,
             is_notify_hook_installed,
             install_notify_hook,
+            get_agent_states,
             acknowledge_session,
             mark_exited,
             save_mru_order,

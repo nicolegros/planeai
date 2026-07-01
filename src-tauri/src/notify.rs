@@ -34,15 +34,22 @@ impl crate::output_observer::OutputObserver for NotifyObserver {
         let mut s = self.state.lock().unwrap();
         let was_idle = s.get_state(session_id) != Some(AgentState::Busy);
         s.notify_output(session_id);
+        drop(s);
         if was_idle {
-            drop(s);
-            let _ = self.app.emit(
-                "agent-state-change",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "state": "Busy"
-                }),
-            );
+            // Emit state change off the PTY flusher hot path — Tauri event dispatch
+            // is synchronous and would block terminal rendering while the frontend
+            // processes the state update.
+            let app = self.app.clone();
+            let sid = session_id.to_string();
+            std::thread::spawn(move || {
+                let _ = app.emit(
+                    "agent-state-change",
+                    serde_json::json!({
+                        "session_id": sid,
+                        "state": "Busy"
+                    }),
+                );
+            });
         }
     }
 }
@@ -89,45 +96,57 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
             let _ = app.emit("sessions-changed", ());
         }
         NotifyEvent::Busy => {
-            let mut s = state.lock().unwrap();
-            let name = s
-                .get_meta(&msg.session_id)
-                .map(|m| m.name.as_str())
-                .unwrap_or("?");
-            tracing::info!(session_id = %msg.session_id, name, "agent busy (hook signal)");
-            s.notify_busy(&msg.session_id);
-            drop(s);
-            emit_state_change(app, &msg.session_id, AgentState::Busy);
-        }
-        NotifyEvent::Notification => {
-            let fired = {
+            let name = {
                 let mut s = state.lock().unwrap();
                 let name = s
                     .get_meta(&msg.session_id)
                     .map(|m| m.name.as_str())
-                    .unwrap_or("?");
-                tracing::info!(session_id = %msg.session_id, name, "immediate notification signal received");
-                s.notify_stop_immediate(&msg.session_id)
+                    .unwrap_or("?")
+                    .to_string();
+                s.notify_busy(&msg.session_id);
+                name
             };
+            tracing::info!(session_id = %msg.session_id, %name, "agent busy (hook signal)");
+            emit_state_change(app, &msg.session_id, AgentState::Busy);
+        }
+        NotifyEvent::Notification => {
+            let (name, fired) = {
+                let mut s = state.lock().unwrap();
+                let name = s
+                    .get_meta(&msg.session_id)
+                    .map(|m| m.name.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let fired = s.notify_stop_immediate(&msg.session_id);
+                (name, fired)
+            };
+            tracing::info!(session_id = %msg.session_id, %name, "immediate notification signal received");
             if fired {
                 emit_state_change(app, &msg.session_id, AgentState::Idle);
                 fire_notification(app, &msg.session_id, state);
             }
         }
         NotifyEvent::Stop => {
-            let mut s = state.lock().unwrap();
-            let name = s
-                .get_meta(&msg.session_id)
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| "?".into());
-            let hook_enabled = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+            let (name, hook_enabled, fired) = {
+                let mut s = state.lock().unwrap();
+                let name = s
+                    .get_meta(&msg.session_id)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| "?".into());
+                let he = s.get_meta(&msg.session_id).is_some_and(|m| m.hook_enabled);
+                let fired = if he {
+                    s.notify_stop_debounced(&msg.session_id);
+                    false
+                } else {
+                    s.notify_stop(&msg.session_id)
+                };
+                (name, he, fired)
+            };
+            // Lock is dropped — trace and emit without blocking other sessions
             if hook_enabled {
                 tracing::info!(session_id = %msg.session_id, %name, "stop received, debouncing 2s");
-                s.notify_stop_debounced(&msg.session_id);
             } else {
                 tracing::info!(session_id = %msg.session_id, %name, "stop received, firing immediately (no hook)");
-                let fired = s.notify_stop(&msg.session_id);
-                drop(s);
                 if fired {
                     emit_state_change(app, &msg.session_id, AgentState::Idle);
                     fire_notification(app, &msg.session_id, state);
@@ -153,19 +172,19 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
         let mut to_notify: Vec<String> = Vec::new();
         {
             let mut s = state.lock().unwrap();
-            let busy = s.busy_sessions();
-            for id in busy {
+            // Collect candidates and check in one pass — minimize lock hold time
+            for id in s.busy_sessions() {
                 if s.check_silence(&id) {
                     to_notify.push(id);
                 }
             }
-            let debounced = s.debounced_sessions();
-            for id in debounced {
+            for id in s.debounced_sessions() {
                 if s.check_debounce(&id) {
                     to_notify.push(id);
                 }
             }
         }
+        // Lock released — notify without blocking PTY flushers
         for session_id in to_notify {
             let name = {
                 let s = state.lock().unwrap();
@@ -174,7 +193,15 @@ pub fn start_silence_checker(state: SharedNotifyState, app: AppHandle) {
                     .unwrap_or_else(|| "?".into())
             };
             tracing::info!(%session_id, %name, "idle timeout, firing notification");
-            emit_state_change(&app, &session_id, AgentState::Idle);
+            // Emit via a short delay to avoid interrupting active terminal rendering.
+            // The OS notification is the user-facing signal; the UI indicator updates
+            // asynchronously without blocking the data channel.
+            let app2 = app.clone();
+            let sid = session_id.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                emit_state_change(&app2, &sid, AgentState::Idle);
+            });
             fire_notification(&app, &session_id, &state);
         }
     });
@@ -186,37 +213,21 @@ fn emit_state_change(app: &AppHandle, session_id: &str, state: AgentState) {
         session_id: String,
         state: AgentState,
     }
-    let _ = app.emit(
-        "agent-state-change",
-        StateChangePayload {
-            session_id: session_id.to_string(),
-            state,
-        },
-    );
+    // Spawn to avoid blocking the caller — app.emit() dispatches to the webview's
+    // main thread and may block until the event is processed.
+    let app = app.clone();
+    let payload = StateChangePayload {
+        session_id: session_id.to_string(),
+        state,
+    };
+    std::thread::spawn(move || {
+        let _ = app.emit("agent-state-change", payload);
+    });
 }
 
-fn fire_notification(app: &AppHandle, session_id: &str, state: &SharedNotifyState) {
-    let (title, body) = {
-        let s = state.lock().unwrap();
-        match s.get_meta(session_id) {
-            Some(meta) => (meta.project_name.clone(), format!("{} is ready", meta.name)),
-            None => ("planeai".to_string(), "Agent is ready".to_string()),
-        }
-    };
-
-    use tauri_plugin_notification::NotificationExt;
-    match app
-        .notification()
-        .builder()
-        .title(&title)
-        .body(&body)
-        .show()
-    {
-        Ok(_) => tracing::info!(%session_id, %title, %body, "OS notification sent"),
-        Err(e) => {
-            tracing::warn!(%session_id, %title, error = %e, "OS notification failed")
-        }
-    }
+fn fire_notification(_app: &AppHandle, session_id: &str, _state: &SharedNotifyState) {
+    // TEMPORARILY DISABLED to diagnose UI lag
+    tracing::info!(%session_id, "fire_notification SKIPPED (diagnosing lag)");
 }
 
 #[cfg(test)]

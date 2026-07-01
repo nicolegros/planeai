@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/api/window", () => ({
   })),
 }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
-vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn() }));
+vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn(), warmAudioContext: vi.fn() }));
 vi.mock("../settings.svelte", () => ({
   getSettings: vi.fn(() => ({
     appearance: { mode: "system", theme: "default" },

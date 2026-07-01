@@ -60,6 +60,19 @@ pub fn install_notify_hook(config_state: State<ConfigState>) -> Result<(), Strin
     Ok(())
 }
 
+/// Returns the current agent states for all sessions (polled by frontend).
+#[tauri::command]
+pub fn get_agent_states(
+    notify: State<crate::state::NotifyHandle>,
+) -> std::collections::HashMap<String, String> {
+    let s = notify.0.lock().unwrap();
+    let mut result = std::collections::HashMap::new();
+    for (id, state) in s.all_states() {
+        result.insert(id.clone(), format!("{:?}", state));
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use planeai_core::notify::install_kiro_hook;

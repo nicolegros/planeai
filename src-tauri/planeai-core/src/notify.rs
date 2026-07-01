@@ -200,6 +200,10 @@ impl NotifyState {
         self.states.get(session_id).copied()
     }
 
+    pub fn all_states(&self) -> &HashMap<String, AgentState> {
+        &self.states
+    }
+
     #[cfg(not(any(test, feature = "test-support")))]
     fn elapsed_since(&self, _session_id: &str, since: Instant) -> Duration {
         since.elapsed()

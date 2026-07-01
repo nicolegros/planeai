@@ -4,7 +4,7 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { sessions as sessionsApi, symphony, tasks, git } from "./api";
+import { sessions as sessionsApi, symphony, tasks, git, notify } from "./api";
 import {
   getCiStatus as _getCiStatus,
   updateSessions as updateCiSessions,
@@ -25,7 +25,7 @@ import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
 import { preloadPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
-import { playTaskComplete } from "./soundPlayer";
+import { playTaskComplete, warmAudioContext } from "./soundPlayer";
 import { getProjects } from "./project-store.svelte";
 import { moveTask } from "./task-store.svelte";
 import { getCycleState } from "./tab-switcher.svelte";
@@ -249,39 +249,48 @@ export function removeProjectSessions(projectId: string): string[] {
 export function startEventListeners(): () => void {
   const unlisteners: Array<Promise<() => void>> = [];
 
-  // Agent state changes (Busy/Idle)
-  unlisteners.push(
-    listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
-      agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
-      if (event.payload.state === "Idle") {
-        playTaskComplete();
-        tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
-          if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
-        });
-        // Auto-open review tab when agent finishes
-        const sid = event.payload.session_id;
-        const session = sessions.find((s) => s.id === sid);
-        if (session?.worktree_path && session.base_branch) {
-          git
-            .getChangedFiles(session.worktree_path, session.base_branch, null)
-            .then((files) => {
-              if (files.length === 0) return;
-              // Preload all patches so ReviewTab opens instantly
-              preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
-              if (sid === activeSessionId) {
-                if (getSettings().auto_open_review !== false) {
-                  // Defer to next frame so state updates don't block the current tick
-                  requestAnimationFrame(() => toggleDiff());
-                }
-              } else {
-                reviewReady = { ...reviewReady, [sid]: true };
-              }
-            })
-            .catch(() => {});
+  // Pre-warm AudioContext so notification sounds don't block the main thread
+  warmAudioContext();
+
+  // Agent state changes (Busy/Idle) — polled to avoid blocking terminal rendering.
+  // Tauri's app.emit() dispatches to the webview main thread and stalls all PTY
+  // data channels while the event is processed. Polling avoids this entirely.
+  const AGENT_STATE_POLL_MS = 1000;
+  const agentStatePollTimer = setInterval(async () => {
+    try {
+      const states = await notify.getAgentStates();
+      for (const [sid, state] of Object.entries(states)) {
+        if (state === "Idle" && agentStates[sid] !== "Idle") {
+          playTaskComplete();
+          setTimeout(() => {
+            tasks.fireNotifyHook(sid).catch((err) => {
+              if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
+            });
+            const session = sessions.find((s) => s.id === sid);
+            if (session?.worktree_path && session.base_branch) {
+              git
+                .getChangedFiles(session.worktree_path, session.base_branch, null)
+                .then((files) => {
+                  if (files.length === 0) return;
+                  preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
+                  if (sid === activeSessionId) {
+                    if (getSettings().auto_open_review !== false) {
+                      requestAnimationFrame(() => toggleDiff());
+                    }
+                  } else {
+                    reviewReady = { ...reviewReady, [sid]: true };
+                  }
+                })
+                .catch(() => {});
+            }
+          }, 0);
         }
       }
-    }),
-  );
+      agentStates = states;
+    } catch {
+      // ignore poll failures
+    }
+  }, AGENT_STATE_POLL_MS);
 
   // Single listener for all PTY exit events (replaces per-session listeners)
   unlisteners.push(
@@ -350,6 +359,7 @@ export function startEventListeners(): () => void {
 
   return () => {
     for (const p of unlisteners) p.then((fn) => fn());
+    clearInterval(agentStatePollTimer);
   };
 }
 
