@@ -151,14 +151,18 @@ fn fetch_pr_url_inner(
 }
 
 #[tauri::command]
-pub fn fetch_pr_url(
+pub async fn fetch_pr_url(
     session_id: String,
-    db_state: State<DbState>,
-    config_state: State<ConfigState>,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
 ) -> Result<Option<String>, String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    fetch_pr_url_inner(&conn, &cfg, &session_id)
+    let db = db_state.0.clone();
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+    super::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        fetch_pr_url_inner(&conn, &cfg, &session_id)
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Serialize)]

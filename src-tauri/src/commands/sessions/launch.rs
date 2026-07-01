@@ -64,24 +64,31 @@ pub async fn launch_session(
         (c, pk, he, be, sb, epd)
     };
 
-    // Phase 2: sync work — detect base branch, git worktree/checkout
-    let effective_base_branch = base_branch.clone().or_else(|| {
-        let mut cmd = std::process::Command::new("git");
-        cmd.args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(&repo_path);
-        planeai_core::command::no_window(&mut cmd);
-        let output = cmd.output().ok()?;
-        if output.status.success() {
-            let b = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !b.is_empty() && b != "HEAD" {
-                Some(b)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    });
+    // Phase 2: async work — detect base branch, git worktree/checkout
+    let effective_base_branch = {
+        let repo_path = repo_path.clone();
+        let base_branch = base_branch.clone();
+        crate::commands::blocking(move || {
+            Ok(base_branch.or_else(|| {
+                let mut cmd = std::process::Command::new("git");
+                cmd.args(["rev-parse", "--abbrev-ref", "HEAD"])
+                    .current_dir(&repo_path);
+                planeai_core::command::no_window(&mut cmd);
+                let output = cmd.output().ok()?;
+                if output.status.success() {
+                    let b = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !b.is_empty() && b != "HEAD" {
+                        Some(b)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }))
+        })
+        .await?
+    };
 
     let (working_dir, worktree_path) = if use_worktree {
         let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
