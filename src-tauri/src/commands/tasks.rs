@@ -188,21 +188,25 @@ pub fn move_task_item(
 }
 
 #[tauri::command]
-pub fn fire_task_notify_hook(
+pub async fn fire_task_notify_hook(
     session_id: String,
-    db_state: State<DbState>,
-    config_state: State<ConfigState>,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
 ) -> Result<(), String> {
-    let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let session = db::get_session(&conn, &session_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("session not found")?;
-    let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-    if session.task_key.is_some() {
-        if let Some(cwd) = session_cwd(&conn, &session) {
-            fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
+    let db = db_state.0.clone();
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+    super::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let session = db::get_session(&conn, &session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("session not found")?;
+        if session.task_key.is_some() {
+            if let Some(cwd) = session_cwd(&conn, &session) {
+                fire_task_hook(&cfg, &session, "on_notify", &cwd, &conn);
+            }
         }
-    }
-    poll_pr_for_session(&conn, &cfg, &session)?;
-    Ok(())
+        poll_pr_for_session(&conn, &cfg, &session)?;
+        Ok(())
+    })
+    .await
 }

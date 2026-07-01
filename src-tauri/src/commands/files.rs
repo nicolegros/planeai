@@ -1,18 +1,21 @@
 #[tauri::command]
-pub fn list_files(repo_path: String) -> Result<Vec<String>, String> {
-    let mut cmd = std::process::Command::new("git");
-    cmd.args(["ls-files"]).current_dir(&repo_path);
-    planeai_core::command::no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("failed to run git ls-files: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.to_string())
-        .collect())
+pub async fn list_files(repo_path: String) -> Result<Vec<String>, String> {
+    super::blocking(move || {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["ls-files"]).current_dir(&repo_path);
+        planeai_core::command::no_window(&mut cmd);
+        let output = cmd
+            .output()
+            .map_err(|e| format!("failed to run git ls-files: {e}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.to_string())
+            .collect())
+    })
+    .await
 }
 
 #[tauri::command]

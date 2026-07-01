@@ -6,7 +6,7 @@ Use TDD (red-green-refactor) when implementing features and fixing bugs. Write a
 
 ## Performance
 
-Never block the main thread. All Tauri commands that perform I/O (subprocesses, network, disk) must be `async` using `tokio`. Use `tokio::process::Command` instead of `std::process::Command`. Release Mutex locks before awaiting. On Windows, apply `planeai_core::command::no_window()` or `no_window_tokio()` to all subprocess spawns to suppress console window flashes.
+Never block the main thread. On macOS, WKWebView dispatches all Tauri IPC handlers on the main thread — any synchronous work there stalls PTY data delivery and keystroke processing for every session. All Tauri commands that perform I/O (subprocesses, network, disk) must be `async`. Use `commands::blocking(|| { ... }).await` for commands that wrap synchronous I/O (e.g., `std::process::Command`). Use `tokio::process::Command` for new async subprocess code. Release Mutex locks before awaiting. On Windows, apply `planeai_core::command::no_window()` or `no_window_tokio()` to all subprocess spawns to suppress console window flashes.
 
 ## Commits
 
