@@ -167,8 +167,11 @@ export function selectSession(id: string): void {
   } else {
     poolActivate(id);
   }
-  if (agentStates[id] === "Idle") agentStates = { ...agentStates, [id]: "Busy" };
-  sessionsApi.acknowledge(id);
+  if (agentStates[id]) {
+    clearAgentState(id);
+  } else {
+    sessionsApi.acknowledge(id);
+  }
 }
 
 export function createSession(session: Session): void {
@@ -218,6 +221,7 @@ export function jumpToSession(index: number): void {
 export function clearAgentState(sessionId: string): void {
   const { [sessionId]: _, ...rest } = agentStates;
   agentStates = rest;
+  sessionsApi.acknowledge(sessionId);
 }
 export function updateSessionStatus(sessionId: string, status: string): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));

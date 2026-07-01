@@ -222,6 +222,10 @@ fn main() {
                 startup::register_active_sessions(&conn, &cfg, &notify_state);
             }
 
+            // Refresh hook scripts to latest bundled version (idempotent, only updates
+            // scripts for hooks that are already installed on the user's system).
+            planeai_core::notify::refresh_hook_scripts(&config::home_dir());
+
             // PTY manager with notify wired in
             let pty_mgr = pty::PtyManager::new();
             pty_mgr.set_observer(Arc::new(notify::NotifyObserver::new(
