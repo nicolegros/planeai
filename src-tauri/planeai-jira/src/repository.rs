@@ -150,7 +150,7 @@ impl JiraRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT issue_key FROM jira_issues")?;
+        let mut stmt = conn.prepare("SELECT issue_key FROM jira_issues WHERE sync_status = 'synced'")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         let mut keys = Vec::new();
         for r in rows {
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn list_all_issue_keys_returns_all() {
+    fn list_all_issue_keys_returns_only_synced() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
@@ -305,7 +305,7 @@ mod tests {
 
         let mut keys = repo.list_all_issue_keys().unwrap();
         keys.sort();
-        assert_eq!(keys, vec!["OTHER-1", "PROJ-1", "PROJ-2"]);
+        assert_eq!(keys, vec!["OTHER-1", "PROJ-1"]);
     }
 
     #[test]
