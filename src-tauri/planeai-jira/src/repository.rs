@@ -145,7 +145,7 @@ impl JiraRepository {
         Ok(keys)
     }
 
-    pub fn list_all_issue_keys(&self) -> Result<Vec<String>, Error> {
+    pub fn list_active_issue_keys(&self) -> Result<Vec<String>, Error> {
         let conn = self
             .conn
             .lock()
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn list_all_issue_keys_returns_only_synced() {
+    fn list_active_issue_keys_returns_only_synced() {
         let repo = setup();
         repo.upsert_issue(&sample_issue("PROJ-1")).unwrap();
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
@@ -303,7 +303,7 @@ mod tests {
 
         repo.mark_departed(&["PROJ-2"]).unwrap();
 
-        let mut keys = repo.list_all_issue_keys().unwrap();
+        let mut keys = repo.list_active_issue_keys().unwrap();
         keys.sort();
         assert_eq!(keys, vec!["OTHER-1", "PROJ-1"]);
     }
