@@ -105,12 +105,6 @@ impl JiraState {
                     return source.writeback.clone();
                 }
             }
-            // Fall back: source_name stored in jira_project column for older entries
-            if !issue.jira_project.is_empty() {
-                if let Some(source) = jira_cfg.sources.get(&issue.jira_project) {
-                    return source.writeback.clone();
-                }
-            }
             None
         })();
         if let Some(wb_config) = wb_config {
