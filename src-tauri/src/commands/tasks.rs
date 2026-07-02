@@ -206,6 +206,8 @@ pub fn move_task_item(
                     state.try_writeback(task_key, st, &cfg);
                 }
             }
+        } else {
+            tracing::warn!(task_key = %task_key, "move_task_item: could not acquire jira lock, skipping writeback");
         }
     };
 

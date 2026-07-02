@@ -167,6 +167,13 @@ pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
     Some(state)
 }
 
+/// Open the shared task provider for all Jira-synced issues.
+///
+/// All sources within a single Jira site share one prefix namespace. This is safe because:
+/// - Jira issue keys are globally unique within a site (e.g., PROJ-1, ENG-42)
+/// - Synced tasks use the Jira issue key directly (not auto-generated sequential keys)
+/// - The prefix only affects the `task_projects` registration; it's never used for key generation
+///   in the Jira sync path
 pub fn open_task_provider(
     config: &JiraConfig,
 ) -> Result<Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>, String> {

@@ -39,6 +39,6 @@
         onclick={() => act(handleDismiss)}
       >Dismiss (<span class="underline">N</span>)</button>
     </div>
-    <p class="mt-1 text-xs text-amber-200/70">{focused ? "D / N / Esc" : "⌘J to interact"}</p>
+    <p class="mt-1 text-xs text-amber-200/70">{focused ? "D / N / Esc" : "⌘U to interact"}</p>
   </div>
 {/if}

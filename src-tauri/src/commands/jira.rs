@@ -108,6 +108,43 @@ pub async fn jira_status(
     Ok(JiraStatusResponse { connected, site })
 }
 
+/// Mark a Jira-synced task as done. Resolves the task provider internally
+/// so the frontend doesn't need to know repo_path.
+#[tauri::command]
+pub async fn mark_jira_task_done(
+    key: String,
+    config_state: State<'_, ConfigState>,
+    jira: State<'_, JiraHandle>,
+) -> Result<(), String> {
+    use planeai_tasks::model::UpdateParams;
+
+    let jira_config = get_jira_config(&config_state)?;
+    let repo = crate::jira::open_task_provider(&jira_config)?;
+    repo.update(
+        &key,
+        UpdateParams {
+            status: Some(Status::Done),
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Fire writeback
+    if let Ok(guard) = jira.0.try_lock() {
+        if let Some(state) = guard.as_ref() {
+            if let Ok(cfg) = config_state.0.lock() {
+                state.try_writeback(&key, Status::Done, &cfg);
+            }
+        } else {
+            tracing::warn!(key = %key, "mark_jira_task_done: jira state not initialized, skipping writeback");
+        }
+    } else {
+        tracing::warn!(key = %key, "mark_jira_task_done: could not acquire jira lock, skipping writeback");
+    }
+
+    Ok(())
+}
+
 /// Assign a Jira task to a project by creating a child task in the project's task store.
 /// Fires on_start writeback when it's the first child created for this Jira parent.
 #[tauri::command]
@@ -163,6 +200,8 @@ pub async fn assign_jira_task(
                     state.try_writeback(&jira_task_key, Status::InProgress, &cfg);
                 }
             }
+        } else {
+            tracing::warn!(key = %jira_task_key, "assign_jira_task: could not acquire jira lock, skipping writeback");
         }
     }
 

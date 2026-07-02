@@ -25,7 +25,7 @@ pub enum Error {
 }
 
 /// Wire type returned by the Jira search API. Callers map this to `model::JiraIssue`
-/// by supplying `jira_project`, `sync_status`, and `last_synced_at`.
+/// by supplying `source_name`, `sync_status`, and `last_synced_at`.
 #[derive(Debug, Clone)]
 pub struct FetchedIssue {
     pub issue_key: String,

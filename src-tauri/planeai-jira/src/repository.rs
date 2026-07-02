@@ -11,17 +11,18 @@ pub struct JiraRepository {
 }
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<JiraIssue> {
-    let labels_json: String = row.get(6)?;
-    let sync_status_str: String = row.get(7)?;
-    let ts: String = row.get(8)?;
-    let source_name: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+    // SELECT columns: issue_key(0), summary(1), description(2), status(3),
+    //                  priority(4), labels(5), sync_status(6), last_synced_at(7), source_name(8)
+    let labels_json: String = row.get(5)?;
+    let sync_status_str: String = row.get(6)?;
+    let ts: String = row.get(7)?;
+    let source_name: String = row.get::<_, Option<String>>(8)?.unwrap_or_default();
     let issue_key: String = row.get(0)?;
     Ok(JiraIssue {
-        jira_project: row.get(1)?,
-        summary: row.get(2)?,
-        description: row.get(3)?,
-        status: row.get(4)?,
-        priority: row.get(5)?,
+        summary: row.get(1)?,
+        description: row.get(2)?,
+        status: row.get(3)?,
+        priority: row.get(4)?,
         labels: serde_json::from_str(&labels_json).unwrap_or_else(|e| {
             tracing::warn!(issue_key = %issue_key, error = %e, "invalid labels JSON, defaulting to empty");
             Vec::new()
@@ -71,7 +72,7 @@ impl JiraRepository {
                 source_name = excluded.source_name",
             params![
                 issue.issue_key,
-                issue.jira_project,
+                issue.source_name, // write source_name to jira_project column for backwards compat
                 issue.summary,
                 issue.description,
                 issue.status,
@@ -117,7 +118,7 @@ impl JiraRepository {
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT issue_key, jira_project, summary, description, status, priority, labels, sync_status, last_synced_at, source_name FROM jira_issues WHERE issue_key = ?1",
+            "SELECT issue_key, summary, description, status, priority, labels, sync_status, last_synced_at, source_name FROM jira_issues WHERE issue_key = ?1",
         )?;
 
         let result = stmt.query_row(params![issue_key], row_to_issue);
@@ -129,15 +130,15 @@ impl JiraRepository {
         }
     }
 
-    pub fn list_synced_keys(&self, jira_project: &str) -> Result<Vec<String>, Error> {
+    pub fn list_synced_keys(&self, source_name: &str) -> Result<Vec<String>, Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
         let mut stmt = conn.prepare(
-            "SELECT issue_key FROM jira_issues WHERE jira_project = ?1 AND sync_status = 'synced'",
+            "SELECT issue_key FROM jira_issues WHERE source_name = ?1 AND sync_status = 'synced'",
         )?;
-        let rows = stmt.query_map(params![jira_project], |row| row.get(0))?;
+        let rows = stmt.query_map(params![source_name], |row| row.get(0))?;
         let mut keys = Vec::new();
         for r in rows {
             keys.push(r?);
@@ -191,7 +192,6 @@ mod tests {
     fn sample_issue(key: &str) -> JiraIssue {
         JiraIssue {
             issue_key: key.to_string(),
-            jira_project: "PROJ".to_string(),
             summary: "Test issue".to_string(),
             description: "A description".to_string(),
             status: "To Do".to_string(),
@@ -283,12 +283,12 @@ mod tests {
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
 
         let mut other = sample_issue("OTHER-1");
-        other.jira_project = "OTHER".to_string();
+        other.source_name = "other".to_string();
         repo.upsert_issue(&other).unwrap();
 
         repo.mark_departed(&["PROJ-2"]).unwrap();
 
-        let keys = repo.list_synced_keys("PROJ").unwrap();
+        let keys = repo.list_synced_keys("proj").unwrap();
         assert_eq!(keys, vec!["PROJ-1"]);
     }
 
@@ -299,7 +299,7 @@ mod tests {
         repo.upsert_issue(&sample_issue("PROJ-2")).unwrap();
 
         let mut other = sample_issue("OTHER-1");
-        other.jira_project = "OTHER".to_string();
+        other.source_name = "other".to_string();
         repo.upsert_issue(&other).unwrap();
 
         repo.mark_departed(&["PROJ-2"]).unwrap();

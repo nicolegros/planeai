@@ -25,7 +25,7 @@ export async function handleDone(): Promise<void> {
   queue.dismiss();
 
   try {
-    await invoke("move_task_item", { key, status: "done" });
+    await invoke("mark_jira_task_done", { key });
   } catch (e) {
     console.error("Failed to mark Jira task done:", e);
   }
