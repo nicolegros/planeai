@@ -52,6 +52,7 @@ fn load_reads_existing_config_file() {
         projects_base_path: None,
         pr_status: None,
         hide_done_tasks: None,
+        hide_empty_projects: None,
         daemon_scrollback_bytes: None,
         scrollback_lines: None,
         web_links: None,
