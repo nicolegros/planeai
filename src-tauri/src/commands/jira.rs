@@ -31,6 +31,7 @@ fn get_jira_config(config_state: &ConfigState) -> Result<JiraConfig, String> {
 
 #[tauri::command]
 pub async fn jira_connect(
+    app: tauri::AppHandle,
     jira: State<'_, JiraHandle>,
     config_state: State<'_, ConfigState>,
 ) -> Result<(), String> {
@@ -38,7 +39,7 @@ pub async fn jira_connect(
 
     let jira_config = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        *guard = crate::jira::init_jira(&cfg);
+        *guard = crate::jira::init_jira(&cfg, app.clone());
         cfg.integrations
             .as_ref()
             .and_then(|i| i.jira.clone())
@@ -48,7 +49,7 @@ pub async fn jira_connect(
     let state = guard.as_mut().ok_or("jira not configured")?;
     state.auth.connect().await.map_err(|e| e.to_string())?;
 
-    let cancel = state.activate(&jira_config)?;
+    let cancel = state.activate(&jira_config, app)?;
     let sync = state.sync.clone().unwrap();
     tokio::spawn(async move { sync.start(cancel).await });
 
@@ -67,6 +68,7 @@ pub async fn jira_disconnect(jira: State<'_, JiraHandle>) -> Result<(), String> 
 
 #[tauri::command]
 pub async fn jira_sync_now(
+    app: tauri::AppHandle,
     jira: State<'_, JiraHandle>,
     config_state: State<'_, ConfigState>,
 ) -> Result<SyncResult, String> {
@@ -75,7 +77,7 @@ pub async fn jira_sync_now(
 
     let jira_config = get_jira_config(&config_state)?;
 
-    let _ = state.activate(&jira_config);
+    let _ = state.activate(&jira_config, app);
     let sync = state.sync.clone().ok_or("jira not connected")?;
     drop(guard);
 

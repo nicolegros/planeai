@@ -11,12 +11,11 @@ pub struct JiraConfig {
     #[serde(default = "default_sync_interval_ms")]
     pub sync_interval_ms: u64,
     #[serde(default)]
-    pub projects: HashMap<String, JiraProjectMapping>,
+    pub sources: HashMap<String, JiraSyncSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct JiraProjectMapping {
-    pub jira_project: String,
+pub struct JiraSyncSource {
     pub jql: String,
     #[serde(default)]
     pub status_map: HashMap<String, String>,
@@ -39,16 +38,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_jira_config() {
-        let mut projects = HashMap::new();
-        projects.insert(
-            "myproject".to_string(),
-            JiraProjectMapping {
-                jira_project: "MP".to_string(),
-                jql: "project = MP AND status != Done".to_string(),
+    fn round_trip_jira_config_with_sources() {
+        let mut sources = HashMap::new();
+        sources.insert(
+            "peng-support".to_string(),
+            JiraSyncSource {
+                jql: "project = PENG AND assignee = currentUser()".to_string(),
                 status_map: HashMap::from([
-                    ("In Progress".to_string(), "active".to_string()),
-                    ("Done".to_string(), "completed".to_string()),
+                    ("In Progress".to_string(), "in_progress".to_string()),
+                    ("Done".to_string(), "done".to_string()),
                 ]),
                 writeback: Some(WritebackConfig {
                     on_start: Some("In Progress".to_string()),
@@ -61,7 +59,7 @@ mod tests {
         let config = JiraConfig {
             site: "https://mycompany.atlassian.net".to_string(),
             sync_interval_ms: 30_000,
-            projects,
+            sources,
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();
@@ -70,11 +68,37 @@ mod tests {
     }
 
     #[test]
+    fn source_has_no_jira_project_field() {
+        let json = r#"{
+            "site": "https://test.atlassian.net",
+            "sources": {
+                "my-source": {
+                    "jql": "project = PENG AND assignee = currentUser()",
+                    "status_map": {"Acknowledged": "in_progress"},
+                    "writeback": {"on_start": "In Progress", "on_complete": "Done", "comment": true}
+                }
+            }
+        }"#;
+        let config: JiraConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.sources.len(), 1);
+        let source = config.sources.get("my-source").unwrap();
+        assert_eq!(source.jql, "project = PENG AND assignee = currentUser()");
+        assert_eq!(
+            source.status_map.get("Acknowledged"),
+            Some(&"in_progress".to_string())
+        );
+        assert_eq!(
+            source.writeback.as_ref().unwrap().on_start,
+            Some("In Progress".to_string())
+        );
+    }
+
+    #[test]
     fn defaults_applied_for_missing_optional_fields() {
         let json = r#"{"site": "https://x.atlassian.net"}"#;
         let config: JiraConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.sync_interval_ms, 60_000);
-        assert!(config.projects.is_empty());
+        assert!(config.sources.is_empty());
     }
 
     #[test]

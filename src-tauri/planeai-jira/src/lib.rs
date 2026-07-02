@@ -10,7 +10,7 @@ pub mod writeback;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use sync::{JiraSync, SyncResult};
+pub use sync::{JiraSync, SyncListener, SyncResult};
 pub use writeback::{JiraWriteback, WritebackAction};
 
 #[derive(Debug)]

@@ -176,7 +176,7 @@ fn main() {
                 }
             });
             // Jira integration (before cfg is moved into ConfigState)
-            let jira_state = jira::init_jira(&cfg);
+            let jira_state = jira::init_jira(&cfg, app.handle().clone());
 
             app.manage(ConfigState(Mutex::new(cfg)));
             app.manage(commands::JiraHandle(tokio::sync::Mutex::new(jira_state)));

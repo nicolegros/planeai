@@ -4,12 +4,42 @@ use planeai_jira::auth::JiraAuth;
 use planeai_jira::client::JiraClient;
 use planeai_jira::config::JiraConfig;
 use planeai_jira::repository::JiraRepository;
-use planeai_jira::{JiraSync, JiraWriteback, WritebackAction};
+use planeai_jira::{JiraSync, JiraWriteback, SyncListener, WritebackAction};
 use planeai_tasks::model::Status;
 use rusqlite::Connection;
+use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+
+/// Emits Tauri events when issues disappear from JQL results.
+pub struct TauriSyncListener {
+    app: AppHandle,
+}
+
+impl TauriSyncListener {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct JiraIssueDeparted {
+    key: String,
+    summary: String,
+}
+
+impl SyncListener for TauriSyncListener {
+    fn on_issue_departed(&self, key: &str, summary: &str) {
+        let payload = JiraIssueDeparted {
+            key: key.to_string(),
+            summary: summary.to_string(),
+        };
+        if let Err(e) = self.app.emit("jira-issue-departed", &payload) {
+            tracing::warn!(error = %e, key = %key, "failed to emit jira-issue-departed event");
+        }
+    }
+}
 
 pub struct JiraState {
     pub sync: Option<Arc<JiraSync>>,
@@ -21,17 +51,19 @@ pub struct JiraState {
 
 impl JiraState {
     /// Activate sync + writeback. Returns the CancellationToken for the sync loop.
-    pub fn activate(&mut self, jira_config: &JiraConfig) -> Result<CancellationToken, String> {
+    pub fn activate(&mut self, jira_config: &JiraConfig, app: AppHandle) -> Result<CancellationToken, String> {
         let cloud_id = self.auth.cloud_id().map_err(|e| e.to_string())?;
         let client = Arc::new(JiraClient::new(self.auth.clone(), cloud_id));
         let task_provider = open_task_provider(jira_config)?;
         let cancel = CancellationToken::new();
+        let listener = Arc::new(TauriSyncListener::new(app));
 
-        self.sync = Some(Arc::new(JiraSync::new(
+        self.sync = Some(Arc::new(JiraSync::with_listener(
             client.clone(),
             self.repo.clone(),
             task_provider,
             jira_config.clone(),
+            listener,
         )));
         self.writeback = Some(Arc::new(JiraWriteback::new(client)));
         self.cancel = Some(cancel.clone());
@@ -67,23 +99,19 @@ impl JiraState {
         };
         let wb_config = (|| {
             let jira_cfg = config.integrations.as_ref()?.jira.as_ref()?;
-            // Prefer source_name for direct lookup, fall back to jira_project match
+            // Look up writeback config by source_name
             if !issue.source_name.is_empty() {
-                if let Some(wb) = jira_cfg.projects.get(&issue.source_name) {
-                    return wb.writeback.clone();
+                if let Some(source) = jira_cfg.sources.get(&issue.source_name) {
+                    return source.writeback.clone();
                 }
-                tracing::debug!(
-                    task_key,
-                    source_name = %issue.source_name,
-                    "source_name not found in config, falling back to jira_project scan"
-                );
             }
-            jira_cfg
-                .projects
-                .values()
-                .find(|m| m.jira_project == issue.jira_project)?
-                .writeback
-                .clone()
+            // Fall back: source_name stored in jira_project column for older entries
+            if !issue.jira_project.is_empty() {
+                if let Some(source) = jira_cfg.sources.get(&issue.jira_project) {
+                    return source.writeback.clone();
+                }
+            }
+            None
         })();
         if let Some(wb_config) = wb_config {
             let issue_key = task_key.to_string();
@@ -99,7 +127,7 @@ impl JiraState {
     }
 }
 
-pub fn init_jira(config: &Config) -> Option<JiraState> {
+pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
     let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
     let token_dir = planeai_paths::app_data_dir().join("jira-tokens");
     let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
@@ -129,7 +157,7 @@ pub fn init_jira(config: &Config) -> Option<JiraState> {
     };
 
     if state.auth.is_connected() {
-        if let Err(e) = state.activate(jira_config) {
+        if let Err(e) = state.activate(jira_config, app) {
             tracing::warn!(error = %e, "jira: configured but failed to activate");
         }
     }
