@@ -144,7 +144,11 @@ impl JiraSync {
 
             match self.task_provider.get(&issue.issue_key) {
                 Err(planeai_tasks::provider::Error::NotFound) => {
-                    let status = map_status(&issue.status, &mapping.status_map, issue.status_category.as_deref());
+                    let status = map_status(
+                        &issue.status,
+                        &mapping.status_map,
+                        issue.status_category.as_deref(),
+                    );
                     let priority = map_priority(issue.priority.as_deref());
                     self.task_provider.create(CreateParams {
                         key: Some(issue.issue_key.clone()),
@@ -158,7 +162,11 @@ impl JiraSync {
                     result.created += 1;
                 }
                 Ok(task) => {
-                    let new_status = map_status(&issue.status, &mapping.status_map, issue.status_category.as_deref());
+                    let new_status = map_status(
+                        &issue.status,
+                        &mapping.status_map,
+                        issue.status_category.as_deref(),
+                    );
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
                         || task.status != new_status;
@@ -209,7 +217,11 @@ impl JiraSync {
     }
 }
 
-fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>, status_category: Option<&str>) -> Status {
+fn map_status(
+    jira_status: &str,
+    status_map: &std::collections::HashMap<String, String>,
+    status_category: Option<&str>,
+) -> Status {
     // 1. Explicit status_map takes priority
     if let Some(mapped) = status_map.get(jira_status).and_then(|v| Status::parse(v)) {
         return mapped;
@@ -389,13 +401,21 @@ mod tests {
         }
 
         fn departed_keys(&self) -> Vec<String> {
-            self.departed.lock().unwrap().iter().map(|(k, _)| k.clone()).collect()
+            self.departed
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect()
         }
     }
 
     impl SyncListener for CapturingListener {
         fn on_issue_departed(&self, key: &str, summary: &str) {
-            self.departed.lock().unwrap().push((key.to_string(), summary.to_string()));
+            self.departed
+                .lock()
+                .unwrap()
+                .push((key.to_string(), summary.to_string()));
         }
 
         fn on_sync_complete(&self, _result: &SyncResult) {}
@@ -456,7 +476,13 @@ mod tests {
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
         let listener = CapturingListener::new();
-        let sync = JiraSync::with_listener(client, jira_repo.clone(), task_repo.clone(), test_config(), listener.clone());
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
         sync.sync_now().await.unwrap();
 
@@ -546,7 +572,13 @@ mod tests {
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
         let listener = CapturingListener::new();
-        let sync = JiraSync::with_listener(client, jira_repo.clone(), task_repo.clone(), test_config(), listener.clone());
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
         sync.sync_now().await.unwrap();
 
@@ -653,16 +685,27 @@ mod tests {
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
         let listener = CapturingListener::new();
-        let sync = JiraSync::with_listener(client, jira_repo.clone(), task_repo.clone(), test_config(), listener.clone());
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
         sync.sync_now().await.unwrap();
 
         // Manually mark task done before next sync
         use planeai_tasks::provider::TaskProvider;
-        task_repo.update("PROJ-1", UpdateParams {
-            status: Some(Status::Done),
-            ..Default::default()
-        }).unwrap();
+        task_repo
+            .update(
+                "PROJ-1",
+                UpdateParams {
+                    status: Some(Status::Done),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
 
         // Second sync: issue disappears
         server.reset().await;

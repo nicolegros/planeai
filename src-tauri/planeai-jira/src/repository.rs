@@ -150,7 +150,8 @@ impl JiraRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut stmt = conn.prepare("SELECT issue_key FROM jira_issues WHERE sync_status = 'synced'")?;
+        let mut stmt =
+            conn.prepare("SELECT issue_key FROM jira_issues WHERE sync_status = 'synced'")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         let mut keys = Vec::new();
         for r in rows {

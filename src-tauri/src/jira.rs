@@ -55,7 +55,11 @@ pub struct JiraState {
 
 impl JiraState {
     /// Activate sync + writeback. Returns the CancellationToken for the sync loop.
-    pub fn activate(&mut self, jira_config: &JiraConfig, app: AppHandle) -> Result<CancellationToken, String> {
+    pub fn activate(
+        &mut self,
+        jira_config: &JiraConfig,
+        app: AppHandle,
+    ) -> Result<CancellationToken, String> {
         let cloud_id = self.auth.cloud_id().map_err(|e| e.to_string())?;
         let client = Arc::new(JiraClient::new(self.auth.clone(), cloud_id));
         let task_provider = open_task_provider(jira_config)?;
