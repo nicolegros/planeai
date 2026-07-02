@@ -260,7 +260,7 @@ pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<JiraTasksRes
 
     let issue_keys = state
         .repo
-        .list_all_issue_keys()
+        .list_active_issue_keys()
         .map_err(|e| e.to_string())?;
     if issue_keys.is_empty() {
         return Ok(JiraTasksResponse {

@@ -46,8 +46,7 @@ export interface JiraWriteback {
   comment?: boolean;
 }
 
-export interface JiraProjectMapping {
-  jira_project: string;
+export interface JiraSyncSource {
   jql: string;
   status_map?: Record<string, string>;
   writeback?: JiraWriteback | null;
@@ -56,7 +55,7 @@ export interface JiraProjectMapping {
 export interface JiraConfig {
   site: string;
   sync_interval_ms?: number;
-  projects?: Record<string, JiraProjectMapping>;
+  sources?: Record<string, JiraSyncSource>;
 }
 
 export interface IntegrationsConfig {

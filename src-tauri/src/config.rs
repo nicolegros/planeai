@@ -1043,9 +1043,8 @@ mod tests {
             "integrations": {
                 "jira": {
                     "site": "https://test.atlassian.net",
-                    "projects": {
+                    "sources": {
                         "myapp": {
-                            "jira_project": "MA",
                             "jql": "project = MA",
                             "status_map": {"In Progress": "active"},
                             "writeback": {"on_start": "In Progress", "comment": true}
@@ -1061,12 +1060,11 @@ mod tests {
         let jira = config.integrations.unwrap().jira.unwrap();
         assert_eq!(jira.site, "https://test.atlassian.net");
         assert_eq!(jira.sync_interval_ms, 60_000);
-        let mapping = jira.projects.get("myapp").unwrap();
-        assert_eq!(mapping.jira_project, "MA");
+        let source = jira.sources.get("myapp").unwrap();
         assert_eq!(
-            mapping.writeback.as_ref().unwrap().on_start,
+            source.writeback.as_ref().unwrap().on_start,
             Some("In Progress".to_string())
         );
-        assert!(mapping.writeback.as_ref().unwrap().comment);
+        assert!(source.writeback.as_ref().unwrap().comment);
     }
 }

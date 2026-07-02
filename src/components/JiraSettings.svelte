@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { jira } from "../lib/api";
-  import { getSettings, updateSettings, type JiraConfig, type JiraProjectMapping, type IntegrationsConfig } from "../lib/settings.svelte";
+  import { getSettings, updateSettings, type JiraConfig, type JiraSyncSource, type IntegrationsConfig } from "../lib/settings.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Button, Input, Select, Label, Checkbox } from "./ui";
   import type { JiraStatus, SyncResult } from "../lib/types";
 
   const config = $derived(getSettings());
   const jiraConfig = $derived(config.integrations?.jira ?? null);
-  const projectsMap = $derived(jiraConfig?.projects ?? {});
+  const sourcesMap = $derived(jiraConfig?.sources ?? {});
 
   let status = $state<JiraStatus>({ connected: false, site: null });
   let connecting = $state(false);
@@ -70,7 +70,7 @@
     syncing = true;
     try {
       const result: SyncResult = await jira.syncNow();
-      showSnackbar(`${result.created} created, ${result.updated} updated, ${result.done} done`);
+      showSnackbar(`${result.created} created, ${result.updated} updated, ${result.departed} departed`);
     } catch (e) {
       showSnackbar(String(e));
     } finally {
@@ -79,26 +79,26 @@
   }
 
   function addSource() {
-    const key = `source_${Object.keys(projectsMap).length + 1}`;
-    saveJira({ projects: { ...projectsMap, [key]: { jira_project: "", jql: "", status_map: {}, writeback: null } } });
+    const key = `source_${Object.keys(sourcesMap).length + 1}`;
+    saveJira({ sources: { ...sourcesMap, [key]: { jql: "", status_map: {}, writeback: null } } });
   }
 
   function removeSource(key: string) {
-    const updated = { ...projectsMap };
+    const updated = { ...sourcesMap };
     delete updated[key];
-    saveJira({ projects: updated });
+    saveJira({ sources: updated });
   }
 
-  function updateSource(key: string, patch: Partial<JiraProjectMapping>) {
-    saveJira({ projects: { ...projectsMap, [key]: { ...projectsMap[key], ...patch } } });
+  function updateSource(key: string, patch: Partial<JiraSyncSource>) {
+    saveJira({ sources: { ...sourcesMap, [key]: { ...sourcesMap[key], ...patch } } });
   }
 
   function renameSourceKey(oldKey: string, newKey: string) {
     if (!newKey || newKey === oldKey) return;
-    const updated = { ...projectsMap };
+    const updated = { ...sourcesMap };
     updated[newKey] = updated[oldKey];
     delete updated[oldKey];
-    saveJira({ projects: updated });
+    saveJira({ sources: updated });
   }
 </script>
 
@@ -135,7 +135,7 @@
 <!-- Sources -->
 <section class="space-y-3">
   <h2 class="text-sm font-medium text-t3 uppercase tracking-wide">Sources</h2>
-  {#each Object.entries(projectsMap) as [key, mapping], i (key)}
+  {#each Object.entries(sourcesMap) as [key, source], i (key)}
     <div class="rounded-lg border border-border p-4 space-y-3">
       <div class="flex items-center justify-between">
         <span class="text-sm font-medium text-t1">{key}</span>
@@ -143,28 +143,23 @@
       </div>
 
       <div class="space-y-1">
-        <Label for="mapping-name-{i}">Name</Label>
-        <Input id="mapping-name-{i}" value={key} placeholder="my-source" onchange={(e) => renameSourceKey(key, e.currentTarget.value)} />
+        <Label for="source-name-{i}">Name</Label>
+        <Input id="source-name-{i}" value={key} placeholder="my-source" onchange={(e) => renameSourceKey(key, e.currentTarget.value)} />
       </div>
 
       <div class="space-y-1">
-        <Label for="mapping-jira-{i}">Jira project key</Label>
-        <Input id="mapping-jira-{i}" value={mapping.jira_project} placeholder="PROJ" onchange={(e) => updateSource(key, { jira_project: e.currentTarget.value })} />
-      </div>
-
-      <div class="space-y-1">
-        <Label for="mapping-jql-{i}">JQL filter</Label>
-        <Input id="mapping-jql-{i}" value={mapping.jql ?? ""} placeholder="status != Done" onchange={(e) => updateSource(key, { jql: e.currentTarget.value })} />
+        <Label for="source-jql-{i}">JQL filter</Label>
+        <Input id="source-jql-{i}" value={source.jql ?? ""} placeholder="project = PENG AND assignee = currentUser()" onchange={(e) => updateSource(key, { jql: e.currentTarget.value })} />
       </div>
 
       <!-- Status Map -->
       <div class="space-y-2">
         <!-- svelte-ignore a11y_label_has_associated_control -->
         <label class="text-xs text-t3">Status map (Jira status → planeai status)</label>
-        {#each Object.entries(mapping.status_map ?? {}) as [jiraStatus, planeaiStatus], j (jiraStatus)}
+        {#each Object.entries(source.status_map ?? {}) as [jiraStatus, planeaiStatus], j (jiraStatus)}
           <div class="flex items-center gap-2">
             <Input value={jiraStatus} placeholder="Jira status" onchange={(e) => {
-              const map = { ...mapping.status_map };
+              const map = { ...source.status_map };
               const val = map[jiraStatus];
               delete map[jiraStatus];
               if (e.currentTarget.value) map[e.currentTarget.value] = val;
@@ -172,18 +167,18 @@
             }} class="flex-1" aria-label="Jira status name" />
             <span class="text-xs text-t3">→</span>
             <Select items={planeaiStatuses} value={planeaiStatus} onValueChange={(v) => {
-              updateSource(key, { status_map: { ...mapping.status_map, [jiraStatus]: v } });
+              updateSource(key, { status_map: { ...source.status_map, [jiraStatus]: v } });
             }} class="flex-1" />
             <button class="text-xs text-red-500 hover:text-red-700" onclick={() => {
-              const map = { ...mapping.status_map };
+              const map = { ...source.status_map };
               delete map[jiraStatus];
               updateSource(key, { status_map: map });
             }} aria-label="Remove status pair">×</button>
           </div>
         {/each}
         <button class="text-xs text-accent hover:underline" onclick={() => {
-          updateSource(key, { status_map: { ...mapping.status_map, "": "todo" } });
-        }}>+ Add status pair</button>
+          updateSource(key, { status_map: { ...source.status_map, "": "todo" } });
+        }}>+ Add status mapping</button>
       </div>
 
       <!-- Writeback -->
@@ -193,14 +188,14 @@
         <div class="grid grid-cols-2 gap-2">
           <div class="space-y-1">
             <Label for="wb-start-{i}">on_start</Label>
-            <Input id="wb-start-{i}" value={mapping.writeback?.on_start ?? ""} placeholder="In Progress" onchange={(e) => updateSource(key, { writeback: { ...mapping.writeback, on_start: e.currentTarget.value || null } })} />
+            <Input id="wb-start-{i}" value={source.writeback?.on_start ?? ""} placeholder="In Progress" onchange={(e) => updateSource(key, { writeback: { ...source.writeback, on_start: e.currentTarget.value || null } })} />
           </div>
           <div class="space-y-1">
             <Label for="wb-complete-{i}">on_complete</Label>
-            <Input id="wb-complete-{i}" value={mapping.writeback?.on_complete ?? ""} placeholder="Done" onchange={(e) => updateSource(key, { writeback: { ...mapping.writeback, on_complete: e.currentTarget.value || null } })} />
+            <Input id="wb-complete-{i}" value={source.writeback?.on_complete ?? ""} placeholder="Done" onchange={(e) => updateSource(key, { writeback: { ...source.writeback, on_complete: e.currentTarget.value || null } })} />
           </div>
         </div>
-        <Checkbox id="wb-comment-{i}" label="Add comment on transition" checked={mapping.writeback?.comment ?? false} onchange={() => updateSource(key, { writeback: { ...mapping.writeback, comment: !(mapping.writeback?.comment ?? false) } })} />
+        <Checkbox id="wb-comment-{i}" label="Add comment on transition" checked={source.writeback?.comment ?? false} onchange={() => updateSource(key, { writeback: { ...source.writeback, comment: !(source.writeback?.comment ?? false) } })} />
       </div>
     </div>
   {/each}

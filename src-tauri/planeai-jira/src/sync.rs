@@ -8,16 +8,33 @@ use tracing::{info, warn};
 use crate::client::JiraClient;
 use crate::config::JiraConfig;
 use crate::repository::JiraRepository;
-use crate::writeback::{JiraWriteback, WritebackAction};
-use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams};
+use planeai_tasks::model::{CreateParams, Status, UpdateParams};
 use planeai_tasks::provider::TaskProvider;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SyncResult {
     pub created: usize,
     pub updated: usize,
-    pub done: usize,
+    pub departed: usize,
     pub errors: usize,
+}
+
+/// Notified when issues disappear from JQL results.
+/// The app layer implements this to show confirmation toasts.
+pub trait SyncListener: Send + Sync {
+    /// Called for each issue that disappeared from JQL results.
+    /// The listener is responsible for eventually marking the task done (or not).
+    fn on_issue_departed(&self, issue_key: &str, summary: &str);
+
+    /// Called after each successful sync cycle completes.
+    fn on_sync_complete(&self, result: &SyncResult);
+}
+
+/// No-op listener for tests that don't care about events.
+pub struct NoOpListener;
+impl SyncListener for NoOpListener {
+    fn on_issue_departed(&self, _key: &str, _summary: &str) {}
+    fn on_sync_complete(&self, _result: &SyncResult) {}
 }
 
 pub struct JiraSync {
@@ -25,7 +42,7 @@ pub struct JiraSync {
     repo: Arc<JiraRepository>,
     task_provider: Arc<dyn TaskProvider + Send + Sync>,
     config: JiraConfig,
-    writeback: JiraWriteback,
+    listener: Arc<dyn SyncListener>,
 }
 
 impl JiraSync {
@@ -35,13 +52,22 @@ impl JiraSync {
         task_provider: Arc<dyn TaskProvider + Send + Sync>,
         config: JiraConfig,
     ) -> Self {
-        let writeback = JiraWriteback::new(Arc::clone(&client));
+        Self::with_listener(client, repo, task_provider, config, Arc::new(NoOpListener))
+    }
+
+    pub fn with_listener(
+        client: Arc<JiraClient>,
+        repo: Arc<JiraRepository>,
+        task_provider: Arc<dyn TaskProvider + Send + Sync>,
+        config: JiraConfig,
+        listener: Arc<dyn SyncListener>,
+    ) -> Self {
         Self {
             client,
             repo,
             task_provider,
             config,
-            writeback,
+            listener,
         }
     }
 
@@ -56,7 +82,10 @@ impl JiraSync {
                 }
                 _ = interval.tick() => {
                     match self.sync_now().await {
-                        Ok(r) => info!(created = r.created, updated = r.updated, done = r.done, errors = r.errors, "jira sync complete"),
+                        Ok(r) => {
+                            info!(created = r.created, updated = r.updated, departed = r.departed, errors = r.errors, "jira sync complete");
+                            self.listener.on_sync_complete(&r);
+                        }
                         Err(e) => warn!(error = %e, "jira sync error"),
                     }
                 }
@@ -67,16 +96,16 @@ impl JiraSync {
     pub async fn sync_now(&self) -> Result<SyncResult, crate::Error> {
         let mut result = SyncResult::default();
 
-        if self.config.projects.is_empty() {
-            tracing::warn!("sync_now: no project mappings configured");
+        if self.config.sources.is_empty() {
+            tracing::warn!("sync_now: no sync sources configured");
             return Ok(result);
         }
 
-        for (source_name, mapping) in &self.config.projects {
+        for (source_name, mapping) in &self.config.sources {
             match self.sync_project(source_name, mapping, &mut result).await {
                 Ok(()) => {}
                 Err(e) => {
-                    warn!(project = %mapping.jira_project, error = %e, "sync failed for project, continuing");
+                    warn!(source = %source_name, error = %e, "sync failed for source, continuing");
                     result.errors += 1;
                 }
             }
@@ -88,7 +117,7 @@ impl JiraSync {
     async fn sync_project(
         &self,
         source_name: &str,
-        mapping: &crate::config::JiraProjectMapping,
+        mapping: &crate::config::JiraSyncSource,
         result: &mut SyncResult,
     ) -> Result<(), crate::Error> {
         let issues = self.client.search(&mapping.jql).await?;
@@ -101,7 +130,7 @@ impl JiraSync {
             // Upsert raw issue into local store
             let jira_issue = crate::model::JiraIssue {
                 issue_key: issue.issue_key.clone(),
-                jira_project: mapping.jira_project.clone(),
+                jira_project: source_name.to_string(),
                 summary: issue.summary.clone(),
                 description: issue.description.clone(),
                 status: issue.status.clone(),
@@ -115,7 +144,11 @@ impl JiraSync {
 
             match self.task_provider.get(&issue.issue_key) {
                 Err(planeai_tasks::provider::Error::NotFound) => {
-                    let status = map_status(&issue.status, &mapping.status_map);
+                    let status = map_status(
+                        &issue.status,
+                        &mapping.status_map,
+                        issue.status_category.as_deref(),
+                    );
                     let priority = map_priority(issue.priority.as_deref());
                     self.task_provider.create(CreateParams {
                         key: Some(issue.issue_key.clone()),
@@ -129,7 +162,11 @@ impl JiraSync {
                     result.created += 1;
                 }
                 Ok(task) => {
-                    let new_status = map_status(&issue.status, &mapping.status_map);
+                    let new_status = map_status(
+                        &issue.status,
+                        &mapping.status_map,
+                        issue.status_category.as_deref(),
+                    );
                     let needs_update = task.title != issue.summary
                         || task.description != issue.description
                         || task.status != new_status;
@@ -153,8 +190,8 @@ impl JiraSync {
             }
         }
 
-        // Mark tasks done when their issues disappear from JQL results
-        let synced_keys = self.repo.list_synced_keys(&mapping.jira_project)?;
+        // Notify listener about issues that disappeared from JQL results
+        let synced_keys = self.repo.list_synced_keys(source_name)?;
         for key in synced_keys {
             if seen_keys.contains(&key) {
                 continue;
@@ -164,35 +201,10 @@ impl JiraSync {
                     if task.status == Status::Done {
                         continue;
                     }
-                    // Guard: don't mark done if task has active children
-                    let children = self.task_provider.list(ListFilter {
-                        parent_key: Some(Some(key.clone())),
-                        ..Default::default()
-                    })?;
-                    if children.iter().any(|c| c.status != Status::Done) {
-                        continue;
-                    }
 
-                    self.task_provider.update(
-                        &key,
-                        UpdateParams {
-                            status: Some(Status::Done),
-                            ..Default::default()
-                        },
-                    )?;
+                    self.listener.on_issue_departed(&key, &task.title);
                     self.repo.mark_departed(&[&key])?;
-                    result.done += 1;
-
-                    // Writeback is best-effort — don't abort sync on failure
-                    if let Some(wb_config) = &mapping.writeback {
-                        if let Err(e) = self
-                            .writeback
-                            .on_status_change(&key, WritebackAction::Complete, wb_config)
-                            .await
-                        {
-                            warn!(key = %key, error = %e, "writeback failed for auto-done task");
-                        }
-                    }
+                    result.departed += 1;
                 }
                 Err(planeai_tasks::provider::Error::NotFound) => {}
                 Err(e) => {
@@ -205,11 +217,26 @@ impl JiraSync {
     }
 }
 
-fn map_status(jira_status: &str, status_map: &std::collections::HashMap<String, String>) -> Status {
-    status_map
-        .get(jira_status)
-        .and_then(|v| Status::parse(v))
-        .unwrap_or(Status::Todo)
+fn map_status(
+    jira_status: &str,
+    status_map: &std::collections::HashMap<String, String>,
+    status_category: Option<&str>,
+) -> Status {
+    // 1. Explicit status_map takes priority
+    if let Some(mapped) = status_map.get(jira_status).and_then(|v| Status::parse(v)) {
+        return mapped;
+    }
+    // 2. Fall back to Jira statusCategory
+    if let Some(category) = status_category {
+        match category {
+            "To Do" => return Status::Todo,
+            "In Progress" => return Status::InProgress,
+            "Done" => return Status::Done,
+            _ => {}
+        }
+    }
+    // 3. Default
+    Status::Todo
 }
 
 fn map_priority(name: Option<&str>) -> i32 {
@@ -227,7 +254,7 @@ fn map_priority(name: Option<&str>) -> i32 {
 mod tests {
     use super::*;
     use crate::auth::JiraAuth;
-    use crate::config::{JiraConfig, JiraProjectMapping};
+    use crate::config::{JiraConfig, JiraSyncSource};
     use rusqlite::Connection;
     use std::collections::HashMap;
     use wiremock::matchers::{method, path};
@@ -237,19 +264,63 @@ mod tests {
     fn test_map_status_found() {
         let mut m = HashMap::new();
         m.insert("In Progress".to_string(), "in_progress".to_string());
-        assert_eq!(map_status("In Progress", &m), Status::InProgress);
+        assert_eq!(map_status("In Progress", &m, None), Status::InProgress);
     }
 
     #[test]
     fn test_map_status_not_found_defaults_to_todo() {
-        assert_eq!(map_status("Unknown", &HashMap::new()), Status::Todo);
+        assert_eq!(map_status("Unknown", &HashMap::new(), None), Status::Todo);
     }
 
     #[test]
     fn test_map_status_invalid_mapped_value_defaults_to_todo() {
         let mut m = HashMap::new();
         m.insert("X".to_string(), "invalid_status".to_string());
-        assert_eq!(map_status("X", &m), Status::Todo);
+        assert_eq!(map_status("X", &m, None), Status::Todo);
+    }
+
+    #[test]
+    fn test_map_status_falls_back_to_status_category() {
+        // No explicit mapping, but statusCategory is "In Progress"
+        assert_eq!(
+            map_status("Acknowledged", &HashMap::new(), Some("In Progress")),
+            Status::InProgress
+        );
+    }
+
+    #[test]
+    fn test_map_status_category_to_do() {
+        assert_eq!(
+            map_status("Open", &HashMap::new(), Some("To Do")),
+            Status::Todo
+        );
+    }
+
+    #[test]
+    fn test_map_status_category_done() {
+        assert_eq!(
+            map_status("Resolved", &HashMap::new(), Some("Done")),
+            Status::Done
+        );
+    }
+
+    #[test]
+    fn test_map_status_explicit_map_wins_over_category() {
+        let mut m = HashMap::new();
+        m.insert("Acknowledged".to_string(), "done".to_string());
+        // Explicit map says "done", category says "In Progress" — explicit wins
+        assert_eq!(
+            map_status("Acknowledged", &m, Some("In Progress")),
+            Status::Done
+        );
+    }
+
+    #[test]
+    fn test_map_status_unknown_category_defaults_to_todo() {
+        assert_eq!(
+            map_status("Weird", &HashMap::new(), Some("No Category")),
+            Status::Todo
+        );
     }
 
     #[test]
@@ -291,11 +362,10 @@ mod tests {
     }
 
     fn test_config() -> JiraConfig {
-        let mut projects = HashMap::new();
-        projects.insert(
+        let mut sources = HashMap::new();
+        sources.insert(
             "proj".to_string(),
-            JiraProjectMapping {
-                jira_project: "PROJ".to_string(),
+            JiraSyncSource {
                 jql: "project = PROJ".to_string(),
                 status_map: HashMap::from([
                     ("In Progress".to_string(), "in_progress".to_string()),
@@ -307,7 +377,7 @@ mod tests {
         JiraConfig {
             site: "https://test.atlassian.net".to_string(),
             sync_interval_ms: 60_000,
-            projects,
+            sources,
         }
     }
 
@@ -317,6 +387,38 @@ mod tests {
             format!("{}/oauth/token", server.uri()),
         ));
         Arc::new(JiraClient::with_base_url(auth, server.uri()))
+    }
+
+    struct CapturingListener {
+        departed: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl CapturingListener {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                departed: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn departed_keys(&self) -> Vec<String> {
+            self.departed
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect()
+        }
+    }
+
+    impl SyncListener for CapturingListener {
+        fn on_issue_departed(&self, key: &str, summary: &str) {
+            self.departed
+                .lock()
+                .unwrap()
+                .push((key.to_string(), summary.to_string()));
+        }
+
+        fn on_sync_complete(&self, _result: &SyncResult) {}
     }
 
     #[tokio::test]
@@ -343,7 +445,7 @@ mod tests {
 
         assert_eq!(result.created, 3);
         assert_eq!(result.updated, 0);
-        assert_eq!(result.done, 0);
+        assert_eq!(result.departed, 0);
 
         // Verify tasks exist
         use planeai_tasks::model::ListFilter;
@@ -373,7 +475,14 @@ mod tests {
 
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
-        let sync = JiraSync::new(client, jira_repo.clone(), task_repo.clone(), test_config());
+        let listener = CapturingListener::new();
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
         sync.sync_now().await.unwrap();
 
@@ -390,13 +499,16 @@ mod tests {
 
         let result = sync.sync_now().await.unwrap();
 
-        assert_eq!(result.done, 2);
-        // Verify tasks are marked done
+        assert_eq!(result.departed, 2);
+        // Listener should be notified, tasks NOT auto-marked done
+        let mut departed = listener.departed_keys();
+        departed.sort();
+        assert_eq!(departed, vec!["PROJ-2", "PROJ-3"]);
         use planeai_tasks::provider::TaskProvider;
         let task2 = task_repo.get("PROJ-2").unwrap();
         let task3 = task_repo.get("PROJ-3").unwrap();
-        assert_eq!(task2.status, Status::Done);
-        assert_eq!(task3.status, Status::Done);
+        assert_eq!(task2.status, Status::Todo);
+        assert_eq!(task3.status, Status::Todo);
     }
 
     #[tokio::test]
@@ -440,7 +552,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_marks_done_for_all_statuses_when_issue_disappears() {
+    async fn sync_notifies_listener_for_all_statuses_when_issue_disappears() {
         let server = MockServer::start().await;
 
         // First sync: 2 issues
@@ -459,7 +571,14 @@ mod tests {
 
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
-        let sync = JiraSync::new(client, jira_repo.clone(), task_repo.clone(), test_config());
+        let listener = CapturingListener::new();
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
         sync.sync_now().await.unwrap();
 
@@ -475,13 +594,16 @@ mod tests {
 
         let result = sync.sync_now().await.unwrap();
 
-        // Both should be marked done
-        assert_eq!(result.done, 2);
+        // Both should trigger listener notification, not auto-done
+        assert_eq!(result.departed, 2);
+        let mut departed = listener.departed_keys();
+        departed.sort();
+        assert_eq!(departed, vec!["PROJ-1", "PROJ-2"]);
         use planeai_tasks::provider::TaskProvider;
         let task1 = task_repo.get("PROJ-1").unwrap();
         let task2 = task_repo.get("PROJ-2").unwrap();
-        assert_eq!(task1.status, Status::Done);
-        assert_eq!(task2.status, Status::Done);
+        assert_eq!(task1.status, Status::Todo);
+        assert_eq!(task2.status, Status::InProgress);
     }
 
     #[tokio::test]
@@ -530,11 +652,10 @@ mod tests {
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
         let mut config = test_config();
-        // Add a second project mapping — it'll use the same mock (returns same data)
-        config.projects.insert(
+        // Add a second source — it'll use the same mock (returns same data)
+        config.sources.insert(
             "other".to_string(),
-            JiraProjectMapping {
-                jira_project: "OTHER".to_string(),
+            JiraSyncSource {
                 jql: "project = OTHER".to_string(),
                 status_map: HashMap::new(),
                 writeback: None,
@@ -548,106 +669,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn active_children_prevent_done_marking() {
-        let server = MockServer::start().await;
-
-        // First sync: parent issue
-        Mock::given(method("GET"))
-            .and(path("/search/jql"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "issues": [issue_json("PROJ-1", "Parent", "To Do")]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let client = test_client(&server).await;
-        let (jira_repo, task_repo) = setup_db();
-        let sync = JiraSync::new(client, jira_repo, task_repo.clone(), test_config());
-
-        sync.sync_now().await.unwrap();
-
-        // Create a child task that is still in_progress
-        use planeai_tasks::provider::TaskProvider;
-        task_repo
-            .create(CreateParams {
-                key: Some("PROJ-1-child".to_string()),
-                title: "Child task".to_string(),
-                status: Some(Status::InProgress),
-                parent_key: Some("PROJ-1".to_string()),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Second sync: parent disappears from JQL
-        server.reset().await;
-        Mock::given(method("GET"))
-            .and(path("/search/jql"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "issues": []
-            })))
-            .mount(&server)
-            .await;
-
-        let result = sync.sync_now().await.unwrap();
-
-        // Parent should NOT be marked done because child is active
-        assert_eq!(result.done, 0);
-        let parent = task_repo.get("PROJ-1").unwrap();
-        assert_eq!(parent.status, Status::Todo);
-    }
-
-    #[tokio::test]
-    async fn done_children_allow_done_marking() {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/search/jql"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "issues": [issue_json("PROJ-1", "Parent", "To Do")]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let client = test_client(&server).await;
-        let (jira_repo, task_repo) = setup_db();
-        let sync = JiraSync::new(client, jira_repo, task_repo.clone(), test_config());
-
-        sync.sync_now().await.unwrap();
-
-        // Create a child task that is done
-        use planeai_tasks::provider::TaskProvider;
-        task_repo
-            .create(CreateParams {
-                key: Some("PROJ-1-child".to_string()),
-                title: "Child task".to_string(),
-                status: Some(Status::Done),
-                parent_key: Some("PROJ-1".to_string()),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Second sync: parent disappears
-        server.reset().await;
-        Mock::given(method("GET"))
-            .and(path("/search/jql"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "issues": []
-            })))
-            .mount(&server)
-            .await;
-
-        let result = sync.sync_now().await.unwrap();
-
-        // Parent should be marked done since all children are done
-        assert_eq!(result.done, 1);
-        let parent = task_repo.get("PROJ-1").unwrap();
-        assert_eq!(parent.status, Status::Done);
-    }
-
-    #[tokio::test]
-    async fn writeback_fires_for_auto_done_tasks() {
+    async fn sync_does_not_notify_for_already_done_tasks() {
         let server = MockServer::start().await;
 
         // First sync: one issue
@@ -662,19 +684,30 @@ mod tests {
 
         let client = test_client(&server).await;
         let (jira_repo, task_repo) = setup_db();
+        let listener = CapturingListener::new();
+        let sync = JiraSync::with_listener(
+            client,
+            jira_repo.clone(),
+            task_repo.clone(),
+            test_config(),
+            listener.clone(),
+        );
 
-        let mut config = test_config();
-        // Enable writeback with on_complete transition
-        config.projects.get_mut("proj").unwrap().writeback = Some(crate::config::WritebackConfig {
-            on_start: None,
-            on_complete: Some("Done".to_string()),
-            comment: true,
-        });
-
-        let sync = JiraSync::new(client, jira_repo, task_repo, config);
         sync.sync_now().await.unwrap();
 
-        // Second sync: issue disappears; expect transition + comment calls
+        // Manually mark task done before next sync
+        use planeai_tasks::provider::TaskProvider;
+        task_repo
+            .update(
+                "PROJ-1",
+                UpdateParams {
+                    status: Some(Status::Done),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Second sync: issue disappears
         server.reset().await;
         Mock::given(method("GET"))
             .and(path("/search/jql"))
@@ -684,32 +717,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Mock transition endpoint
-        Mock::given(method("GET"))
-            .and(path("/issue/PROJ-1/transitions"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "transitions": [{"id": "31", "name": "Done", "to": {"name": "Done"}}]
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/issue/PROJ-1/transitions"))
-            .respond_with(ResponseTemplate::new(204))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/issue/PROJ-1/comment"))
-            .respond_with(ResponseTemplate::new(201))
-            .expect(1)
-            .mount(&server)
-            .await;
-
         let result = sync.sync_now().await.unwrap();
-        assert_eq!(result.done, 1);
+
+        // Already-done task should not trigger listener
+        assert_eq!(result.departed, 0);
+        assert!(listener.departed_keys().is_empty());
     }
 
     #[tokio::test]
