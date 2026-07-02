@@ -50,7 +50,10 @@ pub async fn jira_connect(
     state.auth.connect().await.map_err(|e| e.to_string())?;
 
     let cancel = state.activate(&jira_config, app)?;
-    let sync = state.sync.clone().unwrap();
+    let sync = state
+        .sync
+        .clone()
+        .ok_or("jira sync not initialized after activate")?;
     tokio::spawn(async move { sync.start(cancel).await });
 
     tracing::info!("jira: connected");

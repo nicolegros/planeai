@@ -37,11 +37,13 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
 
     for (i, sql) in migrations.iter().enumerate() {
         if (i as i32) >= version {
-            conn.execute_batch(sql)?;
-            conn.execute(
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            tx.execute(
                 "UPDATE jira_schema_version SET version = ?1",
                 params![i + 1],
             )?;
+            tx.commit()?;
         }
     }
 

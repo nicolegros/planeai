@@ -10,9 +10,16 @@ fn main() {
         .unwrap();
     let _ = dotenvy::from_path(repo_root.join(".env"));
 
-    let client_id = std::env::var("JIRA_CLIENT_ID").expect("JIRA_CLIENT_ID must be set");
-    let client_secret =
-        std::env::var("JIRA_CLIENT_SECRET").expect("JIRA_CLIENT_SECRET must be set");
+    let client_id = std::env::var("JIRA_CLIENT_ID").unwrap_or_else(|_| {
+        println!("cargo::warning=JIRA_CLIENT_ID not set — using placeholder. OAuth will not work.");
+        "PLACEHOLDER_CLIENT_ID".to_string()
+    });
+    let client_secret = std::env::var("JIRA_CLIENT_SECRET").unwrap_or_else(|_| {
+        println!(
+            "cargo::warning=JIRA_CLIENT_SECRET not set — using placeholder. OAuth will not work."
+        );
+        "PLACEHOLDER_CLIENT_SECRET".to_string()
+    });
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest = std::path::Path::new(&out_dir).join("oauth_credentials.rs");

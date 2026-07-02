@@ -64,7 +64,15 @@ impl TokenStore for FileStore {
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), Error> {
-        std::fs::write(self.dir.join(key), value).map_err(|e| Error::Keyring(e.to_string()))
+        let path = self.dir.join(key);
+        std::fs::write(&path, value).map_err(|e| Error::Keyring(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| Error::Keyring(e.to_string()))?;
+        }
+        Ok(())
     }
 
     fn delete(&self, key: &str) -> Result<(), Error> {
@@ -156,7 +164,15 @@ impl JiraAuth {
     }
 
     pub async fn connect(&self) -> Result<(), Error> {
-        let listener = TcpListener::bind("127.0.0.1:19287").await?;
+        let listener = TcpListener::bind("127.0.0.1:19287").await.map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to bind OAuth callback port 19287: {e}. \
+                     Is another instance of planeai already running?"
+                ),
+            ))
+        })?;
         let redirect_uri = "http://localhost:19287/callback".to_string();
 
         let (verifier, challenge) = generate_pkce();

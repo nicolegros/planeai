@@ -123,12 +123,13 @@ impl JiraClient {
 
     #[instrument(skip(self), fields(jql))]
     pub async fn search(&self, jql: &str) -> Result<Vec<FetchedIssue>, Error> {
+        const MAX_PAGES: usize = 100;
         let mut issues = Vec::new();
         let mut next_page_token: Option<String> = None;
         let page_size_str = PAGE_SIZE.to_string();
 
-        loop {
-            debug!(?next_page_token, "fetching search page");
+        for page_num in 0..MAX_PAGES {
+            debug!(?next_page_token, page_num, "fetching search page");
             let url = format!("{}/search/jql", self.base_url());
             let token_ref = next_page_token.clone();
 
