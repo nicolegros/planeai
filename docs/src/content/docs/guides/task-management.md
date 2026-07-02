@@ -181,5 +181,29 @@ High-priority tasks always dispatch first. Use priority to ensure critical bugs 
 :::
 
 :::note
-Tasks are stored locally in planeai's SQLite database, scoped to each project. They are not synced to external issue trackers — planeai's task board is designed for fast, local agent orchestration rather than team-wide project management.
+Tasks are stored locally in planeai's SQLite database, scoped to each project. For external issue tracking, see the [Jira integration](#jira-integration) below.
 :::
+
+## Jira Integration
+
+planeai can pull issues from a Jira Cloud site and display them alongside local tasks in the sidebar. This lets you work on Jira issues with the same agent-driven workflow as local tasks.
+
+### How it works
+
+1. **Configure sources** — define JQL filters in `integrations.jira.sources` (see [Configuration](/planeai/guides/configuration/#jira))
+2. **Connect** — authenticate via **Preferences → Jira → Connect to Jira** (OAuth 2.0)
+3. **Sync** — planeai polls Jira on an interval and imports matching issues into a dedicated Jira section in the sidebar
+4. **Assign** — click a Jira issue to assign it to a project, which creates a child task in that project's task board
+5. **Writeback** — when a task starts or completes locally, planeai can transition the Jira issue and/or add a comment
+
+### Sidebar
+
+Synced Jira issues appear in a dedicated "Jira" section at the bottom of the sidebar. Each issue shows its key, title, and status. Click an issue to assign it to a project (creating a local child task that can be dispatched to an agent).
+
+### Departed issues
+
+When a synced issue no longer matches its source JQL (e.g., reassigned or moved), planeai marks it as "departed" and shows a prompt. You can mark the local task as done or dismiss the notification.
+
+### Configuration
+
+See [Configuration → Integrations → Jira](/planeai/guides/configuration/#jira) for the full config schema including sources, status maps, and writeback options.

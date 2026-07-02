@@ -146,6 +146,53 @@ Tauri still owns:
 4. **Notify hooks** — Iced doesn't detect agent completion signals.
 5. **PR integration** — Iced doesn't track PR status.
 
+## Jira Integration
+
+The `planeai-jira` crate provides two-way sync between Jira Cloud and planeai's task board.
+
+### Jira Issues (local cache)
+
+Stored in `jira_issues` table (managed by `JiraRepository`):
+
+| Field          | Type     | Description                                               |
+| -------------- | -------- | --------------------------------------------------------- |
+| issue_key      | String   | Jira issue key (e.g., `ENG-42`). Primary key.            |
+| summary        | String   | Issue title from Jira                                     |
+| description    | String   | Issue body/description                                    |
+| status         | String   | Current Jira status (e.g., "In Progress")                 |
+| priority       | String?  | Jira priority name                                        |
+| labels         | String[] | Jira labels                                               |
+| sync_status    | Enum     | `synced` or `departed`                                    |
+| last_synced_at | DateTime | Timestamp of last successful sync                         |
+| source_name    | String   | Config source alias (key in `JiraConfig.sources`)         |
+
+### Sync Flow
+
+```
+JQL query → Jira REST API → JiraRepository (local cache)
+                                    ↓
+                          TaskProvider (upsert into planeai tasks)
+```
+
+- New issues: created as tasks with their Jira key as the task key
+- Updated issues: title/description/status updated in local task store
+- Departed issues (removed from JQL results): marked `departed`, UI prompted
+
+### Writeback Flow
+
+```
+Local task status change → JiraWriteback
+                              ↓
+                    Jira REST API (transition + optional comment)
+```
+
+- `on_start`: triggered when a Jira task's first child is assigned to a project
+- `on_complete`: triggered when a Jira task is marked done locally
+
+### Authentication
+
+OAuth 2.0 with PKCE via `JiraAuth`. Tokens stored file-based in `<app_data>/jira-tokens/` (600 perms). Refresh tokens used for silent re-auth.
+
 ## Running Tests
 
 ```bash

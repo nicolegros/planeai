@@ -19,6 +19,21 @@ cd planeai
 pnpm install
 ```
 
+### Environment Variables
+
+Copy `.env.example` to `.env` and fill in the values:
+
+```bash
+cp .env.example .env
+```
+
+| Variable             | Required | Description                                    |
+| -------------------- | -------- | ---------------------------------------------- |
+| `JIRA_CLIENT_ID`     | No*      | OAuth 2.0 client ID for Jira integration       |
+| `JIRA_CLIENT_SECRET` | No*      | OAuth 2.0 client secret for Jira integration   |
+
+\* The build succeeds without these (placeholder values are used), but Jira OAuth will not work at runtime. For `cargo test` and `cargo clippy`, dummy values are passed automatically by the Makefile.
+
 ## Development
 
 ```bash
