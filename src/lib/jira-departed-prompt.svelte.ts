@@ -4,7 +4,6 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { refocusTerminal } from "./focus.svelte";
 
 export interface DepartedPrompt {
   key: string;
@@ -32,7 +31,6 @@ export async function handleDone(): Promise<void> {
   const { key } = current;
   current = null;
   advance();
-  refocusTerminal();
 
   try {
     await invoke("move_task_item", { key, status: "done" });
@@ -44,7 +42,6 @@ export async function handleDone(): Promise<void> {
 export function handleDismiss(): void {
   current = null;
   advance();
-  refocusTerminal();
 }
 
 /** Start listening for Tauri events. Call once at app startup. */
