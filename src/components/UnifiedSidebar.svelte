@@ -1,5 +1,6 @@
 <script lang="ts">
   import { projects as projectsApi, jira as jiraApi } from "../lib/api";
+  import { listen } from "@tauri-apps/api/event";
   import type { TaskItem, Session, Project } from "../lib/types";
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
@@ -69,6 +70,10 @@
   $effect(() => { if (projects.length) loadAutoModes(); });
   let jiraConnected = $state(false);
   $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
+  $effect(() => {
+    const unlisten = listen("jira-sync-complete", () => { jiraTaskStore.loadJiraTasks(); });
+    return () => { unlisten.then(fn => fn()); };
+  });
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);

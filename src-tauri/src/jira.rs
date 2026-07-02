@@ -39,6 +39,10 @@ impl SyncListener for TauriSyncListener {
             tracing::warn!(error = %e, key = %key, "failed to emit jira-issue-departed event");
         }
     }
+
+    fn on_sync_complete(&self, _result: &planeai_jira::SyncResult) {
+        let _ = self.app.emit("jira-sync-complete", ());
+    }
 }
 
 pub struct JiraState {

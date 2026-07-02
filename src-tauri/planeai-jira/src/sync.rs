@@ -25,12 +25,16 @@ pub trait SyncListener: Send + Sync {
     /// Called for each issue that disappeared from JQL results.
     /// The listener is responsible for eventually marking the task done (or not).
     fn on_issue_departed(&self, issue_key: &str, summary: &str);
+
+    /// Called after each successful sync cycle completes.
+    fn on_sync_complete(&self, result: &SyncResult);
 }
 
-/// No-op listener for tests that don't care about departure events.
+/// No-op listener for tests that don't care about events.
 pub struct NoOpListener;
 impl SyncListener for NoOpListener {
     fn on_issue_departed(&self, _key: &str, _summary: &str) {}
+    fn on_sync_complete(&self, _result: &SyncResult) {}
 }
 
 pub struct JiraSync {
@@ -78,7 +82,10 @@ impl JiraSync {
                 }
                 _ = interval.tick() => {
                     match self.sync_now().await {
-                        Ok(r) => info!(created = r.created, updated = r.updated, departed = r.departed, errors = r.errors, "jira sync complete"),
+                        Ok(r) => {
+                            info!(created = r.created, updated = r.updated, departed = r.departed, errors = r.errors, "jira sync complete");
+                            self.listener.on_sync_complete(&r);
+                        }
                         Err(e) => warn!(error = %e, "jira sync error"),
                     }
                 }
@@ -390,6 +397,8 @@ mod tests {
         fn on_issue_departed(&self, key: &str, summary: &str) {
             self.departed.lock().unwrap().push((key.to_string(), summary.to_string()));
         }
+
+        fn on_sync_complete(&self, _result: &SyncResult) {}
     }
 
     #[tokio::test]
