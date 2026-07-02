@@ -113,7 +113,7 @@
     const templates = getTaskManagerTemplates();
     sessionName = templates?.name ? renderTemplate(templates.name, task) : `${task.key}: ${task.title}`;
     taskPrompt = templates?.prompt ? renderTemplate(templates.prompt, task) : (task.description ? `Implement task ${task.key}: ${task.title}\n\n${task.description}` : `Implement task ${task.key}: ${task.title}`);
-    const slugBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, "")}`;
+    const slugBranch = templates?.branch ? renderTemplate(templates.branch, task) : `${task.key.toLowerCase()}/${task.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "")}`;
     branchSearch = slugBranch;
     branchValue = slugBranch;
     newBranchName = slugBranch;
@@ -121,7 +121,7 @@
 
   const branch = $derived((branchValue || branchSearch).replace(/^remote:/, ""));
   const isNewBranch = $derived(branch !== "" && !branches.some((b) => b.value === branchValue || b.value === `remote:${branch}`));
-  const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-\/]/g, ""));
+  const defaultBranchName = $derived(sessionName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, ""));
   const worktreeBranch = $derived(newBranchName || defaultBranchName);
   const baseBranch = $derived(baseBranchValue || "main");
 

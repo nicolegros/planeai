@@ -435,9 +435,7 @@ fn config_dir_uses_app_name_for_directory() {
     // Test the structure: config_dir returns <base>/<app_name>
     let path = config_dir("planeai");
     assert!(path.ends_with("planeai"));
-    assert!(
-        path.to_string_lossy().contains(".config") || std::env::var("XDG_CONFIG_HOME").is_ok()
-    );
+    assert!(path.to_string_lossy().contains(".config") || std::env::var("XDG_CONFIG_HOME").is_ok());
 }
 
 #[test]
