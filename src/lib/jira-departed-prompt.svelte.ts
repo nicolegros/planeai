@@ -4,33 +4,25 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { createPromptQueue } from "./prompt-queue.svelte";
 
 export interface DepartedPrompt {
   key: string;
   summary: string;
 }
 
-let queue = $state<DepartedPrompt[]>([]);
-let current = $state<DepartedPrompt | null>(null);
-let unlistenFn: (() => void) | null = null;
+const queue = createPromptQueue<DepartedPrompt>((a, b) => a.key === b.key);
 
-export function getCurrent(): DepartedPrompt | null {
-  return current;
-}
-
-function advance() {
-  if (queue.length > 0) {
-    current = queue.shift()!;
-  } else {
-    current = null;
-  }
-}
+export const getCurrent = queue.getCurrent.bind(queue);
+export const registerFocus = queue.registerFocus.bind(queue);
+export const unregisterFocus = queue.unregisterFocus.bind(queue);
+export const focusDepartedPrompt = queue.focus.bind(queue);
 
 export async function handleDone(): Promise<void> {
-  if (!current) return;
-  const { key } = current;
-  current = null;
-  advance();
+  const prompt = queue.getCurrent();
+  if (!prompt) return;
+  const { key } = prompt;
+  queue.dismiss();
 
   try {
     await invoke("move_task_item", { key, status: "done" });
@@ -40,23 +32,16 @@ export async function handleDone(): Promise<void> {
 }
 
 export function handleDismiss(): void {
-  current = null;
-  advance();
+  queue.dismiss();
 }
+
+let unlistenFn: (() => void) | null = null;
 
 /** Start listening for Tauri events. Call once at app startup. */
 export async function startListening(): Promise<void> {
   if (unlistenFn) return;
   unlistenFn = await listen<DepartedPrompt>("jira-issue-departed", (event) => {
-    const { key, summary } = event.payload;
-    // Deduplicate: don't queue if already current or in queue
-    if (current?.key === key) return;
-    if (queue.some((p) => p.key === key)) return;
-    if (!current) {
-      current = { key, summary };
-    } else {
-      queue.push({ key, summary });
-    }
+    queue.push(event.payload);
   });
 }
 
@@ -66,16 +51,4 @@ export function stopListening(): void {
     unlistenFn();
     unlistenFn = null;
   }
-}
-
-/** Focus coordination — component registers its focus function */
-let focusFn: (() => void) | null = null;
-export function registerFocus(fn: () => void) {
-  focusFn = fn;
-}
-export function unregisterFocus() {
-  focusFn = null;
-}
-export function focusDepartedPrompt() {
-  focusFn?.();
 }
