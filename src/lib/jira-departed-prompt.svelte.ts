@@ -11,11 +11,6 @@ export interface DepartedPrompt {
   summary: string;
 }
 
-interface DepartedEvent {
-  key: string;
-  summary: string;
-}
-
 let queue = $state<DepartedPrompt[]>([]);
 let current = $state<DepartedPrompt | null>(null);
 let unlistenFn: (() => void) | null = null;
@@ -55,7 +50,7 @@ export function handleDismiss(): void {
 /** Start listening for Tauri events. Call once at app startup. */
 export async function startListening(): Promise<void> {
   if (unlistenFn) return;
-  unlistenFn = await listen<DepartedEvent>("jira-issue-departed", (event) => {
+  unlistenFn = await listen<DepartedPrompt>("jira-issue-departed", (event) => {
     const { key, summary } = event.payload;
     // Deduplicate: don't queue if already current or in queue
     if (current?.key === key) return;
