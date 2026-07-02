@@ -75,9 +75,12 @@ import {
   getEditorTabActive,
   getAgentStates,
   clearAgentState,
+  getReviewReady,
+  clearReviewReady,
   startEventListeners,
   startSymphonyPolling,
   _resetForTests,
+  _setReviewReadyForTests,
 } from "../session-orchestrator.svelte";
 
 const api = vi.mocked(sessionsApi);
@@ -332,6 +335,29 @@ describe("session-orchestrator", () => {
       await loadSessions();
       clearAgentState("s1");
       expect(getAgentStates()["s1"]).toBeUndefined();
+    });
+  });
+
+  describe("reviewReady (PLA-187)", () => {
+    it("selectSession does NOT clear reviewReady (bulb persists until user input)", async () => {
+      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+      await loadSessions();
+      _setReviewReadyForTests("s2");
+      expect(getReviewReady()["s2"]).toBe(true);
+
+      selectSession("s2");
+      expect(getReviewReady()["s2"]).toBe(true);
+    });
+
+    it("clearReviewReady removes the bulb for a session", async () => {
+      api.list.mockResolvedValue([makeSession({ id: "s1" }), makeSession({ id: "s2" })]);
+      await loadSessions();
+      _setReviewReadyForTests("s1");
+      _setReviewReadyForTests("s2");
+
+      clearReviewReady("s2");
+      expect(getReviewReady()["s2"]).toBeUndefined();
+      expect(getReviewReady()["s1"]).toBe(true);
     });
   });
 });
