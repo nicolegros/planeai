@@ -22,4 +22,5 @@ fn main() {
 
     println!("cargo::rerun-if-env-changed=JIRA_CLIENT_ID");
     println!("cargo::rerun-if-env-changed=JIRA_CLIENT_SECRET");
+    println!("cargo::rerun-if-changed={}", repo_root.join(".env").display());
 }
