@@ -184,6 +184,7 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            hide_empty_projects: None,
             scrollback_lines: None,
             web_links: None,
             session_log_dir: None,

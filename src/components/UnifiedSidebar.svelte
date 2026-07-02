@@ -4,6 +4,7 @@
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
+  import { shouldHideProject } from "../lib/sidebar-session-order";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
@@ -163,11 +164,21 @@
     return projects[0]?.path ?? null;
   }
 
+  // Filter projects based on hide_empty_projects setting
+  const visibleProjects = $derived(
+    projects.filter(p => {
+      const orphans = orphansByProject.find(g => g.project.id === p.id)?.sessions ?? [];
+      const tasks = tasksByProject[p.path] ?? [];
+      const visibleTaskCount = tasks.filter(t => !(t.status === "done" && getSettings().hide_done_tasks)).length;
+      return !shouldHideProject(orphans.length, visibleTaskCount, !!getSettings().hide_empty_projects);
+    })
+  );
+
   // Flat nav list for keyboard navigation
   type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
-    for (const project of projects) {
+    for (const project of visibleProjects) {
       const projectKey = `project:${project.id}`;
       result.push({ type: "project_header", project });
       if (isProjectCollapsed(project)) continue;
@@ -365,7 +376,7 @@
         <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
     {:else}
-      {#each projects as project (project.id)}
+      {#each visibleProjects as project (project.id)}
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {@const statusGroups = groupByStatus(projectTasks)}
         {@const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? []}

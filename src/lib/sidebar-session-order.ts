@@ -6,6 +6,18 @@ import type { Session, Project, TaskItem } from "./types";
 
 const STATUS_ORDER = ["in_progress", "in_review", "todo", "done"] as const;
 
+/**
+ * Pure predicate: should a project be hidden from the sidebar?
+ * Hidden when hideEmpty is on AND the project has zero visible items.
+ */
+export function shouldHideProject(
+  orphanCount: number,
+  visibleTaskCount: number,
+  hideEmpty: boolean,
+): boolean {
+  return hideEmpty && orphanCount === 0 && visibleTaskCount === 0;
+}
+
 export function computeSidebarSessionOrder(
   projects: Project[],
   sessions: Session[],
