@@ -390,7 +390,11 @@ struct Project {
     prefix: String,
 }
 
-pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<OrchestratorConfig> {
+pub fn build_orchestrator_config(
+    config: &Config,
+    db: &Connection,
+    task_db_path: &std::path::Path,
+) -> Option<OrchestratorConfig> {
     let projects = load_auto_projects(db);
     if projects.is_empty() {
         return None;
@@ -421,9 +425,8 @@ pub fn build_orchestrator_config(config: &Config, db: &Connection) -> Option<Orc
 
         // Build SqliteTaskSource from a new connection to the same DB
         let prefix = &project.prefix;
-        let db_path = planeai_paths::app_data_dir().join("planeai.db");
-        let _ = std::fs::create_dir_all(db_path.parent().unwrap_or(std::path::Path::new(".")));
-        let task_repo = match SqliteRepository::open(db_path.to_str().unwrap_or(""), prefix) {
+        let _ = std::fs::create_dir_all(task_db_path.parent().unwrap_or(std::path::Path::new(".")));
+        let task_repo = match SqliteRepository::open(task_db_path.to_str().unwrap_or(""), prefix) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -549,7 +552,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let task_db = tmp.path().join("tasks.db");
+        let orch_config = build_orchestrator_config(&config, &conn, &task_db);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -567,7 +572,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch_config = build_orchestrator_config(&config, &conn);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let task_db = tmp.path().join("tasks.db");
+        let orch_config = build_orchestrator_config(&config, &conn, &task_db);
         assert!(orch_config.is_some());
 
         let orch = orch_config.unwrap();
@@ -591,7 +598,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let task_db = tmp.path().join("tasks.db");
+        let orch = build_orchestrator_config(&config, &conn, &task_db).unwrap();
 
         assert_eq!(
             orch.projects[0].dispatch_config.prompt_wrapper,
@@ -615,7 +624,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let orch = build_orchestrator_config(&config, &conn).unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let task_db = tmp.path().join("tasks.db");
+        let orch = build_orchestrator_config(&config, &conn, &task_db).unwrap();
 
         assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);
         assert_eq!(
