@@ -3,6 +3,7 @@
  * Queues prompts one-at-a-time. Re-prompts on next sync cycle if dismissed.
  */
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { refocusTerminal } from "./focus.svelte";
 
 export interface DepartedPrompt {
@@ -38,8 +39,6 @@ export async function handleDone(): Promise<void> {
   advance();
   refocusTerminal();
 
-  // Mark the task done via API
-  const { invoke } = await import("@tauri-apps/api/core");
   try {
     await invoke("move_task_item", { key, status: "done" });
   } catch (e) {
