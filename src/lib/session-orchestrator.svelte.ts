@@ -90,6 +90,10 @@ export function _resetForTests(): void {
   tabLayoutReset();
 }
 
+export function _setReviewReadyForTests(sessionId: string): void {
+  reviewReady = { ...reviewReady, [sessionId]: true };
+}
+
 // ─── Getters ─────────────────────────────────────────────────────────────────
 
 export function getSessions(): Session[] {
@@ -114,6 +118,7 @@ export function getReviewReady(): Record<string, boolean> {
   return reviewReady;
 }
 export function clearReviewReady(sessionId: string): void {
+  if (!reviewReady[sessionId]) return;
   const { [sessionId]: _, ...rest } = reviewReady;
   reviewReady = rest;
 }

@@ -420,7 +420,7 @@
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
-          onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); }}
+          onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); orchestrator.clearReviewReady(session.id); }}
         />
         {/if}
       {/each}
