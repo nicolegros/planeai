@@ -25,6 +25,8 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_done_tasks: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_empty_projects: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon_scrollback_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_lines: Option<u32>,
@@ -247,6 +249,7 @@ impl Default for Config {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            hide_empty_projects: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,
@@ -496,6 +499,7 @@ mod tests {
             projects_base_path: None,
             pr_status: None,
             hide_done_tasks: None,
+            hide_empty_projects: None,
             daemon_scrollback_bytes: None,
             scrollback_lines: None,
             web_links: None,

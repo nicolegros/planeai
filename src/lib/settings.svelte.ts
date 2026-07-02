@@ -58,6 +58,7 @@ export interface AppConfig {
   projects_base_path?: string | null;
   pr_status?: string | null;
   hide_done_tasks?: boolean | null;
+  hide_empty_projects?: boolean | null;
   scrollback_lines?: number | null;
   web_links?: boolean | null;
   auto_open_review?: boolean | null;

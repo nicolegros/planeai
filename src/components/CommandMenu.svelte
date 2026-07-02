@@ -447,6 +447,14 @@
                   {getSettings().hide_done_tasks ? "Show done tasks" : "Hide done tasks"}
                 </Command.Item>
                 <Command.Item
+                  value={getSettings().hide_empty_projects ? "show empty projects" : "hide empty projects"}
+                  keywords={["empty", "projects", "hide", "show", "toggle", "inactive"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                  onSelect={() => { updateSettings({ hide_empty_projects: !getSettings().hide_empty_projects }); close(); }}
+                >
+                  {getSettings().hide_empty_projects ? "Show empty projects" : "Hide empty projects"}
+                </Command.Item>
+                <Command.Item
                   value="reset terminal"
                   keywords={["reset", "clear", "redraw", "refresh", "fix"]}
                   disabled={!activeSessionId}
