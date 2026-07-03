@@ -221,24 +221,24 @@ Optional Jira Cloud integration that syncs issues into planeai's task board and 
 
 ### Schema
 
-| Field                         | Type     | Default  | Description                                                 |
-| ----------------------------- | -------- | -------- | ----------------------------------------------------------- |
-| `integrations.jira.site`      | string   | —        | Jira Cloud site URL (required to enable)                    |
-| `integrations.jira.sync_interval_ms` | number | 60000 | Polling interval in milliseconds                            |
-| `integrations.jira.sources`   | map      | `{}`     | Named JQL sync sources (key = source alias)                 |
-| `sources.<name>.jql`          | string   | —        | JQL filter selecting issues to sync                         |
-| `sources.<name>.status_map`   | map      | `{}`     | Jira status name → planeai status                           |
-| `sources.<name>.writeback`    | object   | null     | Optional writeback config                                   |
-| `writeback.on_start`          | string   | null     | Jira status to transition to on work start                  |
-| `writeback.on_complete`       | string   | null     | Jira status to transition to on work complete               |
-| `writeback.comment`           | bool     | false    | Add a timestamped comment on each transition                |
+| Field                                | Type   | Default | Description                                   |
+| ------------------------------------ | ------ | ------- | --------------------------------------------- |
+| `integrations.jira.site`             | string | —       | Jira Cloud site URL (required to enable)      |
+| `integrations.jira.sync_interval_ms` | number | 60000   | Polling interval in milliseconds              |
+| `integrations.jira.sources`          | map    | `{}`    | Named JQL sync sources (key = source alias)   |
+| `sources.<name>.jql`                 | string | —       | JQL filter selecting issues to sync           |
+| `sources.<name>.status_map`          | map    | `{}`    | Jira status name → planeai status             |
+| `sources.<name>.writeback`           | object | null    | Optional writeback config                     |
+| `writeback.on_start`                 | string | null    | Jira status to transition to on work start    |
+| `writeback.on_complete`              | string | null    | Jira status to transition to on work complete |
+| `writeback.comment`                  | bool   | false   | Add a timestamped comment on each transition  |
 
 ### Build-time env vars
 
-| Variable             | Required | Description                                |
-| -------------------- | -------- | ------------------------------------------ |
-| `JIRA_CLIENT_ID`     | Yes*     | OAuth 2.0 client ID (from Atlassian dev console) |
-| `JIRA_CLIENT_SECRET` | Yes*     | OAuth 2.0 client secret                    |
+| Variable             | Required | Description                                      |
+| -------------------- | -------- | ------------------------------------------------ |
+| `JIRA_CLIENT_ID`     | Yes\*    | OAuth 2.0 client ID (from Atlassian dev console) |
+| `JIRA_CLIENT_SECRET` | Yes\*    | OAuth 2.0 client secret                          |
 
 \* Build succeeds without them (placeholder values used) but OAuth will not work at runtime.
 

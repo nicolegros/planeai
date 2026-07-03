@@ -201,17 +201,17 @@ planeai can sync issues from Jira Cloud into the local task board and write stat
 }
 ```
 
-| Field                         | Description                                                    |
-| ----------------------------- | -------------------------------------------------------------- |
-| `site`                        | Jira Cloud site URL (e.g., `https://myco.atlassian.net`)       |
-| `sync_interval_ms`            | Polling interval in milliseconds (default: 60000)              |
-| `sources`                     | Named JQL filters to sync                                      |
-| `sources.<name>.jql`          | JQL query selecting issues to import                           |
-| `sources.<name>.status_map`   | Map of Jira status → planeai status (`todo`, `in_progress`, `in_review`, `done`) |
-| `sources.<name>.writeback`    | Optional writeback configuration                               |
-| `writeback.on_start`          | Jira status to transition to when work starts locally          |
-| `writeback.on_complete`       | Jira status to transition to when work completes locally       |
-| `writeback.comment`           | Whether to add a comment on each transition (default: false)   |
+| Field                       | Description                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| `site`                      | Jira Cloud site URL (e.g., `https://myco.atlassian.net`)                         |
+| `sync_interval_ms`          | Polling interval in milliseconds (default: 60000)                                |
+| `sources`                   | Named JQL filters to sync                                                        |
+| `sources.<name>.jql`        | JQL query selecting issues to import                                             |
+| `sources.<name>.status_map` | Map of Jira status → planeai status (`todo`, `in_progress`, `in_review`, `done`) |
+| `sources.<name>.writeback`  | Optional writeback configuration                                                 |
+| `writeback.on_start`        | Jira status to transition to when work starts locally                            |
+| `writeback.on_complete`     | Jira status to transition to when work completes locally                         |
+| `writeback.comment`         | Whether to add a comment on each transition (default: false)                     |
 
 #### Authentication
 

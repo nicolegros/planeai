@@ -34,7 +34,11 @@ impl crate::output_observer::OutputObserver for NotifyObserver {
         let mut s = self.state.lock().unwrap();
         let was_idle = s.get_state(session_id) != Some(AgentState::Busy);
         s.notify_output(session_id);
-        if was_idle {
+        // Only emit Busy if the state actually transitioned. For hook-enabled
+        // sessions, notify_output preserves Idle state (PTY echo is not an
+        // authoritative busy signal), so we must re-check after the call.
+        let is_now_busy = s.get_state(session_id) == Some(AgentState::Busy);
+        if was_idle && is_now_busy {
             drop(s);
             let _ = self.app.emit(
                 "agent-state-change",
