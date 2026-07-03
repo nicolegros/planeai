@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getCurrent, handleDone, handleDismiss, registerFocus, unregisterFocus } from "../lib/jira-departed-prompt.svelte";
   import { refocusTerminal } from "../lib/focus.svelte";
+  import { MOD_LABEL } from "../lib/keyboard";
 
   const prompt = $derived(getCurrent());
   let wrapperEl = $state<HTMLDivElement | null>(null);
@@ -39,6 +40,6 @@
         onclick={() => act(handleDismiss)}
       >Dismiss (<span class="underline">N</span>)</button>
     </div>
-    <p class="mt-1 text-xs text-amber-200/70">{focused ? "D / N / Esc" : "⌘U to interact"}</p>
+    <p class="mt-1 text-xs text-amber-200/70">{focused ? "D / N / Esc" : `${MOD_LABEL}U to interact`}</p>
   </div>
 {/if}
