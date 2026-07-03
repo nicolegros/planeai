@@ -4,9 +4,7 @@ import { extractCommandName } from "../shell-title";
 describe("extractCommandName", () => {
   it("extracts last path segment from a full path", () => {
     expect(extractCommandName("/usr/bin/vim")).toBe("vim");
-    expect(extractCommandName("/Users/nicolas/.cargo/bin/cargo-nextest")).toBe(
-      "cargo-nextest",
-    );
+    expect(extractCommandName("/Users/nicolas/.cargo/bin/cargo-nextest")).toBe("cargo-nextest");
   });
 
   it("returns binary name as-is for a simple command", () => {

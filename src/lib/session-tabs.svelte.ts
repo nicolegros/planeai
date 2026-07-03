@@ -75,11 +75,7 @@ export function destroySession(sessionId: string): void {
   delete state[sessionId];
 }
 
-export function setTabTitle(
-  sessionId: string,
-  tabIndex: number,
-  title: string,
-): void {
+export function setTabTitle(sessionId: string, tabIndex: number, title: string): void {
   if (tabIndex === 0) return; // Agent tab is not modifiable
   const s = state[sessionId];
   if (!s) return;

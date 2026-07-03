@@ -19,9 +19,7 @@ export function extractCommandName(oscTitle: string): string | null {
   if (trimmed === "/" || trimmed.endsWith("/")) return null;
 
   // Extract last path segment (handles both "/usr/bin/vim" and "vim")
-  const lastSegment = trimmed.includes("/")
-    ? trimmed.split("/").pop()!
-    : trimmed;
+  const lastSegment = trimmed.includes("/") ? trimmed.split("/").pop()! : trimmed;
 
   if (!lastSegment) return null;
 
