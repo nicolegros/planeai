@@ -3,6 +3,7 @@ export interface Tab {
   label: string;
   icon?: string;
   modified?: boolean;
+  customTitle?: boolean;
 }
 
 interface SessionTabState {
@@ -15,9 +16,12 @@ let state = $state<Record<string, SessionTabState>>({});
 
 function relabel(tabs: Tab[]): Tab[] {
   let shellNum = 1;
-  return tabs.map((t) =>
-    t.index === 0 ? t : { ...t, label: `Shell ${shellNum++}`, icon: "terminal" },
-  );
+  return tabs.map((t) => {
+    if (t.index === 0) return t;
+    const num = shellNum++;
+    if (t.customTitle) return t;
+    return { ...t, label: `Shell ${num}`, icon: "terminal" };
+  });
 }
 
 export function initSession(sessionId: string, tabCount = 1): void {
@@ -82,4 +86,5 @@ export function setTabTitle(
   const tab = s.tabs.find((t) => t.index === tabIndex);
   if (!tab) return;
   tab.label = title;
+  tab.customTitle = true;
 }
