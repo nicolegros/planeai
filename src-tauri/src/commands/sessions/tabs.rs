@@ -44,13 +44,38 @@ pub fn spawn_tab(
 
     let pty_key = format!("{}:{}", session_id, tab_index);
 
+    // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
+    // via prepare_session() — same for both backends.
+    let shell_cmd = format!("{} -l", shell);
+    let env = {
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        let extra_path_dirs = cfg.resolved_extra_path_dirs();
+        super::helpers::build_local_env(
+            &pty_key,
+            std::path::PathBuf::from(&cwd),
+            &shell_cmd,
+            dark_mode.unwrap_or(true),
+            extra_path_dirs,
+        )?
+    };
+
     let target = if session.backend == "daemon" {
         // Check if shell tab already exists in daemon (reattach after app restart)
         let already_running = crate::daemon_client::list_sessions_sync()
             .map(|ids| ids.contains(&pty_key))
             .unwrap_or(false);
         if !already_running {
-            crate::daemon::spawn_session(&pty_key, &shell, &[], &cwd, None)?;
+            let env_owned: std::collections::HashMap<String, String> =
+                env.iter().cloned().collect();
+            let env_ref: std::collections::HashMap<&str, &str> =
+                env_owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            crate::daemon::spawn_session(
+                &pty_key,
+                &shell,
+                &["-l"],
+                &cwd,
+                Some(&env_ref),
+            )?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {
@@ -59,24 +84,9 @@ pub fn spawn_tab(
         }
     } else {
         pty::PtyTarget::Shell {
-            command: format!("{} -l", shell),
+            command: shell_cmd,
             cwd: cwd.clone(),
         }
-    };
-
-    // Build env for local shell tabs via prepare_session()
-    let env = if session.backend != "daemon" {
-        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
-        let extra_path_dirs = cfg.resolved_extra_path_dirs();
-        super::helpers::build_local_env(
-            &pty_key,
-            std::path::PathBuf::from(&cwd),
-            &format!("{} -l", shell),
-            dark_mode.unwrap_or(true),
-            extra_path_dirs,
-        )?
-    } else {
-        vec![]
     };
 
     state.0.attach(&pty_key, target, app, on_data, env)?;
