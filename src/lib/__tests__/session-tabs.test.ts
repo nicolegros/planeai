@@ -8,6 +8,7 @@ import {
   getActiveTabIndex,
   getTabCount,
   destroySession,
+  setTabTitle,
 } from "../session-tabs.svelte";
 
 describe("session tabs", () => {
@@ -111,5 +112,29 @@ describe("session tabs", () => {
     setActiveTab("s1", 1);
     removeTab("s1", 1);
     expect(getActiveTabIndex("s1")).toBe(0);
+  });
+
+  it("setTabTitle updates a shell tab label but not the agent tab", () => {
+    initSession("s1", 2);
+    setTabTitle("s1", 1, "cargo");
+    const tabs = getTabs("s1");
+    expect(tabs[0].label).toBe("Agent");
+    expect(tabs[1].label).toBe("cargo");
+  });
+
+  it("setTabTitle on agent tab (index 0) is a no-op", () => {
+    initSession("s1");
+    setTabTitle("s1", 0, "vim");
+    expect(getTabs("s1")[0].label).toBe("Agent");
+  });
+
+  it("setTabTitle is a no-op for unknown session or tab", () => {
+    initSession("s1", 2);
+    // Unknown session
+    setTabTitle("unknown", 1, "vim");
+    // Unknown tab index
+    setTabTitle("s1", 99, "vim");
+    // Should not throw, tabs unchanged
+    expect(getTabs("s1")[1].label).toBe("Shell 1");
   });
 });
