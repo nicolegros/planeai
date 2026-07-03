@@ -70,3 +70,16 @@ export function getTabCount(sessionId: string): number {
 export function destroySession(sessionId: string): void {
   delete state[sessionId];
 }
+
+export function setTabTitle(
+  sessionId: string,
+  tabIndex: number,
+  title: string,
+): void {
+  if (tabIndex === 0) return; // Agent tab is not modifiable
+  const s = state[sessionId];
+  if (!s) return;
+  const tab = s.tabs.find((t) => t.index === tabIndex);
+  if (!tab) return;
+  tab.label = title;
+}

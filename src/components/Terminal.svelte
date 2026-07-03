@@ -13,6 +13,8 @@
   import { getSettings, getTerminalSettings, isDark } from "../lib/settings.svelte";
   import { extractTerminalTheme } from "../lib/theme-loader";
   import { matchTerminalKey } from "../lib/terminal-keys";
+  import { extractCommandName } from "../lib/shell-title";
+  import { setTabTitle } from "../lib/session-tabs.svelte";
 
   interface Props {
     sessionId: string;
@@ -224,6 +226,17 @@
         }
       });
     };
+
+    // ── OSC title tracking for shell tabs ─────────────────────────────────
+    if (skipAttach) {
+      const parts = sessionId.split(":");
+      const baseSessionId = parts[0];
+      const tabIndex = parseInt(parts[1] || "0", 10);
+      term.onTitleChange((title) => {
+        const name = extractCommandName(title);
+        if (name) setTabTitle(baseSessionId, tabIndex, name);
+      });
+    }
 
     // ── Attach to the session ─────────────────────────────────────────────
     if (skipAttach) {
