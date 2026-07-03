@@ -553,7 +553,7 @@ mod tests {
         ).unwrap();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let task_db = tmp.path().join("tasks.db");
+        let task_db = tmp.path().join("planeai.db");
         let orch_config = build_orchestrator_config(&config, &conn, &task_db);
         assert!(orch_config.is_some());
 
@@ -573,7 +573,7 @@ mod tests {
         ).unwrap();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let task_db = tmp.path().join("tasks.db");
+        let task_db = tmp.path().join("planeai.db");
         let orch_config = build_orchestrator_config(&config, &conn, &task_db);
         assert!(orch_config.is_some());
 
@@ -599,7 +599,7 @@ mod tests {
         ).unwrap();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let task_db = tmp.path().join("tasks.db");
+        let task_db = tmp.path().join("planeai.db");
         let orch = build_orchestrator_config(&config, &conn, &task_db).unwrap();
 
         assert_eq!(
@@ -625,7 +625,7 @@ mod tests {
         ).unwrap();
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let task_db = tmp.path().join("tasks.db");
+        let task_db = tmp.path().join("planeai.db");
         let orch = build_orchestrator_config(&config, &conn, &task_db).unwrap();
 
         assert_eq!(orch.projects[0].dispatch_config.prompt_wrapper, None);

@@ -36,11 +36,9 @@
     updateSettings({ integrations });
   }
 
+  const hasSite = $derived(!!jiraConfig?.site?.trim());
+
   async function connect() {
-    if (!jiraConfig?.site) {
-      showSnackbar("Enter a Jira site URL first");
-      return;
-    }
     connecting = true;
     try {
       await jira.connect();
@@ -114,7 +112,8 @@
       <Button onclick={disconnect} disabled={connecting} aria-label="Disconnect from Jira">Disconnect</Button>
       <Button onclick={syncNow} disabled={syncing} aria-label="Sync now">{syncing ? 'Syncing…' : 'Sync Now'}</Button>
     {:else}
-      <Button onclick={connect} disabled={connecting} aria-label="Connect to Jira">{connecting ? 'Connecting…' : 'Connect to Jira'}</Button>
+      <Button onclick={connect} disabled={connecting || !hasSite} aria-label="Connect to Jira">{connecting ? 'Connecting…' : 'Connect to Jira'}</Button>
+      {#if !hasSite}<p class="text-xs text-t3">Enter a site URL below to connect</p>{/if}
     {/if}
   </div>
 </section>
