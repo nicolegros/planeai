@@ -848,3 +848,47 @@ fn local_and_daemon_targets_produce_same_path() {
     let daemon_result = prepare_session(&daemon_req).unwrap();
     assert_eq!(local_result.env["PATH"], daemon_result.env["PATH"]);
 }
+
+// ─── Shell tab parity: daemon tabs get same PATH as local tabs ───────────────
+
+#[test]
+fn daemon_shell_tab_env_includes_usr_local_bin() {
+    // Regression test for PLA-190: daemon backend shell tabs must include
+    // /usr/local/bin in PATH so tools like tgf are accessible.
+    use planeai_core::command::build_daemon_env;
+
+    let extra_path_dirs: Vec<String> = vec![];
+    let mut path_buf = String::new();
+    let env = build_daemon_env(&extra_path_dirs, "session:1", &mut path_buf);
+
+    let path = env.get("PATH").unwrap();
+    assert!(
+        path.contains("/usr/local/bin"),
+        "daemon shell tab PATH must include /usr/local/bin: {path}"
+    );
+    assert!(
+        path.contains("/opt/homebrew/bin"),
+        "daemon shell tab PATH must include /opt/homebrew/bin: {path}"
+    );
+}
+
+#[test]
+fn daemon_shell_tab_and_local_shell_tab_have_same_path() {
+    // Regression test for PLA-190: verify parity between daemon and local shell tab env.
+    use planeai_core::command::{augmented_path, build_daemon_env};
+
+    let extra_path_dirs = vec!["/custom/shims".to_string()];
+
+    // Daemon shell tab uses build_daemon_env
+    let mut path_buf = String::new();
+    let daemon_env = build_daemon_env(&extra_path_dirs, "tab:1", &mut path_buf);
+    let daemon_path = daemon_env.get("PATH").unwrap();
+
+    // Local shell tab uses augmented_path (via prepare_session)
+    let local_path = augmented_path(&extra_path_dirs);
+
+    assert_eq!(
+        *daemon_path, local_path,
+        "daemon and local shell tabs must produce the same PATH"
+    );
+}

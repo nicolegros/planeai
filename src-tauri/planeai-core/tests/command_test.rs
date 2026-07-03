@@ -63,3 +63,51 @@ fn respects_cwd() {
     let actual = std::fs::canonicalize(result.trim()).unwrap();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn build_daemon_env_includes_usr_local_bin() {
+    use planeai_core::command::build_daemon_env;
+
+    let extra_path_dirs: Vec<String> = vec![];
+    let session_id = "shell-tab-test";
+    let mut path_buf = String::new();
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+
+    let path = env.get("PATH").expect("daemon env must include PATH");
+    assert!(
+        path.contains("/usr/local/bin"),
+        "daemon env PATH must include /usr/local/bin for commands like tgf: {path}"
+    );
+}
+
+#[test]
+fn build_daemon_env_includes_session_id() {
+    use planeai_core::command::build_daemon_env;
+
+    let extra_path_dirs: Vec<String> = vec![];
+    let session_id = "test-tab:1";
+    let mut path_buf = String::new();
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+
+    assert_eq!(
+        env.get("PLANEAI_SESSION_ID"),
+        Some(&"test-tab:1"),
+        "daemon env must include PLANEAI_SESSION_ID"
+    );
+}
+
+#[test]
+fn build_daemon_env_includes_extra_path_dirs() {
+    use planeai_core::command::build_daemon_env;
+
+    let extra_path_dirs = vec!["/custom/shims".to_string()];
+    let session_id = "shell-tab:2";
+    let mut path_buf = String::new();
+    let env = build_daemon_env(&extra_path_dirs, session_id, &mut path_buf);
+
+    let path = env.get("PATH").expect("daemon env must include PATH");
+    assert!(
+        path.contains("/custom/shims"),
+        "daemon env PATH must include extra_path_dirs: {path}"
+    );
+}
