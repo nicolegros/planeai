@@ -1,5 +1,6 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::model::{CreateParams, ListFilter, Status, Task, UpdateParams, DEFAULT_BASE_BRANCH};
@@ -116,6 +117,63 @@ impl SqliteRepository {
         Self::new(conn, prefix)
     }
 
+    /// Fetch multiple tasks by key (cross-prefix, ignores project_prefix filter).
+    pub fn list_by_keys(&self, keys: &[&str]) -> Result<Vec<Task>, Error> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut tasks = Vec::new();
+        for key in keys {
+            match self.query_task(&conn, key, None) {
+                Ok(t) => tasks.push(t),
+                Err(Error::NotFound) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(tasks)
+    }
+
+    /// Count children for given parent keys (cross-prefix).
+    pub fn count_children(&self, parent_keys: &[&str]) -> Result<HashMap<String, usize>, Error> {
+        if parent_keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let ph: String = parent_keys
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT parent_key, COUNT(*) FROM tasks WHERE parent_key IN ({ph}) GROUP BY parent_key"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = parent_keys
+            .iter()
+            .map(|k| k as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let mut map = HashMap::new();
+        for r in rows {
+            let (k, c) = r.map_err(|e| Error::Storage(e.to_string()))?;
+            map.insert(k, c);
+        }
+        Ok(map)
+    }
+
     fn next_key(&self, conn: &Connection) -> Result<String, Error> {
         let seq: i32 = conn
             .query_row(
@@ -179,6 +237,65 @@ impl SqliteRepository {
                 .unwrap_or_else(|_| Utc::now()),
         })
     }
+
+    fn query_task(
+        &self,
+        conn: &Connection,
+        key: &str,
+        prefix_filter: Option<&str>,
+    ) -> Result<Task, Error> {
+        let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match prefix_filter {
+            Some(p) => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1 AND project_prefix = ?2",
+                vec![Box::new(key.to_string()), Box::new(p.to_string())],
+            ),
+            None => (
+                "SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1",
+                vec![Box::new(key.to_string())],
+            ),
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+
+        stmt.query_row(params_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i32>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
+            _ => Error::Storage(e.to_string()),
+        })
+        .and_then(
+            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
+                self.row_to_task(
+                    conn,
+                    TaskRow {
+                        key: k,
+                        title,
+                        description: desc,
+                        status,
+                        priority,
+                        parent_key: parent,
+                        base_branch,
+                        created_at: created,
+                        updated_at: updated,
+                    },
+                )
+            },
+        )
+    }
 }
 
 struct TaskRow {
@@ -194,18 +311,35 @@ struct TaskRow {
 }
 
 impl TaskProvider for SqliteRepository {
+    /// Create a new task.
+    ///
+    /// If `params.key` is `Some`, that key is used directly instead of auto-generating.
+    /// Idempotent: if the key already exists within this project, the existing task is
+    /// returned unchanged — the remaining `CreateParams` fields are silently discarded.
+    /// This supports Jira sync where repeated syncs for the same issue should not
+    /// duplicate tasks; the sync loop handles updates separately.
     fn create(&self, params: CreateParams) -> Result<Task, Error> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let key = self.next_key(&conn)?;
+        let key = match params.key {
+            Some(ref k) => k.clone(),
+            None => self.next_key(&conn)?,
+        };
         let now = Utc::now().to_rfc3339();
+        let status = params.status.unwrap_or(Status::Todo);
 
-        conn.execute(
-            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![key, self.prefix, params.title, params.description, "todo", params.priority, params.parent_key, params.base_branch, now, now],
+        let result = conn.execute(
+            "INSERT OR IGNORE INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![key, self.prefix, params.title, params.description, status.as_str(), params.priority, params.parent_key, params.base_branch, now, now],
         ).map_err(|e| Error::Storage(e.to_string()))?;
+
+        if result == 0 {
+            // Key already exists — idempotent create: return existing task only if it
+            // belongs to this project (prevents cross-project collision).
+            return self.query_task(&conn, &key, Some(&self.prefix));
+        }
 
         for bk in &params.blocked_by {
             conn.execute(
@@ -229,7 +363,7 @@ impl TaskProvider for SqliteRepository {
                 key,
                 title: params.title,
                 description: params.description,
-                status: "todo".to_string(),
+                status: status.as_str().to_string(),
                 priority: params.priority,
                 parent_key: params.parent_key,
                 base_branch: Some(params.base_branch),
@@ -244,45 +378,7 @@ impl TaskProvider for SqliteRepository {
             .conn
             .lock()
             .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut stmt = conn
-            .prepare("SELECT key, title, description, status, priority, parent_key, base_branch, created_at, updated_at FROM tasks WHERE key = ?1")
-            .map_err(|e| Error::Storage(e.to_string()))?;
-
-        stmt.query_row(params![key], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i32>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
-            _ => Error::Storage(e.to_string()),
-        })
-        .and_then(
-            |(k, title, desc, status, priority, parent, base_branch, created, updated)| {
-                self.row_to_task(
-                    &conn,
-                    TaskRow {
-                        key: k,
-                        title,
-                        description: desc,
-                        status,
-                        priority,
-                        parent_key: parent,
-                        base_branch,
-                        created_at: created,
-                        updated_at: updated,
-                    },
-                )
-            },
-        )
+        self.query_task(&conn, key, None)
     }
 
     fn list(&self, filter: ListFilter) -> Result<Vec<Task>, Error> {
@@ -477,419 +573,5 @@ impl TaskProvider for SqliteRepository {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::*;
-
-    fn repo() -> SqliteRepository {
-        SqliteRepository::open_in_memory("TEST").unwrap()
-    }
-
-    #[test]
-    fn create_and_get() {
-        let r = repo();
-        let task = r
-            .create(CreateParams {
-                title: "First task".into(),
-                description: "desc".into(),
-                priority: 1,
-                tags: vec!["backend".into()],
-                ..Default::default()
-            })
-            .unwrap();
-
-        assert_eq!(task.key, "TEST-1");
-        assert_eq!(task.status, Status::Todo);
-        assert_eq!(task.tags, vec!["backend"]);
-
-        let fetched = r.get("TEST-1").unwrap();
-        assert_eq!(fetched.title, "First task");
-        assert_eq!(fetched.priority, 1);
-    }
-
-    #[test]
-    fn sequential_keys() {
-        let r = repo();
-        let t1 = r
-            .create(CreateParams {
-                title: "a".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        let t2 = r
-            .create(CreateParams {
-                title: "b".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(t1.key, "TEST-1");
-        assert_eq!(t2.key, "TEST-2");
-    }
-
-    #[test]
-    fn get_not_found() {
-        let r = repo();
-        assert!(matches!(r.get("NOPE-1"), Err(Error::NotFound)));
-    }
-
-    #[test]
-    fn update_partial() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "original".into(),
-            priority: 1,
-            ..Default::default()
-        })
-        .unwrap();
-        let updated = r
-            .update(
-                "TEST-1",
-                UpdateParams {
-                    title: Some("renamed".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(updated.title, "renamed");
-        assert_eq!(updated.priority, 1);
-    }
-
-    #[test]
-    fn update_status() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "task".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let updated = r
-            .update(
-                "TEST-1",
-                UpdateParams {
-                    status: Some(Status::InProgress),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(updated.status, Status::InProgress);
-    }
-
-    #[test]
-    fn update_not_found() {
-        let r = repo();
-        assert!(matches!(
-            r.update("NOPE-1", UpdateParams::default()),
-            Err(Error::NotFound)
-        ));
-    }
-
-    #[test]
-    fn delete_task() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "doomed".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.delete("TEST-1").unwrap();
-        assert!(matches!(r.get("TEST-1"), Err(Error::NotFound)));
-    }
-
-    #[test]
-    fn delete_not_found() {
-        let r = repo();
-        assert!(matches!(r.delete("NOPE-1"), Err(Error::NotFound)));
-    }
-
-    #[test]
-    fn list_all() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "a".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "b".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let tasks = r.list(ListFilter::default()).unwrap();
-        assert_eq!(tasks.len(), 2);
-    }
-
-    #[test]
-    fn list_filter_by_status() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "a".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "b".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.update(
-            "TEST-1",
-            UpdateParams {
-                status: Some(Status::Done),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let todo = r
-            .list(ListFilter {
-                status: Some(Status::Todo),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(todo.len(), 1);
-        assert_eq!(todo[0].key, "TEST-2");
-
-        let not_done = r
-            .list(ListFilter {
-                exclude_status: Some(Status::Done),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(not_done.len(), 1);
-    }
-
-    #[test]
-    fn list_filter_by_tags() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "a".into(),
-            tags: vec!["ui".into()],
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "b".into(),
-            tags: vec!["backend".into()],
-            ..Default::default()
-        })
-        .unwrap();
-
-        let ui = r
-            .list(ListFilter {
-                tags: vec!["ui".into()],
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(ui.len(), 1);
-        assert_eq!(ui[0].key, "TEST-1");
-    }
-
-    #[test]
-    fn list_priority_ordering() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "low".into(),
-            priority: 0,
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "high".into(),
-            priority: 1,
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "medium".into(),
-            priority: 2,
-            ..Default::default()
-        })
-        .unwrap();
-
-        let tasks = r.list(ListFilter::default()).unwrap();
-        assert_eq!(tasks[0].title, "high");
-        assert_eq!(tasks[1].title, "medium");
-        assert_eq!(tasks[2].title, "low");
-    }
-
-    #[test]
-    fn blockers_roundtrip() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "first".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "second".into(),
-            blocked_by: vec!["TEST-1".into()],
-            ..Default::default()
-        })
-        .unwrap();
-
-        let t = r.get("TEST-2").unwrap();
-        assert_eq!(t.blocked_by, vec!["TEST-1"]);
-
-        r.update(
-            "TEST-2",
-            UpdateParams {
-                blocked_by: Some(vec![]),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let t = r.get("TEST-2").unwrap();
-        assert!(t.blocked_by.is_empty());
-    }
-
-    #[test]
-    fn parent_key() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "parent".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "child".into(),
-            parent_key: Some("TEST-1".into()),
-            ..Default::default()
-        })
-        .unwrap();
-
-        let child = r.get("TEST-2").unwrap();
-        assert_eq!(child.parent_key, Some("TEST-1".to_string()));
-
-        let roots = r
-            .list(ListFilter {
-                parent_key: Some(None),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].key, "TEST-1");
-    }
-
-    #[test]
-    fn derive_prefix_from_name() {
-        assert_eq!(derive_prefix("planeai"), "PLA");
-        assert_eq!(derive_prefix("nomi"), "NOM");
-        assert_eq!(derive_prefix("budget-buddy"), "BB");
-        assert_eq!(derive_prefix("AB"), "AB");
-    }
-
-    #[test]
-    fn derive_prefix_unique_for_similar_names() {
-        // These must produce different prefixes
-        let a = derive_prefix("deployment-pipeline");
-        let b = derive_prefix("deployment-pipeline-api");
-        assert_ne!(
-            a, b,
-            "deployment-pipeline and deployment-pipeline-api must have different prefixes"
-        );
-        assert_eq!(a, "DP");
-        assert_eq!(b, "DPA");
-    }
-
-    #[test]
-    fn new_with_existing_connection() {
-        let conn = Connection::open_in_memory().unwrap();
-        let repo = SqliteRepository::new(conn, "FOO").unwrap();
-        let task = repo
-            .create(CreateParams {
-                title: "works".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(task.key, "FOO-1");
-    }
-
-    #[test]
-    fn base_branch_defaults_to_main() {
-        let r = repo();
-        let task = r
-            .create(CreateParams {
-                title: "task".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(task.base_branch, "main");
-        let fetched = r.get("TEST-1").unwrap();
-        assert_eq!(fetched.base_branch, "main");
-    }
-
-    #[test]
-    fn base_branch_custom_on_create() {
-        let r = repo();
-        let task = r
-            .create(CreateParams {
-                title: "task".into(),
-                base_branch: "develop".into(),
-                ..Default::default()
-            })
-            .unwrap();
-        assert_eq!(task.base_branch, "develop");
-        let fetched = r.get("TEST-1").unwrap();
-        assert_eq!(fetched.base_branch, "develop");
-    }
-
-    #[test]
-    fn base_branch_update() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "task".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let updated = r
-            .update(
-                "TEST-1",
-                UpdateParams {
-                    base_branch: Some("release/v2".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(updated.base_branch, "release/v2");
-    }
-
-    #[test]
-    fn base_branch_preserved_on_unrelated_update() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "task".into(),
-            base_branch: "develop".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let updated = r
-            .update(
-                "TEST-1",
-                UpdateParams {
-                    title: Some("renamed".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        assert_eq!(updated.base_branch, "develop");
-    }
-
-    #[test]
-    fn base_branch_in_list() {
-        let r = repo();
-        r.create(CreateParams {
-            title: "a".into(),
-            base_branch: "develop".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        r.create(CreateParams {
-            title: "b".into(),
-            ..Default::default()
-        })
-        .unwrap();
-        let tasks = r.list(ListFilter::default()).unwrap();
-        assert_eq!(tasks[0].base_branch, "develop");
-        assert_eq!(tasks[1].base_branch, "main");
-    }
-}
+#[path = "sqlite_tests.rs"]
+mod tests;

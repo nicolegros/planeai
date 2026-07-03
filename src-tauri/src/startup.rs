@@ -260,7 +260,10 @@ pub fn init_symphony(
     let cfg = cfg_state.0.lock().unwrap();
 
     let mut state = crate::symphony::SymphonyState::new();
-    if let Some(orch_config) = crate::symphony::build_orchestrator_config(&cfg, &conn) {
+    let task_db_path = planeai_paths::app_data_dir().join("planeai.db");
+    if let Some(orch_config) =
+        crate::symphony::build_orchestrator_config(&cfg, &conn, &task_db_path)
+    {
         drop(cfg);
         drop(conn);
 

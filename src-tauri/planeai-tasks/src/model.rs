@@ -60,8 +60,10 @@ fn default_base_branch() -> String {
 
 #[derive(Debug, Clone)]
 pub struct CreateParams {
+    pub key: Option<String>,
     pub title: String,
     pub description: String,
+    pub status: Option<Status>,
     pub priority: i32,
     pub parent_key: Option<String>,
     pub blocked_by: Vec<String>,
@@ -72,8 +74,10 @@ pub struct CreateParams {
 impl Default for CreateParams {
     fn default() -> Self {
         Self {
+            key: None,
             title: String::new(),
             description: String::new(),
+            status: None,
             priority: 0,
             parent_key: None,
             blocked_by: Vec::new(),

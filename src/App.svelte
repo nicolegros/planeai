@@ -38,7 +38,9 @@
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
+  import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
+  import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -200,6 +202,8 @@
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
+    startJiraDepartedListening();
+
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
     const unlistenClose = orchestrator.setupQuitGuard((count) => { quitDirectCount = count; showQuitConfirm = true; });
@@ -245,7 +249,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); }
+        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
@@ -289,7 +293,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -657,3 +661,4 @@
 {/if}
 
 <PostMergePrompt />
+<JiraDepartedPrompt />

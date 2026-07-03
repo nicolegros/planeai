@@ -18,6 +18,7 @@ src-tauri/binaries/
 # Env
 .env
 .env.*
+!.env.example
 
 # Benchmark artifacts
 bench/fixtures/

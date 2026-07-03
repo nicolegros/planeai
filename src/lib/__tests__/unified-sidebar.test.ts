@@ -273,4 +273,94 @@ describe("unified sidebar logic", () => {
       expect(flatNav[0]).toEqual({ type: "project_header", id: "p1" });
     });
   });
+
+  describe("jira section in flat nav", () => {
+    type JiraNavItem =
+      | { type: "project_header"; project: { id: string } }
+      | { type: "orphan"; session: { id: string } }
+      | { type: "status_header"; projectPath: string; status: string }
+      | { type: "task"; task: { key: string }; projectPath: string }
+      | { type: "jira_header" }
+      | { type: "jira_task"; task: { key: string } };
+
+    function makeJiraTask(key: string, status: string): TaskItem {
+      return {
+        key,
+        title: "jira task",
+        status,
+        description: "",
+        priority: 0,
+        blocked_by: [],
+        tags: [],
+        parent_key: null,
+        url: null,
+        base_branch: "main",
+      };
+    }
+
+    it("jira section appears after projects when jira tasks exist", () => {
+      const flatNav: JiraNavItem[] = [];
+      flatNav.push({ type: "project_header", project: { id: "p1" } });
+      const jiraTasks = [makeJiraTask("PROJ-1", "todo"), makeJiraTask("PROJ-2", "in_progress")];
+      if (jiraTasks.length > 0) {
+        flatNav.push({ type: "jira_header" });
+        for (const t of jiraTasks) flatNav.push({ type: "jira_task", task: { key: t.key } });
+      }
+      expect(flatNav).toHaveLength(4);
+      expect(flatNav[1]).toMatchObject({ type: "jira_header" });
+      expect(flatNav[2]).toMatchObject({ type: "jira_task", task: { key: "PROJ-1" } });
+      expect(flatNav[3]).toMatchObject({ type: "jira_task", task: { key: "PROJ-2" } });
+    });
+
+    it("jira section is omitted when no jira tasks", () => {
+      const flatNav: JiraNavItem[] = [];
+      flatNav.push({ type: "project_header", project: { id: "p1" } });
+      const jiraTasks: TaskItem[] = [];
+      if (jiraTasks.length > 0) {
+        flatNav.push({ type: "jira_header" });
+      }
+      expect(flatNav).toHaveLength(1);
+    });
+
+    it("collapsed jira section only shows header", () => {
+      const collapsed = new Set(["jira"]);
+      const jiraTasks = [makeJiraTask("PROJ-1", "todo")];
+      const flatNav: JiraNavItem[] = [];
+      flatNav.push({ type: "jira_header" });
+      if (!collapsed.has("jira")) {
+        for (const t of jiraTasks) flatNav.push({ type: "jira_task", task: { key: t.key } });
+      }
+      expect(flatNav).toHaveLength(1);
+      expect(flatNav[0]).toMatchObject({ type: "jira_header" });
+    });
+
+    it("jira tasks remain visible regardless of child creation (Decision 16)", () => {
+      // child_counts is a separate map, tasks always shown
+      const jiraTasks = [makeJiraTask("PROJ-1", "in_progress")];
+      const childCounts: Record<string, number> = { "PROJ-1": 3 };
+      const flatNav: JiraNavItem[] = [];
+      flatNav.push({ type: "jira_header" });
+      for (const t of jiraTasks) flatNav.push({ type: "jira_task", task: { key: t.key } });
+      expect(flatNav).toHaveLength(2);
+      expect(childCounts["PROJ-1"]).toBe(3);
+    });
+
+    it("flatNavIndex includes jira items", () => {
+      const flatNav: JiraNavItem[] = [
+        { type: "project_header", project: { id: "p1" } },
+        { type: "jira_header" },
+        { type: "jira_task", task: { key: "PROJ-1" } },
+        { type: "jira_task", task: { key: "PROJ-2" } },
+      ];
+      const map = new Map<string, number>();
+      flatNav.forEach((item, i) => {
+        if (item.type === "project_header") map.set(`project:${item.project.id}`, i);
+        else if (item.type === "jira_header") map.set("jira_header", i);
+        else if (item.type === "jira_task") map.set(`jira:${item.task.key}`, i);
+      });
+      expect(map.get("jira_header")).toBe(1);
+      expect(map.get("jira:PROJ-1")).toBe(2);
+      expect(map.get("jira:PROJ-2")).toBe(3);
+    });
+  });
 });

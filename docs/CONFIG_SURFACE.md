@@ -21,6 +21,7 @@ These are normal options users should configure.
 | `projects_base_path`      | string   | unset        | Base directory for project worktrees                                |
 | `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config                            |
 | `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                             |
+| `integrations`            | object   | unset        | External service integrations (currently: `jira`)                   |
 | `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                      |
 | `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
 
@@ -209,3 +210,40 @@ Specific examples:
 - `PLANEAI_SESSION_LOG_DIR` > config `session_log_dir`
 - `PLANEAI_EXTRA_PATH` > config `extra_path_dirs`
 - `PLANEAI_DAEMON_PTY_CORE` > config `daemon_pty_core`
+
+---
+
+## integrations.jira
+
+### Definition
+
+Optional Jira Cloud integration that syncs issues into planeai's task board and writes back status transitions.
+
+### Schema
+
+| Field                         | Type     | Default  | Description                                                 |
+| ----------------------------- | -------- | -------- | ----------------------------------------------------------- |
+| `integrations.jira.site`      | string   | —        | Jira Cloud site URL (required to enable)                    |
+| `integrations.jira.sync_interval_ms` | number | 60000 | Polling interval in milliseconds                            |
+| `integrations.jira.sources`   | map      | `{}`     | Named JQL sync sources (key = source alias)                 |
+| `sources.<name>.jql`          | string   | —        | JQL filter selecting issues to sync                         |
+| `sources.<name>.status_map`   | map      | `{}`     | Jira status name → planeai status                           |
+| `sources.<name>.writeback`    | object   | null     | Optional writeback config                                   |
+| `writeback.on_start`          | string   | null     | Jira status to transition to on work start                  |
+| `writeback.on_complete`       | string   | null     | Jira status to transition to on work complete               |
+| `writeback.comment`           | bool     | false    | Add a timestamped comment on each transition                |
+
+### Build-time env vars
+
+| Variable             | Required | Description                                |
+| -------------------- | -------- | ------------------------------------------ |
+| `JIRA_CLIENT_ID`     | Yes*     | OAuth 2.0 client ID (from Atlassian dev console) |
+| `JIRA_CLIENT_SECRET` | Yes*     | OAuth 2.0 client secret                    |
+
+\* Build succeeds without them (placeholder values used) but OAuth will not work at runtime.
+
+### Policy
+
+- Jira is entirely optional. Absent `integrations.jira` config means the feature is inactive.
+- Auth tokens are stored in the app data directory (file-based, `0600` permissions on Unix).
+- All Jira network calls are async and never block the main thread.
