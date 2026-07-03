@@ -133,6 +133,7 @@ Each session can have multiple tabs. Tab 0 is the agent; tabs 1+ are shell tabs.
 
 - **Daemon backend**: shell tabs are spawned in the daemon with composed ID `{session_id}:{tab_index}`. They receive the same augmented PATH environment as agent sessions (via `build_daemon_env`). They persist across app restarts (same as the agent session). On archive/destroy, all shell tabs are killed alongside the agent session.
 - **Tmux backend**: shell tabs use a local PTY (`PtyTarget::Shell`) and are ephemeral — they die with the app.
+- **Dynamic tab titles**: shell tabs listen for OSC title changes from the terminal. When the shell reports a running command (e.g., `vim`, `cargo`), the tab label updates to show that command name (`src/lib/shell-title.ts` extracts the binary name, filtering out shell resets and cwd paths). Tabs with a custom title are preserved across relabeling.
 
 ### Exit detection
 
