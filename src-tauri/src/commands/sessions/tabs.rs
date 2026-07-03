@@ -67,15 +67,11 @@ pub fn spawn_tab(
         if !already_running {
             let env_owned: std::collections::HashMap<String, String> =
                 env.iter().cloned().collect();
-            let env_ref: std::collections::HashMap<&str, &str> =
-                env_owned.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-            crate::daemon::spawn_session(
-                &pty_key,
-                &shell,
-                &["-l"],
-                &cwd,
-                Some(&env_ref),
-            )?;
+            let env_ref: std::collections::HashMap<&str, &str> = env_owned
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            crate::daemon::spawn_session(&pty_key, &shell, &["-l"], &cwd, Some(&env_ref))?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {
