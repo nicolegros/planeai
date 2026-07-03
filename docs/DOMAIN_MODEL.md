@@ -154,17 +154,17 @@ The `planeai-jira` crate provides two-way sync between Jira Cloud and planeai's 
 
 Stored in `jira_issues` table (managed by `JiraRepository`):
 
-| Field          | Type     | Description                                               |
-| -------------- | -------- | --------------------------------------------------------- |
-| issue_key      | String   | Jira issue key (e.g., `ENG-42`). Primary key.            |
-| summary        | String   | Issue title from Jira                                     |
-| description    | String   | Issue body/description                                    |
-| status         | String   | Current Jira status (e.g., "In Progress")                 |
-| priority       | String?  | Jira priority name                                        |
-| labels         | String[] | Jira labels                                               |
-| sync_status    | Enum     | `synced` or `departed`                                    |
-| last_synced_at | DateTime | Timestamp of last successful sync                         |
-| source_name    | String   | Config source alias (key in `JiraConfig.sources`)         |
+| Field          | Type     | Description                                       |
+| -------------- | -------- | ------------------------------------------------- |
+| issue_key      | String   | Jira issue key (e.g., `ENG-42`). Primary key.     |
+| summary        | String   | Issue title from Jira                             |
+| description    | String   | Issue body/description                            |
+| status         | String   | Current Jira status (e.g., "In Progress")         |
+| priority       | String?  | Jira priority name                                |
+| labels         | String[] | Jira labels                                       |
+| sync_status    | Enum     | `synced` or `departed`                            |
+| last_synced_at | DateTime | Timestamp of last successful sync                 |
+| source_name    | String   | Config source alias (key in `JiraConfig.sources`) |
 
 ### Sync Flow
 

@@ -803,6 +803,62 @@ mod tests {
         }
     }
 
+    /// PLA-189: For hook-enabled sessions, PTY output (user typing echo) while Idle
+    /// must NOT transition state to Busy. The notify_output method preserves Idle
+    /// state for these sessions, so callers that check state before/after should
+    /// not see a transition.
+    #[test]
+    fn hook_enabled_pty_output_while_idle_does_not_transition_to_busy() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "agent-1", "project-a", true);
+
+        // Simulate: agent worked, then stopped → Idle
+        state.notify_busy("s1");
+        assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
+        let fired = state.notify_stop_immediate("s1");
+        assert!(fired);
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+
+        // User types → PTY echo triggers notify_output while Idle.
+        // For hook-enabled sessions, state must stay Idle (not transition to Busy).
+        let was_idle = state.get_state("s1") != Some(AgentState::Busy);
+        state.notify_output("s1");
+        let is_now_busy = state.get_state("s1") == Some(AgentState::Busy);
+
+        assert!(was_idle, "session was idle before output");
+        assert!(
+            !is_now_busy,
+            "hook-enabled session must NOT become Busy from PTY echo"
+        );
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+    }
+
+    /// For non-hook sessions, PTY output while Idle SHOULD transition to Busy
+    /// (this is the standard silence-based detection path).
+    #[test]
+    fn non_hook_pty_output_while_idle_transitions_to_busy() {
+        let mut state = NotifyState::new();
+        state.register_session("s1", "agent-1", "project-a", false);
+
+        // Agent was busy, then went idle via silence check
+        state.notify_output("s1");
+        assert_eq!(state.get_state("s1"), Some(AgentState::Busy));
+        state.advance_time("s1", Duration::from_secs(10));
+        assert!(state.check_silence("s1"));
+        assert_eq!(state.get_state("s1"), Some(AgentState::Idle));
+
+        // New PTY output → should transition back to Busy
+        let was_idle = state.get_state("s1") != Some(AgentState::Busy);
+        state.notify_output("s1");
+        let is_now_busy = state.get_state("s1") == Some(AgentState::Busy);
+
+        assert!(was_idle);
+        assert!(
+            is_now_busy,
+            "non-hook session SHOULD become Busy from PTY output"
+        );
+    }
+
     /// Simulates boot registration: sessions loaded from DB get registered
     #[test]
     fn session_registration_on_boot() {
