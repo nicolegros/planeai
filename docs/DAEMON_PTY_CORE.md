@@ -143,7 +143,7 @@ This ensures:
 
 ## Environment / PATH Propagation
 
-All session spawn paths (initial launch, restart, CLI, symphony auto-dispatch) use the same centralized PATH resolution:
+All session spawn paths (initial launch, restart, CLI, symphony auto-dispatch, shell tabs) use the same centralized PATH resolution:
 
 ```rust
 planeai_core::command::augmented_path(&extra_path_dirs)
