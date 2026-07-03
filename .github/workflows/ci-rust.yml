@@ -8,8 +8,8 @@ on:
       - "!src-tauri/icons/**"
 
 env:
-  JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
-  JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+  JIRA_CLIENT_ID: dummy
+  JIRA_CLIENT_SECRET: dummy
 
 jobs:
   check:
