@@ -71,6 +71,23 @@ The `daemon` backend is experimental. It provides session persistence across app
 tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
+## Sound
+
+Controls whether planeai plays audio notifications.
+
+```jsonc
+{
+  "sound_enabled": true, // default: true
+}
+```
+
+| Value   | Behavior                                               |
+| ------- | ------------------------------------------------------ |
+| `true`  | Play a chime when an agent finishes a task (default)   |
+| `false` | Disable all sound notifications                        |
+
+This setting is also available in **Preferences → Sound**.
+
 ## Task Manager Integration
 
 ### Templates

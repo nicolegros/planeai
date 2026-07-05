@@ -23,6 +23,7 @@ These are normal options users should configure.
 | `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                             |
 | `integrations`            | object   | unset        | External service integrations (currently: `jira`)                   |
 | `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                      |
+| `sound_enabled`           | bool     | `true`       | Play a chime when an agent finishes a task                          |
 | `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
 
 ### 2. Advanced compatibility config
