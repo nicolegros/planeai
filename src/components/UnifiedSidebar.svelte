@@ -196,7 +196,9 @@
     fadingSessionIds = new Set([...fadingSessionIds, sessionId]);
     setTimeout(() => {
       fadingSessionIds = new Set([...fadingSessionIds].filter(id => id !== sessionId));
-      action();
+      Promise.resolve(action()).catch((err) => {
+        console.error("fadeOutThenAct action failed:", err);
+      });
     }, 200);
   }
 

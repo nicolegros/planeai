@@ -139,7 +139,17 @@ pub async fn launch_session(
         .await;
 
         if let Err(e) = spawn_result {
-            rollback_branch_creation(&repo_path, &branch, worktree_path.as_deref(), is_new_branch);
+            {
+                let rp = repo_path.clone();
+                let br = branch.clone();
+                let wtp = worktree_path.clone();
+                let inb = is_new_branch;
+                let _ = crate::commands::blocking(move || {
+                    rollback_branch_creation(&rp, &br, wtp.as_deref(), inb);
+                    Ok(())
+                })
+                .await;
+            }
             // Clear the stale daemon connection so next attempt reconnects
             if e.contains("Broken pipe") || e.contains("Connection refused") || e.contains("No such file") {
                 let daemon_state = app.state::<DaemonState>();
@@ -153,7 +163,12 @@ pub async fn launch_session(
 
     // Phase 4: DB write and notify (re-acquire lock)
     let conn = state.0.lock().map_err(|e| {
-        rollback_branch_creation(&repo_path, &branch, worktree_path.as_deref(), is_new_branch);
+        let rp = repo_path.clone();
+        let br = branch.clone();
+        let wtp = worktree_path.clone();
+        tokio::task::spawn_blocking(move || {
+            rollback_branch_creation(&rp, &br, wtp.as_deref(), is_new_branch);
+        });
         e.to_string()
     })?;
 
@@ -178,7 +193,12 @@ pub async fn launch_session(
         effective_base_branch.as_deref(),
     )
     .map_err(|e| {
-        rollback_branch_creation(&repo_path, &branch, worktree_path.as_deref(), is_new_branch);
+        let rp = repo_path.clone();
+        let br = branch.clone();
+        let wtp = worktree_path.clone();
+        tokio::task::spawn_blocking(move || {
+            rollback_branch_creation(&rp, &br, wtp.as_deref(), is_new_branch);
+        });
         e.to_string()
     })?;
 
@@ -268,20 +288,39 @@ fn rollback_branch_creation(
             tracing::warn!(error = %e, "rollback: worktree cleanup error");
         }
     } else if is_new_branch {
-        // Non-worktree case: checkout previous branch, then delete the new one
-        let checkout_result = std::process::Command::new("git")
-            .args(["checkout", "-"])
-            .current_dir(repo_path)
-            .output();
-        if let Err(e) = checkout_result {
-            tracing::warn!(error = %e, "rollback: failed to checkout previous branch");
+        let mut checkout_cmd = std::process::Command::new("git");
+        checkout_cmd.args(["checkout", "-"]).current_dir(repo_path);
+        planeai_core::command::no_window(&mut checkout_cmd);
+        match checkout_cmd.output() {
+            Ok(output) if !output.status.success() => {
+                tracing::warn!(
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "rollback: git checkout failed, skipping branch delete"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollback: failed to checkout previous branch");
+                return;
+            }
+            _ => {}
         }
-        let delete_result = std::process::Command::new("git")
+        let mut delete_cmd = std::process::Command::new("git");
+        delete_cmd
             .args(["branch", "-D", branch])
-            .current_dir(repo_path)
-            .output();
-        if let Err(e) = delete_result {
-            tracing::warn!(error = %e, "rollback: failed to delete branch");
+            .current_dir(repo_path);
+        planeai_core::command::no_window(&mut delete_cmd);
+        match delete_cmd.output() {
+            Ok(output) if !output.status.success() => {
+                tracing::warn!(
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "rollback: git branch -D failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollback: failed to delete branch");
+            }
+            _ => {}
         }
     }
 }
