@@ -146,6 +146,16 @@ Forms that use the form keyboard controller display a mode badge and mnemonic hi
 - **Mnemonic badges:** Inline `<span>` next to each label. In normal mode: `bg-accent-bg text-accent`; in insert mode: `bg-panel-hi text-t3`.
 - **Submit hint:** `MOD_ENTER_HINT` (⌘↵ / Ctrl+↵) shown inside the primary submit button at reduced opacity.
 
+### Form submission loading state
+
+All forms and async action buttons follow a consistent loading pattern:
+
+- A `submitting` reactive state (`$state(false)`) guards against double-submission.
+- The submit button is `disabled` while submitting.
+- Button label is replaced with a `LoaderCircle` spinner (`size-3.5 animate-spin`) during submission.
+- On error, `submitting` resets to `false` so the user can retry. On success, the form closes (no reset needed).
+- `Cmd/Ctrl+Enter` shortcuts also check `submitting` before invoking submit.
+
 ## Motion
 
 Minimal, purposeful animation only:
@@ -155,5 +165,6 @@ Minimal, purposeful animation only:
 - Busy spinner: `animate-spin` (0.7s linear)
 - Terminal caret: `blink-caret 1.1s`
 - Selection changes: instant or 120–150ms transition
+- Sidebar archive/delete: 200ms opacity fade-out before action executes
 
 No decorative animation.

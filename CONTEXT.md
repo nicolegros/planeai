@@ -37,6 +37,15 @@ create → active → exited → deleted
 - **Exited** — agent process terminated. Terminal buffer is frozen (read-only). User can restart or delete. Detected via PTY EOF (tmux) or daemon exit event (daemon).
 - **Deleted** — session removed from sidebar and DB. For tmux sessions, the tmux session is killed. For daemon sessions, a kill command is sent to the daemon. Irreversible.
 
+### Launch-failure rollback
+
+If session creation fails after git branch/worktree setup (e.g., daemon spawn fails, DB write fails), the launch command automatically rolls back:
+
+- **Worktree mode** — calls `cleanup_worktree()` to remove the worktree directory and branch.
+- **Checkout mode (new branch)** — checks out the previous branch and deletes the newly created branch.
+
+Rollback is best-effort: errors are logged as warnings but do not propagate. If the daemon connection fails with "Broken pipe", "Connection refused", or "No such file", the stale connection is cleared so the next attempt auto-reconnects to a restarted daemon.
+
 ## Architecture notes
 
 - **Tauri v2** (Rust backend + webview frontend)
