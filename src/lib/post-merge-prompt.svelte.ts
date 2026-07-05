@@ -2,6 +2,7 @@
  * Post-merge prompt store — shows Archive/Destroy/Keep prompt when a PR is merged.
  * When the session has a task, shows Done/Dismiss instead.
  * Default timeout action is configurable via settings.post_merge_action.
+ * A live countdown (getCountdown()) ticks from 30s to 0; skipped when action is "keep".
  */
 import { showSnackbar } from "./snackbar.svelte";
 import { getSettings } from "./settings.svelte";
