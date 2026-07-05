@@ -453,10 +453,10 @@
             onclick={() => toggleSection(projectKey)}
             oncontextmenu={(e) => onProjectContextMenu(e, project)}
           >
-            {#if projectCollapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
             {project.name}
             <span class="ml-auto font-normal text-t3">{(projectOrphans.length) + (projectTasks.length)}</span>
             {#if projectAutoMode[project.id]}<Zap class="size-2.5 text-status-running" />{/if}
+            {#if projectCollapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
           </button>
 
           {#if !projectCollapsed}
@@ -483,7 +483,7 @@
                       <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                       <button
                         data-nav-index={globalIndex}
-                        class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg px-2
+                        class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2
                           {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                           {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
                         onclick={() => handleOrphanClick(session)}
@@ -519,7 +519,7 @@
               <div>
                 <button
                   data-nav-index={statusNavIdx}
-                  class="w-full flex items-center gap-1.5 px-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-2 ring-accent' : ''}"
+                  class="w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-[9.5px] font-semibold text-t2 uppercase tracking-[.05em] hover:opacity-80 rounded-lg {isStatusSelected ? 'ring-2 ring-accent' : ''}"
                   onclick={() => toggleSection(sectionKey)}
                 >
                   <span class="size-1.5 rounded-full {statusDotColors[status]}"></span>
@@ -541,7 +541,7 @@
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
                             data-nav-index={taskNavIdx}
-                            class="flex-1 min-w-0 text-left py-[6px] px-2 flex items-center gap-1.5 transition-colors rounded-lg
+                            class="flex-1 min-w-0 text-left py-[6px] pl-4 pr-2 flex items-center gap-1.5 transition-colors rounded-lg
                               {isActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                               {isPreviewing ? 'ring-2 ring-accent' : isSelected ? 'ring-2 ring-accent' : ''}"
                             onclick={() => handleTaskClick(task, project.path)}
