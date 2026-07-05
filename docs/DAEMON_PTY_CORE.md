@@ -226,6 +226,16 @@ desktop client
       → shutdown_timer (30s grace, exits when no clients + no live sessions)
 ```
 
+## Client Resilience
+
+### Spawn retry on stale connection
+
+The GUI holds a persistent control connection to the daemon. If `spawn_session` fails (e.g., broken pipe from a stale connection), the client reconnects to the daemon and retries once. If the retry fails with "still running" (session survived the original spawn), it is treated as success.
+
+### Resize via data connection
+
+Resize events are sent as `FRAME_RESIZE` frames on the existing data connection rather than opening a new control connection per event. This prevents file descriptor exhaustion under rapid resize (e.g., window drag). The control protocol `resize` command remains available for tools that only have a control connection.
+
 ## Platform Notes
 
 ### Connection Error Recovery

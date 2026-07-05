@@ -28,6 +28,18 @@ pub fn ensure_running(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Raise FD soft limit in the daemon child process before exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                planeai_paths::raise_fd_limit();
+                Ok(())
+            });
+        }
+    }
+
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

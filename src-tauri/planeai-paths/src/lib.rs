@@ -37,3 +37,22 @@ pub fn db_path() -> PathBuf {
 pub fn notify_socket_path() -> PathBuf {
     app_data_dir().join("notify.sock")
 }
+
+/// Raise the process file descriptor soft limit to min(hard_limit, 10240).
+///
+/// On macOS the default soft limit is 256, which is far too low for processes
+/// managing WebView FDs, PTY sessions, IPC sockets, and log files.
+/// Call this early in main() before any I/O.
+#[cfg(unix)]
+pub fn raise_fd_limit() {
+    unsafe {
+        let mut rlim = std::mem::MaybeUninit::<libc::rlimit>::zeroed().assume_init();
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+            let target = rlim.rlim_max.min(10240);
+            if rlim.rlim_cur < target {
+                rlim.rlim_cur = target;
+                let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
+            }
+        }
+    }
+}

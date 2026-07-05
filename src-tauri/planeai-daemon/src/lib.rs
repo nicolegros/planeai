@@ -37,6 +37,10 @@ struct Cli {
 
 /// Entry point for the daemon binary.
 pub fn run() -> anyhow::Result<()> {
+    // Raise FD soft limit — the daemon manages many PTY sessions and connections.
+    #[cfg(unix)]
+    planeai_paths::raise_fd_limit();
+
     let log_dir = default_log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
     let file_appender = tracing_appender::rolling::daily(&log_dir, "daemon.log");

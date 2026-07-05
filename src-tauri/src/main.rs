@@ -41,6 +41,12 @@ use commands::*;
 use state::*;
 
 fn main() {
+    // Raise the file descriptor soft limit on macOS/Linux.
+    // The default macOS soft limit is 256, which is easily exhausted by
+    // WebView, multiple daemon data connections, and session log files.
+    #[cfg(unix)]
+    planeai_paths::raise_fd_limit();
+
     let app_dir = planeai_paths::app_data_dir();
     std::fs::create_dir_all(&app_dir).expect("failed to create app data dir");
     let log_dir = app_dir.join("logs");

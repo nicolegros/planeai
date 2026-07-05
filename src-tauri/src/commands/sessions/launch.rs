@@ -150,7 +150,7 @@ pub async fn launch_session(
                 })
                 .await;
             }
-            // Clear the stale daemon connection so next attempt reconnects
+            // Clear the stale daemon connection so next attempt reconnects automatically
             if e.contains("Broken pipe")
                 || e.contains("Connection refused")
                 || e.contains("No such file")
@@ -266,7 +266,7 @@ async fn spawn_in_daemon(
             ds.as_mut().unwrap()
         }
     };
-    client
+    let result = client
         .spawn_session(
             &launch_result.session_id,
             &launch_result.program,
@@ -274,7 +274,19 @@ async fn spawn_in_daemon(
             working_dir,
             Some(&launch_result.env),
         )
-        .await
+        .await;
+
+    // If the first attempt fails (e.g. broken pipe), the caller handles reconnection.
+    // But if the error is "still running", the session was already spawned successfully
+    // (the response was lost due to the broken pipe). Treat as success.
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.contains("still running") => {
+            tracing::info!(session_id, "session already running, treating as success");
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Rollback branch/worktree creation on launch failure.
