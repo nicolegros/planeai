@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { getPrompt, handleArchive, handleDestroy, handleKeep, handleTaskDone, registerFocus, unregisterFocus } from "../lib/post-merge-prompt.svelte";
+  import { getPrompt, getCountdown, handleArchive, handleDestroy, handleKeep, handleTaskDone, registerFocus, unregisterFocus } from "../lib/post-merge-prompt.svelte";
   import { refocusTerminal } from "../lib/focus.svelte";
 
   const prompt = $derived(getPrompt());
+  const countdown = $derived(getCountdown());
   let wrapperEl = $state<HTMLDivElement | null>(null);
   let focused = $state(false);
 
@@ -59,6 +60,6 @@
         ><span class="underline">K</span>eep</button>
       {/if}
     </div>
-    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"} · auto-archives in 30s</p>
+    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"} · auto-archives in {countdown}s</p>
   </div>
 {/if}
