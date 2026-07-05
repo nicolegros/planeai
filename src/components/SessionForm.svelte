@@ -197,7 +197,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div bind:this={wrapperEl} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
+<div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form bind:this={formEl} class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
   <!-- Mode toggle -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -320,8 +320,7 @@
     <div class="flex gap-2">
       <Button type="button" onclick={onCancel}>Cancel</Button>
       <Button type="submit" variant="primary" disabled={submitting}>
-        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
-        Create session <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>
+        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Create session <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
       </Button>
     </div>
   </div>

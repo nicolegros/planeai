@@ -113,8 +113,7 @@
   <div class="flex justify-end gap-2">
     <Button type="button" onclick={onCancel}>Cancel</Button>
     <Button type="submit" variant="primary" disabled={submitting}>
-      {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
-      Add <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+      {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Add <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>{/if}
     </Button>
   </div>
 </form>

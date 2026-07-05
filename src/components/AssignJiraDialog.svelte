@@ -50,7 +50,7 @@
 <FormDialog title="Assign to project" {onClose}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div bind:this={wrapper} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+  <div bind:this={wrapper} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <form class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); } }}>
       <div class="flex items-start justify-between">
@@ -79,8 +79,7 @@
         <div class="flex gap-2">
           <Button type="button" onclick={onClose}>Cancel</Button>
           <Button type="submit" variant="primary" disabled={!projectId || submitting}>
-            {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
-            Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+            {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>{/if}
           </Button>
         </div>
       </div>
