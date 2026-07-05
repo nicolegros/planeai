@@ -297,7 +297,10 @@ mod tests {
         // Filter to only events for the file under test (the watcher may also emit
         // events for the directory itself or other OS-generated files like .DS_Store).
         let rapid_paths: Vec<&String> = paths.iter().filter(|p| p.contains("rapid.txt")).collect();
-        assert!(!rapid_paths.is_empty(), "expected at least one debounced event for rapid.txt");
+        assert!(
+            !rapid_paths.is_empty(),
+            "expected at least one debounced event for rapid.txt"
+        );
 
         manager.unwatch("session-2");
     }
