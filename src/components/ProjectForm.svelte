@@ -7,6 +7,7 @@
   import { nameFromPath } from "../lib/name-from-path";
   import { getSettings } from "../lib/settings.svelte";
   import { Button, Input, Label } from "./ui";
+  import { LoaderCircle } from "@lucide/svelte";
 
   interface Props {
     onCreated: () => void;
@@ -22,6 +23,7 @@
   let name = $state("");
   let nameManuallyEdited = $state(false);
   let error = $state("");
+  let submitting = $state(false);
   let formEl: HTMLFormElement;
 
   onMount(() => {
@@ -44,6 +46,7 @@
   }
 
   async function submit() {
+    if (submitting) return;
     if (!path) {
       error = "Path is required.";
       return;
@@ -55,15 +58,18 @@
       error = "Could not derive a name from the path.";
       return;
     }
+    submitting = true;
     const valid = await projectsApi.validateGitRepo(path);
     if (!valid) {
       error = "Not a valid git repository (no .git found).";
+      submitting = false;
       return;
     }
     try {
       await projectsApi.create(name, path);
     } catch (e) {
       showSnackbar(String(e));
+      submitting = false;
       return;
     }
     onCreated();
@@ -106,6 +112,9 @@
 
   <div class="flex justify-end gap-2">
     <Button type="button" onclick={onCancel}>Cancel</Button>
-    <Button type="submit" variant="primary">Add <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+    <Button type="submit" variant="primary" disabled={submitting}>
+      {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
+      Add <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+    </Button>
   </div>
 </form>

@@ -6,6 +6,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import { LoaderCircle } from "@lucide/svelte";
 
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
   interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
@@ -156,7 +157,7 @@
     if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
   }
 
-  let submitting = false;
+  let submitting = $state(false);
 
   async function submit() {
     if (submitting) return;
@@ -318,7 +319,10 @@
     </div>
     <div class="flex gap-2">
       <Button type="button" onclick={onCancel}>Cancel</Button>
-      <Button type="submit" variant="primary">Create session <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span></Button>
+      <Button type="submit" variant="primary" disabled={submitting}>
+        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
+        Create session <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>
+      </Button>
     </div>
   </div>
 </form>

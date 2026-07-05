@@ -10,7 +10,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, Send, Check, AlertTriangle } from "@lucide/svelte";
+  import { MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
@@ -91,6 +91,7 @@
   // Reactive
   let totalCount = $derived(getTotalCommentCount(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
+  let sendingFeedback = $state(false);
   let currentFileComments = $derived(
     getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
   );
@@ -291,20 +292,25 @@
 
   async function sendFeedback() {
     const comments = getComments(sessionId);
-    if (comments.length === 0 || sessionExited) return;
-    const filePaths = [...new Set(comments.map((c) => c.filePath))];
-    const fileDiffs = new Map<string, FileDiffData>();
-    await Promise.all(filePaths.map(async (path) => {
-      try { const diff = await git.getFileDiff(repoPath, effectiveBase, path, null, effectiveHead); fileDiffs.set(path, diff); } catch {}
-    }));
-    const serialized = serializeComments(comments, fileDiffs);
-    const bytes = Array.from(new TextEncoder().encode(serialized));
-    await pty.write(sessionId, bytes);
-    await pty.write(sessionId, [0x0d]);
-    const count = comments.length;
-    clearComments(sessionId);
-    updateAnnotations();
-    showSnackbar(`Feedback sent (${count} comment${count !== 1 ? "s" : ""})`, "success");
+    if (comments.length === 0 || sessionExited || sendingFeedback) return;
+    sendingFeedback = true;
+    try {
+      const filePaths = [...new Set(comments.map((c) => c.filePath))];
+      const fileDiffs = new Map<string, FileDiffData>();
+      await Promise.all(filePaths.map(async (path) => {
+        try { const diff = await git.getFileDiff(repoPath, effectiveBase, path, null, effectiveHead); fileDiffs.set(path, diff); } catch {}
+      }));
+      const serialized = serializeComments(comments, fileDiffs);
+      const bytes = Array.from(new TextEncoder().encode(serialized));
+      await pty.write(sessionId, bytes);
+      await pty.write(sessionId, [0x0d]);
+      const count = comments.length;
+      clearComments(sessionId);
+      updateAnnotations();
+      showSnackbar(`Feedback sent (${count} comment${count !== 1 ? "s" : ""})`, "success");
+    } finally {
+      sendingFeedback = false;
+    }
   }
 
   // ─── Viewed ──────────────────────────────────────────────────────────────────
@@ -708,7 +714,7 @@
         <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded">c Comment</span>
       {/if}
       {#if totalCount > 0}
-        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}><Send size={12} /><span class="ml-1">Send ({totalCount})</span></Button>
+        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}>{#if sendingFeedback}<LoaderCircle size={12} class="animate-spin" />{:else}<Send size={12} />{/if}<span class="ml-1">Send ({totalCount})</span></Button>
       {/if}
     </div>
 

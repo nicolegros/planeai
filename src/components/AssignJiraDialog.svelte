@@ -5,6 +5,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { Select, Button, Label } from "./ui";
   import FormDialog from "./ui/FormDialog.svelte";
+  import { LoaderCircle } from "@lucide/svelte";
   import * as jiraTaskStore from "../lib/jira-task-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -20,6 +21,7 @@
 
   let projectId = $state(preselectedProjectId);
   let error = $state("");
+  let submitting = $state(false);
   let wrapper = $state<HTMLDivElement | null>(null);
 
   const fk = createFormKeyboardController(
@@ -31,7 +33,8 @@
   );
 
   async function submit() {
-    if (!projectId) return;
+    if (!projectId || submitting) return;
+    submitting = true;
     try {
       await jiraApi.assign(task.key, projectId);
       onClose();
@@ -39,6 +42,7 @@
       await taskStore.refresh(projects.map(p => p.path));
     } catch (e) {
       error = String(e);
+      submitting = false;
     }
   }
 </script>
@@ -74,7 +78,10 @@
         </div>
         <div class="flex gap-2">
           <Button type="button" onclick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={!projectId}>Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+          <Button type="submit" variant="primary" disabled={!projectId || submitting}>
+            {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{/if}
+            Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+          </Button>
         </div>
       </div>
     </form>
