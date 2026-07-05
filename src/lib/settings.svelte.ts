@@ -84,6 +84,7 @@ export interface AppConfig {
   scrollback_lines?: number | null;
   web_links?: boolean | null;
   auto_open_review?: boolean | null;
+  sound_enabled?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;
   integrations?: IntegrationsConfig | null;
 }
