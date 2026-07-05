@@ -128,63 +128,52 @@ pub async fn launch_session(
 
     // Phase 3: async daemon work — no locks held
     if backend == "daemon" {
-        let daemon_state = app.state::<DaemonState>();
-        let socket_path = planeai_ipc::daemon_socket_path();
-        let sidecar_path = crate::paths::resolve_daemon_binary(&app);
+        let spawn_result = spawn_in_daemon(
+            &app,
+            &session_id,
+            &working_dir,
+            &cmd,
+            &extra_path_dirs,
+            scrollback_bytes,
+        )
+        .await;
 
-        crate::daemon_client::ensure_daemon_running(&sidecar_path, &socket_path, scrollback_bytes)
-            .await?;
-
-        let launch_req = planeai_core::session_launch::CreateSessionRequest {
-            session_id: session_id.clone(),
-            project_cwd: std::path::PathBuf::from(&working_dir),
-            session_target: planeai_core::session_launch::SessionTarget::Daemon,
-            agent_command: cmd.clone(),
-            env: std::collections::HashMap::new(),
-            extra_path_dirs: extra_path_dirs.clone(),
-            cols: 80,
-            rows: 24,
-            durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
-        };
-        let launch_result = planeai_core::session_launch::prepare_session(&launch_req)
-            .map_err(|e| e.to_string())?;
-
-        tracing::info!(
-            caller = "tauri",
-            shared_launch_service = true,
-            target = "daemon",
-            cwd = %launch_result.cwd.display(),
-            command_label = %launch_result.command_label,
-            durable_logs = launch_req.durable_logs,
-            extra_path_dirs_count = launch_req.extra_path_dirs.len(),
-            "session created via shared launch service"
-        );
-
-        let mut ds = daemon_state.0.lock().await;
-        let client = match ds.as_mut() {
-            Some(c) => c,
-            None => {
-                *ds = Some(
-                    crate::daemon_client::DaemonClient::connect(&socket_path)
-                        .await
-                        .map_err(|e| format!("daemon connect failed: {e}"))?,
-                );
-                ds.as_mut().unwrap()
+        if let Err(e) = spawn_result {
+            {
+                let rp = repo_path.clone();
+                let br = branch.clone();
+                let wtp = worktree_path.clone();
+                let inb = is_new_branch;
+                let _ = crate::commands::blocking(move || {
+                    rollback_branch_creation(&rp, &br, wtp.as_deref(), inb);
+                    Ok(())
+                })
+                .await;
             }
-        };
-        client
-            .spawn_session(
-                &launch_result.session_id,
-                &launch_result.program,
-                &launch_result.args,
-                &working_dir,
-                Some(&launch_result.env),
-            )
-            .await?;
+            // Clear the stale daemon connection so next attempt reconnects
+            if e.contains("Broken pipe")
+                || e.contains("Connection refused")
+                || e.contains("No such file")
+            {
+                let daemon_state = app.state::<DaemonState>();
+                let mut ds = daemon_state.0.lock().await;
+                *ds = None;
+                return Err("Session daemon is not responding — it may have crashed. Try again (the daemon will restart automatically).".to_string());
+            }
+            return Err(format!("Failed to launch session: {e}"));
+        }
     }
 
     // Phase 4: DB write and notify (re-acquire lock)
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let conn = state.0.lock().map_err(|e| {
+        let rp = repo_path.clone();
+        let br = branch.clone();
+        let wtp = worktree_path.clone();
+        tokio::task::spawn_blocking(move || {
+            rollback_branch_creation(&rp, &br, wtp.as_deref(), is_new_branch);
+        });
+        e.to_string()
+    })?;
 
     {
         let mut ns = notify.0.lock().unwrap();
@@ -206,7 +195,15 @@ pub async fn launch_session(
         task_key.as_deref(),
         effective_base_branch.as_deref(),
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        let rp = repo_path.clone();
+        let br = branch.clone();
+        let wtp = worktree_path.clone();
+        tokio::task::spawn_blocking(move || {
+            rollback_branch_creation(&rp, &br, wtp.as_deref(), is_new_branch);
+        });
+        e.to_string()
+    })?;
 
     if session.task_key.is_some() {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
@@ -216,9 +213,126 @@ pub async fn launch_session(
     Ok(session)
 }
 
+/// Attempt to spawn a session in the daemon. Returns an error string on failure.
+async fn spawn_in_daemon(
+    app: &AppHandle,
+    session_id: &str,
+    working_dir: &str,
+    cmd: &str,
+    extra_path_dirs: &[String],
+    scrollback_bytes: usize,
+) -> Result<(), String> {
+    let daemon_state = app.state::<DaemonState>();
+    let socket_path = planeai_ipc::daemon_socket_path();
+    let sidecar_path = crate::paths::resolve_daemon_binary(app);
+
+    crate::daemon_client::ensure_daemon_running(&sidecar_path, &socket_path, scrollback_bytes)
+        .await?;
+
+    let launch_req = planeai_core::session_launch::CreateSessionRequest {
+        session_id: session_id.to_string(),
+        project_cwd: std::path::PathBuf::from(working_dir),
+        session_target: planeai_core::session_launch::SessionTarget::Daemon,
+        agent_command: cmd.to_string(),
+        env: std::collections::HashMap::new(),
+        extra_path_dirs: extra_path_dirs.to_vec(),
+        cols: 80,
+        rows: 24,
+        durable_logs: std::env::var("PLANEAI_SESSION_LOG_DIR").is_ok(),
+    };
+    let launch_result =
+        planeai_core::session_launch::prepare_session(&launch_req).map_err(|e| e.to_string())?;
+
+    tracing::info!(
+        caller = "tauri",
+        shared_launch_service = true,
+        target = "daemon",
+        cwd = %launch_result.cwd.display(),
+        command_label = %launch_result.command_label,
+        durable_logs = launch_req.durable_logs,
+        extra_path_dirs_count = launch_req.extra_path_dirs.len(),
+        "session created via shared launch service"
+    );
+
+    let mut ds = daemon_state.0.lock().await;
+    let client = match ds.as_mut() {
+        Some(c) => c,
+        None => {
+            *ds = Some(
+                crate::daemon_client::DaemonClient::connect(&socket_path)
+                    .await
+                    .map_err(|e| format!("daemon connect failed: {e}"))?,
+            );
+            ds.as_mut().unwrap()
+        }
+    };
+    client
+        .spawn_session(
+            &launch_result.session_id,
+            &launch_result.program,
+            &launch_result.args,
+            working_dir,
+            Some(&launch_result.env),
+        )
+        .await
+}
+
+/// Rollback branch/worktree creation on launch failure.
+/// Best-effort — logs warnings but doesn't propagate errors.
+fn rollback_branch_creation(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: Option<&str>,
+    is_new_branch: bool,
+) {
+    if let Some(wt_path) = worktree_path {
+        let errors = planeai_core::cleanup::cleanup_worktree(repo_path, wt_path, Some(branch));
+        for e in &errors {
+            tracing::warn!(error = %e, "rollback: worktree cleanup error");
+        }
+    } else if is_new_branch {
+        let mut checkout_cmd = std::process::Command::new("git");
+        checkout_cmd.args(["checkout", "-"]).current_dir(repo_path);
+        planeai_core::command::no_window(&mut checkout_cmd);
+        match checkout_cmd.output() {
+            Ok(output) if !output.status.success() => {
+                tracing::warn!(
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "rollback: git checkout failed, skipping branch delete"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollback: failed to checkout previous branch");
+                return;
+            }
+            _ => {}
+        }
+        let mut delete_cmd = std::process::Command::new("git");
+        delete_cmd
+            .args(["branch", "-D", branch])
+            .current_dir(repo_path);
+        planeai_core::command::no_window(&mut delete_cmd);
+        match delete_cmd.output() {
+            Ok(output) if !output.status.success() => {
+                tracing::warn!(
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "rollback: git branch -D failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollback: failed to delete branch");
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use planeai_core::command::shell_args;
+
+    use super::rollback_branch_creation;
 
     #[test]
     fn shell_args_preserves_quoted_prompt() {
@@ -246,5 +360,23 @@ mod tests {
             assert_eq!(program, "/bin/sh");
             assert_eq!(args, vec!["-c", cmd]);
         }
+    }
+
+    #[test]
+    fn rollback_with_nonexistent_worktree_does_not_panic() {
+        // rollback_branch_creation is best-effort — should never panic even
+        // with paths/branches that don't exist.
+        rollback_branch_creation(
+            "/nonexistent/repo",
+            "feat/nonexistent",
+            Some("/nonexistent/wt"),
+            true,
+        );
+    }
+
+    #[test]
+    fn rollback_without_worktree_and_not_new_branch_is_noop() {
+        // When is_new_branch is false and no worktree, nothing should happen
+        rollback_branch_creation("/nonexistent/repo", "main", None, false);
     }
 }

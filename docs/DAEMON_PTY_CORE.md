@@ -228,6 +228,10 @@ desktop client
 
 ## Platform Notes
 
+### Connection Error Recovery
+
+If a daemon spawn fails with "Broken pipe", "Connection refused", or "No such file or directory", the Tauri GUI clears the cached `DaemonClient` connection. The next session launch attempt will reconnect to the daemon (which `ensure_daemon_running` restarts automatically if crashed). The user sees a one-time error prompting them to retry.
+
 ### macOS / Linux
 
 - Unix domain socket at `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock`

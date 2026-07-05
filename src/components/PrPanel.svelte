@@ -1,6 +1,6 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { RefreshCw, ShieldAlert, AlertTriangle } from "@lucide/svelte";
+  import { RefreshCw, ShieldAlert, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { getCiChecks, classifyCheck, refreshCiChecks, type CiConclusion } from "../lib/ci-checks.svelte";
   import { refreshPrComments } from "../lib/pr-comments.svelte";
   import { hasConflicts } from "../lib/ci-checks.svelte";
@@ -22,6 +22,7 @@
   const STORAGE_KEY = "planeai:merge-strategy";
 
   let merging = $state(false);
+  let sendingFailures = $state(false);
   let allowedStrategies = $state<string[]>([]);
   let selectedStrategy = $state<string>(localStorage.getItem(STORAGE_KEY) || "squash");
   let wrapperEl = $state<HTMLDivElement | null>(null);
@@ -112,7 +113,8 @@
   }
 
   async function sendFailuresToAgent() {
-    if (sessionExited || failedCount === 0) return;
+    if (sessionExited || failedCount === 0 || sendingFailures) return;
+    sendingFailures = true;
     try {
       let msg: string;
       try { msg = await pr.getCiFailureLogs(sessionId); } catch {
@@ -126,6 +128,7 @@
       await pty.write(sessionId, Array.from(new TextEncoder().encode(msg + "\r")));
       showSnackbar("CI failures sent to agent", "success");
     } catch (e: any) { showSnackbar(e.toString()); }
+    finally { sendingFailures = false; }
   }
 </script>
 
@@ -173,7 +176,8 @@
         {/each}
       </div>
       {#if failedCount > 0}
-        <button class="mt-2 w-full text-xs px-2 py-1.5 rounded-lg bg-status-exited/10 text-status-exited hover:bg-status-exited/20 disabled:opacity-50" disabled={sessionExited} onclick={sendFailuresToAgent}>
+        <button class="mt-2 w-full text-xs px-2 py-1.5 rounded-lg bg-status-exited/10 text-status-exited hover:bg-status-exited/20 disabled:opacity-50 flex items-center justify-center gap-1.5" disabled={sessionExited || sendingFailures} onclick={sendFailuresToAgent}>
+          {#if sendingFailures}<LoaderCircle class="size-3 animate-spin" />{/if}
           Send failures to agent <span class="font-mono text-[10px] px-1 rounded {badge}">F</span>
         </button>
       {/if}

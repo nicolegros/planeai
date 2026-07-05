@@ -5,6 +5,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
   interface Props {
@@ -252,8 +253,8 @@
       </div>
       <div class="flex gap-2">
         <Button type="button" onclick={onCancel}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={!formTitle.trim()}>
-          {mode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>
+        <Button type="submit" variant="primary" disabled={!formTitle.trim() || submitting}>
+          {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{mode === "create" ? "Create" : "Save"} <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>{/if}
         </Button>
       </div>
     </div>

@@ -1,12 +1,20 @@
 import { describe, it, expect, vi } from "vitest";
-import { mount, flushSync } from "svelte";
+import { mount, flushSync, tick } from "svelte";
 
 vi.mock("../../lib/api", () => ({
-  sessions: { launch: vi.fn(() => Promise.resolve({})) },
+  sessions: { launch: vi.fn(() => new Promise(() => {})) },
   projects: { listBranches: vi.fn(() => Promise.resolve([])) },
   tasks: {
-    list: vi.fn(() => Promise.resolve([])),
-    listAll: vi.fn(() => Promise.resolve([])),
+    list: vi.fn(() =>
+      Promise.resolve([
+        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+      ]),
+    ),
+    listAll: vi.fn(() =>
+      Promise.resolve([
+        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+      ]),
+    ),
   },
 }));
 
@@ -87,5 +95,42 @@ describe("SessionForm", () => {
 
     // Name and branch fields should be cleared
     expect(nameInput.value).toBe("");
+  });
+
+  it("submit button is not disabled initially", () => {
+    const target = renderForm();
+    const submitBtn = target.querySelector<HTMLButtonElement>("button[type='submit']")!;
+    expect(submitBtn.disabled).toBe(false);
+  });
+
+  it("submit button becomes disabled with spinner during submission", async () => {
+    const target = renderForm({
+      taskPrefill: {
+        key: "PROJ-1",
+        title: "Fix bug",
+        description: "",
+        branch: "feat/test",
+        name: "Fix bug",
+        prompt: "Fix it",
+      },
+    });
+
+    // Wait for async task loading effect to fire and populate branch
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    const submitBtn = target.querySelector<HTMLButtonElement>("button[type='submit']")!;
+
+    // Trigger submit via form submission
+    const form = target.querySelector("form")!;
+    form.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    flushSync();
+
+    // Button should now be disabled and contain a spinner (svg from LoaderCircle)
+    expect(submitBtn.disabled).toBe(true);
+    expect(submitBtn.querySelector("svg")).not.toBeNull();
   });
 });

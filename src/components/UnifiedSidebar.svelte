@@ -56,6 +56,7 @@
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
   let renameValue = $state("");
   let searchQuery = $state("");
+  let fadingSessionIds = $state<Set<string>>(new Set());
 
   const statusOrder = ["running", "needs_review", "idle", "todo", "done", "exited"];
   const statusLabels: Record<string, string> = { running: "Running", needs_review: "Needs review", idle: "Idle", todo: "To do", done: "Done", exited: "Exited" };
@@ -189,6 +190,16 @@
   function handleOrphanClick(session: Session) {
     onSelectSession(session.id);
     focusTerminal();
+  }
+
+  function fadeOutThenAct(sessionId: string, action: () => void | Promise<void>) {
+    fadingSessionIds = new Set([...fadingSessionIds, sessionId]);
+    setTimeout(() => {
+      fadingSessionIds = new Set([...fadingSessionIds].filter(id => id !== sessionId));
+      Promise.resolve(action()).catch((err) => {
+        console.error("fadeOutThenAct action failed:", err);
+      });
+    }, 200);
   }
 
   async function moveTask(key: string, status: string) {
@@ -362,8 +373,8 @@
     if (current.type === "orphan") {
       const session = current.session;
       if (action.type === "select") { onSelectSession(session.id); focusTerminal(); }
-      else if (action.type === "archive") onArchiveSession(session);
-      else if (action.type === "delete") onDeleteSession(session);
+      else if (action.type === "archive") fadeOutThenAct(session.id, () => onArchiveSession(session));
+      else if (action.type === "delete") fadeOutThenAct(session.id, () => onDeleteSession(session));
       else if (action.type === "rename") startRename(session);
       else if (action.type === "restart") onRestartSession(session);
       else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
@@ -469,7 +480,7 @@
                 {@const isActive = session.id === activeSessionId}
                 {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
                 {@const isPreviewing = session.id === previewSessionId}
-                <li>
+                <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
                   {#if renamingSessionId === session.id}
                     <input
                       use:autofocus
@@ -536,7 +547,7 @@
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
                       {@const isPreviewing = linked && linked.id === previewSessionId}
-                      <li>
+                      <li class="transition-opacity duration-200 {linked && fadingSessionIds.has(linked.id) ? 'opacity-0' : 'opacity-100'}">
                         <div class="flex items-center gap-1.5">
                           <span class="w-[2px] self-stretch rounded-full transition-opacity {isActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
                           <button
@@ -615,7 +626,7 @@
     disableKeyboard={true}
     {onPickTask}
     {onSelectSession}
-    onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) await onArchiveSession(full); }}
+    onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) fadeOutThenAct(full.id, () => onArchiveSession(full)); }}
     onSessionsChanged={onSessionsChanged}
   />
 </div>
@@ -629,13 +640,13 @@
     items={contextMenu.session.status === 'exited'
       ? [
           { label: "Restart", onSelect: () => onRestartSession(contextMenu!.session) },
-          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onDeleteSession(contextMenu!.session)) },
         ]
       : [
           { label: "Review", onSelect: () => { onSelectSession(contextMenu!.session.id); orchestrator.toggleDiff(); } },
           { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
-          { label: "Archive", onSelect: () => onArchiveSession(contextMenu!.session) },
-          { label: "Delete", danger: true, onSelect: () => onDeleteSession(contextMenu!.session) },
+          { label: "Archive", onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onArchiveSession(contextMenu!.session)) },
+          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onDeleteSession(contextMenu!.session)) },
         ]}
   />
 {/if}

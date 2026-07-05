@@ -5,6 +5,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { Select, Button, Label } from "./ui";
   import FormDialog from "./ui/FormDialog.svelte";
+  import { LoaderCircle } from "@lucide/svelte";
   import * as jiraTaskStore from "../lib/jira-task-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -20,6 +21,7 @@
 
   let projectId = $state(preselectedProjectId);
   let error = $state("");
+  let submitting = $state(false);
   let wrapper = $state<HTMLDivElement | null>(null);
 
   const fk = createFormKeyboardController(
@@ -31,7 +33,8 @@
   );
 
   async function submit() {
-    if (!projectId) return;
+    if (!projectId || submitting) return;
+    submitting = true;
     try {
       await jiraApi.assign(task.key, projectId);
       onClose();
@@ -39,6 +42,7 @@
       await taskStore.refresh(projects.map(p => p.path));
     } catch (e) {
       error = String(e);
+      submitting = false;
     }
   }
 </script>
@@ -46,7 +50,7 @@
 <FormDialog title="Assign to project" {onClose}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div bind:this={wrapper} tabindex="-1" onkeydown={fk.handleKeydown} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+  <div bind:this={wrapper} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <form class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); } }}>
       <div class="flex items-start justify-between">
@@ -74,7 +78,9 @@
         </div>
         <div class="flex gap-2">
           <Button type="button" onclick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={!projectId}>Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span></Button>
+          <Button type="submit" variant="primary" disabled={!projectId || submitting}>
+            {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Assign <span class="ml-1 text-xs opacity-60">{MOD_ENTER_HINT}</span>{/if}
+          </Button>
         </div>
       </div>
     </form>
