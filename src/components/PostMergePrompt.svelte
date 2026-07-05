@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getPrompt, getCountdown, handleArchive, handleDestroy, handleKeep, handleTaskDone, registerFocus, unregisterFocus } from "../lib/post-merge-prompt.svelte";
+  import { getSettings } from "../lib/settings.svelte";
   import { refocusTerminal } from "../lib/focus.svelte";
 
   const prompt = $derived(getPrompt());
@@ -60,6 +61,6 @@
         ><span class="underline">K</span>eep</button>
       {/if}
     </div>
-    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"} · auto-archives in {countdown}s</p>
+    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"}{countdown > 0 ? ` · auto-${(getSettings().post_merge_action ?? "archive") === "destroy" ? "destroys" : "archives"} in ${countdown}s` : ""}</p>
   </div>
 {/if}
