@@ -59,6 +59,7 @@ fn load_reads_existing_config_file() {
         session_log_dir: None,
         extra_path_dirs: Vec::new(),
         auto_open_review: Some(true),
+        sound_enabled: Some(true),
         integrations: None,
     };
 

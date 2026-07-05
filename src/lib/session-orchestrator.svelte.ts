@@ -259,7 +259,9 @@ export function startEventListeners(): () => void {
     listen<{ session_id: string; state: string }>("agent-state-change", (event) => {
       agentStates = { ...agentStates, [event.payload.session_id]: event.payload.state };
       if (event.payload.state === "Idle") {
-        playTaskComplete();
+        if (getSettings().sound_enabled !== false) {
+          playTaskComplete();
+        }
         tasks.fireNotifyHook(event.payload.session_id).catch((err) => {
           if (err && typeof err === "string" && err.startsWith("pr_status:")) showSnackbar(err);
         });

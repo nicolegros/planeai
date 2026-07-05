@@ -621,6 +621,25 @@
     </section>
 
     <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Sound</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Play sound notifications</p>
+          <p class="text-xs text-t3">Play a chime when an agent finishes a task.</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {(config.sound_enabled ?? true) ? 'bg-accent' : 'bg-panel-hi'}"
+          onclick={() => updateSettings({ sound_enabled: !(config.sound_enabled ?? true) } as Partial<AppConfig>)}
+          role="switch"
+          aria-checked={config.sound_enabled ?? true}
+          aria-label="Toggle sound notifications"
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {(config.sound_enabled ?? true) ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
+    </section>
+
+    <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Post-Merge Action</h2>
       <Select
         items={[{ value: "archive", label: "Archive" }, { value: "destroy", label: "Destroy" }, { value: "keep", label: "Keep" }]}

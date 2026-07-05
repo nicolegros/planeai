@@ -296,6 +296,105 @@ describe("session-orchestrator", () => {
       cleanup();
     });
 
+    it("does not play sound when sound_enabled is false", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: false,
+      });
+
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      const cleanup = startEventListeners();
+      // Find the agent-state-change listener callback
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      expect(agentCall).toBeDefined();
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      const { playTaskComplete } = await import("../soundPlayer");
+      vi.mocked(playTaskComplete).mockClear();
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      expect(playTaskComplete).not.toHaveBeenCalled();
+
+      cleanup();
+    });
+
+    it("plays sound when sound_enabled is true", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+        sound_enabled: true,
+      });
+
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      expect(agentCall).toBeDefined();
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      const { playTaskComplete } = await import("../soundPlayer");
+      vi.mocked(playTaskComplete).mockClear();
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      expect(playTaskComplete).toHaveBeenCalled();
+
+      cleanup();
+    });
+
+    it("plays sound when sound_enabled is undefined (defaults to on)", async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const listenMock = vi.mocked(listen);
+      listenMock.mockClear();
+
+      vi.mocked(getSettings).mockReturnValue({
+        appearance: { mode: "system", theme: "default" },
+        terminal: { font_family: "Menlo", font_size: 14, option_as_meta: true },
+        providers: {},
+        default_provider: "kiro",
+        task_management: null,
+      });
+
+      api.list.mockResolvedValue([makeSession({ id: "s1" })]);
+      await loadSessions();
+
+      const cleanup = startEventListeners();
+      const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
+      expect(agentCall).toBeDefined();
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
+
+      const { playTaskComplete } = await import("../soundPlayer");
+      vi.mocked(playTaskComplete).mockClear();
+
+      handler({ payload: { session_id: "s1", state: "Idle" } });
+      expect(playTaskComplete).toHaveBeenCalled();
+
+      cleanup();
+    });
+
     it("startSymphonyPolling returns cleanup", () => {
       vi.mocked(getSettings).mockReturnValue({
         appearance: { mode: "system", theme: "default" },

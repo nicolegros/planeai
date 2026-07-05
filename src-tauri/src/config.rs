@@ -51,6 +51,11 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_open_review: Option<bool>,
+    #[serde(
+        default = "default_sound_enabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sound_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrations: Option<IntegrationsConfig>,
 }
@@ -83,6 +88,10 @@ fn default_option_as_meta() -> bool {
 }
 
 fn default_auto_open_review() -> Option<bool> {
+    Some(true)
+}
+
+fn default_sound_enabled() -> Option<bool> {
     Some(true)
 }
 
@@ -264,6 +273,7 @@ impl Default for Config {
             session_log_dir: None,
             extra_path_dirs: Vec::new(),
             auto_open_review: Some(true),
+            sound_enabled: Some(true),
             integrations: None,
         }
     }
