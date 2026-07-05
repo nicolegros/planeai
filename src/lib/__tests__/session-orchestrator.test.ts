@@ -317,7 +317,9 @@ describe("session-orchestrator", () => {
       // Find the agent-state-change listener callback
       const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
       expect(agentCall).toBeDefined();
-      const handler = agentCall![1] as (event: { payload: { session_id: string; state: string } }) => void;
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
 
       const { playTaskComplete } = await import("../soundPlayer");
       vi.mocked(playTaskComplete).mockClear();
@@ -348,7 +350,9 @@ describe("session-orchestrator", () => {
       const cleanup = startEventListeners();
       const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
       expect(agentCall).toBeDefined();
-      const handler = agentCall![1] as (event: { payload: { session_id: string; state: string } }) => void;
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
 
       const { playTaskComplete } = await import("../soundPlayer");
       vi.mocked(playTaskComplete).mockClear();
@@ -378,7 +382,9 @@ describe("session-orchestrator", () => {
       const cleanup = startEventListeners();
       const agentCall = listenMock.mock.calls.find((c) => c[0] === "agent-state-change");
       expect(agentCall).toBeDefined();
-      const handler = agentCall![1] as (event: { payload: { session_id: string; state: string } }) => void;
+      const handler = agentCall![1] as (event: {
+        payload: { session_id: string; state: string };
+      }) => void;
 
       const { playTaskComplete } = await import("../soundPlayer");
       vi.mocked(playTaskComplete).mockClear();
