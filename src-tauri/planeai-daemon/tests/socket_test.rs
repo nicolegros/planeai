@@ -180,4 +180,53 @@ mod socket_tests {
         let resp = send_recv(&mut reader, r#"not valid json"#).await;
         assert!(!resp["error"].as_str().unwrap().is_empty());
     }
+
+    /// Regression test: after a control connection drops (simulating broken pipe),
+    /// a fresh connection to the same daemon should work. This validates the
+    /// reconnect-on-failure pattern used in launch_session.
+    #[tokio::test]
+    async fn reconnect_after_dropped_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        // First connection: spawn a session, then drop the connection (simulates broken pipe)
+        {
+            let mut reader = connect_control(&sock).await;
+            let resp = send_recv(
+                &mut reader,
+                r#"{"cmd":"spawn","session_id":"reconn1","command":"cat","args":[]}"#,
+            )
+            .await;
+            assert_eq!(resp["ok"], true);
+        }
+        // Connection dropped here
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Second connection: fresh client should work and see the session
+        let mut reader = connect_control(&sock).await;
+        let resp = send_recv(&mut reader, r#"{"cmd":"list"}"#).await;
+        let sessions = resp["sessions"].as_array().unwrap();
+        let found = sessions
+            .iter()
+            .any(|s| s["session_id"] == "reconn1" && s["alive"] == true);
+        assert!(
+            found,
+            "session should still exist after reconnect: {:?}",
+            sessions
+        );
+
+        // Should be able to spawn another session on the fresh connection
+        let resp = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","session_id":"reconn2","command":"cat","args":[]}"#,
+        )
+        .await;
+        assert_eq!(resp["ok"], true);
+
+        // Cleanup
+        send_recv(&mut reader, r#"{"cmd":"kill","session_id":"reconn1"}"#).await;
+        send_recv(&mut reader, r#"{"cmd":"kill","session_id":"reconn2"}"#).await;
+    }
 }

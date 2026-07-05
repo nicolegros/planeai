@@ -259,6 +259,14 @@ fn spawn_detached(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
+        // Safety: pre_exec runs in the forked child before exec.
+        // Raise the FD soft limit so the daemon (even an old binary) doesn't hit 256.
+        unsafe {
+            cmd.pre_exec(|| {
+                planeai_paths::raise_fd_limit();
+                Ok(())
+            });
+        }
     }
     #[cfg(windows)]
     {

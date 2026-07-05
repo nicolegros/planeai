@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -41,7 +40,6 @@ struct DaemonBackend {
     writer: Arc<tokio::sync::Mutex<tokio::io::WriteHalf<planeai_ipc::r#async::AsyncIpcStream>>>,
     cancelled: Arc<AtomicBool>,
     flow: Arc<FlowControl>,
-    session_id: String,
 }
 
 impl SessionBackend for DaemonBackend {
@@ -61,20 +59,18 @@ impl SessionBackend for DaemonBackend {
     }
 
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
-        let sid = self.session_id.clone();
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let app_dir = planeai_paths::app_data_dir();
-            let mut stream = match planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            stream.write_all(&[0x00]).ok();
-            let req =
-                serde_json::json!({"cmd": "resize", "session_id": sid, "cols": cols, "rows": rows});
-            let _ = stream.write_all(format!("{}\n", req).as_bytes());
-            let mut buf = [0u8; 256];
-            let _ = stream.read(&mut buf);
+        let writer = self.writer.clone();
+        let mut payload = [0u8; 4];
+        payload[0..2].copy_from_slice(&cols.to_be_bytes());
+        payload[2..4].copy_from_slice(&rows.to_be_bytes());
+        tauri::async_runtime::spawn(async move {
+            let mut w = writer.lock().await;
+            let _ = planeai_daemon::protocol::write_frame(
+                &mut *w,
+                planeai_daemon::protocol::FRAME_RESIZE,
+                &payload,
+            )
+            .await;
         });
         Ok(())
     }
@@ -217,7 +213,6 @@ impl PtyManager {
                 writer: writer_arc,
                 cancelled: cancelled_clone.clone(),
                 flow: flow_clone.clone(),
-                session_id: sid_clone.clone(),
             });
 
             {

@@ -294,9 +294,13 @@ mod tests {
         while let Ok(event) = rx.try_recv() {
             paths.push(event.path);
         }
-        // All events should reference the same file (debounced from 5 rapid writes)
-        assert!(!paths.is_empty(), "expected at least one debounced event");
-        assert!(paths.iter().all(|p| p.contains("rapid.txt")));
+        // Filter to only events for the file under test (the watcher may also emit
+        // events for the directory itself or other OS-generated files like .DS_Store).
+        let rapid_paths: Vec<&String> = paths.iter().filter(|p| p.contains("rapid.txt")).collect();
+        assert!(
+            !rapid_paths.is_empty(),
+            "expected at least one debounced event for rapid.txt"
+        );
 
         manager.unwatch("session-2");
     }

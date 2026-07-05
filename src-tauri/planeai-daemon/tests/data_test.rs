@@ -1,7 +1,7 @@
 #[cfg(unix)]
 mod data_tests {
     use planeai_daemon::protocol::{
-        read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT,
+        read_frame, write_frame, CONN_CONTROL, CONN_DATA, FRAME_INPUT, FRAME_OUTPUT, FRAME_RESIZE,
     };
     use planeai_daemon::server::DaemonServer;
     use planeai_daemon::transport::DaemonListener;
@@ -472,5 +472,59 @@ mod data_tests {
         );
 
         kill_session(&mut ctrl, "rapid1").await;
+    }
+
+    /// Regression test: resize via FRAME_RESIZE on the data connection.
+    /// Previously, resize opened a separate control connection per event,
+    /// causing FD exhaustion (os error 24) under rapid resize.
+    #[tokio::test]
+    async fn resize_via_data_connection_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut ctrl = connect_control(&sock).await;
+        spawn_session(&mut ctrl, "resize_data1", "cat", "").await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let mut data = connect_data(&sock, "resize_data1").await;
+
+        // Send 50 rapid resize frames through the data connection (simulates window drag)
+        for i in 0..50u16 {
+            let cols: u16 = 80 + i;
+            let rows: u16 = 24;
+            let mut payload = [0u8; 4];
+            payload[0..2].copy_from_slice(&cols.to_be_bytes());
+            payload[2..4].copy_from_slice(&rows.to_be_bytes());
+            write_frame(&mut data, FRAME_RESIZE, &payload)
+                .await
+                .unwrap();
+        }
+
+        // Verify the session is still alive and responsive after rapid resizes
+        write_frame(&mut data, FRAME_INPUT, b"alive\n")
+            .await
+            .unwrap();
+
+        let mut collected = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), read_frame(&mut data)).await {
+                Ok(Ok((_, payload))) => {
+                    collected.extend_from_slice(&payload);
+                    if String::from_utf8_lossy(&collected).contains("alive") {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&collected).contains("alive"),
+            "session should still work after rapid FRAME_RESIZE, got: {:?}",
+            String::from_utf8_lossy(&collected)
+        );
+
+        kill_session(&mut ctrl, "resize_data1").await;
     }
 }
