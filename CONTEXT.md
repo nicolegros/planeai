@@ -86,7 +86,8 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 | **Title bar padding** | Left (traffic lights)                             | Right (caption buttons)                                |
 | **Font enumeration**  | font-kit (cross-platform)                         | font-kit (cross-platform)                              |
 | **Window style**      | Overlay title bar                                 | Overlay title bar (Tauri handles caption buttons)      |
-| **Subprocess spawn**  | No special handling                               | `CREATE_NO_WINDOW` flag via `no_window()` helpers      |
+| **Subprocess spawn**  | `raise_fd_limit()` via `pre_exec` (daemon child)  | `CREATE_NO_WINDOW` flag via `no_window()` helpers      |
+| **FD soft limit**     | Raised to min(hard, 10240) at startup             | N/A (Windows has no equivalent low default)            |
 
 ## Notification IPC events
 

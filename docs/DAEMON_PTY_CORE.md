@@ -247,6 +247,7 @@ If a daemon spawn fails with "Broken pipe", "Connection refused", or "No such fi
 - Unix domain socket at `$XDG_RUNTIME_DIR/planeai/daemon.sock` or `/tmp/planeai-<uid>/daemon.sock`
 - Shell default: zsh (macOS) or sh (Linux)
 - Detached daemon via `process_group(0)`
+- FD soft limit raised to min(hard_limit, 10240) at startup — the macOS default of 256 is too low for many PTY sessions + data connections + log files. Applied in the GUI process, the daemon binary, and via `pre_exec` on daemon child spawns.
 
 ### Windows
 
