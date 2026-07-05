@@ -5,8 +5,16 @@ vi.mock("../../lib/api", () => ({
   sessions: { launch: vi.fn(() => new Promise(() => {})) },
   projects: { listBranches: vi.fn(() => Promise.resolve([])) },
   tasks: {
-    list: vi.fn(() => Promise.resolve([{ key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 }])),
-    listAll: vi.fn(() => Promise.resolve([{ key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 }])),
+    list: vi.fn(() =>
+      Promise.resolve([
+        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+      ]),
+    ),
+    listAll: vi.fn(() =>
+      Promise.resolve([
+        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+      ]),
+    ),
   },
 }));
 

@@ -151,7 +151,10 @@ pub async fn launch_session(
                 .await;
             }
             // Clear the stale daemon connection so next attempt reconnects
-            if e.contains("Broken pipe") || e.contains("Connection refused") || e.contains("No such file") {
+            if e.contains("Broken pipe")
+                || e.contains("Connection refused")
+                || e.contains("No such file")
+            {
                 let daemon_state = app.state::<DaemonState>();
                 let mut ds = daemon_state.0.lock().await;
                 *ds = None;
