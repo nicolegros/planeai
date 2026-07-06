@@ -4,7 +4,7 @@
  */
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { sessions as sessionsApi, symphony, tasks, git } from "./api";
+import { sessions as sessionsApi, symphony, tasks } from "./api";
 import {
   getCiStatus as _getCiStatus,
   updateSessions as updateCiSessions,
@@ -269,22 +269,16 @@ export function startEventListeners(): () => void {
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
-          git
-            .getChangedFiles(session.worktree_path, session.base_branch, null)
-            .then((files) => {
-              if (files.length === 0) return;
-              // Preload all patches so ReviewTab opens instantly
-              preloadPatches(sid, session.worktree_path!, session.base_branch!, files);
-              if (sid === activeSessionId) {
-                if (getSettings().auto_open_review !== false) {
-                  // Defer to next frame so state updates don't block the current tick
-                  requestAnimationFrame(() => toggleDiff());
-                }
-              } else {
-                reviewReady = { ...reviewReady, [sid]: true };
-              }
-            })
-            .catch(() => {});
+          // Preload combined patch so ReviewTab opens instantly
+          preloadPatches(sid, session.worktree_path!, session.base_branch!);
+          if (sid === activeSessionId) {
+            if (getSettings().auto_open_review !== false) {
+              // Defer to next frame so state updates don't block the current tick
+              requestAnimationFrame(() => toggleDiff());
+            }
+          } else {
+            reviewReady = { ...reviewReady, [sid]: true };
+          }
         }
       }
     }),

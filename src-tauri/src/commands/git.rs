@@ -78,6 +78,15 @@ pub async fn get_all_file_patches(
 }
 
 #[tauri::command]
+pub async fn get_combined_patch(
+    repo_path: String,
+    base_branch: String,
+    head_ref: Option<String>,
+) -> Result<String, String> {
+    blocking(move || git::get_combined_patch(&repo_path, &base_branch, head_ref.as_deref())).await
+}
+
+#[tauri::command]
 pub async fn detect_default_branch(repo_path: String) -> Result<String, String> {
     blocking(move || git::detect_default_branch(&repo_path)).await
 }

@@ -172,6 +172,12 @@ export const git = {
       files,
       headRef: headRef ?? null,
     }),
+  getCombinedPatch: (repoPath: string, baseBranch: string, headRef?: string | null) =>
+    invoke<string>("get_combined_patch", {
+      repoPath,
+      baseBranch,
+      headRef: headRef ?? null,
+    }),
   listCommits: (repoPath: string, limit: number) =>
     invoke<CommitEntry[]>("list_commits", { repoPath, limit }),
   listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
