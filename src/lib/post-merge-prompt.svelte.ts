@@ -2,6 +2,7 @@
  * Post-merge prompt store — shows Archive/Destroy/Keep prompt when a PR is merged.
  * When the session has a task, shows Done/Dismiss instead.
  * Default timeout action is configurable via settings.post_merge_action.
+ * A live countdown (getCountdown()) ticks from 30s to 0; skipped when action is "keep".
  */
 import { showSnackbar } from "./snackbar.svelte";
 import { getSettings } from "./settings.svelte";
@@ -26,9 +27,17 @@ export interface MergePromptOptions {
 
 let prompt = $state<MergePrompt | null>(null);
 let timer: ReturnType<typeof setTimeout> | null = null;
+let countdown = $state<number>(0);
+let countdownInterval: ReturnType<typeof setInterval> | null = null;
+
+const TIMEOUT_SECONDS = 30;
 
 export function getPrompt(): MergePrompt | null {
   return prompt;
+}
+
+export function getCountdown(): number {
+  return countdown;
 }
 
 export function showMergePrompt(options: MergePromptOptions): void {
@@ -44,7 +53,12 @@ export function showMergePrompt(options: MergePromptOptions): void {
 
   const action = getSettings().post_merge_action ?? "archive";
   if (action === "keep") return; // no timeout
-  timer = setTimeout(() => runDefault(), 30_000);
+  countdown = TIMEOUT_SECONDS;
+  countdownInterval = setInterval(() => {
+    countdown--;
+    if (countdown <= 0) clearCountdownInterval();
+  }, 1_000);
+  timer = setTimeout(() => runDefault(), TIMEOUT_SECONDS * 1_000);
 }
 
 export async function handleArchive(): Promise<void> {
@@ -116,6 +130,15 @@ function clearTimer(): void {
     clearTimeout(timer);
     timer = null;
   }
+  clearCountdownInterval();
+}
+
+function clearCountdownInterval(): void {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  countdown = 0;
 }
 
 /** Dismiss prompt for a session that was removed externally. */

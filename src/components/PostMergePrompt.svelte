@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { getPrompt, handleArchive, handleDestroy, handleKeep, handleTaskDone, registerFocus, unregisterFocus } from "../lib/post-merge-prompt.svelte";
+  import { getPrompt, getCountdown, handleArchive, handleDestroy, handleKeep, handleTaskDone, registerFocus, unregisterFocus } from "../lib/post-merge-prompt.svelte";
+  import { getSettings } from "../lib/settings.svelte";
   import { refocusTerminal } from "../lib/focus.svelte";
 
   const prompt = $derived(getPrompt());
+  const countdown = $derived(getCountdown());
   let wrapperEl = $state<HTMLDivElement | null>(null);
   let focused = $state(false);
 
@@ -32,7 +34,8 @@
 
 {#if prompt}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <div bind:this={wrapperEl} tabindex="-1" onkeydown={onKeydown} class="fixed bottom-4 left-4 z-[100] max-w-lg rounded-lg bg-emerald-700 px-4 py-3 shadow-lg outline-none">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div bind:this={wrapperEl} role="alertdialog" aria-label="Post-merge actions" tabindex="-1" onkeydown={onKeydown} class="fixed bottom-4 left-4 z-[100] max-w-lg rounded-lg bg-emerald-700 px-4 py-3 shadow-lg outline-none">
     <p class="text-sm text-white font-mono">PR merged ✓ — <span class="text-emerald-200">{prompt.sessionName}</span></p>
     <div class="mt-2 flex gap-2">
       {#if prompt.taskKey}
@@ -59,6 +62,6 @@
         ><span class="underline">K</span>eep</button>
       {/if}
     </div>
-    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"} · auto-archives in 30s</p>
+    <p class="mt-1 text-xs text-emerald-200/70">{focused ? (prompt.taskKey ? "D / N / Esc" : "A / D / K / Esc") : "⌘U to interact"}{countdown > 0 ? ` · auto-${(getSettings().post_merge_action ?? "archive") === "destroy" ? "destroys" : "archives"} in ${countdown}s` : ""}</p>
   </div>
 {/if}
