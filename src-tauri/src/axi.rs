@@ -321,7 +321,14 @@ pub fn session_prompt(
             )];
             (render(&fields), 0)
         }
-        Err(e) => (emit_error(&e.to_string(), &[]), 1),
+        Err(e) => {
+            let help = if e.contains("already in progress") {
+                vec!["retry after the current prompt is sent".into()]
+            } else {
+                vec![]
+            };
+            (emit_error(&e, &help), 1)
+        }
     }
 }
 

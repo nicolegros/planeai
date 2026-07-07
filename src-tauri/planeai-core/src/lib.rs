@@ -4,6 +4,7 @@ pub mod dispatch;
 pub mod git;
 pub mod notify;
 pub mod orchestrator;
+pub mod prompt_lock;
 pub mod services;
 pub mod session;
 pub mod session_launch;

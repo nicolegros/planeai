@@ -93,6 +93,8 @@ If `text` is omitted, the prompt is read from stdin. This is useful for piping m
 echo "Refactor the auth module" | planeai-cli session prompt abc123
 ```
 
+Prompts are serialized per session — only one prompt can be in flight at a time. If a concurrent prompt is already being sent to the same session, the command fails immediately with an error. Concurrent prompts to different sessions proceed independently.
+
 ---
 
 ## `project`
@@ -303,6 +305,14 @@ planeai-cli axi session prompt <id> [text]
 ```
 
 If `text` is omitted, reads from stdin.
+
+Prompts are serialized per session. If another prompt is already in flight, the command returns a TOON error with a retry hint:
+
+```
+error: session prompt already in progress
+help[1]:
+  - retry after the current prompt is sent
+```
 
 ### `axi project ls`
 

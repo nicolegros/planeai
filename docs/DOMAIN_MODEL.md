@@ -100,6 +100,18 @@ archived → active (restore)
 
 **Status:** Both Tauri and Iced can launch sessions from tasks, persist task_key on session records, create task-driven worktrees, and fire lifecycle hooks. Full task dispatch/assignment UI remains Tauri-only.
 
+## Prompt Locks
+
+| Field       | Type   | Description                                        |
+| ----------- | ------ | -------------------------------------------------- |
+| session_id  | String | Primary key — the session being locked             |
+| owner_id    | UUID   | Unique lock owner (generated per acquisition)      |
+| acquired_at | String | RFC 3339 timestamp of when the lock was acquired   |
+
+**Purpose:** Prevents concurrent prompt sends to the same session from multiple processes (GUI, CLI, AXI). The lock is acquired before sending a prompt and always released after (success or failure). Stale locks older than 2 minutes are automatically cleaned up on acquisition attempts.
+
+**Module:** `planeai_core::prompt_lock` — migrated via `planeai_core::services::migrate`.
+
 ## What Iced Reuses
 
 | Concern                                  | Source                                            |
@@ -110,6 +122,7 @@ archived → active (restore)
 | Session persistence                      | `planeai_core::services::SessionService`          |
 | Worktree logic                           | `planeai_core::services::WorktreeService`         |
 | Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
+| Prompt locking (cross-process)           | `planeai_core::prompt_lock`                       |
 | Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
 | Daemon protocol                          | `planeai_daemon::protocol`                        |
 | IPC transport                            | `planeai_ipc`                                     |
