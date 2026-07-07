@@ -43,19 +43,20 @@ Tauri's `db::create_session_with_id()` delegates to `SessionService::create()`. 
 
 ## Sessions
 
-| Field         | Type    | Description                                 |
-| ------------- | ------- | ------------------------------------------- |
-| id            | UUID    | Same ID used for daemon session             |
-| project_id    | UUID    | FK to projects                              |
-| name          | String  | Display name                                |
-| branch        | String  | Git branch (empty if no worktree)           |
-| status        | String  | `active`, `exited`, `archived`, `destroyed` |
-| worktree_path | String? | Absolute path to git worktree               |
-| provider      | String? | Provider key (e.g., "kiro", "claude")       |
-| backend       | String  | `daemon` or `tmux`                          |
-| task_key      | String? | Link to task (e.g., "PLA-5")                |
-| command       | String? | Agent launch command                        |
-| cwd           | String? | Working directory                           |
+| Field             | Type    | Description                                 |
+| ----------------- | ------- | ------------------------------------------- |
+| id                | UUID    | Same ID used for daemon session             |
+| project_id        | UUID    | FK to projects                              |
+| name              | String  | Display name                                |
+| branch            | String  | Git branch (empty if no worktree)           |
+| status            | String  | `active`, `exited`, `archived`, `destroyed` |
+| worktree_path     | String? | Absolute path to git worktree               |
+| provider          | String? | Provider key (e.g., "kiro", "claude")       |
+| backend           | String  | `daemon` or `tmux`                          |
+| task_key          | String? | Link to task (e.g., "PLA-5")                |
+| command           | String? | Agent launch command                        |
+| cwd               | String? | Working directory                           |
+| parent_session_id | String? | ID of the session that spawned this one     |
 
 **ID mapping:** The session UUID is passed directly to the daemon as its session_id. No secondary mapping exists — the DB record ID **is** the daemon session ID.
 

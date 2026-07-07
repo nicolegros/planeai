@@ -60,6 +60,7 @@ JSON-line protocol on control connections (type byte `0x00`).
 {"cmd": "list"}
 {"cmd": "attach", "session_id": "..."}
 {"cmd": "detach", "session_id": "..."}
+{"cmd": "read_buffer", "session_id": "...", "lines": 100}
 ```
 
 ### List Response
@@ -77,6 +78,21 @@ JSON-line protocol on control connections (type byte `0x00`).
   ]
 }
 ```
+
+### ReadBuffer Response
+
+Returns the last N lines of a session's terminal buffer with ANSI escape sequences stripped.
+
+```json
+{
+  "ok": true,
+  "session_id": "...",
+  "text": "...",
+  "line_count": 42
+}
+```
+
+The `lines` field in the request defaults to 100 if omitted.
 
 ### Events (broadcast to all control connections)
 

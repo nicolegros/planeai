@@ -35,18 +35,19 @@ Create and launch a new agent session.
 planeai-cli session create --project <name> --branch <branch> [options]
 ```
 
-| Flag            | Description                                           |
-| --------------- | ----------------------------------------------------- |
-| `--project`     | Project name (required)                               |
-| `--branch`      | Git branch to use (required)                          |
-| `--name`        | Display name for the session                          |
-| `--new-branch`  | Create the branch if it doesn't exist                 |
-| `--worktree`    | Use a git worktree instead of checking out in-place   |
-| `--base-branch` | Base branch for new branch / worktree (default: main) |
-| `--yolo`        | Enable autonomous mode (skip confirmations)           |
-| `--provider`    | Provider to use (overrides default_provider)          |
-| `--task-key`    | Associate a task key with this session                |
-| `--prompt`      | Initial prompt to send to the agent                   |
+| Flag            | Description                                                                  |
+| --------------- | ---------------------------------------------------------------------------- |
+| `--project`     | Project name (required)                                                      |
+| `--branch`      | Git branch to use (required)                                                 |
+| `--name`        | Display name for the session                                                 |
+| `--new-branch`  | Create the branch if it doesn't exist                                        |
+| `--worktree`    | Use a git worktree instead of checking out in-place                          |
+| `--base-branch` | Base branch for new branch / worktree (default: main)                        |
+| `--yolo`        | Enable autonomous mode (skip confirmations)                                  |
+| `--provider`    | Provider to use (overrides default_provider)                                 |
+| `--task-key`    | Associate a task key with this session                                       |
+| `--prompt`      | Initial prompt to send to the agent                                          |
+| `--parent`      | Parent session ID (for orchestration tracking). Falls back to `$PLANEAI_SESSION_ID` env var |
 
 ### `session ls`
 
@@ -257,6 +258,41 @@ List sessions.
 ```bash
 planeai-cli axi session ls [--archived]
 ```
+
+### `axi session create`
+
+Create a new session. Automatically sets the parent session from the `$PLANEAI_SESSION_ID` environment variable if present (for orchestration tracking).
+
+```bash
+planeai-cli axi session create --project <name> --branch <branch> [options]
+```
+
+| Flag            | Description                                           |
+| --------------- | ----------------------------------------------------- |
+| `--project`     | Project name (required)                               |
+| `--branch`      | Git branch to use (required)                          |
+| `--name`        | Display name for the session                          |
+| `--new-branch`  | Create the branch if it doesn't exist                 |
+| `--worktree`    | Use a git worktree instead of checking out in-place   |
+| `--base-branch` | Base branch for new branch / worktree (default: main) |
+| `--yolo`        | Enable autonomous mode (skip confirmations)           |
+| `--provider`    | Provider to use (overrides default_provider)          |
+| `--task-key`    | Associate a task key with this session                |
+| `--prompt`      | Initial prompt to send to the agent                   |
+
+### `axi session read`
+
+Read the last N lines of a session's terminal output (ANSI-stripped).
+
+```bash
+planeai-cli axi session read <id> [--lines <n>]
+```
+
+| Flag      | Description                          |
+| --------- | ------------------------------------ |
+| `--lines` | Number of lines to read (default: 100) |
+
+Works with both daemon and tmux backends. The `id` can be a prefix.
 
 ### `axi session prompt`
 
