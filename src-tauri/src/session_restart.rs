@@ -286,6 +286,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();
@@ -320,6 +321,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -348,6 +350,7 @@ mod tests {
             None,
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -382,6 +385,7 @@ mod tests {
             None,
             "daemon",
             false,
+            None,
             None,
             None,
         )
@@ -420,6 +424,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();
@@ -452,6 +457,7 @@ mod tests {
             Some("kiro"),
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -496,6 +502,7 @@ mod tests {
             Some("kiro"),
             "daemon",
             false,
+            None,
             None,
             None,
         )

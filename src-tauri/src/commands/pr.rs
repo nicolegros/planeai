@@ -758,6 +758,7 @@ mod tests {
             true,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -812,6 +813,7 @@ mod tests {
             true,
             None,
             Some("main"),
+            None,
         )
         .unwrap();
 
@@ -843,6 +845,7 @@ mod tests {
             None,
             "daemon",
             true,
+            None,
             None,
             None,
         )
@@ -890,6 +893,7 @@ mod tests {
             true,
             None,
             Some("develop"),
+            None,
         )
         .unwrap();
 

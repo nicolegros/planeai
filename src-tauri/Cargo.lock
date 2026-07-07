@@ -3233,6 +3233,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "planeai-core",
  "planeai-ipc",
  "planeai-paths",
  "planeai-pty",

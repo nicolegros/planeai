@@ -76,6 +76,15 @@ pub enum Request {
     Detach {
         session_id: String,
     },
+    ReadBuffer {
+        session_id: String,
+        #[serde(default = "default_read_lines")]
+        lines: usize,
+    },
+}
+
+fn default_read_lines() -> usize {
+    100
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +106,12 @@ pub enum Response {
     Event {
         event: String,
         session_id: String,
+    },
+    BufferText {
+        ok: bool,
+        session_id: String,
+        text: String,
+        line_count: usize,
     },
 }
 

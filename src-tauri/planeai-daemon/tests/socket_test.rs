@@ -229,4 +229,51 @@ mod socket_tests {
         send_recv(&mut reader, r#"{"cmd":"kill","session_id":"reconn1"}"#).await;
         send_recv(&mut reader, r#"{"cmd":"kill","session_id":"reconn2"}"#).await;
     }
+
+    #[tokio::test]
+    async fn read_buffer_returns_stripped_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut reader = connect_control(&sock).await;
+
+        // Spawn a session that outputs known text
+        let resp = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","session_id":"rb1","command":"/bin/sh","args":["-c","echo hello-world"]}"#,
+        )
+        .await;
+        assert_eq!(resp["ok"], true);
+
+        // Wait for output to land in buffer
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Read buffer — drain any event messages (e.g. exited) until we get the response
+        reader
+            .get_mut()
+            .write_all(b"{\"cmd\":\"read_buffer\",\"session_id\":\"rb1\",\"lines\":10}\n")
+            .await
+            .unwrap();
+        let resp = loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let val: Value = serde_json::from_str(&line).unwrap();
+            if val.get("event").is_none() {
+                break val;
+            }
+        };
+
+        assert_eq!(resp["ok"], true);
+        let text = resp["text"].as_str().unwrap();
+        assert!(
+            text.contains("hello-world"),
+            "read_buffer should contain 'hello-world', got: {text:?}"
+        );
+        // Should not contain ANSI escape codes
+        assert!(
+            !text.contains("\x1b["),
+            "read_buffer should strip ANSI escapes, got: {text:?}"
+        );
+    }
 }

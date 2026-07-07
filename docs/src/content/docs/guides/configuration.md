@@ -81,10 +81,10 @@ Controls whether planeai plays audio notifications.
 }
 ```
 
-| Value   | Behavior                                               |
-| ------- | ------------------------------------------------------ |
-| `true`  | Play a chime when an agent finishes a task (default)   |
-| `false` | Disable all sound notifications                        |
+| Value   | Behavior                                             |
+| ------- | ---------------------------------------------------- |
+| `true`  | Play a chime when an agent finishes a task (default) |
+| `false` | Disable all sound notifications                      |
 
 This setting is also available in **Preferences → Sound**.
 

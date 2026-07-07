@@ -184,6 +184,7 @@ impl Backend for TauriBackend {
             session.auto_approve,
             Some(session.task_key.as_str()).filter(|s| !s.is_empty()),
             Some(session.base_branch.as_str()).filter(|s| !s.is_empty()),
+            None,
         )
         .map_err(|e| e.to_string())?;
         conn.execute(
