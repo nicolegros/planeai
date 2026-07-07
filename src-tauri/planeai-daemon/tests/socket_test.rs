@@ -325,11 +325,7 @@ mod socket_tests {
         let cmd = format!(
             "{{\"cmd\":\"read_buffer_after\",\"session_id\":\"rba1\",\"after\":{cursor},\"max_bytes\":0}}\n"
         );
-        reader
-            .get_mut()
-            .write_all(cmd.as_bytes())
-            .await
-            .unwrap();
+        reader.get_mut().write_all(cmd.as_bytes()).await.unwrap();
         let resp = loop {
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap();
@@ -362,6 +358,9 @@ mod socket_tests {
             r#"{"cmd":"read_buffer_after","session_id":"nonexistent","after":0,"max_bytes":0}"#,
         )
         .await;
-        assert!(resp["error"].as_str().unwrap().contains("session not found"));
+        assert!(resp["error"]
+            .as_str()
+            .unwrap()
+            .contains("session not found"));
     }
 }

@@ -830,7 +830,12 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             let ops = planeai::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
             planeai::axi::session_prompt(conn, &id, &prompt_text, &ops)
         }
-        AxiSessionAction::Read { id, lines, after, max_bytes } => {
+        AxiSessionAction::Read {
+            id,
+            lines,
+            after,
+            max_bytes,
+        } => {
             let session = match planeai::session_ops::resolve_session_by_prefix(conn, &id) {
                 Ok(s) => s,
                 Err(e) => return emit_axi_error(&e.to_string()),
@@ -852,14 +857,13 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                         ) {
                             Ok(result) => {
                                 let cursor = format!("daemon:{}", result.cursor);
-                                let (output, code) =
-                                    planeai::axi::session_read_cursor_output(
-                                        &session.id[..8],
-                                        "daemon",
-                                        &cursor,
-                                        result.truncated,
-                                        &result.text,
-                                    );
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    "daemon",
+                                    &cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
                                 print!("{output}");
                                 code
                             }
@@ -883,23 +887,20 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                             max_bytes,
                         ) {
                             Ok(result) => {
-                                let (output, code) =
-                                    planeai::axi::session_read_cursor_output(
-                                        &session.id[..8],
-                                        "tmux",
-                                        &result.cursor,
-                                        result.truncated,
-                                        &result.text,
-                                    );
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    "tmux",
+                                    &result.cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
                                 print!("{output}");
                                 code
                             }
                             Err(e) => emit_axi_error(&e),
                         }
                     }
-                    "local" => {
-                        emit_axi_error("local backend does not support remote read")
-                    }
+                    "local" => emit_axi_error("local backend does not support remote read"),
                     other => emit_axi_error(&format!("unsupported backend: {other}")),
                 };
             }

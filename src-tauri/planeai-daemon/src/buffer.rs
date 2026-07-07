@@ -68,7 +68,13 @@ impl RingBuffer {
             available
         };
 
-        let bytes: Vec<u8> = self.buf.iter().skip(buf_start).take(take).copied().collect();
+        let bytes: Vec<u8> = self
+            .buf
+            .iter()
+            .skip(buf_start)
+            .take(take)
+            .copied()
+            .collect();
         (bytes, truncated)
     }
 

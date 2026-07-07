@@ -566,8 +566,9 @@ pub fn read_daemon_buffer_after(
         if let Some(err) = val.get("error") {
             let msg = err.as_str().unwrap_or("unknown error");
             if msg.contains("unknown variant") {
-                return Err("daemon does not support cursor reads (restart planeai to upgrade)"
-                    .to_string());
+                return Err(
+                    "daemon does not support cursor reads (restart planeai to upgrade)".to_string(),
+                );
             }
             return Err(msg.to_string());
         }
