@@ -51,10 +51,24 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div bind:this={wrapper} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none px-5 pb-5" data-form-keyboard>
+    <!-- Task info header -->
+    <div class="mb-4 space-y-2">
+      <p class="text-sm text-t1 font-semibold">
+        <span class="font-mono text-t2">{task.key}</span>
+        <span class="mx-1.5 text-t3">·</span>
+        {task.title}
+      </p>
+      {#if task.description}
+        <div data-testid="task-description" class="text-xs text-t2 leading-relaxed max-h-[40vh] overflow-y-auto">
+          {task.description}
+        </div>
+      {/if}
+    </div>
+
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <form class="space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }} onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); } }}>
       <div class="flex items-start justify-between">
-        <p class="text-sm text-t2">Assign <span class="font-mono font-medium text-t1">{task.key}</span> to a project:</p>
+        <p class="text-sm text-t2">Assign to a project:</p>
         <Button type="button" onclick={onNewProject}>New project <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">N</span></Button>
       </div>
       <div class="space-y-1" data-field="project">

@@ -337,6 +337,12 @@
             break;
           }
         }
+      } else if (current.type === "jira_header") {
+        if (!collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: true };
+      } else if (current.type === "jira_task") {
+        // First press jumps to header; if already on header it will collapse
+        const jiraIdx = flatNav.findIndex(n => n.type === "jira_header");
+        if (jiraIdx >= 0) setSelectedIndex(jiraIdx);
       }
       return;
     }
@@ -348,6 +354,8 @@
       } else if (current.type === "status_header") {
         const sectionKey = `${current.projectPath}:${current.status}`;
         if (collapsedSections[sectionKey]) collapsedSections = { ...collapsedSections, [sectionKey]: false };
+      } else if (current.type === "jira_header") {
+        if (collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: false };
       }
       return;
     }
