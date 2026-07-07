@@ -758,9 +758,9 @@
       if (item.type !== "diff") continue;
       const filePath = item.item.id.replace("diff:", "");
       if (expandedFiles.has(filePath)) {
-        item.element.classList.remove("expandable-separator");
+        item.element.style.cursor = "";
       } else {
-        item.element.classList.add("expandable-separator");
+        item.element.style.cursor = "pointer";
       }
     }
   }
@@ -969,9 +969,6 @@
     0% { transform: translateX(-100%); }
     50% { transform: translateX(150%); }
     100% { transform: translateX(-100%); }
-  }
-  :global(diffs-container.expandable-separator) {
-    cursor: pointer;
   }
 </style>
 
