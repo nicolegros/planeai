@@ -413,8 +413,7 @@ pub fn send_prompt(
     }
 
     // Acquire prompt lock
-    let lock = planeai_core::prompt_lock::acquire(conn, &session.id)
-        .map_err(|e| e.to_string())?;
+    let lock = planeai_core::prompt_lock::acquire(conn, &session.id).map_err(|e| e.to_string())?;
 
     tracing::info!(session_id = %session.id, backend = %session.backend, "send_prompt: dispatching");
 
