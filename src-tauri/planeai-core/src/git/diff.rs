@@ -200,6 +200,30 @@ pub fn get_file_diff(
     })
 }
 
+/// Build a synthetic unified diff patch for a new file (content shown as all additions).
+/// When `include_git_header` is true, includes the `diff --git` preamble needed for combined patches.
+fn synthetic_new_file_patch(file_path: &str, content: &str, include_git_header: bool) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let count = lines.len();
+    let mut result = String::new();
+    if include_git_header {
+        result.push_str(&format!(
+            "diff --git a/{fp} b/{fp}\nnew file mode 100644\n",
+            fp = file_path
+        ));
+    }
+    result.push_str(&format!(
+        "--- /dev/null\n+++ b/{}\n@@ -0,0 +1,{} @@\n",
+        file_path, count
+    ));
+    for line in &lines {
+        result.push('+');
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
 /// Get the unified diff patch for a single file. Uses native git diff which is
 /// much faster than recomputing the diff in JavaScript.
 /// When `head_ref` is None: diffs base against working tree.
@@ -242,19 +266,7 @@ pub fn get_file_patch(
         if content.is_empty() {
             return Ok(String::new());
         }
-        // Build a synthetic unified diff for new files
-        let lines: Vec<&str> = content.lines().collect();
-        let count = lines.len();
-        let mut result = format!(
-            "--- /dev/null\n+++ b/{}\n@@ -0,0 +1,{} @@\n",
-            file_path, count
-        );
-        for line in &lines {
-            result.push('+');
-            result.push_str(line);
-            result.push('\n');
-        }
-        return Ok(result);
+        return Ok(synthetic_new_file_patch(file_path, &content, false));
     }
 
     Ok(patch)
@@ -318,17 +330,7 @@ pub fn get_combined_patch(
                 if content.is_empty() {
                     continue;
                 }
-                let lines: Vec<&str> = content.lines().collect();
-                let count = lines.len();
-                patch.push_str(&format!(
-                    "diff --git a/{fp} b/{fp}\nnew file mode 100644\n--- /dev/null\n+++ b/{fp}\n@@ -0,0 +1,{count} @@\n",
-                    fp = file_path
-                ));
-                for line in &lines {
-                    patch.push('+');
-                    patch.push_str(line);
-                    patch.push('\n');
-                }
+                patch.push_str(&synthetic_new_file_patch(file_path, &content, true));
             }
         }
     }
