@@ -407,18 +407,7 @@ mod tests {
 
     // --- get_combined_patch tests ---
 
-    fn git(path: &std::path::Path, args: &[&str]) {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(path)
-            .output()
-            .unwrap();
-    }
-
-    fn configure_git_identity(path: &std::path::Path) {
-        git(path, &["config", "user.email", "test@test.com"]);
-        git(path, &["config", "user.name", "Test"]);
-    }
+    use crate::git::test_util::{configure_git_identity, git};
 
     fn init_repo_for_combined_patch() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
