@@ -194,6 +194,8 @@
     allItems = items;
     viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
     computeHunkMeta(items);
+    // Mark partial-file containers as clickable after a frame (elements need to mount first)
+    requestAnimationFrame(updateExpandableContainerClasses);
     if (items.length > 0 && viewer.getItem(currentFileId())) {
       viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
     }
@@ -349,6 +351,7 @@
       expandedFiles.add(filePath);
       viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
       computeHunkMeta(allItems);
+      updateExpandableContainerClasses();
       return true;
     } catch (e) {
       console.error(`Failed to expand file ${filePath}:`, e);
@@ -735,13 +738,32 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-      unsafeCSS: `[data-separator] { cursor: pointer !important; } [data-separator] * { cursor: pointer !important; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
+      unsafeCSS: `[data-line] { cursor: text !important; } [data-column-number] { cursor: pointer !important; } [data-diffs-header] { cursor: default !important; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
+      hunkSeparators: "line-info",
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
+
+  /**
+   * Mark diffs-container elements for partial files with a CSS class
+   * so the cursor shows as pointer (CSS inherits into Shadow DOM).
+   */
+  function updateExpandableContainerClasses() {
+    if (!viewer) return;
+    const renderedItems = viewer.getRenderedItems();
+    for (const item of renderedItems) {
+      if (item.type !== "diff") continue;
+      const filePath = item.item.id.replace("diff:", "");
+      if (expandedFiles.has(filePath)) {
+        item.element.classList.remove("expandable-separator");
+      } else {
+        item.element.classList.add("expandable-separator");
+      }
+    }
+  }
 
   /**
    * Handle clicks on hunk separators in partial files.
@@ -800,6 +822,7 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
+      viewer.subscribeToScroll(updateExpandableContainerClasses);
       viewerRoot.addEventListener("click", handleViewerClick);
       applyDiffFont();
       refresh();
@@ -946,6 +969,9 @@
     0% { transform: translateX(-100%); }
     50% { transform: translateX(150%); }
     100% { transform: translateX(-100%); }
+  }
+  :global(diffs-container.expandable-separator) {
+    cursor: pointer;
   }
 </style>
 
