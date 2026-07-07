@@ -61,6 +61,7 @@ JSON-line protocol on control connections (type byte `0x00`).
 {"cmd": "attach", "session_id": "..."}
 {"cmd": "detach", "session_id": "..."}
 {"cmd": "read_buffer", "session_id": "...", "lines": 100}
+{"cmd": "read_buffer_after", "session_id": "...", "after": 0, "max_bytes": 0}
 ```
 
 ### List Response
@@ -93,6 +94,25 @@ Returns the last N lines of a session's terminal buffer with ANSI escape sequenc
 ```
 
 The `lines` field in the request defaults to 100 if omitted.
+
+### ReadBufferAfter Response
+
+Returns buffer content written since the given byte offset (cursor-based incremental read). ANSI escape sequences are stripped.
+
+```json
+{
+  "ok": true,
+  "session_id": "...",
+  "text": "...",
+  "cursor": 1234,
+  "truncated": false
+}
+```
+
+- `after`: byte offset from a previous read (0 = read everything in the buffer).
+- `max_bytes`: cap on returned text size (0 = unlimited).
+- `cursor`: the new write offset to pass as `after` on the next call.
+- `truncated`: `true` if data between the requested offset and the earliest available content was evicted from the ring buffer.
 
 ### Events (broadcast to all control connections)
 
