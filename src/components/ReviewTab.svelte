@@ -76,6 +76,8 @@
 
   // Tracks files that have been expanded to full content (isPartial: false)
   let expandedFiles = new Set<string>();
+  // Tracks files currently being loaded for expansion (for loading UI feedback)
+  let loadingExpansionFiles = $state<Set<string>>(new Set());
 
   let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
 
@@ -325,9 +327,12 @@
    */
   async function expandFileToFull(filePath: string): Promise<boolean> {
     if (!viewer || expandedFiles.has(filePath)) return true;
+    if (loadingExpansionFiles.has(filePath)) return false;
     const file = files.find((f) => f.path === filePath);
     if (!file) return false;
 
+    loadingExpansionFiles.add(filePath);
+    loadingExpansionFiles = new Set(loadingExpansionFiles);
     try {
       const diff = await git.getFileDiff(repoPath, effectiveBase, filePath, file.old_path, effectiveHead);
       const oldFile: FileContents = { name: file.old_path ?? filePath, contents: diff.original };
@@ -348,6 +353,9 @@
     } catch (e) {
       console.error(`Failed to expand file ${filePath}:`, e);
       return false;
+    } finally {
+      loadingExpansionFiles.delete(filePath);
+      loadingExpansionFiles = new Set(loadingExpansionFiles);
     }
   }
 
@@ -727,12 +735,47 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
+      unsafeCSS: `[data-separator-wrapper] { cursor: pointer; } [data-separator-wrapper]:hover [data-unmodified-lines] { text-decoration: underline; }`,
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
+
+  /**
+   * Handle clicks on hunk separators in partial files.
+   * When a separator is clicked on a file that hasn't been expanded yet,
+   * load the full content so expand arrows appear.
+   */
+  function handleViewerClick(e: MouseEvent) {
+    const path = e.composedPath() as EventTarget[];
+    // Look for a separator element in the composed path (inside shadow DOM)
+    const separatorEl = path.find(
+      (el) => el instanceof HTMLElement && (el.hasAttribute("data-separator-wrapper") || el.hasAttribute("data-unmodified-lines"))
+    ) as HTMLElement | undefined;
+    if (!separatorEl) return;
+
+    // Find which file this separator belongs to by walking up to the diffs-container host
+    const container = path.find(
+      (el) => el instanceof HTMLElement && el.tagName.toLowerCase() === "diffs-container"
+    ) as HTMLElement | undefined;
+    if (!container) return;
+
+    // Match the container to a file via the rendered items
+    const renderedItems = viewer?.getRenderedItems();
+    if (!renderedItems) return;
+    const renderedItem = renderedItems.find((r) => r.element === container);
+    if (!renderedItem || renderedItem.type !== "diff") return;
+
+    const filePath = renderedItem.item.id.replace("diff:", "");
+    if (expandedFiles.has(filePath)) return; // Already expanded, let library handle natively
+
+    // Trigger expansion for this partial file
+    e.preventDefault();
+    e.stopPropagation();
+    expandFileToFull(filePath);
+  }
 
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
@@ -742,6 +785,7 @@
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
+    viewerRoot?.removeEventListener("click", handleViewerClick);
     viewer?.cleanUp();
     viewer = null;
   });
@@ -756,6 +800,7 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
+      viewerRoot.addEventListener("click", handleViewerClick);
       applyDiffFont();
       refresh();
     }
@@ -886,6 +931,23 @@
     {:else if files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
     {/if}
+
+    <!-- Expansion loading indicator -->
+    {#if loadingExpansionFiles.size > 0}
+      <div class="absolute left-0 right-0 z-10" style:top="{contentTop}px">
+        <div class="h-[2px] w-full bg-panel-hi overflow-hidden">
+          <div class="h-full w-2/5 bg-accent rounded-full" style="animation: loading-slide 1.2s ease-in-out infinite; transform-origin: left;"></div>
+        </div>
+      </div>
+    {/if}
+
+<style>
+  @keyframes loading-slide {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(150%); }
+    100% { transform: translateX(-100%); }
+  }
+</style>
 
   </div>
 
