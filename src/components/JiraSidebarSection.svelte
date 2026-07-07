@@ -29,10 +29,10 @@
       class="w-full px-2 mb-1 text-[11px] font-semibold text-t2 uppercase tracking-[.05em] truncate flex items-center gap-1.5 rounded-lg py-1 hover:bg-panel-hi {isHeaderSelected ? 'ring-2 ring-accent' : ''}"
       onclick={onToggleSection}
     >
-      {#if collapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
       <Cable class="size-3 shrink-0 text-t3" />
       Jira
       <span class="ml-auto font-normal text-t3">{tasks.length}</span>
+      {#if collapsed}<ChevronRight class="size-3 shrink-0 text-t3" />{:else}<ChevronDown class="size-3 shrink-0 text-t3" />{/if}
     </button>
 
     {#if !collapsed}
