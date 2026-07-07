@@ -343,7 +343,10 @@ pub fn get_combined_patch(
                 Ok(patches)
             });
 
-            (diff_handle.join().unwrap(), untracked_handle.join().unwrap())
+            (
+                diff_handle.join().unwrap(),
+                untracked_handle.join().unwrap(),
+            )
         });
 
         let mut patch = diff_result?;
