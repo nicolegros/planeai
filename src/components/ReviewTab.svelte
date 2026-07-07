@@ -72,6 +72,7 @@
   let viewedFiles = $state<Set<string>>(new Set());
   let patchFingerprints = new Map<string, string>();
   let allItems: CodeViewItem<ReviewComment>[] = [];
+  let diffGeneration = 0;
   let viewedVersion = 0;
 
   // Tracks files that have been expanded to full content (isPartial: false)
@@ -124,6 +125,7 @@
 
   async function loadAllDiffs() {
     if (!viewer) return;
+    diffGeneration++;
     // Reset expanded files tracking on fresh load
     expandedFiles = new Set<string>();
     // Use preloaded patches if available (populated when agent finishes)
@@ -334,7 +336,9 @@
     loadingExpansionFiles.add(filePath);
     loadingExpansionFiles = new Set(loadingExpansionFiles);
     try {
+      const gen = diffGeneration;
       const diff = await git.getFileDiff(repoPath, effectiveBase, filePath, file.old_path, effectiveHead);
+      if (gen !== diffGeneration) return false;
       const oldFile: FileContents = { name: file.old_path ?? filePath, contents: diff.original };
       const newFile: FileContents = { name: filePath, contents: diff.modified };
 

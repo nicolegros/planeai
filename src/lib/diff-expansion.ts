@@ -3,7 +3,7 @@
  * The @pierre/diffs library only allows hunk expansion when isPartial is false,
  * meaning we need full file content in additionLines/deletionLines.
  */
-import { parseDiffFromFile, type CodeViewItem, type DiffLineAnnotation, type FileContents, type FileDiffMetadata } from "@pierre/diffs";
+import { parseDiffFromFile, type CodeViewItem, type FileContents } from "@pierre/diffs";
 
 /**
  * Rebuild a patch-based (partial) diff item using full file contents.
