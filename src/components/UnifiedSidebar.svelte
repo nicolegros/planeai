@@ -62,6 +62,14 @@
   const statusLabels: Record<string, string> = { running: "Running", needs_review: "Needs review", idle: "Idle", todo: "To do", done: "Done", exited: "Exited" };
   const statusDotColors: Record<string, string> = { running: "bg-status-running", needs_review: "bg-status-review", idle: "bg-status-idle", todo: "bg-t3", done: "bg-status-running", exited: "bg-status-exited" };
 
+  // Task status options for context menu (maps internal values to display labels)
+  const STATUS_OPTIONS = [
+    { value: "todo", label: "Todo" },
+    { value: "in_progress", label: "In Progress" },
+    { value: "in_review", label: "In Review" },
+    { value: "done", label: "Done" },
+  ] as const;
+
   // Auto-mode per project
   let projectAutoMode = $state<Record<string, boolean>>({});
   async function loadAutoModes() {
@@ -441,7 +449,7 @@
   </div>
 
   <!-- Main content -->
-  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide">
+  <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none">
     {#if projects.length === 0}
       <div class="mt-12 text-center px-4 space-y-3">
         <p class="text-xs text-t3">No projects yet</p>
@@ -640,6 +648,8 @@
     items={contextMenu.session.status === 'exited'
       ? [
           { label: "Restart", onSelect: () => onRestartSession(contextMenu!.session) },
+          { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
+          { label: "Archive", onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onArchiveSession(contextMenu!.session)) },
           { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onDeleteSession(contextMenu!.session)) },
         ]
       : [
@@ -668,18 +678,19 @@
 <!-- Task context menu -->
 {#if taskContextMenu}
   {@const linkedSession = sessionForTask(taskContextMenu.task.key)}
+  {@const statusChildren = STATUS_OPTIONS
+    .filter(s => s.value !== taskContextMenu!.task.status)
+    .map(s => ({ label: s.label, onSelect: () => moveTask(taskContextMenu!.task.key, s.value) }))}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
     onClose={() => (taskContextMenu = null)}
     items={[
       ...(linkedSession
-        ? [{ label: "Go to session", onSelect: () => { onSelectSession(linkedSession.id); focusTerminal(); } }]
-        : [{ label: "Start session", onSelect: () => onPickTask(taskContextMenu!.task, taskContextMenu!.projectPath) }]),
-      ...(taskContextMenu.task.status !== "in_progress" ? [{ label: "→ In Progress", onSelect: () => moveTask(taskContextMenu!.task.key, "in_progress") }] : []),
-      ...(taskContextMenu.task.status !== "in_review" ? [{ label: "→ In Review", onSelect: () => moveTask(taskContextMenu!.task.key, "in_review") }] : []),
-      ...(taskContextMenu.task.status !== "todo" ? [{ label: "→ Todo", onSelect: () => moveTask(taskContextMenu!.task.key, "todo") }] : []),
-      ...(taskContextMenu.task.status !== "done" ? [{ label: "→ Done", onSelect: () => moveTask(taskContextMenu!.task.key, "done") }] : []),
+        ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); orchestrator.toggleDiff(); } }]
+        : []),
+      { label: "Edit task", onSelect: () => taskPanelRef?.openEdit(taskContextMenu!.task) },
+      { label: "Change status", children: statusChildren },
     ]}
   />
 {/if}
