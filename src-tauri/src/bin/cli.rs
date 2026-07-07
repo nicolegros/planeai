@@ -202,7 +202,7 @@ enum AxiSessionAction {
     /// Read session output (last N lines, ANSI stripped)
     Read {
         id: String,
-        #[arg(long, default_value = "100")]
+        #[arg(long, default_value = "100", conflicts_with = "after")]
         lines: usize,
         /// Opaque cursor from a previous read. Returns only output since that cursor.
         #[arg(long)]

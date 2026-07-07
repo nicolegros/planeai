@@ -645,7 +645,9 @@ pub fn read_tmux_pane_after(
     let (prev_line_count, prev_hash) = parse_tmux_cursor(cursor)?;
 
     // Try to validate cursor: check if lines up to prev_line_count still hash the same
-    let truncated = if prev_line_count <= all_lines.len() {
+    let truncated = if prev_line_count == 0 {
+        false
+    } else if prev_line_count <= all_lines.len() {
         let check_lines = &all_lines[..prev_line_count];
         let current_hash = hash_lines(check_lines);
         current_hash != prev_hash
