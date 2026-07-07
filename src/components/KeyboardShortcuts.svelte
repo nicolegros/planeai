@@ -98,6 +98,7 @@
     { keys: `g/G`, description: "Top / bottom" },
     { keys: `u`, description: "Split / unified" },
     { keys: `e`, description: "Edit file" },
+    { keys: `x`, description: "Expand collapsed context" },
     { keys: `r`, description: "Refresh" },
     { keys: MOD_ENTER_HINT, description: "Send feedback" },
   ]};

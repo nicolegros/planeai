@@ -2,7 +2,7 @@
   import { git } from "../lib/api";
   import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
   import { onMount, onDestroy } from "svelte";
-  import { CodeView, parsePatchFiles, type CodeViewItem, type DiffLineAnnotation, type SelectedLineRange, type FileDiffMetadata } from "@pierre/diffs";
+  import { CodeView, parsePatchFiles, type CodeViewItem, type DiffLineAnnotation, type SelectedLineRange, type FileDiffMetadata, type FileContents } from "@pierre/diffs";
   import { getOrCreateWorkerPoolSingleton, terminateWorkerPoolSingleton } from "@pierre/diffs/worker";
   import { workerFactory } from "../lib/worker-factory";
   import { isDark, getSettings } from "../lib/settings.svelte";
@@ -21,6 +21,7 @@
   import { hasConflicts } from "../lib/ci-checks.svelte";
   import BranchCompareForm from "./BranchCompareForm.svelte";
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
+  import { rebuildItemWithFullContent } from "../lib/diff-expansion";
 
   interface Props {
     repoPath: string;
@@ -71,7 +72,13 @@
   let viewedFiles = $state<Set<string>>(new Set());
   let patchFingerprints = new Map<string, string>();
   let allItems: CodeViewItem<ReviewComment>[] = [];
+  let diffGeneration = 0;
   let viewedVersion = 0;
+
+  // Tracks files that have been expanded to full content (isPartial: false)
+  let expandedFiles = new Set<string>();
+  // Tracks files currently being loaded for expansion (for loading UI feedback)
+  let loadingExpansionFiles = $state<Set<string>>(new Set());
 
   let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
 
@@ -118,6 +125,9 @@
 
   async function loadAllDiffs() {
     if (!viewer) return;
+    diffGeneration++;
+    // Reset expanded files tracking on fresh load
+    expandedFiles = new Set<string>();
     // Use preloaded patches if available (populated when agent finishes)
     const preloaded = getPreloadedPatches(sessionId);
 
@@ -236,6 +246,11 @@
     const id = `diff:${files[index]?.path}`;
     if (viewer?.getItem(id)) viewer.scrollTo({ type: "item", id, align: "start" });
     if (diffFocus === "body") showCursor();
+    // Proactively load full file content so expand arrows appear
+    const filePath = files[index]?.path;
+    if (filePath && !expandedFiles.has(filePath)) {
+      expandFileToFull(filePath);
+    }
   }
 
   function navigateFile(index: number) {
@@ -305,6 +320,89 @@
         : it,
     );
     viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
+  }
+
+  /**
+   * Expand a partial file to full content by fetching old+new file from git.
+   * After expansion, the item has isPartial:false and the library handles
+   * subsequent expand/collapse of context lines natively.
+   */
+  async function expandFileToFull(filePath: string): Promise<boolean> {
+    if (!viewer || expandedFiles.has(filePath)) return true;
+    if (loadingExpansionFiles.has(filePath)) return false;
+    const file = files.find((f) => f.path === filePath);
+    if (!file) return false;
+
+    loadingExpansionFiles.add(filePath);
+    loadingExpansionFiles = new Set(loadingExpansionFiles);
+    try {
+      const gen = diffGeneration;
+      const diff = await git.getFileDiff(repoPath, effectiveBase, filePath, file.old_path, effectiveHead);
+      if (gen !== diffGeneration) return false;
+      const oldFile: FileContents = { name: file.old_path ?? filePath, contents: diff.original };
+      const newFile: FileContents = { name: filePath, contents: diff.modified };
+
+      const itemId = `diff:${filePath}`;
+      const itemIdx = allItems.findIndex((it) => it.id === itemId);
+      if (itemIdx === -1) return false;
+
+      const rebuilt = rebuildItemWithFullContent(allItems[itemIdx], oldFile, newFile);
+      if (!rebuilt) return false;
+
+      allItems[itemIdx] = rebuilt;
+      expandedFiles.add(filePath);
+      viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
+      computeHunkMeta(allItems);
+      return true;
+    } catch (e) {
+      console.error(`Failed to expand file ${filePath}:`, e);
+      return false;
+    } finally {
+      loadingExpansionFiles.delete(filePath);
+      loadingExpansionFiles = new Set(loadingExpansionFiles);
+    }
+  }
+
+  /**
+   * Keyboard shortcut handler: expand the nearest collapsed context around cursor.
+   * If the file is still partial, loads it fully first, then expands the nearest hunk.
+   */
+  async function expandCurrentFileContext() {
+    const filePath = files[selectedIndex]?.path;
+    if (!filePath || !viewer) return;
+
+    // Ensure file is fully loaded
+    const expanded = await expandFileToFull(filePath);
+    if (!expanded) return;
+
+    // Find the rendered instance for this file and expand the nearest hunk
+    const itemId = `diff:${filePath}`;
+    const renderedItems = viewer.getRenderedItems();
+    const rendered = renderedItems.find((r) => r.item.id === itemId);
+    if (!rendered || rendered.type !== "diff") return;
+
+    const item = viewer.getItem(itemId);
+    if (!item || item.type !== "diff") return;
+
+    // Find the nearest hunk separator relative to cursor position
+    const hunks = item.fileDiff.hunks;
+    let bestHunkIdx = -1;
+    let bestDistance = Infinity;
+
+    for (let i = 0; i < hunks.length; i++) {
+      const hunk = hunks[i];
+      // The separator is above this hunk — collapsed lines precede additionStart
+      const separatorLine = hunk.additionStart;
+      const dist = Math.abs(cursorLine - separatorLine);
+      if (dist < bestDistance && hunk.collapsedBefore > 0) {
+        bestDistance = dist;
+        bestHunkIdx = i;
+      }
+    }
+
+    if (bestHunkIdx >= 0) {
+      rendered.instance.expandHunk(bestHunkIdx, "both");
+    }
   }
 
   async function sendFeedback() {
@@ -568,6 +666,10 @@
       const comment = getComments(sessionId).find((c) => c.filePath === files[selectedIndex]?.path && c.startLine <= cursorLine && c.endLine >= cursorLine);
       if (comment) openEditComment(comment);
     }
+    else if (e.key === "x" && !e.metaKey && !e.ctrlKey && files.length > 0) {
+      e.preventDefault();
+      expandCurrentFileContext();
+    }
   }
 
   function toggleDiffStyle() {
@@ -589,6 +691,9 @@
       enableLineSelection: true,
       disableVirtualizationBuffers: true,
       disableFileHeader: false,
+      expandUnchanged: true,
+      expansionLineCount: 20,
+      collapsedContextThreshold: 5,
       renderHeaderMetadata(fileDiff) {
         const path = fileDiff.name;
         const idx = files.findIndex((f) => f.path === path);
@@ -793,6 +898,23 @@
     {:else if files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
     {/if}
+
+    <!-- Expansion loading indicator -->
+    {#if loadingExpansionFiles.size > 0}
+      <div class="absolute left-0 right-0 z-10" style:top="{contentTop}px">
+        <div class="h-[2px] w-full bg-panel-hi overflow-hidden">
+          <div class="h-full w-2/5 bg-accent rounded-full" style="animation: loading-slide 1.2s ease-in-out infinite; transform-origin: left;"></div>
+        </div>
+      </div>
+    {/if}
+
+<style>
+  @keyframes loading-slide {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(150%); }
+    100% { transform: translateX(-100%); }
+  }
+</style>
 
   </div>
 
