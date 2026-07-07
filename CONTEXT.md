@@ -143,8 +143,8 @@ text: <new_output_since_cursor>
 **Workflow for loop observation**:
 
 ```bash
-# Initial read — get current output + cursor
-OUTPUT=$(planeai-cli axi session read $CHILD --lines 100)
+# Initial read — get current output + cursor (use backend-appropriate zero cursor)
+OUTPUT=$(planeai-cli axi session read $CHILD --after "tmux:0:0")
 CURSOR=$(echo "$OUTPUT" | grep "^cursor:" | cut -d' ' -f2)
 
 # Poll loop — only new output each iteration

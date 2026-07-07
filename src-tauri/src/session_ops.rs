@@ -664,9 +664,14 @@ pub fn read_tmux_pane_after(
         }
     };
 
-    // Apply max_bytes cap
+    // Apply max_bytes cap (truncate at a valid UTF-8 char boundary)
     let text = if max_bytes > 0 && new_content.len() > max_bytes {
-        new_content[..max_bytes].to_string()
+        let safe_end = new_content
+            .char_indices()
+            .take_while(|(i, _)| *i < max_bytes)
+            .last()
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        new_content[..safe_end].to_string()
     } else {
         new_content
     };
@@ -682,6 +687,7 @@ pub fn read_tmux_pane_after(
 }
 
 /// Build an initial tmux cursor (for first read without --after).
+#[allow(dead_code)]
 pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
     let mut cmd = std::process::Command::new("tmux");
     cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
@@ -723,7 +729,12 @@ fn hash_lines(lines: &[&str]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     lines.len().hash(&mut hasher);
-    // Hash last 10 lines for efficiency and stability
+    // Hash first 5 lines for anchoring (detects history trimming)
+    let first_end = lines.len().min(5);
+    for line in &lines[..first_end] {
+        line.hash(&mut hasher);
+    }
+    // Hash last 10 lines for tail stability
     let start = lines.len().saturating_sub(10);
     for line in &lines[start..] {
         line.hash(&mut hasher);
