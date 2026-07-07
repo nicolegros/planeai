@@ -190,6 +190,16 @@ describe("tab-switcher state machine", () => {
     expect(commit()).toBe("b");
   });
 
+  it("exited sessions excluded from cycle via validIds", () => {
+    // Simulates the App passing only non-exited session IDs as validIds
+    seedMruWith("active1", "exited1", "active2", "exited2");
+    const activeOnly = new Set(["active1", "active2"]);
+    startCycle("active1", activeOnly);
+    // Only active sessions appear in the cycle
+    expect(getCycleState().cycleList).toEqual(["active2", "active1"]);
+    expect(commit()).toBe("active2");
+  });
+
   it("startCycle returns false when validIds filters all others", () => {
     seedMruWith("a", "ghost1", "ghost2");
     const validIds = new Set(["a"]);

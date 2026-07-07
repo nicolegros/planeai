@@ -4,7 +4,7 @@ export interface Session {
   name: string;
   tmux_name: string | null;
   branch: string;
-  status: string;
+  status: "active" | "exited" | "archived";
   created_at: string;
   worktree_path: string | null;
   provider: string | null;
