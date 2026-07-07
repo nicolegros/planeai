@@ -275,7 +275,8 @@ pub fn get_file_patch(
 /// Get a single combined unified diff patch containing all changed files.
 /// Runs one `git diff` subprocess instead of N per-file calls.
 /// When `head_ref` is None, diffs base against the working tree and includes
-/// synthetic patches for untracked files.
+/// synthetic patches for untracked files. Both git commands run in parallel
+/// via `std::thread::scope`.
 /// When `head_ref` is Some, diffs base..head (committed only).
 pub fn get_combined_patch(
     repo_path: &str,
@@ -289,6 +290,68 @@ pub fn get_combined_patch(
         None => resolved.clone(),
     };
 
+    // When comparing to working tree, run git diff and git ls-files in parallel
+    if head_ref.is_none() {
+        let (diff_result, untracked_result) = std::thread::scope(|s| {
+            let diff_handle = s.spawn(|| {
+                let output = git_cmd()
+                    .args([
+                        "diff",
+                        "--no-color",
+                        "-U3",
+                        "--find-renames",
+                        "--no-ext-diff",
+                        &diff_range,
+                    ])
+                    .current_dir(repo_path)
+                    .output()
+                    .map_err(|e| format!("failed to run git: {e}"))?;
+
+                if !output.status.success() {
+                    return Err(String::from_utf8_lossy(&output.stderr).to_string());
+                }
+                Ok(String::from_utf8_lossy(&output.stdout).to_string())
+            });
+
+            let untracked_handle = s.spawn(|| -> Result<String, String> {
+                let output = git_cmd()
+                    .args(["ls-files", "--others", "--exclude-standard"])
+                    .current_dir(repo_path)
+                    .output()
+                    .map_err(|e| format!("failed to run git ls-files: {e}"))?;
+
+                if !output.status.success() {
+                    return Ok(String::new());
+                }
+
+                let mut patches = String::new();
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let file_path = line.trim();
+                    if file_path.is_empty() {
+                        continue;
+                    }
+                    let full_path = std::path::Path::new(repo_path).join(file_path);
+                    let content = match std::fs::read_to_string(&full_path) {
+                        Ok(c) => c,
+                        Err(_) => continue, // skip binary/unreadable files
+                    };
+                    if content.is_empty() {
+                        continue;
+                    }
+                    patches.push_str(&synthetic_new_file_patch(file_path, &content, true));
+                }
+                Ok(patches)
+            });
+
+            (diff_handle.join().unwrap(), untracked_handle.join().unwrap())
+        });
+
+        let mut patch = diff_result?;
+        patch.push_str(&untracked_result?);
+        return Ok(patch);
+    }
+
+    // When head_ref is set, just run git diff (no untracked files)
     let output = git_cmd()
         .args([
             "diff",
@@ -305,37 +368,7 @@ pub fn get_combined_patch(
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
-
-    let mut patch = String::from_utf8_lossy(&output.stdout).to_string();
-
-    // Include untracked files only when comparing to working tree
-    if head_ref.is_none() {
-        let untracked_output = git_cmd()
-            .args(["ls-files", "--others", "--exclude-standard"])
-            .current_dir(repo_path)
-            .output()
-            .map_err(|e| format!("failed to run git ls-files: {e}"))?;
-
-        if untracked_output.status.success() {
-            for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
-                let file_path = line.trim();
-                if file_path.is_empty() {
-                    continue;
-                }
-                let full_path = std::path::Path::new(repo_path).join(file_path);
-                let content = match std::fs::read_to_string(&full_path) {
-                    Ok(c) => c,
-                    Err(_) => continue, // skip binary/unreadable files
-                };
-                if content.is_empty() {
-                    continue;
-                }
-                patch.push_str(&synthetic_new_file_patch(file_path, &content, true));
-            }
-        }
-    }
-
-    Ok(patch)
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Get unified diff patches for all given files in one call.
