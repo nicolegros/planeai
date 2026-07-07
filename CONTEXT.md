@@ -170,6 +170,7 @@ Selecting an exited session triggers restart automatically. The terminal pool ac
 - `status TEXT NOT NULL DEFAULT 'active'` — updated on exit/delete
 - `tmux_name TEXT` — NULL for daemon sessions, populated for tmux sessions
 - `attached_once INTEGER NOT NULL DEFAULT 0` — set to 1 on first attach; determines whether attach runs launch command (0) or resume command (1)
+- `parent_session_id TEXT` — optional reference to the session that spawned this one (for orchestration/parent-child tracking)
 
 ### Preferences UI
 

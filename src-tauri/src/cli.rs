@@ -22,6 +22,7 @@ pub struct SessionCreateOpts {
     pub provider: Option<String>,
     pub task_key: Option<String>,
     pub prompt: Option<String>,
+    pub parent_session_id: Option<String>,
 }
 
 pub struct Env {
@@ -63,6 +64,7 @@ pub struct SessionPlan {
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
     pub project_id: String,
+    pub parent_session_id: Option<String>,
 }
 
 pub fn build_session_plan(
@@ -140,6 +142,7 @@ pub fn build_session_plan(
         task_key: opts.task_key.clone(),
         base_branch: opts.base_branch.clone(),
         project_id: project.id.clone(),
+        parent_session_id: opts.parent_session_id.clone(),
     })
 }
 
@@ -217,6 +220,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         plan.yolo,
         plan.task_key.as_deref(),
         plan.base_branch.as_deref(),
+        plan.parent_session_id.as_deref(),
     )
     .map_err(|e| e.to_string())?;
 
@@ -225,6 +229,37 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     }
 
     serde_json::to_string(&session).map_err(|e| e.to_string())
+}
+
+/// Shared session creation orchestration used by both the JSON CLI and the AXI
+/// interface. Loads config, resolves the project, builds a plan, and executes it.
+/// Returns the created `Session` on success.
+pub fn create_session(conn: &Connection, opts: SessionCreateOpts) -> Result<db::Session, String> {
+    let cfg_dir = config::config_dir("planeai");
+    let (cfg, _) = config::load(&cfg_dir);
+    let backend = config::resolve_backend(&cfg).to_string();
+
+    let env = Env {
+        backend,
+        socket_path: planeai_paths::notify_socket_path(),
+        config: cfg,
+    };
+
+    let project_name = opts.project.clone();
+    let projects = db::list_projects(conn).map_err(|e| e.to_string())?;
+    let proj = projects
+        .iter()
+        .find(|p| p.name == project_name)
+        .ok_or_else(|| format!("unknown project: {project_name}"))?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let plan = build_session_plan(&session_id, &opts, &env, proj)?;
+
+    execute_plan(&plan, conn, &env)?;
+
+    db::get_session(conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "session created but not found in database".to_string())
 }
 
 /// Resolve the daemon binary path. Checks /usr/local/bin first, then falls back
@@ -296,6 +331,7 @@ mod tests {
             provider: None,
             task_key: None,
             prompt: None,
+            parent_session_id: None,
         };
 
         let plan = build_session_plan(
@@ -333,6 +369,7 @@ mod tests {
             provider: None,
             task_key: None,
             prompt: None,
+            parent_session_id: None,
         };
 
         let plan = build_session_plan(
@@ -382,6 +419,7 @@ mod tests {
             provider: None,
             task_key: None,
             prompt: None,
+            parent_session_id: None,
         };
 
         let plan = build_session_plan(
@@ -409,6 +447,7 @@ mod tests {
             provider: None,
             task_key: None,
             prompt: None,
+            parent_session_id: None,
         };
 
         let plan = build_session_plan(
@@ -439,6 +478,7 @@ mod tests {
             provider: Some("nonexistent".to_string()),
             task_key: None,
             prompt: None,
+            parent_session_id: None,
         };
 
         let result = build_session_plan(

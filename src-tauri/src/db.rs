@@ -23,11 +23,12 @@ pub struct Session {
     pub pr_url: Option<String>,
     pub pr_state: Option<String>,
     pub attached_once: bool,
+    pub parent_session_id: Option<String>,
 }
 
 /// Column list for SELECT statements returning a Session.
 /// Keep in sync with `row_to_session`.
-pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once";
+pub const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, attached_once, parent_session_id";
 
 /// Map a row (selected with SESSION_COLUMNS) to a Session struct.
 pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
@@ -50,6 +51,7 @@ pub fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         pr_url: row.get(15)?,
         pr_state: row.get(16)?,
         attached_once: row.get(17)?,
+        parent_session_id: row.get(18)?,
     })
 }
 
@@ -142,6 +144,7 @@ fn record_to_session(r: planeai_core::services::SessionRecord) -> Session {
         pr_url: r.pr_url,
         pr_state: r.pr_state,
         attached_once: r.attached_once,
+        parent_session_id: r.parent_session_id,
     }
 }
 
@@ -212,6 +215,7 @@ pub fn create_session(
         true,
         None,
         None,
+        None,
     )
 }
 
@@ -229,6 +233,7 @@ pub fn create_session_with_id(
     auto_approve: bool,
     task_key: Option<&str>,
     base_branch: Option<&str>,
+    parent_session_id: Option<&str>,
 ) -> Result<Session> {
     let params = planeai_core::services::CreateSessionParams {
         id: id.to_string(),
@@ -242,6 +247,7 @@ pub fn create_session_with_id(
         auto_approve,
         task_key: task_key.map(|s| s.to_string()),
         base_branch: base_branch.map(|s| s.to_string()),
+        parent_session_id: parent_session_id.map(|s| s.to_string()),
         ..Default::default()
     };
     let record = planeai_core::services::SessionService::create(conn, &params)?;
@@ -364,6 +370,7 @@ mod tests {
             None,
             "daemon",
             true,
+            None,
             None,
             None,
         )
@@ -640,6 +647,7 @@ mod tests {
             true,
             None,
             None,
+            None,
         )
         .unwrap();
         // Initially null
@@ -763,7 +771,7 @@ mod tests {
         migrate(&conn).unwrap();
         // Now inserting NULL tmux_name should work
         let s = create_session_with_id(
-            &conn, "s2", "p1", "daemon", None, "feat", None, None, "daemon", true, None, None,
+            &conn, "s2", "p1", "daemon", None, "feat", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         assert!(s.tmux_name.is_none());
@@ -797,6 +805,7 @@ mod tests {
             true,
             None,
             Some("main"),
+            None,
         )
         .unwrap();
         assert_eq!(s.base_branch, Some("main".to_string()));
@@ -809,15 +818,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
 
@@ -854,15 +863,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
 
@@ -878,15 +887,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
 
@@ -904,15 +913,15 @@ mod tests {
         let conn = setup();
         let p = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         create_session_with_id(
-            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None,
+            &conn, "a", &p.id, "A", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None,
+            &conn, "b", &p.id, "B", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
         create_session_with_id(
-            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None,
+            &conn, "c", &p.id, "C", None, "main", None, None, "daemon", true, None, None, None,
         )
         .unwrap();
 
@@ -998,6 +1007,7 @@ mod tests {
         // Session with no task_key — should always appear
         let s1 = create_session_with_id(
             &conn, "s1", &p.id, "no task", None, "main", None, None, "daemon", false, None, None,
+            None,
         )
         .unwrap();
 
@@ -1014,6 +1024,7 @@ mod tests {
             "daemon",
             false,
             Some("MYA-1"),
+            None,
             None,
         )
         .unwrap();
@@ -1032,6 +1043,7 @@ mod tests {
             false,
             Some("MYA-1"),
             None,
+            None,
         )
         .unwrap();
         mark_session_exited(&conn, &s3.id).unwrap();
@@ -1049,6 +1061,7 @@ mod tests {
             "daemon",
             false,
             Some("MYA-2"),
+            None,
             None,
         )
         .unwrap();

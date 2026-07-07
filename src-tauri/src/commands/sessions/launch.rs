@@ -194,6 +194,7 @@ pub async fn launch_session(
         auto_approve,
         task_key.as_deref(),
         effective_base_branch.as_deref(),
+        None,
     )
     .map_err(|e| {
         let rp = repo_path.clone();

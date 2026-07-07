@@ -444,6 +444,84 @@ pub fn send_prompt(
     })
 }
 
+/// Read buffer content from a daemon-backend session via the daemon control connection.
+pub fn read_daemon_buffer(session_id: &str, lines: usize) -> Result<String, String> {
+    use std::io::{BufRead, Write};
+
+    let app_dir = planeai_paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+        .map_err(|e| format!("daemon is not running: {e}"))?;
+
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+
+    // Control connection type byte
+    stream
+        .write_all(&[0x00])
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    // Send read_buffer command
+    let req = serde_json::json!({
+        "cmd": "read_buffer",
+        "session_id": session_id,
+        "lines": lines,
+    });
+    stream
+        .write_all(format!("{}\n", req).as_bytes())
+        .map_err(|e| format!("write failed: {e}"))?;
+
+    // Read response (skip events)
+    let mut reader = std::io::BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("read failed: {e}"))?;
+        if line.is_empty() {
+            return Err("connection closed".to_string());
+        }
+        let val: serde_json::Value =
+            serde_json::from_str(line.trim()).map_err(|e| format!("parse failed: {e}"))?;
+        if val.get("event").is_some() {
+            continue; // Skip broadcast events
+        }
+        if let Some(err) = val.get("error") {
+            let msg = err.as_str().unwrap_or("unknown error");
+            if msg.contains("unknown variant") {
+                return Err(
+                    "daemon does not support read_buffer (restart planeai to upgrade)".to_string(),
+                );
+            }
+            return Err(msg.to_string());
+        }
+        return Ok(val["text"].as_str().unwrap_or("").to_string());
+    }
+}
+
+/// Read output from a tmux-backend session via tmux capture-pane.
+pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.args([
+        "capture-pane",
+        "-p",
+        "-t",
+        tmux_name,
+        "-S",
+        &format!("-{lines}"),
+    ]);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Session, ResolveError> {
     if prefix.len() < MIN_PREFIX_LEN {
         return Err(ResolveError::TooShort);
@@ -537,6 +615,7 @@ mod tests {
             None,
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -661,6 +740,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -700,6 +780,7 @@ mod tests {
             false,
             Some("PROJ-123"),
             None,
+            None,
         )
         .unwrap();
 
@@ -731,6 +812,7 @@ mod tests {
             None,
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -767,6 +849,7 @@ mod tests {
             None,
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -808,6 +891,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -844,6 +928,7 @@ mod tests {
             None,
             "daemon",
             false,
+            None,
             None,
             None,
         )
@@ -885,6 +970,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -919,6 +1005,7 @@ mod tests {
             "tmux",
             false,
             Some("PROJ-456"),
+            None,
             None,
         )
         .unwrap();
@@ -1001,6 +1088,7 @@ mod tests {
             pr_url: None,
             pr_state: None,
             attached_once: false,
+            parent_session_id: None,
         }];
 
         let table = format_table(&sessions, &projects);
@@ -1044,6 +1132,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -1080,6 +1169,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -1109,6 +1199,7 @@ mod tests {
             None,
             "daemon",
             false,
+            None,
             None,
             None,
         )
@@ -1145,6 +1236,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         db::mark_session_exited(&conn, id).unwrap();
@@ -1173,6 +1265,7 @@ mod tests {
             None,
             "tmux",
             false,
+            None,
             None,
             None,
         )

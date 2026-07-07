@@ -939,3 +939,47 @@ fn create_project_disambiguates_prefix_on_collision() {
     assert_eq!(p1.prefix, "DP");
     assert_eq!(p2.prefix, "DP2");
 }
+
+#[test]
+fn parent_session_id_persisted_on_create_and_retrievable() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    let parent_id = uuid::Uuid::new_v4().to_string();
+    let child_id = uuid::Uuid::new_v4().to_string();
+
+    // Create parent session
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: parent_id.clone(),
+            project_id: project.id.clone(),
+            name: "parent".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Create child session with parent_session_id
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child_id.clone(),
+            project_id: project.id.clone(),
+            name: "child".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(parent_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Retrieve child — parent_session_id should be present
+    let child = SessionService::get(&conn, &child_id).unwrap().unwrap();
+    assert_eq!(child.parent_session_id, Some(parent_id.clone()));
+
+    // Parent should have no parent_session_id
+    let parent = SessionService::get(&conn, &parent_id).unwrap().unwrap();
+    assert_eq!(parent.parent_session_id, None);
+}

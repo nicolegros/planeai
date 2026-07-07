@@ -9,6 +9,7 @@ pub mod session;
 pub mod session_launch;
 pub mod task;
 pub mod template;
+pub mod text;
 
 use std::path::PathBuf;
 

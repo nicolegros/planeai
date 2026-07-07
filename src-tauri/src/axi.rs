@@ -191,6 +191,51 @@ pub fn task_move(repo: &dyn TaskProvider, key: &str, status: &str) -> (String, i
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
+pub fn session_read_output(session_id: &str, text: &str) -> (String, i32) {
+    let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    let line_count = lines.len();
+    let fields = vec![
+        field("session_id", str_val(session_id)),
+        field("lines", int_val(line_count as i64)),
+        field("output", Value::List(lines)),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn session_create_output(session: &crate::db::Session) -> (String, i32) {
+    let short_id = &session.id[..8];
+    let mut session_fields = vec![
+        field("id", str_val(&session.id)),
+        field("name", str_val(&session.name)),
+        field("status", str_val(&session.status)),
+        field("branch", str_val(&session.branch)),
+        field("backend", str_val(&session.backend)),
+    ];
+    if let Some(ref provider) = session.provider {
+        session_fields.push(field("provider", str_val(provider)));
+    }
+    if let Some(ref wt) = session.worktree_path {
+        session_fields.push(field("worktree_path", str_val(wt)));
+    }
+    if let Some(ref parent) = session.parent_session_id {
+        session_fields.push(field("parent_session_id", str_val(parent)));
+    }
+
+    let fields = vec![
+        field("session", Value::Object(session_fields)),
+        field(
+            "help",
+            Value::List(vec![
+                format!(
+                    "Run `planeai-cli axi session prompt {short_id} \"<text>\"` to send a prompt"
+                ),
+                format!("Run `planeai-cli axi session read {short_id}` to read session output"),
+            ]),
+        ),
+    ];
+    (render(&fields), 0)
+}
+
 pub fn session_ls(conn: &rusqlite::Connection, archived: bool) -> (String, i32) {
     let sessions = match crate::session_ops::list(conn, archived) {
         Ok(s) => s,
@@ -735,5 +780,70 @@ mod tests {
         assert!(output.contains("error:"), "output:\n{output}");
         assert!(output.contains("invalid status"), "output:\n{output}");
         assert!(output.contains("Valid statuses"), "output:\n{output}");
+    }
+
+    #[test]
+    fn session_create_outputs_toon_with_session_id() {
+        let session = crate::db::Session {
+            id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            project_id: "proj-1".to_string(),
+            name: "my-feature".to_string(),
+            tmux_name: None,
+            branch: "feat/my-feature".to_string(),
+            status: "active".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            worktree_path: Some("/tmp/wt/aaaaaaaa".to_string()),
+            provider: Some("kiro".to_string()),
+            backend: "daemon".to_string(),
+            provider_session_id: None,
+            tab_count: 1,
+            auto_approve: true,
+            task_key: None,
+            base_branch: Some("main".to_string()),
+            pr_url: None,
+            pr_state: None,
+            attached_once: false,
+            parent_session_id: Some("pppppppp-1111-2222-3333-444444444444".to_string()),
+        };
+
+        let (output, code) = session_create_output(&session);
+        assert_eq!(code, 0);
+        assert!(
+            output.contains("id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("name: my-feature"), "output:\n{output}");
+        assert!(output.contains("status: active"), "output:\n{output}");
+        assert!(
+            output.contains("branch: feat/my-feature"),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains("worktree_path: /tmp/wt/aaaaaaaa"),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains("parent_session_id: pppppppp-1111-2222-3333-444444444444"),
+            "output:\n{output}"
+        );
+        // Should include help hint
+        assert!(
+            output.contains("planeai-cli axi session prompt"),
+            "output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn session_read_outputs_toon_with_text() {
+        let text = "line1\nline2\nline3";
+        let (output, code) = session_read_output("aaaabbbb", text);
+        assert_eq!(code, 0);
+        assert!(output.contains("session_id: aaaabbbb"), "output:\n{output}");
+        assert!(output.contains("lines: 3"), "output:\n{output}");
+        // Lines are emitted as a list (one per line)
+        assert!(output.contains("output[3]:"), "output:\n{output}");
+        assert!(output.contains("- line1"), "output:\n{output}");
+        assert!(output.contains("- line2"), "output:\n{output}");
+        assert!(output.contains("- line3"), "output:\n{output}");
     }
 }

@@ -184,6 +184,9 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
          END;",
     );
 
+    // Track which session spawned this one (orchestration / parent-child relationships)
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT");
+
     Ok(())
 }
 
@@ -222,10 +225,11 @@ pub struct SessionRecord {
     pub mru_position: Option<i64>,
     pub auto_dispatched: bool,
     pub attached_once: bool,
+    pub parent_session_id: Option<String>,
 }
 
 /// Column list matching production SESSION_COLUMNS + mru_position + auto_dispatched.
-const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once";
+const SESSION_COLUMNS: &str = "id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, pr_url, pr_state, mru_position, auto_dispatched, attached_once, parent_session_id";
 
 fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
     Ok(SessionRecord {
@@ -249,6 +253,7 @@ fn row_to_session(row: &rusqlite::Row) -> rusqlite::Result<SessionRecord> {
         mru_position: row.get(17)?,
         auto_dispatched: row.get::<_, bool>(18).unwrap_or(false),
         attached_once: row.get::<_, bool>(19).unwrap_or(false),
+        parent_session_id: row.get(20)?,
     })
 }
 
@@ -266,6 +271,7 @@ pub struct CreateSessionParams {
     pub task_key: Option<String>,
     pub base_branch: Option<String>,
     pub auto_dispatched: bool,
+    pub parent_session_id: Option<String>,
 }
 
 // ─── ProjectService ──────────────────────────────────────────────────────────
@@ -462,8 +468,8 @@ impl SessionService {
     pub fn create(conn: &Connection, params: &CreateSessionParams) -> SqlResult<SessionRecord> {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 params.id,
                 params.project_id,
@@ -478,6 +484,7 @@ impl SessionService {
                 params.task_key,
                 params.base_branch,
                 params.auto_dispatched,
+                params.parent_session_id,
             ],
         )?;
         Ok(SessionRecord {
@@ -501,6 +508,7 @@ impl SessionService {
             mru_position: None,
             auto_dispatched: params.auto_dispatched,
             attached_once: false,
+            parent_session_id: params.parent_session_id.clone(),
         })
     }
 

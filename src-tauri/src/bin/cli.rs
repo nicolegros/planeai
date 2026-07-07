@@ -55,6 +55,9 @@ enum SessionAction {
         task_key: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
+        /// Parent session ID (for orchestration tracking)
+        #[arg(long)]
+        parent: Option<String>,
         #[arg(long)]
         pretty: bool,
     },
@@ -171,8 +174,37 @@ enum AxiSessionAction {
         #[arg(long)]
         archived: bool,
     },
+    /// Create a new session (auto-sets parent from $PLANEAI_SESSION_ID)
+    Create {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        branch: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        new_branch: bool,
+        #[arg(long)]
+        worktree: bool,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
+        yolo: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        task_key: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+    },
     /// Send a prompt to a running session
     Prompt { id: String, text: Option<String> },
+    /// Read session output (last N lines, ANSI stripped)
+    Read {
+        id: String,
+        #[arg(long, default_value = "100")]
+        lines: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -302,20 +334,13 @@ fn main() {
                 provider,
                 task_key,
                 prompt,
+                parent,
                 pretty,
             } => {
-                let cfg_dir = planeai::config::config_dir("planeai");
-                let (cfg, _) = planeai::config::load(&cfg_dir);
-                let backend = planeai::config::resolve_backend(&cfg).to_string();
-
-                let env = planeai::cli::Env {
-                    backend,
-                    socket_path: planeai_paths::notify_socket_path(),
-                    config: cfg,
-                };
+                let parent_session_id = parent.or_else(|| std::env::var("PLANEAI_SESSION_ID").ok());
 
                 let opts = planeai::cli::SessionCreateOpts {
-                    project: project.clone(),
+                    project,
                     branch,
                     name,
                     new_branch,
@@ -325,31 +350,12 @@ fn main() {
                     provider,
                     task_key,
                     prompt,
+                    parent_session_id,
                 };
 
-                let projects = planeai::db::list_projects(&conn).unwrap_or_else(|e| {
-                    eprintln!("{{\"error\": \"{e}\"}}");
-                    std::process::exit(1);
-                });
-                let proj = match projects.iter().find(|p| p.name == project) {
-                    Some(p) => p,
-                    None => {
-                        eprintln!("{{\"error\": \"unknown project: {project}\"}}");
-                        std::process::exit(1);
-                    }
-                };
-
-                let session_id = uuid::Uuid::new_v4().to_string();
-                let plan = match planeai::cli::build_session_plan(&session_id, &opts, &env, proj) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("{{\"error\": \"{e}\"}}");
-                        std::process::exit(1);
-                    }
-                };
-
-                match planeai::cli::execute_plan(&plan, &conn, &env) {
-                    Ok(output) => {
+                match planeai::cli::create_session(&conn, opts) {
+                    Ok(session) => {
+                        let output = serde_json::to_string(&session).unwrap();
                         if pretty {
                             let v: serde_json::Value = serde_json::from_str(&output).unwrap();
                             println!("{}", serde_json::to_string_pretty(&v).unwrap());
@@ -770,6 +776,39 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
 fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32 {
     let (output, code) = match action {
         AxiSessionAction::List { archived } => planeai::axi::session_ls(conn, archived),
+        AxiSessionAction::Create {
+            project,
+            branch,
+            name,
+            new_branch,
+            worktree,
+            base_branch,
+            yolo,
+            provider,
+            task_key,
+            prompt,
+        } => {
+            let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
+
+            let opts = planeai::cli::SessionCreateOpts {
+                project,
+                branch,
+                name,
+                new_branch,
+                worktree,
+                base_branch,
+                yolo,
+                provider,
+                task_key,
+                prompt,
+                parent_session_id,
+            };
+
+            match planeai::cli::create_session(conn, opts) {
+                Ok(session) => planeai::axi::session_create_output(&session),
+                Err(e) => return emit_axi_error(&e),
+            }
+        }
         AxiSessionAction::Prompt { id, text } => {
             let prompt_text = match text {
                 Some(t) => t,
@@ -777,12 +816,7 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
                     use std::io::Read;
                     let mut buf = String::new();
                     if std::io::stdin().read_to_string(&mut buf).is_err() {
-                        let output = planeai_toon::render(&[planeai_toon::field(
-                            "error",
-                            planeai_toon::str_val("failed to read stdin"),
-                        )]);
-                        print!("{output}");
-                        return 1;
+                        return emit_axi_error("failed to read stdin");
                     }
                     buf
                 }
@@ -790,9 +824,39 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             let ops = planeai::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
             planeai::axi::session_prompt(conn, &id, &prompt_text, &ops)
         }
+        AxiSessionAction::Read { id, lines } => {
+            let session = match planeai::session_ops::resolve_session_by_prefix(conn, &id) {
+                Ok(s) => s,
+                Err(e) => return emit_axi_error(&e.to_string()),
+            };
+            match session.backend.as_str() {
+                "daemon" => match planeai::session_ops::read_daemon_buffer(&session.id, lines) {
+                    Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
+                    Err(e) => return emit_axi_error(&e),
+                },
+                "tmux" => {
+                    let tmux_name = match session.tmux_name.as_deref() {
+                        Some(n) => n,
+                        None => return emit_axi_error("tmux session has no tmux_name"),
+                    };
+                    match planeai::session_ops::read_tmux_pane(tmux_name, lines) {
+                        Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
+                        Err(e) => return emit_axi_error(&e),
+                    }
+                }
+                "local" => return emit_axi_error("local backend does not support remote read"),
+                other => return emit_axi_error(&format!("unsupported backend: {other}")),
+            }
+        }
     };
     print!("{output}");
     code
+}
+
+fn emit_axi_error(msg: &str) -> i32 {
+    let output = planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(msg))]);
+    print!("{output}");
+    1
 }
 
 fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {

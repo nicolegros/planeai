@@ -214,6 +214,21 @@ impl DaemonServer {
                 }
             }
             Request::Detach { session_id } => Response::ok(Some(session_id)),
+            Request::ReadBuffer { session_id, lines } => match reg.get(&session_id) {
+                Some(session) => {
+                    let raw = session.buffer_snapshot();
+                    let stripped = planeai_core::text::strip_ansi(&raw);
+                    let text = planeai_core::text::tail_lines(&stripped, lines);
+                    let line_count = text.lines().count();
+                    Response::BufferText {
+                        ok: true,
+                        session_id,
+                        text,
+                        line_count,
+                    }
+                }
+                None => Response::error(format!("session not found: {session_id}")),
+            },
         }
     }
 

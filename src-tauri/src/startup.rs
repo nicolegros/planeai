@@ -328,6 +328,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         db::set_provider_session_id(&conn, "s1", "sess-123").unwrap();
@@ -386,6 +387,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         db::mark_session_exited(&conn, "s1").unwrap();
@@ -433,6 +435,7 @@ mod tests {
             Some("kiro"),
             "daemon",
             false,
+            None,
             None,
             None,
         )
@@ -486,6 +489,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -522,6 +526,7 @@ mod tests {
             Some("kiro"),
             "tmux",
             false,
+            None,
             None,
             None,
         )
@@ -573,6 +578,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         // Archived session
@@ -587,6 +593,7 @@ mod tests {
             None,
             "daemon",
             false,
+            None,
             None,
             None,
         )
@@ -625,6 +632,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -657,6 +665,7 @@ mod tests {
             false,
             None,
             None,
+            None,
         )
         .unwrap();
         // Daemon session should be untouched
@@ -671,6 +680,7 @@ mod tests {
             Some("kiro"),
             "daemon",
             false,
+            None,
             None,
             None,
         )

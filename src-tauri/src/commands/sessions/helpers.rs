@@ -190,6 +190,7 @@ mod tests {
             pr_url: None,
             pr_state: None,
             attached_once: false,
+            parent_session_id: None,
         }
     }
 
