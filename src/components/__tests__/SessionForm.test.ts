@@ -7,12 +7,26 @@ vi.mock("../../lib/api", () => ({
   tasks: {
     list: vi.fn(() =>
       Promise.resolve([
-        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0, base_branch: "main" },
+        {
+          key: "PROJ-1",
+          title: "Fix bug",
+          description: "",
+          status: "todo",
+          priority: 0,
+          base_branch: "main",
+        },
       ]),
     ),
     listAll: vi.fn(() =>
       Promise.resolve([
-        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0, base_branch: "main" },
+        {
+          key: "PROJ-1",
+          title: "Fix bug",
+          description: "",
+          status: "todo",
+          priority: 0,
+          base_branch: "main",
+        },
       ]),
     ),
   },
