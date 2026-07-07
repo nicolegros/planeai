@@ -194,8 +194,6 @@
     allItems = items;
     viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
     computeHunkMeta(items);
-    // Mark partial-file containers as clickable after a frame (elements need to mount first)
-    requestAnimationFrame(updateExpandableContainerClasses);
     if (items.length > 0 && viewer.getItem(currentFileId())) {
       viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
     }
@@ -351,7 +349,6 @@
       expandedFiles.add(filePath);
       viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
       computeHunkMeta(allItems);
-      updateExpandableContainerClasses();
       return true;
     } catch (e) {
       console.error(`Failed to expand file ${filePath}:`, e);
@@ -738,7 +735,7 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-      unsafeCSS: `[data-line] { cursor: text !important; } [data-column-number] { cursor: pointer !important; } [data-diffs-header] { cursor: default !important; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
+      unsafeCSS: `[data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
       hunkSeparators: "line-info",
     }, getWorkerPool());
     v.setup(viewerRoot);
@@ -748,21 +745,32 @@
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
   /**
-   * Mark diffs-container elements for partial files with a CSS class
-   * so the cursor shows as pointer (CSS inherits into Shadow DOM).
+   * Show pointer cursor only when hovering over a separator in a partial file.
    */
-  function updateExpandableContainerClasses() {
-    if (!viewer) return;
-    const renderedItems = viewer.getRenderedItems();
-    for (const item of renderedItems) {
-      if (item.type !== "diff") continue;
-      const filePath = item.item.id.replace("diff:", "");
-      if (expandedFiles.has(filePath)) {
-        item.element.style.cursor = "";
-      } else {
-        item.element.style.cursor = "pointer";
+  function handleViewerMouseMove(e: MouseEvent) {
+    if (!viewerRoot) return;
+    const path = e.composedPath() as EventTarget[];
+    const overSeparator = path.some(
+      (el) => el instanceof HTMLElement && el.hasAttribute("data-separator")
+    );
+    if (overSeparator) {
+      // Check if this file is still partial (not yet expanded)
+      const container = path.find(
+        (el) => el instanceof HTMLElement && el.tagName.toLowerCase() === "diffs-container"
+      ) as HTMLElement | undefined;
+      if (container) {
+        const renderedItems = viewer?.getRenderedItems();
+        const renderedItem = renderedItems?.find((r) => r.element === container);
+        if (renderedItem && renderedItem.type === "diff") {
+          const filePath = renderedItem.item.id.replace("diff:", "");
+          if (!expandedFiles.has(filePath)) {
+            viewerRoot.style.cursor = "pointer";
+            return;
+          }
+        }
       }
     }
+    viewerRoot.style.cursor = "";
   }
 
   /**
@@ -808,6 +816,7 @@
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
     viewerRoot?.removeEventListener("click", handleViewerClick);
+    viewerRoot?.removeEventListener("mousemove", handleViewerMouseMove);
     viewer?.cleanUp();
     viewer = null;
   });
@@ -822,8 +831,8 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
-      viewer.subscribeToScroll(updateExpandableContainerClasses);
       viewerRoot.addEventListener("click", handleViewerClick);
+      viewerRoot.addEventListener("mousemove", handleViewerMouseMove);
       applyDiffFont();
       refresh();
     }
