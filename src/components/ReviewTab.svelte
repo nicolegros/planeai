@@ -735,7 +735,7 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-      unsafeCSS: `[data-separator-wrapper] { cursor: pointer; } [data-separator-wrapper]:hover [data-unmodified-lines] { text-decoration: underline; }`,
+      unsafeCSS: `[data-separator] { cursor: pointer; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
@@ -752,7 +752,7 @@
     const path = e.composedPath() as EventTarget[];
     // Look for a separator element in the composed path (inside shadow DOM)
     const separatorEl = path.find(
-      (el) => el instanceof HTMLElement && (el.hasAttribute("data-separator-wrapper") || el.hasAttribute("data-unmodified-lines"))
+      (el) => el instanceof HTMLElement && el.hasAttribute("data-separator")
     ) as HTMLElement | undefined;
     if (!separatorEl) return;
 
