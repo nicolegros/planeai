@@ -735,77 +735,12 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-      unsafeCSS: `[data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
-      hunkSeparators: "line-info",
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
-
-  /**
-   * Show pointer cursor only when hovering over a separator in a partial file.
-   */
-  function handleViewerMouseMove(e: MouseEvent) {
-    if (!viewerRoot) return;
-    const path = e.composedPath() as EventTarget[];
-    const overSeparator = path.some(
-      (el) => el instanceof HTMLElement && el.hasAttribute("data-separator")
-    );
-    if (overSeparator) {
-      // Check if this file is still partial (not yet expanded)
-      const container = path.find(
-        (el) => el instanceof HTMLElement && el.tagName.toLowerCase() === "diffs-container"
-      ) as HTMLElement | undefined;
-      if (container) {
-        const renderedItems = viewer?.getRenderedItems();
-        const renderedItem = renderedItems?.find((r) => r.element === container);
-        if (renderedItem && renderedItem.type === "diff") {
-          const filePath = renderedItem.item.id.replace("diff:", "");
-          if (!expandedFiles.has(filePath)) {
-            viewerRoot.style.cursor = "pointer";
-            return;
-          }
-        }
-      }
-    }
-    viewerRoot.style.cursor = "";
-  }
-
-  /**
-   * Handle clicks on hunk separators in partial files.
-   * When a separator is clicked on a file that hasn't been expanded yet,
-   * load the full content so expand arrows appear.
-   */
-  function handleViewerClick(e: MouseEvent) {
-    const path = e.composedPath() as EventTarget[];
-    // Look for a separator element in the composed path (inside shadow DOM)
-    const separatorEl = path.find(
-      (el) => el instanceof HTMLElement && el.hasAttribute("data-separator")
-    ) as HTMLElement | undefined;
-    if (!separatorEl) return;
-
-    // Find which file this separator belongs to by walking up to the diffs-container host
-    const container = path.find(
-      (el) => el instanceof HTMLElement && el.tagName.toLowerCase() === "diffs-container"
-    ) as HTMLElement | undefined;
-    if (!container) return;
-
-    // Match the container to a file via the rendered items
-    const renderedItems = viewer?.getRenderedItems();
-    if (!renderedItems) return;
-    const renderedItem = renderedItems.find((r) => r.element === container);
-    if (!renderedItem || renderedItem.type !== "diff") return;
-
-    const filePath = renderedItem.item.id.replace("diff:", "");
-    if (expandedFiles.has(filePath)) return; // Already expanded, let library handle natively
-
-    // Trigger expansion for this partial file
-    e.preventDefault();
-    e.stopPropagation();
-    expandFileToFull(filePath);
-  }
 
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
@@ -815,8 +750,6 @@
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
-    viewerRoot?.removeEventListener("click", handleViewerClick);
-    viewerRoot?.removeEventListener("mousemove", handleViewerMouseMove);
     viewer?.cleanUp();
     viewer = null;
   });
@@ -831,8 +764,6 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
-      viewerRoot.addEventListener("click", handleViewerClick);
-      viewerRoot.addEventListener("mousemove", handleViewerMouseMove);
       applyDiffFont();
       refresh();
     }
