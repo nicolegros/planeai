@@ -124,7 +124,7 @@
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
   let renamingSessionId = $state<string | null>(null);
-  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; projectId?: string | null } | null>(null);
+  let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
 
   let editorBindRefs = $state<Record<string, EditorTab>>({});
   $effect(() => { for (const [id, ref] of Object.entries(editorBindRefs)) { if (ref) orchestrator.registerEditorRef(id, ref); } });
@@ -336,7 +336,7 @@
         onRenameSession={doRename}
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
-        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", projectId: proj?.id ?? null }; showSessionForm = true; }}
+        onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
         onAddProject={() => (showProjectForm = true)}
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showNewItemModal = true; }}

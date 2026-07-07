@@ -8,7 +8,7 @@
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { LoaderCircle } from "@lucide/svelte";
 
-  interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; }
+  interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; }
   interface Props { projects: Project[]; sessions: Session[]; onCreated: (session: Session) => void; onCancel: () => void; taskPrefill?: TaskPrefill | null; currentProjectId?: string | null; }
 
   let { projects, sessions, onCreated, onCancel, taskPrefill = null, currentProjectId = null }: Props = $props();
@@ -37,7 +37,7 @@
   let branchValue = $state("");
   let branchSearch = $state("");
   let branches = $state<{ value: string; label: string }[]>([]);
-  let baseBranchValue = $state("");
+  let baseBranchValue = $state(taskPrefill?.baseBranch ?? "");
 
   // Task picker state
   let taskItems = $state<TaskItem[]>([]);
@@ -118,6 +118,7 @@
     branchSearch = slugBranch;
     branchValue = slugBranch;
     newBranchName = slugBranch;
+    baseBranchValue = task.base_branch;
   }
 
   const branch = $derived((branchValue || branchSearch).replace(/^remote:/, ""));
