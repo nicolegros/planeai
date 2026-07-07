@@ -134,9 +134,8 @@ impl DaemonSession {
     /// Returns (raw_bytes, new_write_offset, truncated).
     pub fn buffer_read_after(&self, after_offset: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
         let buf = self.buffer.lock().unwrap();
-        let (bytes, truncated) = buf.read_after(after_offset, max_bytes);
-        let write_offset = buf.write_offset();
-        (bytes, write_offset, truncated)
+        let (bytes, next_cursor, truncated) = buf.read_after(after_offset, max_bytes);
+        (bytes, next_cursor, truncated)
     }
 
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {

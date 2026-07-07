@@ -123,7 +123,7 @@ The AXI session read command supports two modes:
 | Backend | Format                         | Semantics                                                                                          |
 | ------- | ------------------------------ | -------------------------------------------------------------------------------------------------- |
 | daemon  | `daemon:<u64_byte_offset>`     | Monotonic byte offset from ring buffer. O(1) incremental reads.                                   |
-| tmux    | `tmux:<line_count>:<hash>`     | Line count + content hash of last 10 lines. Used to detect history rolloff.                        |
+| tmux    | `tmux:<line_count>:<hash>`     | Line count + content hash of first 5 and last 10 lines. Used to detect history rolloff.            |
 | local   | —                              | Not supported. Returns an error.                                                                   |
 
 **Cursor-mode TOON output**:
