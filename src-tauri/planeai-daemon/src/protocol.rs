@@ -81,6 +81,13 @@ pub enum Request {
         #[serde(default = "default_read_lines")]
         lines: usize,
     },
+    ReadBufferAfter {
+        session_id: String,
+        #[serde(default)]
+        after: u64,
+        #[serde(default)]
+        max_bytes: usize,
+    },
 }
 
 fn default_read_lines() -> usize {
@@ -112,6 +119,13 @@ pub enum Response {
         session_id: String,
         text: String,
         line_count: usize,
+    },
+    BufferTextCursor {
+        ok: bool,
+        session_id: String,
+        text: String,
+        cursor: u64,
+        truncated: bool,
     },
 }
 

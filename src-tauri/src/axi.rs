@@ -202,6 +202,24 @@ pub fn session_read_output(session_id: &str, text: &str) -> (String, i32) {
     (render(&fields), 0)
 }
 
+/// Render session read output with cursor information for incremental polling.
+pub fn session_read_cursor_output(
+    session_id: &str,
+    backend: &str,
+    cursor: &str,
+    truncated: bool,
+    text: &str,
+) -> (String, i32) {
+    let fields = vec![
+        field("session_id", str_val(session_id)),
+        field("backend", str_val(backend)),
+        field("cursor", str_val(cursor)),
+        field("truncated", Value::Bool(truncated)),
+        field("text", str_val(text)),
+    ];
+    (render(&fields), 0)
+}
+
 pub fn session_create_output(session: &crate::db::Session) -> (String, i32) {
     let short_id = &session.id[..8];
     let mut session_fields = vec![
@@ -852,5 +870,42 @@ mod tests {
         assert!(output.contains("- line1"), "output:\n{output}");
         assert!(output.contains("- line2"), "output:\n{output}");
         assert!(output.contains("- line3"), "output:\n{output}");
+    }
+
+    #[test]
+    fn session_read_cursor_outputs_toon_with_cursor_fields() {
+        let (output, code) = session_read_cursor_output(
+            "aaaabbbb",
+            "daemon",
+            "daemon:1234",
+            false,
+            "new output here",
+        );
+        assert_eq!(code, 0);
+        assert!(output.contains("session_id: aaaabbbb"), "output:\n{output}");
+        assert!(output.contains("backend: daemon"), "output:\n{output}");
+        assert!(
+            output.contains("cursor: \"daemon:1234\""),
+            "output:\n{output}"
+        );
+        assert!(output.contains("truncated: false"), "output:\n{output}");
+        assert!(
+            output.contains("text: new output here"),
+            "output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn session_read_cursor_truncated_flag() {
+        let (output, code) = session_read_cursor_output(
+            "bbbbcccc",
+            "tmux",
+            "tmux:100:9876543210",
+            true,
+            "all available content",
+        );
+        assert_eq!(code, 0);
+        assert!(output.contains("truncated: true"), "output:\n{output}");
+        assert!(output.contains("backend: tmux"), "output:\n{output}");
     }
 }
