@@ -217,11 +217,11 @@
         else if (action.type === "jump_to_session") { orchestrator.jumpToSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
-          if (!sw.isCycling) startCycle(activeSessionId ?? undefined, new Set(sessions.map((s) => s.id)));
+          if (!sw.isCycling) startCycle(activeSessionId ?? undefined, orchestrator.getSwitchableSessionIds());
           else advance(1);
         } else if (action.type === "tab_switch_reverse") {
           const sw = getCycleState();
-          if (!sw.isCycling) { startCycle(activeSessionId ?? undefined, new Set(sessions.map((s) => s.id))); advance(-1); }
+          if (!sw.isCycling) { startCycle(activeSessionId ?? undefined, orchestrator.getSwitchableSessionIds()); advance(-1); }
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();

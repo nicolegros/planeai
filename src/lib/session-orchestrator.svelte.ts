@@ -105,6 +105,10 @@ export function getActiveSessionId(): string | null {
 export function getActiveSession(): Session | undefined {
   return sessions.find((s) => s.id === activeSessionId);
 }
+/** Session IDs that are valid switch targets (excludes exited sessions). */
+export function getSwitchableSessionIds(): Set<string> {
+  return new Set(sessions.filter((s) => s.status !== "exited").map((s) => s.id));
+}
 export function getAgentStates(): Record<string, string> {
   return agentStates;
 }
@@ -228,7 +232,7 @@ export function clearAgentState(sessionId: string): void {
   agentStates = rest;
   sessionsApi.acknowledge(sessionId);
 }
-export function updateSessionStatus(sessionId: string, status: string): void {
+export function updateSessionStatus(sessionId: string, status: Session["status"]): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
 }
 export function updateSessionName(sessionId: string, name: string): void {
