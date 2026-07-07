@@ -452,6 +452,10 @@ pub fn read_daemon_buffer(session_id: &str, lines: usize) -> Result<String, Stri
     let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
         .map_err(|e| format!("daemon is not running: {e}"))?;
 
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+
     // Control connection type byte
     stream
         .write_all(&[0x00])
@@ -497,15 +501,17 @@ pub fn read_daemon_buffer(session_id: &str, lines: usize) -> Result<String, Stri
 
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
-    let output = std::process::Command::new("tmux")
-        .args([
-            "capture-pane",
-            "-p",
-            "-t",
-            tmux_name,
-            "-S",
-            &format!("-{lines}"),
-        ])
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.args([
+        "capture-pane",
+        "-p",
+        "-t",
+        tmux_name,
+        "-S",
+        &format!("-{lines}"),
+    ]);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to run tmux: {e}"))?;
 

@@ -134,3 +134,17 @@ impl Write for IpcStream {
         self.inner.flush()
     }
 }
+
+impl IpcStream {
+    pub fn set_read_timeout(&self, dur: Option<std::time::Duration>) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.inner.set_read_timeout(dur)
+        }
+        #[cfg(windows)]
+        {
+            let _ = dur;
+            Ok(())
+        }
+    }
+}
