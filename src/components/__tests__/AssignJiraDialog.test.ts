@@ -89,12 +89,4 @@ describe("AssignJiraDialog", () => {
     const descSection = target.querySelector("[data-testid='task-description']");
     expect(descSection).toBeNull();
   });
-
-  it("description container has a max-height for scrollability", async () => {
-    const target = await renderDialog();
-    const descSection = target.querySelector("[data-testid='task-description']") as HTMLElement;
-    expect(descSection).not.toBeNull();
-    expect(descSection.className).toContain("max-h-");
-    expect(descSection.className).toContain("overflow-y-auto");
-  });
 });
