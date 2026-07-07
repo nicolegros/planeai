@@ -105,6 +105,12 @@ The notify socket (`notify.sock` / `\\.\pipe\planeai-notify`) accepts JSONL mess
 For tmux-backend sessions, the CLI sends prompts directly via `tmux send-keys -l` without going through the GUI.
 For daemon-backend sessions, the CLI sends prompts via the daemon data connection (FRAME_INPUT).
 
+### Prompt locking
+
+Prompts are serialized per session via a SQLite-backed cross-process lock (`prompt_locks` table). Before sending a prompt, the caller acquires a lock keyed by `session_id`. If another process already holds the lock, the request fails immediately with a "session prompt already in progress" error. The lock is always released after the prompt send completes (success or failure). Stale locks older than 2 minutes are automatically cleaned up on acquisition attempts.
+
+This guarantees that concurrent prompts to the same session cannot interleave, regardless of whether they originate from the GUI, CLI, or AXI. Concurrent prompts to different sessions proceed independently.
+
 ## Session backend
 
 ### Resolution

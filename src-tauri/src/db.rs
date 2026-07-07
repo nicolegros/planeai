@@ -90,6 +90,7 @@ pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
 pub fn migrate(conn: &Connection) -> Result<()> {
     // Project/session schema lives in planeai-core (single source of truth)
     planeai_core::services::migrate_project_session_schema(conn)?;
+    planeai_core::prompt_lock::migrate(conn)?;
 
     // Settings table is Tauri-specific (not needed by Iced)
     conn.execute_batch(

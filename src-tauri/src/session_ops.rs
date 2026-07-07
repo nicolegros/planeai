@@ -412,9 +412,13 @@ pub fn send_prompt(
         ));
     }
 
+    // Acquire prompt lock
+    let lock = planeai_core::prompt_lock::acquire(conn, &session.id)
+        .map_err(|e| e.to_string())?;
+
     tracing::info!(session_id = %session.id, backend = %session.backend, "send_prompt: dispatching");
 
-    match session.backend.as_str() {
+    let result = match session.backend.as_str() {
         "tmux" => {
             let tmux_name = session
                 .tmux_name
@@ -422,23 +426,30 @@ pub fn send_prompt(
                 .ok_or("tmux session has no tmux_name")?;
             if !ops.tmux_has_session(tmux_name) {
                 tracing::warn!(tmux_name, "send_prompt: tmux session not running");
-                return Err("tmux session is not running".to_string());
+                Err("tmux session is not running".to_string())
+            } else {
+                ops.tmux_send_keys(tmux_name, text)?;
+                tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
+                Ok(())
             }
-            ops.tmux_send_keys(tmux_name, text)?;
-            tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
         "local" => {
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
+            Ok(())
         }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
+            Ok(())
         }
-        other => return Err(format!("unsupported backend: {other}")),
-    }
+        other => Err(format!("unsupported backend: {other}")),
+    };
 
-    Ok(PromptResult {
+    // Always release lock
+    let _ = planeai_core::prompt_lock::release(conn, &lock);
+
+    result.map(|_| PromptResult {
         session_id: session.id,
         backend: session.backend,
     })
@@ -1274,5 +1285,75 @@ mod tests {
         let ops = MockPromptOps::new(false); // has_session returns false
         let err = send_prompt(&conn, "dddd", "hi", &ops).unwrap_err();
         assert!(err.contains("not running"));
+    }
+
+    #[test]
+    fn send_prompt_rejects_concurrent_prompt() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "eeeeffff-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "locked-session",
+            Some("planeai-myapp-eeee"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Manually acquire a lock to simulate a concurrent prompt
+        let _lock = planeai_core::prompt_lock::acquire(&conn, id).unwrap();
+
+        let ops = MockPromptOps::new(true);
+        let err = send_prompt(&conn, "eeee", "second prompt", &ops).unwrap_err();
+        assert!(err.contains("already in progress"));
+        // tmux_send_keys should never have been called
+        assert_eq!(ops.sent_keys.borrow().len(), 0);
+    }
+
+    #[test]
+    fn send_prompt_releases_lock_on_backend_error() {
+        let conn = setup_db();
+        db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        let projects = db::list_projects(&conn).unwrap();
+        let pid = &projects[0].id;
+
+        let id = "ffffaaaa-1111-2222-3333-444455556666";
+        db::create_session_with_id(
+            &conn,
+            id,
+            pid,
+            "error-session",
+            Some("planeai-myapp-ffff"),
+            "main",
+            None,
+            None,
+            "tmux",
+            false,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // tmux session not running — will cause an error after lock is acquired
+        let ops = MockPromptOps::new(false);
+        let err = send_prompt(&conn, "ffff", "hi", &ops).unwrap_err();
+        assert!(err.contains("not running"));
+
+        // Lock should have been released — next acquire should succeed
+        let lock = planeai_core::prompt_lock::acquire(&conn, id).unwrap();
+        assert_eq!(lock.session_id, id);
     }
 }
