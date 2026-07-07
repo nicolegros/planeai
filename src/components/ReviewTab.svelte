@@ -735,7 +735,7 @@
         return el;
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-      unsafeCSS: `[data-separator] { cursor: pointer; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
+      unsafeCSS: `[data-separator] { cursor: pointer !important; } [data-separator] * { cursor: pointer !important; } [data-separator]:hover [data-unmodified-lines] { text-decoration: underline; }`,
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
