@@ -161,7 +161,7 @@
     // Update fingerprints and invalidate viewed state for changed files
     const newFingerprints = new Map<string, string>();
     for (let i = 0; i < files.length; i++) {
-      const fp = `${files[i].additions}:${files[i].deletions}:${allFileDiffs[i] ? 1 : 0}`;
+      const fp = `${files[i].additions}:${files[i].deletions}:${allFileDiffs[i]?.splitLineCount ?? 0}`;
       newFingerprints.set(files[i].path, fp);
       if (viewedFiles.has(files[i].path) && patchFingerprints.get(files[i].path) !== fp) {
         viewedFiles.delete(files[i].path);
