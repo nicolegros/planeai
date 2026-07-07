@@ -108,14 +108,9 @@
   async function refresh() {
     loading = true;
     try {
-      files = await git.getChangedFiles(repoPath, effectiveBase, effectiveHead);
-      if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
-      if (files.length > 0) {
-        await loadAllDiffs();
-        onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
-      }
+      await loadAllDiffs();
     } catch (e) {
-      console.error("Failed to get changed files:", e);
+      console.error("Failed to load diffs:", e);
       files = [];
     }
     loading = false;
@@ -126,22 +121,47 @@
     // Use preloaded patches if available (populated when agent finishes)
     const preloaded = getPreloadedPatches(sessionId);
 
-    let patches: string[];
-    if (preloaded && preloaded.size >= files.length) {
-      patches = files.map((f) => preloaded.get(f.path) ?? "");
+    let combinedPatch: string;
+    if (preloaded) {
+      combinedPatch = preloaded;
     } else {
-      // Single batch IPC call — one invoke, one deserialization
-      const fileArgs: [string, string | null][] = files.map((f) => [f.path, f.old_path ?? null]);
-      patches = await git.getAllFilePatches(repoPath, effectiveBase, fileArgs, effectiveHead);
+      combinedPatch = await git.getCombinedPatch(repoPath, effectiveBase, effectiveHead);
     }
 
     if (!viewer) return;
     if (preloaded) clearPreloadedPatches(sessionId);
 
+    // Parse the combined patch into per-file diffs
+    const parsed = parsePatchFiles(combinedPatch, sessionId);
+    const allFileDiffs = parsed.flatMap((p) => p.files);
+
+    // Derive file list from the parsed patch output
+    const derivedFiles: ChangedFile[] = allFileDiffs.map((fileDiff) => {
+      const path = fileDiff.name;
+      const oldPath = fileDiff.prevName;
+      let status = "M";
+      if (fileDiff.type === "new") status = "A";
+      else if (fileDiff.type === "deleted") status = "D";
+      else if (fileDiff.type === "rename-pure" || fileDiff.type === "rename-changed") status = "R";
+      let additions = 0;
+      let deletions = 0;
+      for (const hunk of fileDiff.hunks) {
+        additions += hunk.additionLines;
+        deletions += hunk.deletionLines;
+      }
+      return { path, status, additions, deletions, old_path: oldPath ?? null };
+    });
+
+    files = derivedFiles;
+    if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
+    if (files.length > 0) {
+      onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
+    }
+
     // Update fingerprints and invalidate viewed state for changed files
     const newFingerprints = new Map<string, string>();
     for (let i = 0; i < files.length; i++) {
-      const fp = `${files[i].additions}:${files[i].deletions}:${(patches[i] || "").length}`;
+      const fp = `${files[i].additions}:${files[i].deletions}:${allFileDiffs[i]?.splitLineCount ?? 0}`;
       newFingerprints.set(files[i].path, fp);
       if (viewedFiles.has(files[i].path) && patchFingerprints.get(files[i].path) !== fp) {
         viewedFiles.delete(files[i].path);
@@ -151,16 +171,13 @@
     patchFingerprints = newFingerprints;
 
     const items: CodeViewItem<ReviewComment>[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const patch = patches[i];
-      if (!patch) continue;
-      const parsed = parsePatchFiles(patch, `${sessionId}-${i}`);
-      const fileDiff = parsed[0]?.files[0];
-      if (!fileDiff) continue;
+    for (let i = 0; i < allFileDiffs.length; i++) {
+      const fileDiff = allFileDiffs[i];
       delete fileDiff.cacheKey;
-      const annotations = getAnnotationsForFile(files[i].path);
+      const filePath = files[i]?.path ?? "";
+      const annotations = getAnnotationsForFile(filePath);
       items.push({
-        id: `diff:${files[i].path}`,
+        id: `diff:${filePath}`,
         type: "diff",
         fileDiff: fileDiff as FileDiffMetadata,
         annotations,

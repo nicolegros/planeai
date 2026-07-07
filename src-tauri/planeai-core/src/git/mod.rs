@@ -6,6 +6,9 @@ pub mod branch;
 pub mod commits;
 pub mod diff;
 
+#[cfg(test)]
+pub(crate) mod test_util;
+
 // Re-export all public items for backward compatibility
 pub use branch::*;
 pub use commits::*;
@@ -52,26 +55,7 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
-    fn configure_git_identity(path: &std::path::Path) {
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .unwrap();
-    }
-
-    fn git(path: &std::path::Path, args: &[&str]) {
-        Command::new("git")
-            .args(args)
-            .current_dir(path)
-            .output()
-            .unwrap();
-    }
+    use super::test_util::{configure_git_identity, git};
 
     fn init_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

@@ -286,6 +286,7 @@ fn main() {
             get_file_diff,
             get_file_patch,
             get_all_file_patches,
+            get_combined_patch,
             detect_default_branch,
             list_commits,
             list_files,
