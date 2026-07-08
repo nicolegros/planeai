@@ -124,6 +124,7 @@ archived → active (restore)
 | Worktree logic                           | `planeai_core::services::WorktreeService`         |
 | Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
 | Prompt locking (cross-process)           | `planeai_core::prompt_lock`                       |
+| Loop run persistence                     | `planeai_core::loop_service::LoopService`         |
 | Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
 | Daemon protocol                          | `planeai_daemon::protocol`                        |
 | IPC transport                            | `planeai_ipc`                                     |
