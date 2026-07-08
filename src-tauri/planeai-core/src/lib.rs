@@ -2,6 +2,8 @@ pub mod cleanup;
 pub mod command;
 pub mod dispatch;
 pub mod git;
+pub mod loop_run;
+pub mod loop_service;
 pub mod notify;
 pub mod orchestrator;
 pub mod prompt_lock;
