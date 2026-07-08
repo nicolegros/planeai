@@ -35,18 +35,18 @@ Create and launch a new agent session.
 planeai-cli session create --project <name> --branch <branch> [options]
 ```
 
-| Flag            | Description                                                                  |
-| --------------- | ---------------------------------------------------------------------------- |
-| `--project`     | Project name (required)                                                      |
-| `--branch`      | Git branch to use (required)                                                 |
-| `--name`        | Display name for the session                                                 |
-| `--new-branch`  | Create the branch if it doesn't exist                                        |
-| `--worktree`    | Use a git worktree instead of checking out in-place                          |
-| `--base-branch` | Base branch for new branch / worktree (default: main)                        |
-| `--yolo`        | Enable autonomous mode (skip confirmations)                                  |
-| `--provider`    | Provider to use (overrides default_provider)                                 |
-| `--task-key`    | Associate a task key with this session                                       |
-| `--prompt`      | Initial prompt to send to the agent                                          |
+| Flag            | Description                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------- |
+| `--project`     | Project name (required)                                                                     |
+| `--branch`      | Git branch to use (required)                                                                |
+| `--name`        | Display name for the session                                                                |
+| `--new-branch`  | Create the branch if it doesn't exist                                                       |
+| `--worktree`    | Use a git worktree instead of checking out in-place                                         |
+| `--base-branch` | Base branch for new branch / worktree (default: main)                                       |
+| `--yolo`        | Enable autonomous mode (skip confirmations)                                                 |
+| `--provider`    | Provider to use (overrides default_provider)                                                |
+| `--task-key`    | Associate a task key with this session                                                      |
+| `--prompt`      | Initial prompt to send to the agent                                                         |
 | `--parent`      | Parent session ID (for orchestration tracking). Falls back to `$PLANEAI_SESSION_ID` env var |
 
 ### `session ls`
@@ -311,6 +311,7 @@ planeai-cli axi session children <id>
 ```
 
 Example output:
+
 ```
 parent_session_id: abc12345
 children[2]{id,parent_session_id,name,status,provider,task_key,backend}:
@@ -327,6 +328,7 @@ planeai-cli axi session tree <id>
 ```
 
 Example output:
+
 ```
 session_tree:
   root: abc12345
@@ -347,11 +349,11 @@ planeai-cli axi session read <id> [--lines <n>]
 planeai-cli axi session read <id> --after <cursor> [--max-bytes <n>]
 ```
 
-| Flag           | Description                                                        |
-| -------------- | ------------------------------------------------------------------ |
-| `--lines`      | Number of lines to read (default: 100). Used in tail mode.         |
-| `--after`      | Opaque cursor from a previous read. Returns only new output since that cursor. |
-| `--max-bytes`  | Maximum bytes to return (default: 0 = unlimited). Only used with `--after`. |
+| Flag          | Description                                                                    |
+| ------------- | ------------------------------------------------------------------------------ |
+| `--lines`     | Number of lines to read (default: 100). Used in tail mode.                     |
+| `--after`     | Opaque cursor from a previous read. Returns only new output since that cursor. |
+| `--max-bytes` | Maximum bytes to return (default: 0 = unlimited). Only used with `--after`.    |
 
 **Tail mode** (default): returns the last N lines.
 

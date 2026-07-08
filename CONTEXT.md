@@ -26,9 +26,9 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Jira source**      | A named JQL-based filter within the Jira config (`sources.<name>`). Each source defines which issues to sync, how to map Jira statuses to planeai statuses, and optional writeback rules.                                                                                                             |
 | **Writeback**        | The process of pushing local task status changes back to Jira (transition the issue and/or add a comment). Configured per source via `writeback.on_start`, `writeback.on_complete`, and `writeback.comment`.                                                                                          |
 | **Departed issue**   | A Jira issue that previously matched a source's JQL but no longer does (e.g., reassigned or moved). The sync marks it departed and emits a `jira-issue-departed` event so the UI can prompt the user.                                                                                                 |
-| **Loop run**         | A durable orchestration layer above sessions. Tracks rounds of agent work, verification, and human review. Owned by a parent session — dies if the parent dies. Persisted in `loop_runs` table via `planeai_core::loop_service::LoopService`.                                                         |
-| **Loop session**     | A session enrolled in a loop run with a strategy-specific role (e.g., "maker", "verifier"). Tracked in `loop_sessions` with composite key `(loop_id, session_id)`.                                                                                                                                   |
-| **Loop event**       | An ordered, append-only log entry for a loop run (e.g., "round_started", "session_spawned"). Stored in `loop_events`.                                                                                                                                                                                |
+| **Loop run**         | A durable orchestration layer above sessions. Tracks rounds of agent work, verification, and human review. Optionally linked to a creating session via `created_by_session_id` (nullable). Persisted in `loop_runs` table via `planeai_core::loop_service::LoopService`.                              |
+| **Loop session**     | A session enrolled in a loop run with a strategy-specific role (e.g., "maker", "verifier"). Tracked in `loop_sessions` with composite key `(loop_id, session_id)`.                                                                                                                                    |
+| **Loop event**       | An ordered, append-only log entry for a loop run (e.g., "round_started", "session_spawned"). Stored in `loop_events`.                                                                                                                                                                                 |
 | **Loop artifact**    | A piece of evidence produced during a loop (diff, patch, test output). Stored in `loop_artifacts`.                                                                                                                                                                                                    |
 | **Verifier run**     | A verification step within a loop — either a shell command (`verifier_type = "command"`) or an agent session (`verifier_type = "agent"`). Tracks exit code and output path. Stored in `verifier_runs`.                                                                                                |
 | **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). Users will be able to define custom strategies in a future iteration.                                                                                                                    |
@@ -126,11 +126,11 @@ The AXI session read command supports two modes:
 
 **Cursor format** — opaque strings, backend-specific:
 
-| Backend | Format                         | Semantics                                                                                          |
-| ------- | ------------------------------ | -------------------------------------------------------------------------------------------------- |
-| daemon  | `daemon:<u64_byte_offset>`     | Monotonic byte offset from ring buffer. O(1) incremental reads.                                   |
-| tmux    | `tmux:<line_count>:<hash>`     | Line count + content hash of first 5 and last 10 lines. Used to detect history rolloff.            |
-| local   | —                              | Not supported. Returns an error.                                                                   |
+| Backend | Format                     | Semantics                                                                               |
+| ------- | -------------------------- | --------------------------------------------------------------------------------------- |
+| daemon  | `daemon:<u64_byte_offset>` | Monotonic byte offset from ring buffer. O(1) incremental reads.                         |
+| tmux    | `tmux:<line_count>:<hash>` | Line count + content hash of first 5 and last 10 lines. Used to detect history rolloff. |
+| local   | —                          | Not supported. Returns an error.                                                        |
 
 **Cursor-mode TOON output**:
 
@@ -242,6 +242,7 @@ Parent/child relationships are observable via `session children` and `session tr
 - `planeai-cli axi session tree <id>` — full tree from root (TOON output)
 
 **Design notes**:
+
 - Child sessions are linked for observability only. Cleanup remains explicit — killing a parent does not automatically kill children.
 - Future loop runs may own cleanup policy (cascading kill on parent exit).
 - `tree` always walks to the root first, then returns the full subtree in BFS order. If the parent referenced by `parent_session_id` no longer exists (deleted/dangling), the walk stops and the orphan becomes the effective root.

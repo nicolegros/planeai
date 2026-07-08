@@ -103,13 +103,15 @@ archived → active (restore)
 
 ## Prompt Locks
 
-| Field       | Type   | Description                                        |
-| ----------- | ------ | -------------------------------------------------- |
-| session_id  | String | Primary key — the session being locked             |
-| owner_id    | UUID   | Unique lock owner (generated per acquisition)      |
-| acquired_at | String | RFC 3339 timestamp of when the lock was acquired   |
+| Field       | Type   | Description                                      |
+| ----------- | ------ | ------------------------------------------------ |
+| session_id  | String | Primary key — the session being locked           |
+| owner_id    | UUID   | Unique lock owner (generated per acquisition)    |
+| acquired_at | String | RFC 3339 timestamp of when the lock was acquired |
 
 **Purpose:** Prevents concurrent prompt sends to the same session from multiple processes (GUI, CLI, AXI). The lock is acquired before sending a prompt and always released after (success or failure). Stale locks older than 2 minutes are automatically cleaned up on acquisition attempts.
+
+**RAII guard:** `PromptLockGuard` (via `acquire_guard`) ensures the lock is released even on early `?` returns or panics. Prefer this over raw `acquire`/`release` to prevent lock leaks on error paths.
 
 **Module:** `planeai_core::prompt_lock` — migrated via `planeai_core::services::migrate`.
 
@@ -215,78 +217,80 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 
 ### Loop Run
 
-| Field              | Type    | Description                                              |
-| ------------------ | ------- | -------------------------------------------------------- |
-| id                 | UUID    | Unique identifier                                        |
-| project_id         | String  | FK to projects                                           |
-| task_key           | String? | Optional link to a tracked task                          |
-| parent_session_id  | String  | Session that owns this loop (loop dies if parent dies)   |
-| strategy           | String  | Freeform strategy identifier (e.g., "maker-verifier")    |
-| goal               | String  | What the loop is trying to accomplish                    |
-| status             | Enum    | See loop statuses below                                  |
-| current_round      | Integer | Current iteration (0-based)                              |
-| max_rounds         | Integer | Maximum rounds before auto-failure                       |
-| created_at         | String  | RFC 3339 timestamp                                       |
-| updated_at         | String  | RFC 3339, advances on any write                          |
-| finished_at        | String? | Set when status transitions to a terminal state          |
-| policy_json        | JSON?   | Retry/timeout/escalation rules (opaque)                  |
-| budget_json        | JSON?   | Token/cost/time limits (opaque)                          |
+| Field                 | Type    | Description                                                                         |
+| --------------------- | ------- | ----------------------------------------------------------------------------------- |
+| id                    | UUID    | Unique identifier                                                                   |
+| project_id            | String  | FK to projects                                                                      |
+| task_key              | String? | Optional link to a tracked task                                                     |
+| created_by_session_id | String? | Session that created this loop (nullable — loops can be CLI/UI/scheduler-initiated) |
+| strategy              | String  | Freeform strategy identifier (e.g., "maker-verifier")                               |
+| goal                  | String  | What the loop is trying to accomplish                                               |
+| status                | Enum    | See loop statuses below                                                             |
+| current_round         | Integer | Current iteration (0-based)                                                         |
+| max_rounds            | Integer | Maximum rounds before auto-failure                                                  |
+| created_at            | String  | RFC 3339 timestamp                                                                  |
+| updated_at            | String  | RFC 3339, advances on any write                                                     |
+| executor_finished_at  | String? | Set when executor is done (completed_unreviewed/failed/cancelled)                   |
+| policy_json           | JSON?   | Retry/timeout/escalation rules (opaque)                                             |
+| budget_json           | JSON?   | Token/cost/time limits (opaque)                                                     |
 
 **Loop statuses:** `draft` → `running` → `observing` → `verifying` → `completed_unreviewed` → `approved` → `merged` → `cleaned`. Also: `blocked`, `needs_human`, `stale`, `failed`, `cancelled`.
 
-**Ownership:** A loop has a hard dependency on its `parent_session_id`. If the parent session dies, the loop should be killed by the executor.
+**Ownership:** `created_by_session_id` tracks who spawned the loop but does not imply lifecycle coupling. Future fields (`owner_session_id`, `cleanup_policy`) will handle parent-death cleanup independently.
+
+**executor_finished_at semantics:** Set only when the executor finishes producing a reviewable result — specifically when status transitions to `completed_unreviewed`, `failed`, or `cancelled`. Post-executor lifecycle states (`approved`, `merged`, `cleaned`) do NOT set this field because they represent human/CI actions after the executor is done.
 
 ### Loop Session
 
-| Field      | Type    | Description                                    |
-| ---------- | ------- | ---------------------------------------------- |
-| loop_id    | String  | FK to loop_runs                                |
-| session_id | String  | FK to sessions                                 |
+| Field      | Type    | Description                                        |
+| ---------- | ------- | -------------------------------------------------- |
+| loop_id    | String  | FK to loop_runs                                    |
+| session_id | String  | FK to sessions                                     |
 | role       | String  | Strategy-specific role (e.g., "maker", "verifier") |
-| round      | Integer | Which round this session belongs to            |
-| provider   | String? | Agent provider used for this session           |
-| status     | String  | Session-within-loop status                     |
-| created_at | String  | RFC 3339 timestamp                             |
+| round      | Integer | Which round this session belongs to                |
+| provider   | String? | Agent provider used for this session               |
+| status     | String  | Session-within-loop status                         |
+| created_at | String  | RFC 3339 timestamp                                 |
 
 **Primary key:** `(loop_id, session_id)` — a session can only belong to one loop.
 
 ### Loop Event
 
-| Field        | Type    | Description                      |
-| ------------ | ------- | -------------------------------- |
-| id           | Integer | Auto-incrementing, ordered       |
-| loop_id      | String  | FK to loop_runs                  |
-| ts           | String  | RFC 3339 timestamp               |
+| Field        | Type    | Description                        |
+| ------------ | ------- | ---------------------------------- |
+| id           | Integer | Auto-incrementing, ordered         |
+| loop_id      | String  | FK to loop_runs                    |
+| ts           | String  | RFC 3339 timestamp                 |
 | kind         | String  | Event type (e.g., "round_started") |
-| payload_json | JSON    | Event-specific payload           |
+| payload_json | JSON    | Event-specific payload             |
 
 ### Loop Artifact
 
-| Field        | Type    | Description                          |
-| ------------ | ------- | ------------------------------------ |
-| id           | UUID    | Unique identifier                    |
-| loop_id      | String  | FK to loop_runs                      |
-| session_id   | String? | Which session produced this artifact |
+| Field        | Type    | Description                           |
+| ------------ | ------- | ------------------------------------- |
+| id           | UUID    | Unique identifier                     |
+| loop_id      | String  | FK to loop_runs                       |
+| session_id   | String? | Which session produced this artifact  |
 | kind         | String  | Artifact type (e.g., "diff", "patch") |
-| path         | String? | File path if applicable              |
-| content_json | JSON?   | Structured content if applicable     |
-| created_at   | String  | RFC 3339 timestamp                   |
+| path         | String? | File path if applicable               |
+| content_json | JSON?   | Structured content if applicable      |
+| created_at   | String  | RFC 3339 timestamp                    |
 
 ### Verifier Run
 
-| Field         | Type    | Description                                      |
-| ------------- | ------- | ------------------------------------------------ |
-| id            | UUID    | Unique identifier                                |
-| loop_id       | String  | FK to loop_runs                                  |
-| session_id    | String? | Session if agent-based verifier                  |
-| verifier_type | String  | "command" or "agent"                             |
-| name          | String  | Human-readable name (e.g., "cargo test")         |
-| command       | String  | The command or agent launch command               |
-| status        | String  | "pending", "running", "passed", "failed"         |
-| exit_code     | Integer?| Process exit code (command verifiers)            |
-| output_path   | String? | Path to captured output                          |
-| created_at    | String  | RFC 3339 timestamp                               |
-| finished_at   | String? | Set when verifier completes                      |
+| Field         | Type     | Description                              |
+| ------------- | -------- | ---------------------------------------- |
+| id            | UUID     | Unique identifier                        |
+| loop_id       | String   | FK to loop_runs                          |
+| session_id    | String?  | Session if agent-based verifier          |
+| verifier_type | String   | "command" or "agent"                     |
+| name          | String   | Human-readable name (e.g., "cargo test") |
+| command       | String   | The command or agent launch command      |
+| status        | String   | "pending", "running", "passed", "failed" |
+| exit_code     | Integer? | Process exit code (command verifiers)    |
+| output_path   | String?  | Path to captured output                  |
+| created_at    | String   | RFC 3339 timestamp                       |
+| finished_at   | String?  | Set when verifier completes              |
 
 **Module:** `planeai_core::loop_service::LoopService` — migrated via `planeai_core::services::migrate`.
 

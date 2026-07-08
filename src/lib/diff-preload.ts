@@ -7,11 +7,7 @@ import { git } from "./api";
 const patchCache = new Map<string, string>();
 
 /** Preload the combined patch for a session's worktree. Single IPC call. */
-export function preloadPatches(
-  sessionId: string,
-  repoPath: string,
-  baseBranch: string,
-): void {
+export function preloadPatches(sessionId: string, repoPath: string, baseBranch: string): void {
   git
     .getCombinedPatch(repoPath, baseBranch)
     .then((patch) => {

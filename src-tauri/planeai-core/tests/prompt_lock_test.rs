@@ -95,3 +95,47 @@ fn different_sessions_independent() {
     // session-a can be reacquired
     let _lock_a2 = prompt_lock::acquire(&conn, "session-a").unwrap();
 }
+
+// ─── PromptLockGuard (RAII) ──────────────────────────────────────────────────
+
+#[test]
+fn guard_releases_on_drop() {
+    let conn = setup();
+    {
+        let _guard = prompt_lock::acquire_guard(&conn, "session-1").unwrap();
+        // Lock is held inside this scope
+        let err = prompt_lock::acquire(&conn, "session-1").unwrap_err();
+        assert!(matches!(err, LockError::Busy { .. }));
+    }
+    // Guard dropped — lock should be released
+    let _lock = prompt_lock::acquire(&conn, "session-1").unwrap();
+}
+
+#[test]
+fn guard_explicit_release_returns_ok() {
+    let conn = setup();
+    let guard = prompt_lock::acquire_guard(&conn, "session-1").unwrap();
+    guard.release().unwrap();
+
+    // Lock is released, can reacquire
+    let _lock = prompt_lock::acquire(&conn, "session-1").unwrap();
+}
+
+#[test]
+fn guard_releases_on_early_return() {
+    let conn = setup();
+
+    fn inner(conn: &Connection) -> Result<(), String> {
+        let _guard = prompt_lock::acquire_guard(conn, "session-1").map_err(|e| e.to_string())?;
+        // Simulate early return via ?
+        Err("backend error".to_string())?;
+        #[allow(unreachable_code)]
+        Ok(())
+    }
+
+    let result = inner(&conn);
+    assert!(result.is_err());
+
+    // Lock should be released despite early return
+    let _lock = prompt_lock::acquire(&conn, "session-1").unwrap();
+}

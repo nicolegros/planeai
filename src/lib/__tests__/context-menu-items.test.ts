@@ -85,9 +85,9 @@ function buildActiveSessionMenu(_session: Session): MenuItem[] {
 
 // Replicate the task context menu logic from UnifiedSidebar
 function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[] {
-  const statusChildren: MenuItem[] = STATUS_OPTIONS
-    .filter((s) => s.value !== task.status)
-    .map((s) => ({ label: s.label, onSelect: () => {} }));
+  const statusChildren: MenuItem[] = STATUS_OPTIONS.filter((s) => s.value !== task.status).map(
+    (s) => ({ label: s.label, onSelect: () => {} }),
+  );
 
   return [
     ...(linkedSession ? [{ label: "Review diff", onSelect: () => {} } as MenuItem] : []),

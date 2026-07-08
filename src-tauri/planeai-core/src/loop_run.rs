@@ -60,6 +60,22 @@ impl LoopStatus {
             _ => None,
         }
     }
+
+    /// The executor has finished producing a reviewable result (or failed/was cancelled).
+    /// These are the statuses that set `executor_finished_at`.
+    pub fn is_executor_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::CompletedUnreviewed | Self::Failed | Self::Cancelled
+        )
+    }
+
+    /// The loop is paused and requires human or external intervention to proceed.
+    /// Do not use `executor_finished_at IS NULL` alone to detect active loops —
+    /// these statuses are not terminal but the executor is not actively running.
+    pub fn is_intervention_required(&self) -> bool {
+        matches!(self, Self::Blocked | Self::NeedsHuman | Self::Stale)
+    }
 }
 
 // ─── Loop Strategy ───────────────────────────────────────────────────────────
@@ -85,7 +101,7 @@ pub struct LoopRun {
     pub id: String,
     pub project_id: String,
     pub task_key: Option<String>,
-    pub parent_session_id: String,
+    pub created_by_session_id: Option<String>,
     pub strategy: LoopStrategy,
     pub goal: String,
     pub status: LoopStatus,
@@ -93,7 +109,7 @@ pub struct LoopRun {
     pub max_rounds: i64,
     pub created_at: String,
     pub updated_at: String,
-    pub finished_at: Option<String>,
+    pub executor_finished_at: Option<String>,
     pub policy_json: Option<serde_json::Value>,
     pub budget_json: Option<serde_json::Value>,
 }
