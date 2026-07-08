@@ -410,7 +410,7 @@ If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by
 
 ### `axi loop observe`
 
-Observe loop state: summary, sessions, recent events.
+Observe loop state: summary, loop-owned sessions, recent events. Use `loop tree` for recursive session expansion including children.
 
 ```bash
 planeai-cli axi loop observe <id> [--limit <n>]
@@ -424,17 +424,17 @@ The `id` can be a prefix — it will match if unambiguous.
 
 ### `axi loop tick`
 
-Advance the loop by one tick. Appends a `tick` event and returns the current state.
+Advance the loop by one tick. If the loop is in `draft` status, tick first transitions it to `running` and appends a `loop_started` event, then appends a `tick` event.
 
 ```bash
 planeai-cli axi loop tick <id>
 ```
 
-This command does not dispatch maker-verifier sessions yet — it will become the deterministic state-machine step in a future PR. Currently it records the tick event for observability.
+This command does not dispatch maker-verifier sessions yet — it will become the deterministic state-machine step in a future PR. Currently it transitions draft → running and records tick events for observability.
 
 ### `axi loop stop`
 
-Stop a loop (mark as cancelled). Idempotent — calling stop on an already-terminal loop is a no-op.
+Stop a loop (mark as cancelled). Idempotent — calling stop on an already-terminal loop (cancelled, failed, completed_unreviewed, approved, merged, cleaned) is a no-op. Loops in paused/intervention states (blocked, needs_human, stale) can still be cancelled.
 
 ```bash
 planeai-cli axi loop stop <id>
