@@ -983,3 +983,338 @@ fn parent_session_id_persisted_on_create_and_retrievable() {
     let parent = SessionService::get(&conn, &parent_id).unwrap().unwrap();
     assert_eq!(parent.parent_session_id, None);
 }
+
+// ─── Session children / tree queries (PLA-205) ──────────────────────────────
+
+#[test]
+fn children_returns_direct_children_only() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/tree").unwrap();
+
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let child1_id = uuid::Uuid::new_v4().to_string();
+    let child2_id = uuid::Uuid::new_v4().to_string();
+    let grandchild_id = uuid::Uuid::new_v4().to_string();
+
+    // root
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: root_id.clone(),
+            project_id: project.id.clone(),
+            name: "Planner".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // child1
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child1_id.clone(),
+            project_id: project.id.clone(),
+            name: "Worker 1".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // child2
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child2_id.clone(),
+            project_id: project.id.clone(),
+            name: "Reviewer".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // grandchild of child1
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: grandchild_id.clone(),
+            project_id: project.id.clone(),
+            name: "Sub-worker".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(child1_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let children = SessionService::children(&conn, &root_id).unwrap();
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0].id, child1_id);
+    assert_eq!(children[1].id, child2_id);
+
+    // children of child1 should only be grandchild
+    let child1_children = SessionService::children(&conn, &child1_id).unwrap();
+    assert_eq!(child1_children.len(), 1);
+    assert_eq!(child1_children[0].id, grandchild_id);
+}
+
+#[test]
+fn children_returns_empty_for_leaf_session() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/leaf").unwrap();
+
+    let leaf_id = uuid::Uuid::new_v4().to_string();
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: leaf_id.clone(),
+            project_id: project.id.clone(),
+            name: "leaf".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let children = SessionService::children(&conn, &leaf_id).unwrap();
+    assert!(children.is_empty());
+}
+
+#[test]
+fn children_includes_all_statuses() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/statuses").unwrap();
+
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let active_child = uuid::Uuid::new_v4().to_string();
+    let exited_child = uuid::Uuid::new_v4().to_string();
+    let archived_child = uuid::Uuid::new_v4().to_string();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: root_id.clone(),
+            project_id: project.id.clone(),
+            name: "root".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: active_child.clone(),
+            project_id: project.id.clone(),
+            name: "active".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: exited_child.clone(),
+            project_id: project.id.clone(),
+            name: "exited".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::mark_exited(&conn, &exited_child).unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: archived_child.clone(),
+            project_id: project.id.clone(),
+            name: "archived".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::archive(&conn, &archived_child).unwrap();
+
+    let children = SessionService::children(&conn, &root_id).unwrap();
+    assert_eq!(children.len(), 3);
+}
+
+#[test]
+fn tree_returns_full_tree_from_root() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/tree2").unwrap();
+
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let child1_id = uuid::Uuid::new_v4().to_string();
+    let child2_id = uuid::Uuid::new_v4().to_string();
+    let grandchild_id = uuid::Uuid::new_v4().to_string();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: root_id.clone(),
+            project_id: project.id.clone(),
+            name: "root".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child1_id.clone(),
+            project_id: project.id.clone(),
+            name: "child1".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child2_id.clone(),
+            project_id: project.id.clone(),
+            name: "child2".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: grandchild_id.clone(),
+            project_id: project.id.clone(),
+            name: "grandchild".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(child1_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Call tree from root — should get all 4
+    let tree = SessionService::tree(&conn, &root_id).unwrap();
+    assert_eq!(tree.len(), 4);
+    assert_eq!(tree[0].id, root_id);
+    // BFS order: root, child1, child2, grandchild
+    assert_eq!(tree[1].id, child1_id);
+    assert_eq!(tree[2].id, child2_id);
+    assert_eq!(tree[3].id, grandchild_id);
+}
+
+#[test]
+fn tree_from_child_walks_up_to_root() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/tree3").unwrap();
+
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let child_id = uuid::Uuid::new_v4().to_string();
+    let grandchild_id = uuid::Uuid::new_v4().to_string();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: root_id.clone(),
+            project_id: project.id.clone(),
+            name: "root".to_string(),
+            backend: "daemon".to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: child_id.clone(),
+            project_id: project.id.clone(),
+            name: "child".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(root_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: grandchild_id.clone(),
+            project_id: project.id.clone(),
+            name: "grandchild".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(child_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Call tree from grandchild — should walk up to root and return full tree
+    let tree = SessionService::tree(&conn, &grandchild_id).unwrap();
+    assert_eq!(tree.len(), 3);
+    assert_eq!(tree[0].id, root_id);
+    assert_eq!(tree[1].id, child_id);
+    assert_eq!(tree[2].id, grandchild_id);
+}
+
+#[test]
+fn tree_with_dangling_parent_treats_child_as_root() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/orphan").unwrap();
+
+    let orphan_id = uuid::Uuid::new_v4().to_string();
+    let orphan_child_id = uuid::Uuid::new_v4().to_string();
+
+    // Create orphan with a non-existent parent
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: orphan_id.clone(),
+            project_id: project.id.clone(),
+            name: "orphan".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some("non-existent-parent-id".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: orphan_child_id.clone(),
+            project_id: project.id.clone(),
+            name: "orphan-child".to_string(),
+            backend: "daemon".to_string(),
+            parent_session_id: Some(orphan_id.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Tree from orphan_child should find orphan as root (dangling parent stops walk)
+    let tree = SessionService::tree(&conn, &orphan_child_id).unwrap();
+    assert_eq!(tree.len(), 2);
+    assert_eq!(tree[0].id, orphan_id);
+    assert_eq!(tree[1].id, orphan_child_id);
+}

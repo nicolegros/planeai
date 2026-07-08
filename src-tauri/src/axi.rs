@@ -279,6 +279,10 @@ pub fn session_ls(conn: &rusqlite::Connection, archived: bool) -> (String, i32) 
                 s.provider.clone().unwrap_or_default(),
                 s.branch.clone(),
                 s.task_key.clone().unwrap_or_default(),
+                s.parent_session_id
+                    .as_ref()
+                    .map(|id| id[..8].to_string())
+                    .unwrap_or_default(),
                 s.worktree_path.clone().unwrap_or_default(),
                 s.base_branch.clone().unwrap_or_default(),
                 if s.auto_approve {
@@ -303,6 +307,7 @@ pub fn session_ls(conn: &rusqlite::Connection, archived: bool) -> (String, i32) 
                     "provider".into(),
                     "branch".into(),
                     "task_key".into(),
+                    "parent_session_id".into(),
                     "worktree_path".into(),
                     "base_branch".into(),
                     "yolo".into(),
@@ -348,6 +353,107 @@ pub fn session_prompt(
             (emit_error(&e, &help), 1)
         }
     }
+}
+
+// ─── Session Children / Tree ─────────────────────────────────────────────────
+
+pub fn session_children(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::services::SessionService;
+
+    let session = match crate::session_ops::resolve_session_by_prefix(conn, id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let children = match SessionService::children(conn, &session.id) {
+        Ok(c) => c,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    if children.is_empty() {
+        let fields = vec![
+            field("parent_session_id", str_val(&session.id[..8])),
+            field("children", str_val("0 children")),
+        ];
+        return (render(&fields), 0);
+    }
+
+    let rows: Vec<Vec<String>> = children.iter().map(session_tree_row).collect();
+
+    let fields = vec![
+        field("parent_session_id", str_val(&session.id[..8])),
+        field(
+            "children",
+            Value::Table {
+                columns: session_tree_columns(),
+                rows,
+            },
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn session_tree(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::services::SessionService;
+
+    let session = match crate::session_ops::resolve_session_by_prefix(conn, id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let tree = match SessionService::tree(conn, &session.id) {
+        Ok(t) => t,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let root_id = tree
+        .first()
+        .map(|s| s.id[..8].to_string())
+        .unwrap_or_default();
+
+    let rows: Vec<Vec<String>> = tree.iter().map(session_tree_row).collect();
+
+    let fields = vec![
+        field(
+            "session_tree",
+            Value::Object(vec![field("root", str_val(&root_id))]),
+        ),
+        field(
+            "sessions",
+            Value::Table {
+                columns: session_tree_columns(),
+                rows,
+            },
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+fn session_tree_columns() -> Vec<String> {
+    vec![
+        "id".into(),
+        "parent_session_id".into(),
+        "name".into(),
+        "status".into(),
+        "provider".into(),
+        "task_key".into(),
+        "backend".into(),
+    ]
+}
+
+fn session_tree_row(s: &planeai_core::services::SessionRecord) -> Vec<String> {
+    vec![
+        s.id[..8].to_string(),
+        s.parent_session_id
+            .as_ref()
+            .map(|id| id[..8].to_string())
+            .unwrap_or_default(),
+        s.name.clone(),
+        s.status.clone(),
+        s.provider.clone().unwrap_or_default(),
+        s.task_key.clone().unwrap_or_default(),
+        s.backend.clone(),
+    ]
 }
 
 // ─── Project ─────────────────────────────────────────────────────────────────
@@ -907,5 +1013,172 @@ mod tests {
         assert_eq!(code, 0);
         assert!(output.contains("truncated: true"), "output:\n{output}");
         assert!(output.contains("backend: tmux"), "output:\n{output}");
+    }
+
+    // ─── Session children/tree TOON output ───────────────────────────────────
+
+    fn setup_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrate(&conn).unwrap();
+        planeai_tasks::sqlite::migrate(&conn).unwrap();
+        conn
+    }
+
+    /// Create a tree: root → child1, child2; child1 → grandchild
+    fn setup_session_tree(conn: &rusqlite::Connection) -> (String, String, String, String) {
+        let project = crate::db::create_project(conn, "test-project", "/tmp/test").unwrap();
+        let root_id = "aaaaaaaa-1111-2222-3333-444444444444".to_string();
+        let child1_id = "bbbbbbbb-1111-2222-3333-444444444444".to_string();
+        let child2_id = "cccccccc-1111-2222-3333-444444444444".to_string();
+        let grandchild_id = "dddddddd-1111-2222-3333-444444444444".to_string();
+
+        crate::db::create_session_with_id(
+            conn,
+            &root_id,
+            &project.id,
+            "Planner",
+            None,
+            "main",
+            None,
+            Some("claude"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        crate::db::create_session_with_id(
+            conn,
+            &child1_id,
+            &project.id,
+            "Worker 1",
+            None,
+            "main",
+            None,
+            Some("codex"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            Some(&root_id),
+        )
+        .unwrap();
+
+        crate::db::create_session_with_id(
+            conn,
+            &child2_id,
+            &project.id,
+            "Reviewer",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            Some(&root_id),
+        )
+        .unwrap();
+
+        crate::db::create_session_with_id(
+            conn,
+            &grandchild_id,
+            &project.id,
+            "Sub-worker",
+            None,
+            "main",
+            None,
+            Some("codex"),
+            "daemon",
+            true,
+            None,
+            None,
+            Some(&child1_id),
+        )
+        .unwrap();
+
+        (root_id, child1_id, child2_id, grandchild_id)
+    }
+
+    #[test]
+    fn session_children_outputs_toon_table() {
+        let conn = setup_db();
+        let (root_id, child1_id, child2_id, _) = setup_session_tree(&conn);
+
+        let (output, code) = session_children(&conn, &root_id[..8]);
+        assert_eq!(code, 0);
+        assert!(
+            output.contains("parent_session_id: aaaaaaaa"),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "children[2]{id,parent_session_id,name,status,provider,task_key,backend}:"
+            ),
+            "output:\n{output}"
+        );
+        assert!(output.contains(&child1_id[..8]), "output:\n{output}");
+        assert!(output.contains(&child2_id[..8]), "output:\n{output}");
+        assert!(output.contains("Worker 1"), "output:\n{output}");
+        assert!(output.contains("Reviewer"), "output:\n{output}");
+    }
+
+    #[test]
+    fn session_children_empty_outputs_message() {
+        let conn = setup_db();
+        let (_, _, child2_id, _) = setup_session_tree(&conn);
+
+        // child2 has no children
+        let (output, code) = session_children(&conn, &child2_id[..8]);
+        assert_eq!(code, 0);
+        assert!(output.contains("children: 0 children"), "output:\n{output}");
+    }
+
+    #[test]
+    fn session_tree_outputs_full_tree_toon() {
+        let conn = setup_db();
+        let (root_id, child1_id, child2_id, grandchild_id) = setup_session_tree(&conn);
+
+        let (output, code) = session_tree(&conn, &root_id[..8]);
+        assert_eq!(code, 0);
+        assert!(output.contains("session_tree:"), "output:\n{output}");
+        assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
+        assert!(
+            output.contains(
+                "sessions[4]{id,parent_session_id,name,status,provider,task_key,backend}:"
+            ),
+            "output:\n{output}"
+        );
+        // BFS order: root, child1, child2, grandchild
+        let lines: Vec<&str> = output.lines().collect();
+        let session_lines: Vec<&&str> = lines
+            .iter()
+            .filter(|l| {
+                l.trim().starts_with(&root_id[..8])
+                    || l.trim().starts_with(&child1_id[..8])
+                    || l.trim().starts_with(&child2_id[..8])
+                    || l.trim().starts_with(&grandchild_id[..8])
+            })
+            .collect();
+        assert_eq!(
+            session_lines.len(),
+            4,
+            "expected 4 session rows, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn session_tree_from_child_shows_full_tree() {
+        let conn = setup_db();
+        let (_, _, _, grandchild_id) = setup_session_tree(&conn);
+
+        // Call from grandchild — should walk up to root
+        let (output, code) = session_tree(&conn, &grandchild_id[..8]);
+        assert_eq!(code, 0);
+        assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
+        assert!(output.contains("sessions[4]"), "output:\n{output}");
     }
 }

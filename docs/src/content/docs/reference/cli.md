@@ -79,6 +79,26 @@ Archive a session (stops the agent but preserves the record).
 planeai-cli session archive <id>
 ```
 
+### `session children`
+
+List direct child sessions of a parent session.
+
+```bash
+planeai-cli session children <id> [--pretty]
+```
+
+Returns a JSON array of child sessions. Empty array if no children exist.
+
+### `session tree`
+
+Show the full session tree. Walks up to the root (follows `parent_session_id` links), then returns all descendants in BFS order.
+
+```bash
+planeai-cli session tree <id> [--pretty]
+```
+
+Returns a JSON array of session records ordered root-first, then breadth-first. If the parent referenced by `parent_session_id` no longer exists, the orphaned session becomes the effective root.
+
 ### `session prompt`
 
 Send a prompt to a running session.
@@ -281,6 +301,42 @@ planeai-cli axi session create --project <name> --branch <branch> [options]
 | `--provider`    | Provider to use (overrides default_provider)          |
 | `--task-key`    | Associate a task key with this session                |
 | `--prompt`      | Initial prompt to send to the agent                   |
+
+### `axi session children`
+
+List direct child sessions of a parent session (TOON output).
+
+```bash
+planeai-cli axi session children <id>
+```
+
+Example output:
+```
+parent_session_id: abc12345
+children[2]{id,parent_session_id,name,status,provider,task_key,backend}:
+  def45678,abc12345,Worker 1,active,codex,PLA-201,daemon
+  ghi78901,abc12345,Reviewer,exited,kiro,PLA-201,daemon
+```
+
+### `axi session tree`
+
+Show the full session tree rooted at the given session's root ancestor (TOON output). Walks up `parent_session_id` links to find the root, then returns all descendants in BFS order.
+
+```bash
+planeai-cli axi session tree <id>
+```
+
+Example output:
+```
+session_tree:
+  root: abc12345
+sessions[3]{id,parent_session_id,name,status,provider,task_key,backend}:
+  abc12345,,Planner,active,claude,PLA-201,daemon
+  def45678,abc12345,Worker 1,active,codex,PLA-201,daemon
+  ghi78901,abc12345,Reviewer,exited,kiro,PLA-201,daemon
+```
+
+Child sessions are linked for observability only. Killing a parent does not automatically kill children — cleanup remains explicit. Future loop runs may own cleanup policy.
 
 ### `axi session read`
 

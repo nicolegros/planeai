@@ -741,6 +741,65 @@ impl SessionService {
         )?;
         Ok(())
     }
+
+    /// Return direct child sessions of the given parent session ID.
+    /// Includes all statuses (active, exited, archived, destroyed) for observability.
+    pub fn children(conn: &Connection, parent_id: &str) -> SqlResult<Vec<SessionRecord>> {
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE parent_session_id = ?1 ORDER BY created_at ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![parent_id], row_to_session)?;
+        rows.collect()
+    }
+
+    /// Return the full session tree rooted at the given session ID.
+    /// Walks up to the root (session with no parent_session_id, or whose parent doesn't exist),
+    /// then returns all descendants in a flat list (root first, then BFS order).
+    pub fn tree(conn: &Connection, session_id: &str) -> SqlResult<Vec<SessionRecord>> {
+        let root_id = Self::find_root(conn, session_id)?;
+
+        let mut result = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+
+        if let Some(root) = Self::get(conn, &root_id)? {
+            queue.push_back(root.id.clone());
+            result.push(root);
+        }
+
+        while let Some(current_id) = queue.pop_front() {
+            let children = Self::children(conn, &current_id)?;
+            for child in children {
+                queue.push_back(child.id.clone());
+                result.push(child);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Walk parent_session_id links upward to find the root of the tree.
+    /// Stops when a session has no parent or its parent doesn't exist in the DB.
+    fn find_root(conn: &Connection, session_id: &str) -> SqlResult<String> {
+        let mut current = session_id.to_string();
+        let mut current_session = Self::get(conn, &current)?;
+        for _ in 0..100 {
+            match current_session {
+                Some(session) => match session.parent_session_id {
+                    Some(ref parent_id) => match Self::get(conn, parent_id)? {
+                        Some(parent) => {
+                            current = parent_id.clone();
+                            current_session = Some(parent);
+                        }
+                        None => break,
+                    },
+                    None => break,
+                },
+                None => break,
+            }
+        }
+        Ok(current)
+    }
 }
 
 // ─── WorktreeMode ────────────────────────────────────────────────────────────
