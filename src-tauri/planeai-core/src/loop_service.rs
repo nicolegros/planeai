@@ -82,6 +82,26 @@ pub struct AddVerifierRunParams {
     pub command: String,
 }
 
+/// Parameters for the atomic handoff recording operation.
+#[derive(Debug, Clone)]
+pub struct RecordHandoffParams {
+    pub loop_id: String,
+    pub session_id: String,
+    pub artifact_path: Option<String>,
+    pub content_json: Option<JsonValue>,
+    pub handoff_status: String,
+    pub event_payload: JsonValue,
+    /// If Some, the loop status will be updated to this value.
+    pub new_loop_status: Option<LoopStatus>,
+}
+
+/// Result of a successful atomic handoff recording.
+#[derive(Debug, Clone)]
+pub struct RecordHandoffResult {
+    pub artifact_id: String,
+    pub event_id: i64,
+}
+
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 pub struct LoopService;
@@ -425,6 +445,26 @@ impl LoopService {
         })
     }
 
+    /// Update the status of a loop session (loop_sessions.status, NOT the runtime session).
+    pub fn update_loop_session_status(
+        conn: &Connection,
+        loop_id: &str,
+        session_id: &str,
+        status: &str,
+    ) -> SqlResult<()> {
+        let tx = conn.unchecked_transaction()?;
+        let rows = tx.execute(
+            "UPDATE loop_sessions SET status = ?1 WHERE loop_id = ?2 AND session_id = ?3",
+            params![status, loop_id, session_id],
+        )?;
+        if rows == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Self::touch_loop(&tx, loop_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list_loop_sessions(conn: &Connection, loop_id: &str) -> SqlResult<Vec<LoopSession>> {
         let mut stmt = conn.prepare(
             "SELECT loop_id, session_id, role, round, provider, status, created_at
@@ -518,6 +558,78 @@ impl LoopService {
             path: params.path,
             content_json: params.content_json,
             created_at: now,
+        })
+    }
+
+    // ─── Handoff Recording (atomic) ──────────────────────────────────────────
+
+    /// Atomically record a handoff: insert artifact, append event, update session
+    /// status, and optionally update loop status — all in a single transaction.
+    ///
+    /// Fails if the loop does not exist or if the session is not part of the loop.
+    /// On failure, no partial state is written.
+    pub fn record_handoff(
+        conn: &Connection,
+        params: RecordHandoffParams,
+    ) -> SqlResult<RecordHandoffResult> {
+        let artifact_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let content_str = params.content_json.as_ref().map(|v| v.to_string());
+        let payload_str = params.event_payload.to_string();
+
+        let tx = conn.unchecked_transaction()?;
+
+        // 1. Assert loop exists (via touch_loop)
+        Self::touch_loop(&tx, &params.loop_id)?;
+
+        // 2. Assert session belongs to this loop
+        let session_rows = tx.execute(
+            "UPDATE loop_sessions SET status = ?1 WHERE loop_id = ?2 AND session_id = ?3",
+            rusqlite::params![params.handoff_status, params.loop_id, params.session_id],
+        )?;
+        if session_rows == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        // 3. Insert loop_artifact
+        tx.execute(
+            "INSERT INTO loop_artifacts (id, loop_id, session_id, kind, path, content_json, created_at)
+             VALUES (?1, ?2, ?3, 'handoff', ?4, ?5, ?6)",
+            rusqlite::params![
+                artifact_id,
+                params.loop_id,
+                params.session_id,
+                params.artifact_path,
+                content_str,
+                now,
+            ],
+        )?;
+
+        // 4. Append loop_event
+        tx.execute(
+            "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'handoff_recorded', ?3)",
+            rusqlite::params![params.loop_id, now, payload_str],
+        )?;
+        let event_id = tx.last_insert_rowid();
+
+        // 5. Update loop status if requested
+        if let Some(ref new_status) = params.new_loop_status {
+            let executor_finished_at = if new_status.is_executor_terminal() {
+                Some(now.clone())
+            } else {
+                None
+            };
+            tx.execute(
+                "UPDATE loop_runs SET status = ?1, updated_at = ?2, executor_finished_at = COALESCE(?3, executor_finished_at) WHERE id = ?4",
+                rusqlite::params![new_status.as_str(), now, executor_finished_at, params.loop_id],
+            )?;
+        }
+
+        tx.commit()?;
+
+        Ok(RecordHandoffResult {
+            artifact_id,
+            event_id,
         })
     }
 

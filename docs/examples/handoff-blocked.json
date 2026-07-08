@@ -1,0 +1,32 @@
+{
+  "schema": "planeai.handoff.v1",
+  "loop_id": "loop_01abc2de-3456-7890-abcd-ef1234567890",
+  "session_id": "4f3a91c2-0000-1111-2222-333344445555",
+  "task_key": "PLA-201",
+  "status": "blocked",
+  "branch": "pla-201/45454a5a",
+  "summary": "Cannot proceed: database migration conflicts with another PR's schema changes",
+  "risks": [
+    "Migration conflict with PR #275 — both add columns to loop_runs",
+    "Manual merge resolution required before continuing"
+  ],
+  "next_actions": [
+    "Merge PR #275 first, then rebase this branch",
+    "Re-run migration tests after rebase"
+  ],
+  "evidence": [
+    {
+      "kind": "build",
+      "name": "cargo build",
+      "result": "fail",
+      "source": "direct",
+      "output_path": ".planeai/loops/loop_01abc2de/sessions/4f3a91c2/build-error.log"
+    },
+    {
+      "kind": "test",
+      "name": "cargo test -p planeai-core loop_service",
+      "result": "fail",
+      "source": "blocked"
+    }
+  ]
+}

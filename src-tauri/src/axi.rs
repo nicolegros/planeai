@@ -1152,7 +1152,334 @@ pub fn loop_tree(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
     (render(&fields), 0)
 }
 
+// ─── Loop Handoff ────────────────────────────────────────────────────────────
+
+pub fn loop_handoff_path(
+    conn: &rusqlite::Connection,
+    loop_id_arg: &str,
+    session_arg: &str,
+    cwd: &str,
+) -> (String, i32) {
+    use planeai_core::loop_service::LoopService;
+
+    let loop_run = match resolve_loop(conn, loop_id_arg) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // Resolve session by prefix among loop sessions
+    let loop_sessions = match LoopService::list_loop_sessions(conn, &loop_run.id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let session = match resolve_loop_session(&loop_sessions, session_arg) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // Determine the base path (session worktree or project root/cwd)
+    let base_path = resolve_handoff_base_path(conn, &session.session_id, cwd);
+
+    let handoff_path = std::path::PathBuf::from(&base_path)
+        .join(".planeai")
+        .join("loops")
+        .join(&loop_run.id)
+        .join("sessions")
+        .join(&session.session_id)
+        .join("handoff.json");
+
+    // Create the parent directory
+    if let Some(parent) = handoff_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let exists = handoff_path.exists();
+    let short_loop = &loop_run.id[..std::cmp::min(8, loop_run.id.len())];
+    let short_session = &session.session_id[..std::cmp::min(8, session.session_id.len())];
+    let path_str = handoff_path.to_string_lossy().to_string();
+
+    let fields = vec![
+        field(
+            "handoff_path",
+            Value::Object(vec![
+                field("loop_id", str_val(&loop_run.id)),
+                field("session_id", str_val(&session.session_id)),
+                field("role", str_val(&session.role)),
+                field("path", str_val(&path_str)),
+                field("exists", Value::Bool(exists)),
+            ]),
+        ),
+        field(
+            "next_actions",
+            Value::List(vec![
+                format!("write a planeai.handoff.v1 JSON file to {path_str}"),
+                format!(
+                    "run `planeai-cli axi loop handoff record --loop {short_loop} --session {short_session} --path {path_str}`"
+                ),
+            ]),
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn loop_handoff_record(
+    conn: &rusqlite::Connection,
+    loop_id_arg: &str,
+    session_arg: &str,
+    path: &std::path::Path,
+    cwd: &str,
+) -> (String, i32) {
+    use planeai_core::handoff::{parse_handoff, validate_ids, HandoffStatus};
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let loop_run = match resolve_loop(conn, loop_id_arg) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // Resolve session by prefix among loop sessions
+    let loop_sessions = match LoopService::list_loop_sessions(conn, &loop_run.id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let session = match resolve_loop_session(&loop_sessions, session_arg) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // Security: canonicalize and validate path is under the project root or worktree
+    let canonical_path = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                emit_error(
+                    &format!("cannot read handoff file: {e}"),
+                    &[format!("path: {}", path.display())],
+                ),
+                1,
+            )
+        }
+    };
+
+    let base_path = resolve_handoff_base_path(conn, &session.session_id, cwd);
+    let canonical_base = std::fs::canonicalize(&base_path).unwrap_or_else(|_| base_path.into());
+
+    if !canonical_path.starts_with(&canonical_base) {
+        return (
+            emit_error(
+                "handoff file path is outside the project root",
+                &[
+                    format!("path: {}", canonical_path.display()),
+                    format!("project root: {}", canonical_base.display()),
+                ],
+            ),
+            1,
+        );
+    }
+
+    // Read the file
+    let content = match std::fs::read_to_string(&canonical_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                emit_error(
+                    &format!("cannot read handoff file: {e}"),
+                    &[format!("path: {}", canonical_path.display())],
+                ),
+                1,
+            )
+        }
+    };
+
+    // Parse and validate
+    let handoff = match parse_handoff(&content) {
+        Ok(h) => h,
+        Err(errors) => {
+            let details: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+            let mut fields = vec![
+                field("error", str_val("invalid handoff file")),
+                field("path", str_val(&canonical_path.to_string_lossy())),
+                field("details", Value::List(details)),
+                field(
+                    "help",
+                    Value::List(vec![format!(
+                        "run `planeai-cli axi loop handoff path --loop {} --session {}` for the expected location",
+                        &loop_run.id[..std::cmp::min(8, loop_run.id.len())],
+                        &session.session_id[..std::cmp::min(8, session.session_id.len())]
+                    )]),
+                ),
+            ];
+            // If all errors are just about unknown schema, still include it
+            let _ = &mut fields;
+            return (render(&fields), 1);
+        }
+    };
+
+    // Validate IDs match
+    if let Err(errors) = validate_ids(&handoff, &loop_run.id, &session.session_id) {
+        let details: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        let fields = vec![
+            field("error", str_val("invalid handoff file")),
+            field("path", str_val(&canonical_path.to_string_lossy())),
+            field("details", Value::List(details)),
+            field(
+                "help",
+                Value::List(vec![format!(
+                    "ensure loop_id and session_id in the handoff file match the command arguments"
+                )]),
+            ),
+        ];
+        return (render(&fields), 1);
+    }
+
+    // Determine loop status transition
+    let is_active = matches!(
+        loop_run.status,
+        LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
+    );
+
+    let (new_loop_status, state_changed) = if is_active {
+        match handoff.status {
+            HandoffStatus::Completed => {
+                if loop_run.status == LoopStatus::Running {
+                    (Some(LoopStatus::Observing), true)
+                } else {
+                    (None, false)
+                }
+            }
+            HandoffStatus::Blocked => (Some(LoopStatus::Blocked), true),
+            HandoffStatus::NeedsHuman => (Some(LoopStatus::NeedsHuman), true),
+            HandoffStatus::Failed => (Some(LoopStatus::Failed), true),
+        }
+    } else {
+        (None, false)
+    };
+
+    // Atomically record: artifact + event + session status + loop status
+    let handoff_json: serde_json::Value = serde_json::to_value(&handoff).unwrap_or_default();
+    let session_status = handoff.status.as_str();
+
+    let event_payload = serde_json::json!({
+        "session_id": session.session_id,
+        "status": session_status,
+        "path": canonical_path.to_string_lossy(),
+    });
+
+    let result = match LoopService::record_handoff(
+        conn,
+        planeai_core::loop_service::RecordHandoffParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session.session_id.clone(),
+            artifact_path: Some(canonical_path.to_string_lossy().to_string()),
+            content_json: Some(handoff_json),
+            handoff_status: session_status.to_string(),
+            event_payload,
+            new_loop_status: new_loop_status.clone(),
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let final_loop_status = new_loop_status.unwrap_or(loop_run.status.clone());
+
+    // Build TOON output
+    let short_loop = &loop_run.id[..std::cmp::min(8, loop_run.id.len())];
+
+    let mut result_fields = vec![field(
+        "handoff_recorded",
+        Value::Object(vec![
+            field("loop_id", str_val(&loop_run.id)),
+            field("session_id", str_val(&session.session_id)),
+            field("artifact_id", str_val(&result.artifact_id)),
+            field("event_id", int_val(result.event_id)),
+            field("schema", str_val(&handoff.schema)),
+            field("status", str_val(session_status)),
+            field("loop_status", str_val(final_loop_status.as_str())),
+            field("session_status", str_val(session_status)),
+            field("state_changed", Value::Bool(state_changed)),
+            field("path", str_val(&canonical_path.to_string_lossy())),
+        ]),
+    )];
+
+    // Add risks if present
+    if !handoff.risks.is_empty() {
+        result_fields.push(field("risks", Value::List(handoff.risks.clone())));
+    }
+
+    // Add next_actions guidance
+    let next_actions = match handoff.status {
+        HandoffStatus::Completed => vec![format!(
+            "run verifier gates or `planeai-cli axi loop tick {short_loop}`"
+        )],
+        HandoffStatus::Blocked => {
+            vec!["inspect handoff risks and unblock manually".to_string()]
+        }
+        HandoffStatus::NeedsHuman => {
+            vec!["review handoff and provide human input".to_string()]
+        }
+        HandoffStatus::Failed => {
+            vec!["inspect failure, fix, and re-run or stop loop".to_string()]
+        }
+    };
+    result_fields.push(field("next_actions", Value::List(next_actions)));
+
+    (render(&result_fields), 0)
+}
+
 // ─── Loop Helpers ────────────────────────────────────────────────────────────
+
+/// Resolve a session within a loop's sessions by exact or prefix match.
+fn resolve_loop_session(
+    loop_sessions: &[planeai_core::loop_run::LoopSession],
+    session_arg: &str,
+) -> Result<planeai_core::loop_run::LoopSession, String> {
+    // Exact match first
+    if let Some(s) = loop_sessions.iter().find(|s| s.session_id == session_arg) {
+        return Ok(s.clone());
+    }
+
+    // Prefix match
+    let matches: Vec<_> = loop_sessions
+        .iter()
+        .filter(|s| s.session_id.starts_with(session_arg))
+        .collect();
+
+    match matches.len() {
+        0 => Err(format!("session not found in this loop: {session_arg}")),
+        1 => Ok(matches[0].clone()),
+        n => {
+            let previews: Vec<String> = matches
+                .iter()
+                .take(5)
+                .map(|s| s.session_id[..std::cmp::min(8, s.session_id.len())].to_string())
+                .collect();
+            Err(format!(
+                "ambiguous session prefix '{session_arg}' matches {n} sessions: {}",
+                previews.join(", ")
+            ))
+        }
+    }
+}
+
+/// Resolve the base path for handoff file validation.
+/// Prefers the session's worktree path, falls back to project path, then CWD.
+fn resolve_handoff_base_path(conn: &rusqlite::Connection, session_id: &str, cwd: &str) -> String {
+    // Try to get the session's worktree path
+    if let Ok(Some(session)) = db::get_session(conn, session_id) {
+        if let Some(ref wt) = session.worktree_path {
+            if !wt.is_empty() {
+                return wt.clone();
+            }
+        }
+    }
+
+    // Fall back to CWD
+    cwd.to_string()
+}
 
 /// Resolve a project from --project flag or CWD, returning (id, prefix, name, path).
 fn resolve_project(
@@ -2244,5 +2571,275 @@ mod tests {
         assert!(output.contains("22222222"), "output:\n{output}");
         assert!(output.contains("Maker"), "output:\n{output}");
         assert!(output.contains("Sub-worker"), "output:\n{output}");
+    }
+
+    // ─── Handoff AXI Tests ───────────────────────────────────────────────────
+
+    fn setup_loop_db() -> rusqlite::Connection {
+        use planeai_core::services::open_db_at;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let conn = open_db_at(&path).unwrap();
+        std::mem::forget(dir);
+        conn
+    }
+
+    fn create_test_loop_with_session(conn: &rusqlite::Connection) -> (String, String) {
+        use planeai_core::loop_run::{LoopStatus, LoopStrategy};
+        use planeai_core::loop_service::{AddLoopSessionParams, CreateLoopParams, LoopService};
+
+        let loop_run = LoopService::create_loop(
+            conn,
+            CreateLoopParams {
+                project_id: "proj-1".into(),
+                task_key: Some("PLA-201".into()),
+                created_by_session_id: None,
+                strategy: LoopStrategy::new("maker-verifier"),
+                goal: "Test handoff".into(),
+                max_rounds: 3,
+                policy_json: None,
+                budget_json: None,
+            },
+        )
+        .unwrap();
+
+        LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+
+        let session_id = "aaaabbbb-1111-2222-3333-444455556666".to_string();
+        LoopService::add_loop_session(
+            conn,
+            AddLoopSessionParams {
+                loop_id: loop_run.id.clone(),
+                session_id: session_id.clone(),
+                role: "maker".to_string(),
+                round: 1,
+                provider: Some("claude".to_string()),
+                status: "running".to_string(),
+            },
+        )
+        .unwrap();
+
+        (loop_run.id, session_id)
+    }
+
+    #[test]
+    fn handoff_path_emits_toon_with_correct_fields() {
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+        let cwd = "/tmp/test-project";
+
+        let (output, code) = loop_handoff_path(&conn, &loop_id[..8], &session_id[..8], cwd);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("handoff_path:"), "output:\n{output}");
+        assert!(
+            output.contains(&format!("loop_id: {loop_id}")),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains(&format!("session_id: {session_id}")),
+            "output:\n{output}"
+        );
+        assert!(output.contains("role: maker"), "output:\n{output}");
+        assert!(output.contains("handoff.json"), "output:\n{output}");
+        assert!(output.contains("next_actions[2]:"), "output:\n{output}");
+        assert!(
+            output.contains("write a planeai.handoff.v1 JSON file"),
+            "output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn handoff_path_fails_for_unknown_session() {
+        let conn = setup_loop_db();
+        let (loop_id, _) = create_test_loop_with_session(&conn);
+
+        let (output, code) = loop_handoff_path(&conn, &loop_id[..8], "nonexist", "/tmp");
+        assert_eq!(code, 1);
+        assert!(output.contains("error:"), "output:\n{output}");
+        assert!(output.contains("session not found"), "output:\n{output}");
+    }
+
+    #[test]
+    fn handoff_record_emits_toon_on_success() {
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+
+        // Create a handoff file
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff.json");
+        let handoff_json = serde_json::json!({
+            "schema": "planeai.handoff.v1",
+            "loop_id": loop_id,
+            "session_id": session_id,
+            "status": "completed",
+            "summary": "Feature implemented",
+            "branch": "feat/test",
+            "commit": "abc123",
+            "changed_files": ["src/main.rs"],
+            "risks": ["Might break on Windows"],
+            "evidence": [{
+                "kind": "test",
+                "name": "cargo test",
+                "result": "pass",
+                "source": "direct"
+            }]
+        });
+        std::fs::write(&handoff_path, handoff_json.to_string()).unwrap();
+
+        // Use the temp dir as the CWD (so path validation passes)
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        let (output, code) =
+            loop_handoff_record(&conn, &loop_id[..8], &session_id[..8], &handoff_path, &cwd);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("handoff_recorded:"), "output:\n{output}");
+        assert!(
+            output.contains(&format!("loop_id: {loop_id}")),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains(&format!("session_id: {session_id}")),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains("schema: planeai.handoff.v1"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("status: completed"), "output:\n{output}");
+        assert!(
+            output.contains("loop_status: observing"),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains("session_status: completed"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("state_changed: true"), "output:\n{output}");
+        assert!(output.contains("risks[1]:"), "output:\n{output}");
+        assert!(
+            output.contains("Might break on Windows"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("next_actions[1]:"), "output:\n{output}");
+
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn handoff_record_persists_artifact_and_event() {
+        use planeai_core::loop_service::LoopService;
+
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff.json");
+        let handoff_json = serde_json::json!({
+            "schema": "planeai.handoff.v1",
+            "loop_id": loop_id,
+            "session_id": session_id,
+            "status": "blocked",
+            "summary": "Blocked by migration",
+            "risks": ["Migration conflict"]
+        });
+        std::fs::write(&handoff_path, handoff_json.to_string()).unwrap();
+
+        let cwd = dir.path().to_string_lossy().to_string();
+        let (_, code) = loop_handoff_record(&conn, &loop_id, &session_id, &handoff_path, &cwd);
+        assert_eq!(code, 0);
+
+        // Check event was stored
+        let events = LoopService::list_loop_events(&conn, &loop_id).unwrap();
+        let handoff_events: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == "handoff_recorded")
+            .collect();
+        assert_eq!(handoff_events.len(), 1);
+        assert_eq!(
+            handoff_events[0].payload_json["status"].as_str().unwrap(),
+            "blocked"
+        );
+
+        // Check loop status was updated to blocked
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.status, planeai_core::loop_run::LoopStatus::Blocked);
+
+        // Check session status was updated
+        let sessions = LoopService::list_loop_sessions(&conn, &loop_id).unwrap();
+        assert_eq!(sessions[0].status, "blocked");
+
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn handoff_record_fails_on_invalid_json() {
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff.json");
+        std::fs::write(&handoff_path, "not valid json").unwrap();
+
+        let cwd = dir.path().to_string_lossy().to_string();
+        let (output, code) = loop_handoff_record(&conn, &loop_id, &session_id, &handoff_path, &cwd);
+        assert_eq!(code, 1);
+        assert!(
+            output.contains("error: invalid handoff file"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("details["), "output:\n{output}");
+
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn handoff_record_fails_on_id_mismatch() {
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+
+        let dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff.json");
+        let handoff_json = serde_json::json!({
+            "schema": "planeai.handoff.v1",
+            "loop_id": "wrong_loop_id",
+            "session_id": session_id,
+            "status": "completed",
+            "summary": "Done"
+        });
+        std::fs::write(&handoff_path, handoff_json.to_string()).unwrap();
+
+        let cwd = dir.path().to_string_lossy().to_string();
+        let (output, code) = loop_handoff_record(&conn, &loop_id, &session_id, &handoff_path, &cwd);
+        assert_eq!(code, 1);
+        assert!(
+            output.contains("error: invalid handoff file"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("loop_id mismatch"), "output:\n{output}");
+
+        std::mem::forget(dir);
+    }
+
+    #[test]
+    fn handoff_record_fails_on_path_outside_project() {
+        let conn = setup_loop_db();
+        let (loop_id, session_id) = create_test_loop_with_session(&conn);
+
+        // Create file in /tmp but use a different cwd
+        let dir = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let handoff_path = dir.path().join("handoff.json");
+        std::fs::write(&handoff_path, "{}").unwrap();
+
+        let cwd = other_dir.path().to_string_lossy().to_string();
+        let (output, code) = loop_handoff_record(&conn, &loop_id, &session_id, &handoff_path, &cwd);
+        assert_eq!(code, 1);
+        assert!(
+            output.contains("outside the project root"),
+            "output:\n{output}"
+        );
+
+        std::mem::forget(dir);
+        std::mem::forget(other_dir);
     }
 }

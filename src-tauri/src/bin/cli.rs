@@ -184,6 +184,36 @@ enum AxiLoopAction {
         /// Loop ID (prefix match supported)
         id: String,
     },
+    /// Structured handoff operations
+    Handoff {
+        #[command(subcommand)]
+        action: AxiLoopHandoffAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiLoopHandoffAction {
+    /// Print the expected handoff file path for a session
+    Path {
+        /// Loop ID (prefix match supported)
+        #[arg(long, alias = "loop")]
+        loop_id: String,
+        /// Session ID (prefix match supported)
+        #[arg(long)]
+        session: String,
+    },
+    /// Record a structured handoff from a file
+    Record {
+        /// Loop ID (prefix match supported)
+        #[arg(long, alias = "loop")]
+        loop_id: String,
+        /// Session ID (prefix match supported)
+        #[arg(long)]
+        session: String,
+        /// Path to the handoff JSON file
+        #[arg(long)]
+        path: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1100,6 +1130,16 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
         AxiLoopAction::Tick { id } => planeai::axi::loop_tick(conn, &id),
         AxiLoopAction::Stop { id } => planeai::axi::loop_stop(conn, &id),
         AxiLoopAction::Tree { id } => planeai::axi::loop_tree(conn, &id),
+        AxiLoopAction::Handoff { action } => match action {
+            AxiLoopHandoffAction::Path { loop_id, session } => {
+                planeai::axi::loop_handoff_path(conn, &loop_id, &session, cwd)
+            }
+            AxiLoopHandoffAction::Record {
+                loop_id,
+                session,
+                path,
+            } => planeai::axi::loop_handoff_record(conn, &loop_id, &session, &path, cwd),
+        },
     };
     print!("{output}");
     code

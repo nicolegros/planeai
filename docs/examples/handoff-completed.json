@@ -1,0 +1,49 @@
+{
+  "schema": "planeai.handoff.v1",
+  "loop_id": "loop_01abc2de-3456-7890-abcd-ef1234567890",
+  "session_id": "4f3a91c2-0000-1111-2222-333344445555",
+  "task_key": "PLA-201",
+  "status": "completed",
+  "branch": "pla-201/45454a5a",
+  "commit": "d25e135a4b",
+  "changed_files": [
+    "src-tauri/planeai-core/src/handoff.rs",
+    "src-tauri/planeai-core/src/lib.rs",
+    "src-tauri/planeai-core/src/loop_service.rs",
+    "src-tauri/src/axi.rs",
+    "src-tauri/src/bin/cli.rs"
+  ],
+  "summary": "Implemented structured handoff schema, parser, validator, and AXI commands for loop engineering",
+  "risks": [
+    "Path security validation uses canonicalization which may behave differently on Windows with symlinks"
+  ],
+  "next_actions": ["Run verifier test suite", "Review evidence source semantics with team"],
+  "evidence": [
+    {
+      "kind": "test",
+      "name": "cargo test -p planeai-core -- handoff",
+      "result": "pass",
+      "source": "direct",
+      "output_path": ".planeai/loops/loop_01abc2de/sessions/4f3a91c2/cargo-test-core.log"
+    },
+    {
+      "kind": "test",
+      "name": "cargo test -p planeai -- handoff",
+      "result": "pass",
+      "source": "direct",
+      "output_path": ".planeai/loops/loop_01abc2de/sessions/4f3a91c2/cargo-test-axi.log"
+    },
+    {
+      "kind": "build",
+      "name": "cargo build --bin planeai-cli",
+      "result": "pass",
+      "source": "direct"
+    },
+    {
+      "kind": "lint",
+      "name": "cargo clippy",
+      "result": "pass",
+      "source": "claimed"
+    }
+  ]
+}
