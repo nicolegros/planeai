@@ -7,12 +7,26 @@ vi.mock("../../lib/api", () => ({
   tasks: {
     list: vi.fn(() =>
       Promise.resolve([
-        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+        {
+          key: "PROJ-1",
+          title: "Fix bug",
+          description: "",
+          status: "todo",
+          priority: 0,
+          base_branch: "main",
+        },
       ]),
     ),
     listAll: vi.fn(() =>
       Promise.resolve([
-        { key: "PROJ-1", title: "Fix bug", description: "", status: "todo", priority: 0 },
+        {
+          key: "PROJ-1",
+          title: "Fix bug",
+          description: "",
+          status: "todo",
+          priority: 0,
+          base_branch: "main",
+        },
       ]),
     ),
   },
@@ -95,6 +109,34 @@ describe("SessionForm", () => {
 
     // Name and branch fields should be cleared
     expect(nameInput.value).toBe("");
+  });
+
+  it("sets base branch from task's base_branch when task is selected", async () => {
+    const target = renderForm({
+      taskPrefill: {
+        key: "PROJ-1",
+        title: "Fix bug",
+        description: "",
+        branch: "fix/bug",
+        name: "PROJ-1: Fix bug",
+        prompt: "Fix it",
+        baseBranch: "main",
+      },
+    });
+
+    // Wait for async task loading effect to fire and call onTaskSelected
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    // The base branch field should be rendered (isNewBranch is true since branches list is empty)
+    const baseField = target.querySelector("[data-field='base']");
+    expect(baseField).not.toBeNull();
+    // The select input should contain the task's base_branch value
+    const baseInput = baseField!.querySelector("input");
+    expect(baseInput).not.toBeNull();
+    expect(baseInput!.value).toBe("main");
   });
 
   it("submit button is not disabled initially", () => {

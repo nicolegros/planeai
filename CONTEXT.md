@@ -202,6 +202,8 @@ Sessions table has `worktree_path TEXT NULL`. Non-null indicates worktree mode.
 
 Project → Session name → ✅ Create worktree → Base branch (existing) → New branch name (editable, defaults to session name slugified)
 
+When a task is selected (via sidebar pick or task picker in the form), the task's `base_branch` field auto-fills the base branch selector.
+
 ## Logging
 
 Uses the `tracing` crate with a rolling daily file appender. Logs go to `<app_data_dir>/logs/planeai.log`.
