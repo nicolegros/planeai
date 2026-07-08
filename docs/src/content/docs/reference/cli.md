@@ -387,6 +387,71 @@ List registered projects.
 planeai-cli axi project ls
 ```
 
+### `axi loop create`
+
+Create a new durable loop run. The loop starts in `draft` status by default. Use `--start` to immediately transition to `running`.
+
+```bash
+planeai-cli axi loop create --goal "<goal>" [options]
+```
+
+| Flag         | Description                                              |
+| ------------ | -------------------------------------------------------- |
+| `--goal`     | Goal description for the loop (required)                 |
+| `--strategy` | Strategy identifier (default: `maker-verifier`)          |
+| `--max-rounds` | Maximum rounds before the loop stops (default: 3)      |
+| `--task`     | Task key to associate with this loop (validated)         |
+| `--project`  | Project name (otherwise resolved from CWD)               |
+| `--start`    | Start immediately (status = `running` instead of `draft`) |
+
+If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by_session_id`.
+
+> **Note:** There is no background scheduler. Loops advance only via explicit `tick` commands.
+
+### `axi loop observe`
+
+Observe loop state: summary, sessions, recent events.
+
+```bash
+planeai-cli axi loop observe <id> [--limit <n>]
+```
+
+| Flag      | Description                                  |
+| --------- | -------------------------------------------- |
+| `--limit` | Maximum number of recent events (default: 20) |
+
+The `id` can be a prefix — it will match if unambiguous.
+
+### `axi loop tick`
+
+Advance the loop by one tick. Appends a `tick` event and returns the current state.
+
+```bash
+planeai-cli axi loop tick <id>
+```
+
+This command does not dispatch maker-verifier sessions yet — it will become the deterministic state-machine step in a future PR. Currently it records the tick event for observability.
+
+### `axi loop stop`
+
+Stop a loop (mark as cancelled). Idempotent — calling stop on an already-terminal loop is a no-op.
+
+```bash
+planeai-cli axi loop stop <id>
+```
+
+Does not kill sessions. Running sessions must be cleaned up manually.
+
+### `axi loop tree`
+
+Show loop-owned sessions with recursive parent/child relationships.
+
+```bash
+planeai-cli axi loop tree <id>
+```
+
+Returns all sessions registered to the loop plus their recursive children (via `parent_session_id`). If the loop has no sessions, returns a message indicating zero sessions.
+
 ---
 
 ## Examples
