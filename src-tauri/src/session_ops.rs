@@ -667,20 +667,35 @@ pub fn read_tmux_pane_after(
         }
     };
 
-    // Apply max_bytes cap (truncate at a valid UTF-8 char boundary)
-    let text = if max_bytes > 0 && new_content.len() > max_bytes {
+    // Apply max_bytes cap: truncate to complete lines within the byte budget so
+    // the line-based cursor can advance precisely. Any partial trailing line is
+    // omitted and will be returned on the next poll.
+    let (text, was_capped) = if max_bytes > 0 && new_content.len() > max_bytes {
         let safe_end = new_content
             .char_indices()
             .take_while(|(i, _)| *i < max_bytes)
             .last()
             .map_or(0, |(i, c)| i + c.len_utf8());
-        new_content[..safe_end].to_string()
+        let capped = &new_content[..safe_end];
+        if let Some(last_nl) = capped.rfind('\n') {
+            (new_content[..last_nl].to_string(), true)
+        } else {
+            (capped.to_string(), false)
+        }
     } else {
-        new_content
+        (new_content, false)
     };
 
-    // Build new cursor from current state
-    let new_cursor = build_tmux_cursor(&all_lines);
+    // Build cursor: if max_bytes capped the output, only advance to cover the
+    // lines actually delivered so remaining content is returned on the next poll.
+    let new_cursor = if was_capped && !truncated {
+        let delivered_line_count = text.lines().count();
+        let cursor_line_count = prev_line_count + delivered_line_count;
+        let cursor_lines = &all_lines[..cursor_line_count];
+        build_tmux_cursor(cursor_lines)
+    } else {
+        build_tmux_cursor(&all_lines)
+    };
 
     Ok(TmuxCursorReadResult {
         text,

@@ -137,7 +137,7 @@ text: <new_output_since_cursor>
 ```
 
 - `truncated: true` means data was lost between the cursor position and the earliest available content (ring buffer eviction for daemon, history rolloff for tmux). The cursor is reset to the current position.
-- `--max-bytes` caps the returned text (0 = unlimited). The cursor still advances to the end of available content.
+- `--max-bytes` caps the returned text (0 = unlimited). The cursor advances only to cover the content actually returned, so remaining data is delivered on the next poll.
 - Agents should persist the `cursor` value and pass it back on the next `--after` call to receive only new output.
 
 **Workflow for loop observation**:
