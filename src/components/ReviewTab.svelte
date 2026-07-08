@@ -199,6 +199,16 @@
     if (items.length > 0 && viewer.getItem(currentFileId())) {
       viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
     }
+    // Work around a race condition where the InteractionManager doesn't pick
+    // up enableLineSelection on the first render frame. Bumping a version on
+    // the items forces a re-render which re-runs flushManagers/syncPointerListeners.
+    requestAnimationFrame(() => {
+      if (!viewer) return;
+      const rendered = viewer.getRenderedItems();
+      for (const r of rendered) {
+        r.instance.flushManagers();
+      }
+    });
   }
 
   function computeHunkMeta(items: CodeViewItem<ReviewComment>[]) {
@@ -488,22 +498,7 @@
       if (!inRange) cursorLine = ranges[0].start;
     }
     viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-    // Scroll the selected line into view directly on the viewerRoot container
-    if (viewerRoot) {
-      for (const host of viewerRoot.querySelectorAll("diffs-container")) {
-        const el = host.shadowRoot?.querySelector("[data-selected-line]") as HTMLElement | null;
-        if (!el) continue;
-        const containerRect = viewerRoot.getBoundingClientRect();
-        const elRect = el.getBoundingClientRect();
-        const margin = 40;
-        if (elRect.bottom + margin > containerRect.bottom) {
-          viewerRoot.scrollTop += elRect.bottom - containerRect.bottom + margin;
-        } else if (elRect.top - margin < containerRect.top) {
-          viewerRoot.scrollTop -= containerRect.top - elRect.top + margin;
-        }
-        break;
-      }
-    }
+    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "nearest", offset: 40 });
   }
 
   function moveCursor(delta: number) {
@@ -689,6 +684,7 @@
       diffStyle,
       stickyHeaders: false,
       enableLineSelection: true,
+      pointerEventsOnScroll: true,
       disableVirtualizationBuffers: true,
       disableFileHeader: false,
       expandUnchanged: true,
@@ -713,7 +709,10 @@
       onLineSelected(range) {
         if (range) {
           diffFocus = "body";
-          cursorLine = range.start;
+          cursorLine = range.end;
+          selectionAnchor = range.start !== range.end ? range.start : null;
+        } else {
+          selectionAnchor = null;
         }
       },
       renderAnnotation(annotation) {
