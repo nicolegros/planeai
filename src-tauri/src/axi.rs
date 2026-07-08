@@ -800,6 +800,7 @@ pub fn loop_create(
 }
 
 pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (String, i32) {
+    use planeai_core::loop_run::LoopStatus;
     use planeai_core::loop_service::LoopService;
 
     let loop_run = match resolve_loop(conn, id) {
@@ -891,14 +892,34 @@ pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (Str
         ));
     }
 
-    // Next actions
-    fields.push(field(
-        "next_actions",
-        Value::List(vec![
-            format!("Run `planeai-cli axi loop tick {short_id}` to dispatch the next step"),
-            format!("Run `planeai-cli axi loop stop {short_id}` to cancel the loop"),
-        ]),
-    ));
+    // Next actions (only shown for non-terminal loops)
+    let is_terminal = matches!(
+        loop_run.status,
+        LoopStatus::Cancelled
+            | LoopStatus::Failed
+            | LoopStatus::CompletedUnreviewed
+            | LoopStatus::Approved
+            | LoopStatus::Merged
+            | LoopStatus::Cleaned
+    );
+
+    if is_terminal {
+        fields.push(field(
+            "next_actions",
+            Value::List(vec![format!(
+                "Loop is in terminal status '{}'. No further actions available.",
+                loop_run.status.as_str()
+            )]),
+        ));
+    } else {
+        fields.push(field(
+            "next_actions",
+            Value::List(vec![
+                format!("Run `planeai-cli axi loop tick {short_id}` to dispatch the next step"),
+                format!("Run `planeai-cli axi loop stop {short_id}` to cancel the loop"),
+            ]),
+        ));
+    }
 
     (render(&fields), 0)
 }
