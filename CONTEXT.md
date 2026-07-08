@@ -226,6 +226,21 @@ Selecting an exited session triggers restart automatically. The terminal pool ac
 - `attached_once INTEGER NOT NULL DEFAULT 0` — set to 1 on first attach; determines whether attach runs launch command (0) or resume command (1)
 - `parent_session_id TEXT` — optional reference to the session that spawned this one (for orchestration/parent-child tracking)
 
+### Session tree inspection
+
+Parent/child relationships are observable via `session children` and `session tree` commands:
+
+- `planeai-cli session children <id>` — lists direct child sessions (JSON output)
+- `planeai-cli session tree <id>` — walks up to root, returns full tree in BFS order (JSON output)
+- `planeai-cli axi session children <id>` — direct children (TOON output)
+- `planeai-cli axi session tree <id>` — full tree from root (TOON output)
+
+**Design notes**:
+- Child sessions are linked for observability only. Cleanup remains explicit — killing a parent does not automatically kill children.
+- Future loop runs may own cleanup policy (cascading kill on parent exit).
+- `tree` always walks to the root first, then returns the full subtree in BFS order. If the parent referenced by `parent_session_id` no longer exists (deleted/dangling), the walk stops and the orphan becomes the effective root.
+- `session ls` (TOON) now includes `parent_session_id` in the tabular output.
+
 ### Preferences UI
 
 Dropdown: Local (default) / tmux / Daemon (experimental). Inline warning if user selects tmux but binary not found.

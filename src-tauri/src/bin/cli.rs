@@ -68,6 +68,18 @@ enum SessionAction {
         #[arg(long)]
         pretty: bool,
     },
+    /// List direct child sessions of a parent
+    Children {
+        id: String,
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Show the full session tree (walks up to root, then shows all descendants)
+    Tree {
+        id: String,
+        #[arg(long)]
+        pretty: bool,
+    },
     Delete {
         id: String,
         #[arg(long)]
@@ -173,6 +185,14 @@ enum AxiSessionAction {
     List {
         #[arg(long)]
         archived: bool,
+    },
+    /// List direct child sessions of a parent
+    Children {
+        id: String,
+    },
+    /// Show the full session tree (walks up to root, then shows all descendants)
+    Tree {
+        id: String,
     },
     /// Create a new session (auto-sets parent from $PLANEAI_SESSION_ID)
     Create {
@@ -386,6 +406,56 @@ fn main() {
                             );
                         } else {
                             println!("{}", serde_json::to_string(&sessions).unwrap());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Children { id, pretty } => {
+                let session = match planeai::session_ops::resolve_session_by_prefix(&conn, &id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                match planeai_core::services::SessionService::children(&conn, &session.id) {
+                    Ok(children) => {
+                        let output = serde_json::to_string(&children).unwrap();
+                        if pretty {
+                            let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                        } else {
+                            println!("{output}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            SessionAction::Tree { id, pretty } => {
+                let session = match planeai::session_ops::resolve_session_by_prefix(&conn, &id) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("{{\"error\": \"{e}\"}}");
+                        std::process::exit(1);
+                    }
+                };
+
+                match planeai_core::services::SessionService::tree(&conn, &session.id) {
+                    Ok(tree) => {
+                        let output = serde_json::to_string(&tree).unwrap();
+                        if pretty {
+                            let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+                        } else {
+                            println!("{output}");
                         }
                     }
                     Err(e) => {
@@ -782,6 +852,8 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
 fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32 {
     let (output, code) = match action {
         AxiSessionAction::List { archived } => planeai::axi::session_ls(conn, archived),
+        AxiSessionAction::Children { id } => planeai::axi::session_children(conn, &id),
+        AxiSessionAction::Tree { id } => planeai::axi::session_tree(conn, &id),
         AxiSessionAction::Create {
             project,
             branch,
