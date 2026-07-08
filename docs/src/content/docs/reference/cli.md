@@ -299,7 +299,7 @@ planeai-cli axi session read <id> --after <cursor> [--max-bytes <n>]
 
 **Tail mode** (default): returns the last N lines.
 
-**Cursor mode** (`--after`): returns only output produced since the cursor. See [CONTEXT.md § Session reads](../../CONTEXT.md) for cursor format, truncation semantics, and polling workflow.
+**Cursor mode** (`--after`): returns only output produced since the cursor. See [CONTEXT.md § Session reads](../../../../../CONTEXT.md) for cursor format, truncation semantics, and polling workflow.
 
 Works with both daemon and tmux backends. The local backend does not support cursor mode. The `id` can be a prefix.
 
