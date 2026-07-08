@@ -757,21 +757,21 @@ impl SessionService {
     /// Walks up to the root (session with no parent_session_id, or whose parent doesn't exist),
     /// then returns all descendants in a flat list (root first, then BFS order).
     pub fn tree(conn: &Connection, session_id: &str) -> SqlResult<Vec<SessionRecord>> {
-        // Walk up to find the root
         let root_id = Self::find_root(conn, session_id)?;
 
-        // BFS from root
         let mut result = Vec::new();
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back(root_id);
+
+        if let Some(root) = Self::get(conn, &root_id)? {
+            queue.push_back(root.id.clone());
+            result.push(root);
+        }
 
         while let Some(current_id) = queue.pop_front() {
-            if let Some(session) = Self::get(conn, &current_id)? {
-                result.push(session);
-                let children = Self::children(conn, &current_id)?;
-                for child in children {
-                    queue.push_back(child.id.clone());
-                }
+            let children = Self::children(conn, &current_id)?;
+            for child in children {
+                queue.push_back(child.id.clone());
+                result.push(child);
             }
         }
 
@@ -782,20 +782,22 @@ impl SessionService {
     /// Stops when a session has no parent or its parent doesn't exist in the DB.
     fn find_root(conn: &Connection, session_id: &str) -> SqlResult<String> {
         let mut current = session_id.to_string();
-        // Safety cap to prevent infinite loops from circular references
+        let mut current_session = Self::get(conn, &current)?;
         for _ in 0..100 {
-            match Self::get(conn, &current)? {
+            match current_session {
                 Some(session) => match session.parent_session_id {
                     Some(ref parent_id) => {
-                        // Check if parent exists
                         match Self::get(conn, parent_id)? {
-                            Some(_) => current = parent_id.clone(),
-                            None => break, // dangling parent reference — current is root
+                            Some(parent) => {
+                                current = parent_id.clone();
+                                current_session = Some(parent);
+                            }
+                            None => break,
                         }
                     }
-                    None => break, // no parent — this is root
+                    None => break,
                 },
-                None => break, // session doesn't exist — stop
+                None => break,
             }
         }
         Ok(current)
