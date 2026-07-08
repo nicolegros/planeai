@@ -9,6 +9,13 @@ use serde_json::Value as JsonValue;
 
 use crate::loop_run::*;
 
+fn parse_loop_status(s: &str) -> LoopStatus {
+    LoopStatus::parse(s).unwrap_or_else(|| {
+        tracing::warn!(status = %s, "unrecognized loop status in database, falling back to Draft");
+        LoopStatus::Draft
+    })
+}
+
 // ─── Params ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -180,8 +187,7 @@ impl LoopService {
                 parent_session_id: row.get(3)?,
                 strategy: LoopStrategy::new(row.get::<_, String>(4)?),
                 goal: row.get(5)?,
-                status: LoopStatus::parse(&row.get::<_, String>(6)?)
-                    .unwrap_or(LoopStatus::Draft),
+                status: parse_loop_status(&row.get::<_, String>(6)?),
                 current_round: row.get(7)?,
                 max_rounds: row.get(8)?,
                 created_at: row.get(9)?,
@@ -212,8 +218,7 @@ impl LoopService {
                 parent_session_id: row.get(3)?,
                 strategy: LoopStrategy::new(row.get::<_, String>(4)?),
                 goal: row.get(5)?,
-                status: LoopStatus::parse(&row.get::<_, String>(6)?)
-                    .unwrap_or(LoopStatus::Draft),
+                status: parse_loop_status(&row.get::<_, String>(6)?),
                 current_round: row.get(7)?,
                 max_rounds: row.get(8)?,
                 created_at: row.get(9)?,
@@ -245,10 +250,13 @@ impl LoopService {
             | LoopStatus::Cleaned => Some(now.clone()),
             _ => None,
         };
-        conn.execute(
+        let rows_affected = conn.execute(
             "UPDATE loop_runs SET status = ?1, updated_at = ?2, finished_at = COALESCE(?3, finished_at) WHERE id = ?4",
             params![status.as_str(), now, finished_at, id],
         )?;
+        if rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -420,10 +428,13 @@ impl LoopService {
         output_path: Option<&str>,
     ) -> SqlResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        conn.execute(
+        let rows_affected = conn.execute(
             "UPDATE verifier_runs SET status = ?1, exit_code = ?2, output_path = ?3, finished_at = ?4 WHERE id = ?5",
             params![status, exit_code, output_path, now, id],
         )?;
+        if rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 }
