@@ -187,13 +187,9 @@ enum AxiSessionAction {
         archived: bool,
     },
     /// List direct child sessions of a parent
-    Children {
-        id: String,
-    },
+    Children { id: String },
     /// Show the full session tree (walks up to root, then shows all descendants)
-    Tree {
-        id: String,
-    },
+    Tree { id: String },
     /// Create a new session (auto-sets parent from $PLANEAI_SESSION_ID)
     Create {
         #[arg(long)]

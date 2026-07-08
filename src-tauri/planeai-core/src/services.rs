@@ -786,15 +786,13 @@ impl SessionService {
         for _ in 0..100 {
             match current_session {
                 Some(session) => match session.parent_session_id {
-                    Some(ref parent_id) => {
-                        match Self::get(conn, parent_id)? {
-                            Some(parent) => {
-                                current = parent_id.clone();
-                                current_session = Some(parent);
-                            }
-                            None => break,
+                    Some(ref parent_id) => match Self::get(conn, parent_id)? {
+                        Some(parent) => {
+                            current = parent_id.clone();
+                            current_session = Some(parent);
                         }
-                    }
+                        None => break,
+                    },
                     None => break,
                 },
                 None => break,

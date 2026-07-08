@@ -378,10 +378,7 @@ pub fn session_children(conn: &rusqlite::Connection, id: &str) -> (String, i32) 
         return (render(&fields), 0);
     }
 
-    let rows: Vec<Vec<String>> = children
-        .iter()
-        .map(|s| session_tree_row(s))
-        .collect();
+    let rows: Vec<Vec<String>> = children.iter().map(session_tree_row).collect();
 
     let fields = vec![
         field("parent_session_id", str_val(&session.id[..8])),
@@ -414,13 +411,13 @@ pub fn session_tree(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
         .map(|s| s.id[..8].to_string())
         .unwrap_or_default();
 
-    let rows: Vec<Vec<String>> = tree
-        .iter()
-        .map(|s| session_tree_row(s))
-        .collect();
+    let rows: Vec<Vec<String>> = tree.iter().map(session_tree_row).collect();
 
     let fields = vec![
-        field("session_tree", Value::Object(vec![field("root", str_val(&root_id))])),
+        field(
+            "session_tree",
+            Value::Object(vec![field("root", str_val(&root_id))]),
+        ),
         field(
             "sessions",
             Value::Table {
@@ -1036,24 +1033,72 @@ mod tests {
         let grandchild_id = "dddddddd-1111-2222-3333-444444444444".to_string();
 
         crate::db::create_session_with_id(
-            conn, &root_id, &project.id, "Planner", None, "main",
-            None, Some("claude"), "daemon", true, Some("PLA-201"), None, None,
-        ).unwrap();
+            conn,
+            &root_id,
+            &project.id,
+            "Planner",
+            None,
+            "main",
+            None,
+            Some("claude"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            None,
+        )
+        .unwrap();
 
         crate::db::create_session_with_id(
-            conn, &child1_id, &project.id, "Worker 1", None, "main",
-            None, Some("codex"), "daemon", true, Some("PLA-201"), None, Some(&root_id),
-        ).unwrap();
+            conn,
+            &child1_id,
+            &project.id,
+            "Worker 1",
+            None,
+            "main",
+            None,
+            Some("codex"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            Some(&root_id),
+        )
+        .unwrap();
 
         crate::db::create_session_with_id(
-            conn, &child2_id, &project.id, "Reviewer", None, "main",
-            None, Some("kiro"), "daemon", true, Some("PLA-201"), None, Some(&root_id),
-        ).unwrap();
+            conn,
+            &child2_id,
+            &project.id,
+            "Reviewer",
+            None,
+            "main",
+            None,
+            Some("kiro"),
+            "daemon",
+            true,
+            Some("PLA-201"),
+            None,
+            Some(&root_id),
+        )
+        .unwrap();
 
         crate::db::create_session_with_id(
-            conn, &grandchild_id, &project.id, "Sub-worker", None, "main",
-            None, Some("codex"), "daemon", true, None, None, Some(&child1_id),
-        ).unwrap();
+            conn,
+            &grandchild_id,
+            &project.id,
+            "Sub-worker",
+            None,
+            "main",
+            None,
+            Some("codex"),
+            "daemon",
+            true,
+            None,
+            None,
+            Some(&child1_id),
+        )
+        .unwrap();
 
         (root_id, child1_id, child2_id, grandchild_id)
     }
@@ -1070,25 +1115,15 @@ mod tests {
             "output:\n{output}"
         );
         assert!(
-            output.contains("children[2]{id,parent_session_id,name,status,provider,task_key,backend}:"),
+            output.contains(
+                "children[2]{id,parent_session_id,name,status,provider,task_key,backend}:"
+            ),
             "output:\n{output}"
         );
-        assert!(
-            output.contains(&child1_id[..8]),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains(&child2_id[..8]),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains("Worker 1"),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains("Reviewer"),
-            "output:\n{output}"
-        );
+        assert!(output.contains(&child1_id[..8]), "output:\n{output}");
+        assert!(output.contains(&child2_id[..8]), "output:\n{output}");
+        assert!(output.contains("Worker 1"), "output:\n{output}");
+        assert!(output.contains("Reviewer"), "output:\n{output}");
     }
 
     #[test]
@@ -1099,10 +1134,7 @@ mod tests {
         // child2 has no children
         let (output, code) = session_children(&conn, &child2_id[..8]);
         assert_eq!(code, 0);
-        assert!(
-            output.contains("children: 0 children"),
-            "output:\n{output}"
-        );
+        assert!(output.contains("children: 0 children"), "output:\n{output}");
     }
 
     #[test]
@@ -1112,27 +1144,30 @@ mod tests {
 
         let (output, code) = session_tree(&conn, &root_id[..8]);
         assert_eq!(code, 0);
+        assert!(output.contains("session_tree:"), "output:\n{output}");
+        assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
         assert!(
-            output.contains("session_tree:"),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains("root: aaaaaaaa"),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains("sessions[4]{id,parent_session_id,name,status,provider,task_key,backend}:"),
+            output.contains(
+                "sessions[4]{id,parent_session_id,name,status,provider,task_key,backend}:"
+            ),
             "output:\n{output}"
         );
         // BFS order: root, child1, child2, grandchild
         let lines: Vec<&str> = output.lines().collect();
-        let session_lines: Vec<&&str> = lines.iter()
-            .filter(|l| l.trim().starts_with(&root_id[..8])
-                || l.trim().starts_with(&child1_id[..8])
-                || l.trim().starts_with(&child2_id[..8])
-                || l.trim().starts_with(&grandchild_id[..8]))
+        let session_lines: Vec<&&str> = lines
+            .iter()
+            .filter(|l| {
+                l.trim().starts_with(&root_id[..8])
+                    || l.trim().starts_with(&child1_id[..8])
+                    || l.trim().starts_with(&child2_id[..8])
+                    || l.trim().starts_with(&grandchild_id[..8])
+            })
             .collect();
-        assert_eq!(session_lines.len(), 4, "expected 4 session rows, output:\n{output}");
+        assert_eq!(
+            session_lines.len(),
+            4,
+            "expected 4 session rows, output:\n{output}"
+        );
     }
 
     #[test]
@@ -1143,13 +1178,7 @@ mod tests {
         // Call from grandchild — should walk up to root
         let (output, code) = session_tree(&conn, &grandchild_id[..8]);
         assert_eq!(code, 0);
-        assert!(
-            output.contains("root: aaaaaaaa"),
-            "output:\n{output}"
-        );
-        assert!(
-            output.contains("sessions[4]"),
-            "output:\n{output}"
-        );
+        assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
+        assert!(output.contains("sessions[4]"), "output:\n{output}");
     }
 }
