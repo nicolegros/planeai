@@ -73,17 +73,15 @@ fn create_loop_and_get_returns_it() {
 fn list_loops_filters_by_project() {
     let conn = test_db();
 
-    let make = |project_id: &str| {
-        CreateLoopParams {
-            project_id: project_id.into(),
-            task_key: None,
-            parent_session_id: "sess-1".into(),
-            strategy: LoopStrategy::new("single"),
-            goal: "goal".into(),
-            max_rounds: 3,
-            policy_json: None,
-            budget_json: None,
-        }
+    let make = |project_id: &str| CreateLoopParams {
+        project_id: project_id.into(),
+        task_key: None,
+        parent_session_id: "sess-1".into(),
+        strategy: LoopStrategy::new("single"),
+        goal: "goal".into(),
+        max_rounds: 3,
+        policy_json: None,
+        budget_json: None,
     };
 
     LoopService::create_loop(&conn, make("proj-a")).unwrap();
@@ -126,8 +124,14 @@ fn update_loop_status_changes_status_and_updated_at() {
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
     assert_eq!(fetched.status, LoopStatus::Running);
-    assert!(fetched.updated_at > created.updated_at, "updated_at should advance");
-    assert_eq!(fetched.finished_at, None, "running should not set finished_at");
+    assert!(
+        fetched.updated_at > created.updated_at,
+        "updated_at should advance"
+    );
+    assert_eq!(
+        fetched.finished_at, None,
+        "running should not set finished_at"
+    );
 }
 
 #[test]
@@ -152,7 +156,10 @@ fn update_loop_status_to_terminal_sets_finished_at() {
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
     assert_eq!(fetched.status, LoopStatus::Failed);
-    assert!(fetched.finished_at.is_some(), "terminal status should set finished_at");
+    assert!(
+        fetched.finished_at.is_some(),
+        "terminal status should set finished_at"
+    );
 }
 
 // ─── 5. Add loop session → list returns them ─────────────────────────────────
@@ -246,7 +253,10 @@ fn append_and_list_events_ordered_by_id() {
     )
     .unwrap();
 
-    assert!(e2.id > e1.id, "event ids should be monotonically increasing");
+    assert!(
+        e2.id > e1.id,
+        "event ids should be monotonically increasing"
+    );
 
     let events = LoopService::list_loop_events(&conn, &loop_run.id).unwrap();
     assert_eq!(events.len(), 2);
@@ -291,14 +301,8 @@ fn add_and_update_verifier_run() {
     assert_eq!(vr.exit_code, None);
     assert_eq!(vr.finished_at, None);
 
-    LoopService::update_verifier_run(
-        &conn,
-        &vr.id,
-        "passed",
-        Some(0),
-        Some("/tmp/output.log"),
-    )
-    .unwrap();
+    LoopService::update_verifier_run(&conn, &vr.id, "passed", Some(0), Some("/tmp/output.log"))
+        .unwrap();
 
     // Verify by reading directly (get_verifier_run not yet needed in interface)
     let row: (String, Option<i32>, Option<String>, Option<String>) = conn

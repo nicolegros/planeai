@@ -235,11 +235,7 @@ impl LoopService {
         rows.collect()
     }
 
-    pub fn update_loop_status(
-        conn: &Connection,
-        id: &str,
-        status: LoopStatus,
-    ) -> SqlResult<()> {
+    pub fn update_loop_status(conn: &Connection, id: &str, status: LoopStatus) -> SqlResult<()> {
         let now = chrono::Utc::now().to_rfc3339();
         let finished_at = match status {
             LoopStatus::CompletedUnreviewed
@@ -291,10 +287,7 @@ impl LoopService {
         })
     }
 
-    pub fn list_loop_sessions(
-        conn: &Connection,
-        loop_id: &str,
-    ) -> SqlResult<Vec<LoopSession>> {
+    pub fn list_loop_sessions(conn: &Connection, loop_id: &str) -> SqlResult<Vec<LoopSession>> {
         let mut stmt = conn.prepare(
             "SELECT loop_id, session_id, role, round, provider, status, created_at
              FROM loop_sessions WHERE loop_id = ?1 ORDER BY round, created_at",
