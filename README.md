@@ -67,4 +67,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for prerequisites, testing, and contrib
 
 ## License
 
-[MIT](./LICENSE)
+[AGPL-3.0](./LICENSE)
