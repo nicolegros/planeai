@@ -750,7 +750,6 @@ pub fn loop_observe(
     limit: usize,
 ) -> (String, i32) {
     use planeai_core::loop_service::LoopService;
-    use planeai_core::services::SessionService;
 
     let loop_run = match resolve_loop(conn, id) {
         Ok(r) => r,
@@ -783,20 +782,6 @@ pub fn loop_observe(
     if loop_sessions.is_empty() {
         fields.push(field("sessions", str_val("0 sessions")));
     } else {
-        // Collect all session IDs from the loop, then expand with recursive children
-        let mut all_session_ids: Vec<String> = Vec::new();
-        for ls in &loop_sessions {
-            all_session_ids.push(ls.session_id.clone());
-            // Get recursive children of each loop session
-            if let Ok(tree) = SessionService::tree(conn, &ls.session_id) {
-                for s in &tree {
-                    if s.id != ls.session_id && !all_session_ids.contains(&s.id) {
-                        all_session_ids.push(s.id.clone());
-                    }
-                }
-            }
-        }
-
         let rows: Vec<Vec<String>> = loop_sessions
             .iter()
             .map(|s| {
@@ -1096,9 +1081,13 @@ fn resolve_loop(
     // Prefix match: query all loops and find prefix match
     // We need a list of all loops — use a raw query for prefix matching
     let mut stmt = conn
-        .prepare("SELECT id FROM loop_runs WHERE id LIKE ?1")
+        .prepare("SELECT id FROM loop_runs WHERE id GLOB ?1")
         .map_err(|e| e.to_string())?;
-    let prefix_pattern = format!("{id}%");
+    let escaped_id: String = id.chars().flat_map(|c| match c {
+        '*' | '?' | '[' | ']' => vec!['[', c, ']'],
+        _ => vec![c],
+    }).collect();
+    let prefix_pattern = format!("{escaped_id}*");
     let ids: Vec<String> = stmt
         .query_map(rusqlite::params![prefix_pattern], |row| row.get(0))
         .map_err(|e| e.to_string())?
