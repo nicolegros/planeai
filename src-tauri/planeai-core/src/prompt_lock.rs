@@ -99,3 +99,63 @@ pub fn release(conn: &Connection, lock: &PromptLock) -> Result<(), LockError> {
     .map_err(|e| LockError::Db(e.to_string()))?;
     Ok(())
 }
+
+/// RAII guard that releases the prompt lock on drop.
+///
+/// Use `acquire_guard` to obtain one. The guard ensures the lock is released
+/// even if the caller returns early via `?` or panics.
+pub struct PromptLockGuard<'a> {
+    conn: &'a Connection,
+    lock: Option<PromptLock>,
+}
+
+impl<'a> PromptLockGuard<'a> {
+    /// Access the underlying lock info.
+    pub fn lock(&self) -> &PromptLock {
+        self.lock.as_ref().expect("guard already consumed")
+    }
+
+    /// Explicitly release the lock, returning any error from the release.
+    /// If release fails, Drop will still attempt cleanup (lock remains in self.lock).
+    /// If not called, Drop will release silently (logging on failure).
+    pub fn release(mut self) -> Result<(), LockError> {
+        if let Some(ref lock) = self.lock {
+            release(self.conn, lock)?;
+        }
+        // Only clear after successful release — if release() returned Err above,
+        // we never reach here, and Drop will retry.
+        self.lock = None;
+        Ok(())
+    }
+}
+
+impl<'a> Drop for PromptLockGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(ref lock) = self.lock {
+            if let Err(e) = self.conn.execute(
+                "DELETE FROM prompt_locks WHERE session_id = ?1 AND owner_id = ?2",
+                params![lock.session_id, lock.owner_id],
+            ) {
+                tracing::warn!(
+                    session_id = %lock.session_id,
+                    error = %e,
+                    "PromptLockGuard: failed to release lock on drop"
+                );
+            }
+        }
+    }
+}
+
+/// Acquire a prompt lock and return an RAII guard that releases on drop.
+///
+/// Prefer this over raw `acquire` + `release` to prevent lock leaks on early returns.
+pub fn acquire_guard<'a>(
+    conn: &'a Connection,
+    session_id: &str,
+) -> Result<PromptLockGuard<'a>, LockError> {
+    let lock = acquire(conn, session_id)?;
+    Ok(PromptLockGuard {
+        conn,
+        lock: Some(lock),
+    })
+}

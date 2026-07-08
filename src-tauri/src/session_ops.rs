@@ -412,12 +412,13 @@ pub fn send_prompt(
         ));
     }
 
-    // Acquire prompt lock
-    let lock = planeai_core::prompt_lock::acquire(conn, &session.id).map_err(|e| e.to_string())?;
+    // Acquire prompt lock — RAII guard ensures release even on early `?` returns
+    let guard =
+        planeai_core::prompt_lock::acquire_guard(conn, &session.id).map_err(|e| e.to_string())?;
 
     tracing::info!(session_id = %session.id, backend = %session.backend, "send_prompt: dispatching");
 
-    let result = match session.backend.as_str() {
+    match session.backend.as_str() {
         "tmux" => {
             let tmux_name = session
                 .tmux_name
@@ -425,30 +426,30 @@ pub fn send_prompt(
                 .ok_or("tmux session has no tmux_name")?;
             if !ops.tmux_has_session(tmux_name) {
                 tracing::warn!(tmux_name, "send_prompt: tmux session not running");
-                Err("tmux session is not running".to_string())
-            } else {
-                ops.tmux_send_keys(tmux_name, text)?;
-                tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
-                Ok(())
+                return Err("tmux session is not running".to_string());
             }
+            ops.tmux_send_keys(tmux_name, text)?;
+            tracing::info!(tmux_name, "send_prompt: sent via tmux send-keys");
         }
         "local" => {
             ops.notify_socket_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via notify socket to local PTY");
-            Ok(())
         }
         "daemon" => {
             ops.daemon_send(&session.id, text)?;
             tracing::info!(session_id = %session.id, "send_prompt: sent via daemon data connection");
-            Ok(())
         }
-        other => Err(format!("unsupported backend: {other}")),
-    };
+        other => return Err(format!("unsupported backend: {other}")),
+    }
 
-    // Always release lock
-    let _ = planeai_core::prompt_lock::release(conn, &lock);
+    // Prompt was sent successfully. Release explicitly for observability, but
+    // don't fail the caller — the prompt was already delivered. Guard would
+    // release on drop anyway.
+    if let Err(e) = guard.release() {
+        tracing::warn!(session_id = %session.id, error = %e, "send_prompt: failed to release prompt lock after successful send");
+    }
 
-    result.map(|_| PromptResult {
+    Ok(PromptResult {
         session_id: session.id,
         backend: session.backend,
     })

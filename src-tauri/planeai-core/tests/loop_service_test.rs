@@ -30,6 +30,19 @@ fn loop_migration_is_idempotent() {
         )
         .unwrap();
     assert_eq!(count, 5);
+
+    // Indexes should exist
+    let idx_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND (name LIKE 'idx_loop%' OR name LIKE 'idx_verifier%')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        idx_count >= 8,
+        "expected at least 8 indexes, got {idx_count}"
+    );
 }
 
 // ─── 2. Create loop → get loop ───────────────────────────────────────────────
@@ -42,7 +55,7 @@ fn create_loop_and_get_returns_it() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: Some("PLA-42".into()),
-            parent_session_id: "sess-parent".into(),
+            created_by_session_id: Some("sess-parent".into()),
             strategy: LoopStrategy::new("maker-verifier"),
             goal: "Fix the bug".into(),
             max_rounds: 5,
@@ -61,10 +74,36 @@ fn create_loop_and_get_returns_it() {
     assert_eq!(fetched.id, created.id);
     assert_eq!(fetched.project_id, "proj-1");
     assert_eq!(fetched.task_key, Some("PLA-42".to_string()));
-    assert_eq!(fetched.parent_session_id, "sess-parent");
+    assert_eq!(
+        fetched.created_by_session_id,
+        Some("sess-parent".to_string())
+    );
     assert_eq!(fetched.strategy, LoopStrategy::new("maker-verifier"));
     assert_eq!(fetched.goal, "Fix the bug");
     assert_eq!(fetched.status, LoopStatus::Draft);
+}
+
+#[test]
+fn create_loop_without_session_id() {
+    let conn = test_db();
+    let created = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "CLI-initiated loop".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(created.created_by_session_id, None);
+    let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
+    assert_eq!(fetched.created_by_session_id, None);
 }
 
 // ─── 3. List loops filters by project_id ─────────────────────────────────────
@@ -76,7 +115,7 @@ fn list_loops_filters_by_project() {
     let make = |project_id: &str| CreateLoopParams {
         project_id: project_id.into(),
         task_key: None,
-        parent_session_id: "sess-1".into(),
+        created_by_session_id: None,
         strategy: LoopStrategy::new("single"),
         goal: "goal".into(),
         max_rounds: 3,
@@ -107,7 +146,7 @@ fn update_loop_status_changes_status_and_updated_at() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: None,
             strategy: LoopStrategy::new("single"),
             goal: "do stuff".into(),
             max_rounds: 3,
@@ -117,7 +156,6 @@ fn update_loop_status_changes_status_and_updated_at() {
     )
     .unwrap();
 
-    // Small sleep to ensure timestamp difference
     std::thread::sleep(std::time::Duration::from_millis(10));
 
     LoopService::update_loop_status(&conn, &created.id, LoopStatus::Running).unwrap();
@@ -129,20 +167,20 @@ fn update_loop_status_changes_status_and_updated_at() {
         "updated_at should advance"
     );
     assert_eq!(
-        fetched.finished_at, None,
-        "running should not set finished_at"
+        fetched.executor_finished_at, None,
+        "running should not set executor_finished_at"
     );
 }
 
 #[test]
-fn update_loop_status_to_terminal_sets_finished_at() {
+fn update_loop_status_to_completed_unreviewed_sets_executor_finished_at() {
     let conn = test_db();
     let created = LoopService::create_loop(
         &conn,
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: None,
             strategy: LoopStrategy::new("single"),
             goal: "do stuff".into(),
             max_rounds: 3,
@@ -152,13 +190,42 @@ fn update_loop_status_to_terminal_sets_finished_at() {
     )
     .unwrap();
 
-    LoopService::update_loop_status(&conn, &created.id, LoopStatus::Failed).unwrap();
+    LoopService::update_loop_status(&conn, &created.id, LoopStatus::CompletedUnreviewed).unwrap();
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
-    assert_eq!(fetched.status, LoopStatus::Failed);
+    assert_eq!(fetched.status, LoopStatus::CompletedUnreviewed);
     assert!(
-        fetched.finished_at.is_some(),
-        "terminal status should set finished_at"
+        fetched.executor_finished_at.is_some(),
+        "completed_unreviewed should set executor_finished_at"
+    );
+}
+
+#[test]
+fn update_loop_status_to_approved_does_not_set_executor_finished_at() {
+    let conn = test_db();
+    let created = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "do stuff".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    // approved is a lifecycle status, not an executor-done status
+    LoopService::update_loop_status(&conn, &created.id, LoopStatus::Approved).unwrap();
+
+    let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
+    assert_eq!(fetched.status, LoopStatus::Approved);
+    assert_eq!(
+        fetched.executor_finished_at, None,
+        "approved is lifecycle, not executor — should not set executor_finished_at"
     );
 }
 
@@ -172,7 +239,7 @@ fn add_and_list_loop_sessions() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: Some("sess-1".into()),
             strategy: LoopStrategy::new("maker-verifier"),
             goal: "implement feature".into(),
             max_rounds: 3,
@@ -227,7 +294,7 @@ fn append_and_list_events_ordered_by_id() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: None,
             strategy: LoopStrategy::new("single"),
             goal: "goal".into(),
             max_rounds: 3,
@@ -275,7 +342,7 @@ fn add_and_update_verifier_run() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: None,
             strategy: LoopStrategy::new("maker-verifier"),
             goal: "goal".into(),
             max_rounds: 3,
@@ -304,7 +371,7 @@ fn add_and_update_verifier_run() {
     LoopService::update_verifier_run(&conn, &vr.id, "passed", Some(0), Some("/tmp/output.log"))
         .unwrap();
 
-    // Verify by reading directly (get_verifier_run not yet needed in interface)
+    // Verify by reading directly
     let row: (String, Option<i32>, Option<String>, Option<String>) = conn
         .query_row(
             "SELECT status, exit_code, output_path, finished_at FROM verifier_runs WHERE id = ?1",
@@ -329,7 +396,7 @@ fn add_artifact_persists() {
         CreateLoopParams {
             project_id: "proj-1".into(),
             task_key: None,
-            parent_session_id: "sess-1".into(),
+            created_by_session_id: None,
             strategy: LoopStrategy::new("single"),
             goal: "goal".into(),
             max_rounds: 3,
@@ -364,4 +431,458 @@ fn add_artifact_persists() {
         )
         .unwrap();
     assert_eq!(row_kind, "diff");
+}
+
+// ─── 9. Strict parsing rejects invalid status ────────────────────────────────
+
+#[test]
+fn get_loop_with_invalid_status_returns_error() {
+    let conn = test_db();
+    let created = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "goal".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    // Corrupt the status directly in the DB
+    conn.execute(
+        "UPDATE loop_runs SET status = 'bogus_invalid' WHERE id = ?1",
+        rusqlite::params![created.id],
+    )
+    .unwrap();
+
+    let result = LoopService::get_loop(&conn, &created.id);
+    match result {
+        Err(LoopServiceError::InvalidStatus(e)) => {
+            assert_eq!(e.0, "bogus_invalid");
+        }
+        other => panic!("expected InvalidStatus error, got {:?}", other),
+    }
+}
+
+#[test]
+fn list_loops_with_invalid_status_returns_error() {
+    let conn = test_db();
+    let created = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "goal".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    conn.execute(
+        "UPDATE loop_runs SET status = 'garbage' WHERE id = ?1",
+        rusqlite::params![created.id],
+    )
+    .unwrap();
+
+    let result = LoopService::list_loops(&conn, "proj-1");
+    assert!(result.is_err());
+}
+
+// ─── 10. Lossy parsing still works for UI ────────────────────────────────────
+
+#[test]
+fn parse_loop_status_lossy_falls_back_to_draft() {
+    let status = parse_loop_status_lossy("totally_unknown");
+    assert_eq!(status, LoopStatus::Draft);
+}
+
+#[test]
+fn parse_loop_status_lossy_parses_valid() {
+    let status = parse_loop_status_lossy("running");
+    assert_eq!(status, LoopStatus::Running);
+}
+
+// ─── 11. Regression: #269 schema migration ───────────────────────────────────
+
+/// Helper: create a database with the exact #269 schema (parent_session_id NOT NULL, finished_at)
+fn setup_269_schema() -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE loop_runs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            task_key TEXT,
+            parent_session_id TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            current_round INTEGER NOT NULL DEFAULT 0,
+            max_rounds INTEGER NOT NULL DEFAULT 3,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            policy_json TEXT,
+            budget_json TEXT
+        );
+        CREATE TABLE loop_sessions (
+            loop_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            round INTEGER NOT NULL,
+            provider TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (loop_id, session_id)
+        );
+        CREATE TABLE loop_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loop_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE loop_artifacts (
+            id TEXT PRIMARY KEY,
+            loop_id TEXT NOT NULL,
+            session_id TEXT,
+            kind TEXT NOT NULL,
+            path TEXT,
+            content_json TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE verifier_runs (
+            id TEXT PRIMARY KEY,
+            loop_id TEXT NOT NULL,
+            session_id TEXT,
+            verifier_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            command TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            exit_code INTEGER,
+            output_path TEXT,
+            created_at TEXT NOT NULL,
+            finished_at TEXT
+        );",
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn migrate_from_269_schema_renames_columns_before_indexes() {
+    let conn = setup_269_schema();
+
+    // Insert a row with old schema to verify data survives migration
+    conn.execute(
+        "INSERT INTO loop_runs (id, project_id, parent_session_id, strategy, goal, status, created_at, updated_at)
+         VALUES ('loop-1', 'proj-1', 'sess-old', 'single', 'goal', 'running', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+
+    LoopService::migrate(&conn).unwrap();
+
+    // Verify columns were renamed
+    let cols: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(loop_runs)").unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+
+    assert!(cols.contains(&"created_by_session_id".to_string()));
+    assert!(cols.contains(&"executor_finished_at".to_string()));
+    assert!(!cols.contains(&"parent_session_id".to_string()));
+    assert!(!cols.contains(&"finished_at".to_string()));
+
+    // Verify data survived
+    let session_id: Option<String> = conn
+        .query_row(
+            "SELECT created_by_session_id FROM loop_runs WHERE id = 'loop-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(session_id, Some("sess-old".to_string()));
+
+    // Verify indexes were created (they reference the new column names)
+    let idx_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND (name LIKE 'idx_loop%' OR name LIKE 'idx_verifier%')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        idx_count >= 8,
+        "expected at least 8 indexes, got {idx_count}"
+    );
+}
+
+#[test]
+fn migrate_from_269_schema_makes_created_by_session_id_nullable() {
+    let conn = setup_269_schema();
+    LoopService::migrate(&conn).unwrap();
+
+    let mut stmt = conn.prepare("PRAGMA table_info(loop_runs)").unwrap();
+    let cols: Vec<(String, i64)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?, // name
+                row.get::<_, i64>(3)?,    // notnull
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    let (_, notnull) = cols
+        .iter()
+        .find(|(name, _)| name == "created_by_session_id")
+        .expect("created_by_session_id column must exist");
+
+    assert_eq!(
+        *notnull, 0,
+        "created_by_session_id must be nullable after migration"
+    );
+}
+
+// ─── 12. Child writes touch loop updated_at ──────────────────────────────────
+
+#[test]
+fn child_writes_advance_loop_updated_at() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "goal".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let original_updated_at = loop_run.updated_at.clone();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    // add_loop_session should touch
+    LoopService::add_loop_session(
+        &conn,
+        AddLoopSessionParams {
+            loop_id: loop_run.id.clone(),
+            session_id: "s1".into(),
+            role: "maker".into(),
+            round: 1,
+            provider: None,
+            status: "active".into(),
+        },
+    )
+    .unwrap();
+
+    let after_session = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    assert!(
+        after_session.updated_at > original_updated_at,
+        "add_loop_session should advance updated_at"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    // append_loop_event should touch
+    LoopService::append_loop_event(&conn, &loop_run.id, "test_event", &serde_json::json!({}))
+        .unwrap();
+
+    let after_event = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    assert!(
+        after_event.updated_at > after_session.updated_at,
+        "append_loop_event should advance updated_at"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    // add_artifact should touch
+    LoopService::add_artifact(
+        &conn,
+        AddArtifactParams {
+            loop_id: loop_run.id.clone(),
+            session_id: None,
+            kind: "patch".into(),
+            path: None,
+            content_json: None,
+        },
+    )
+    .unwrap();
+
+    let after_artifact = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    assert!(
+        after_artifact.updated_at > after_event.updated_at,
+        "add_artifact should advance updated_at"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    // add_verifier_run + update_verifier_run should touch
+    let vr = LoopService::add_verifier_run(
+        &conn,
+        AddVerifierRunParams {
+            loop_id: loop_run.id.clone(),
+            session_id: None,
+            verifier_type: "command".into(),
+            name: "test".into(),
+            command: "cargo test".into(),
+        },
+    )
+    .unwrap();
+
+    let after_vr_add = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    assert!(
+        after_vr_add.updated_at > after_artifact.updated_at,
+        "add_verifier_run should advance updated_at"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(10));
+
+    LoopService::update_verifier_run(&conn, &vr.id, "passed", Some(0), None).unwrap();
+
+    let after_vr_update = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    assert!(
+        after_vr_update.updated_at > after_vr_add.updated_at,
+        "update_verifier_run should advance updated_at"
+    );
+}
+
+// ─── 13. Child writes fail for missing loop (orphan prevention) ──────────────
+
+#[test]
+fn add_loop_session_fails_for_missing_loop() {
+    let conn = test_db();
+    let result = LoopService::add_loop_session(
+        &conn,
+        AddLoopSessionParams {
+            loop_id: "does-not-exist".into(),
+            session_id: "s1".into(),
+            role: "maker".into(),
+            round: 1,
+            provider: None,
+            status: "active".into(),
+        },
+    );
+    assert!(result.is_err(), "should fail for missing loop");
+
+    // Verify no orphan row was left behind
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM loop_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "no orphan rows should exist");
+}
+
+#[test]
+fn append_loop_event_fails_for_missing_loop() {
+    let conn = test_db();
+    let result = LoopService::append_loop_event(
+        &conn,
+        "does-not-exist",
+        "round_started",
+        &serde_json::json!({}),
+    );
+    assert!(result.is_err(), "should fail for missing loop");
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM loop_events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "no orphan rows should exist");
+}
+
+#[test]
+fn add_artifact_fails_for_missing_loop() {
+    let conn = test_db();
+    let result = LoopService::add_artifact(
+        &conn,
+        AddArtifactParams {
+            loop_id: "does-not-exist".into(),
+            session_id: None,
+            kind: "diff".into(),
+            path: None,
+            content_json: None,
+        },
+    );
+    assert!(result.is_err(), "should fail for missing loop");
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM loop_artifacts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "no orphan rows should exist");
+}
+
+#[test]
+fn add_verifier_run_fails_for_missing_loop() {
+    let conn = test_db();
+    let result = LoopService::add_verifier_run(
+        &conn,
+        AddVerifierRunParams {
+            loop_id: "does-not-exist".into(),
+            session_id: None,
+            verifier_type: "command".into(),
+            name: "test".into(),
+            command: "cargo test".into(),
+        },
+    );
+    assert!(result.is_err(), "should fail for missing loop");
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM verifier_runs", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "no orphan rows should exist");
+}
+
+// ─── 14. Migration recovers from leftover temp table ─────────────────────────
+
+#[test]
+fn migrate_from_269_schema_recovers_from_leftover_loop_runs_new() {
+    let conn = setup_269_schema();
+
+    // Simulate a previously half-failed migration that left loop_runs_new behind
+    conn.execute_batch("CREATE TABLE loop_runs_new (id TEXT PRIMARY KEY);")
+        .unwrap();
+
+    LoopService::migrate(&conn).unwrap();
+
+    // Verify final schema is correct
+    let mut stmt = conn.prepare("PRAGMA table_info(loop_runs)").unwrap();
+    let cols: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert!(cols.contains(&"created_by_session_id".to_string()));
+    assert!(cols.contains(&"executor_finished_at".to_string()));
+
+    // Verify temp table was cleaned up
+    let temp_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='loop_runs_new'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        temp_exists, 0,
+        "loop_runs_new should not exist after migration"
+    );
 }

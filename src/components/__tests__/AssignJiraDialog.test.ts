@@ -26,7 +26,8 @@ function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
     key: "PLA-42",
     title: "Fix login redirect loop",
     status: "todo",
-    description: "When a user logs in via SSO they get redirected back to the login page in an infinite loop.",
+    description:
+      "When a user logs in via SSO they get redirected back to the login page in an infinite loop.",
     priority: 1,
     blocked_by: [],
     tags: [],
@@ -37,9 +38,7 @@ function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
   };
 }
 
-const projects: Project[] = [
-  { id: "p1", name: "myapp", path: "/tmp/myapp" },
-];
+const projects: Project[] = [{ id: "p1", name: "myapp", path: "/tmp/myapp" }];
 
 let component: Record<string, unknown> | null = null;
 let mountTarget: HTMLElement | null = null;
