@@ -680,7 +680,7 @@ pub fn read_tmux_pane_after(
         if let Some(last_nl) = capped.rfind('\n') {
             (new_content[..last_nl].to_string(), true)
         } else {
-            (capped.to_string(), false)
+            (capped.to_string(), true)
         }
     } else {
         (new_content, false)
@@ -689,10 +689,15 @@ pub fn read_tmux_pane_after(
     // Build cursor: if max_bytes capped the output, only advance to cover the
     // lines actually delivered so remaining content is returned on the next poll.
     let new_cursor = if was_capped && !truncated {
-        let delivered_line_count = text.lines().count();
-        let cursor_line_count = prev_line_count + delivered_line_count;
-        let cursor_lines = &all_lines[..cursor_line_count];
-        build_tmux_cursor(cursor_lines)
+        let newline_count = text.matches('\n').count();
+        if newline_count == 0 {
+            build_tmux_cursor(&all_lines[..prev_line_count])
+        } else {
+            let delivered_line_count = newline_count + 1;
+            let cursor_line_count = prev_line_count + delivered_line_count;
+            let cursor_lines = &all_lines[..cursor_line_count];
+            build_tmux_cursor(cursor_lines)
+        }
     } else {
         build_tmux_cursor(&all_lines)
     };
