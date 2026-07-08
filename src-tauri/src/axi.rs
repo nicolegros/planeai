@@ -912,6 +912,30 @@ pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
         Err(e) => return (emit_error(&e, &[]), 1),
     };
 
+    let is_terminal = matches!(
+        loop_run.status,
+        LoopStatus::Cancelled
+            | LoopStatus::Failed
+            | LoopStatus::CompletedUnreviewed
+            | LoopStatus::Approved
+            | LoopStatus::Merged
+            | LoopStatus::Cleaned
+    );
+
+    if is_terminal {
+        return (
+            emit_error(
+                &format!(
+                    "cannot tick loop {}: already in terminal status '{}'",
+                    &loop_run.id[..8],
+                    loop_run.status.as_str()
+                ),
+                &[],
+            ),
+            1,
+        );
+    }
+
     // If draft, transition to running and append loop_started event
     if loop_run.status == LoopStatus::Draft {
         if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running) {
@@ -2034,6 +2058,26 @@ mod tests {
             "output:\n{output}"
         );
         assert!(output.contains("no-op"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_tick_rejects_terminal_status() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn, "/tmp/myapp", None, None, "maker-verifier", "Goal", 3, true,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        loop_stop(&conn, &loop_id);
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 1, "expected error exit code, output:\n{output}");
+        assert!(
+            output.contains("terminal status"),
+            "expected terminal status error, output:\n{output}"
+        );
     }
 
     #[test]
