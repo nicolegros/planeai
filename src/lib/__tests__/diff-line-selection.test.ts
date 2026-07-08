@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parsePatchFiles, type CodeViewItem, type SelectedLineRange } from "@pierre/diffs";
+import { parsePatchFiles, type SelectedLineRange } from "@pierre/diffs";
 
 /**
  * Regression test for PLA-219: mouse line selection in split diff view.
