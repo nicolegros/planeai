@@ -737,12 +737,9 @@ pub fn loop_create(
     };
 
     // Append loop_created event
-    if let Err(e) = LoopService::append_loop_event(
-        conn,
-        &loop_run.id,
-        "loop_created",
-        &serde_json::json!({}),
-    ) {
+    if let Err(e) =
+        LoopService::append_loop_event(conn, &loop_run.id, "loop_created", &serde_json::json!({}))
+    {
         return (emit_error(&e.to_string(), &[]), 1);
     }
 
@@ -1051,12 +1048,9 @@ pub fn loop_stop(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
     if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Cancelled) {
         return (emit_error(&e.to_string(), &[]), 1);
     }
-    if let Err(e) = LoopService::append_loop_event(
-        conn,
-        &loop_run.id,
-        "loop_cancelled",
-        &serde_json::json!({}),
-    ) {
+    if let Err(e) =
+        LoopService::append_loop_event(conn, &loop_run.id, "loop_cancelled", &serde_json::json!({}))
+    {
         return (emit_error(&e.to_string(), &[]), 1);
     }
 
@@ -1922,7 +1916,14 @@ mod tests {
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
         let (output, code) = loop_create(
-            &conn, "/tmp/myapp", None, None, "maker-verifier", "Goal", 0, false,
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            0,
+            false,
         );
         assert_eq!(code, 1, "output:\n{output}");
         assert!(
@@ -2062,7 +2063,14 @@ mod tests {
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
         let (create_output, _) = loop_create(
-            &conn, "/tmp/myapp", None, None, "maker-verifier", "Goal", 3, true,
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
         );
         let loop_id = extract_loop_id(&create_output);
 
@@ -2087,7 +2095,14 @@ mod tests {
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
         let (create_output, _) = loop_create(
-            &conn, "/tmp/myapp", None, None, "maker-verifier", "Goal", 3, true,
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
         );
         let loop_id = extract_loop_id(&create_output);
 
