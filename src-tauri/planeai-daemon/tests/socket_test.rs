@@ -276,4 +276,91 @@ mod socket_tests {
             "read_buffer should strip ANSI escapes, got: {text:?}"
         );
     }
+
+    #[tokio::test]
+    async fn read_buffer_after_returns_incremental_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut reader = connect_control(&sock).await;
+
+        // Spawn a session that outputs known text
+        let resp = send_recv(
+            &mut reader,
+            r#"{"cmd":"spawn","session_id":"rba1","command":"/bin/sh","args":["-c","echo first-line"]}"#,
+        )
+        .await;
+        assert_eq!(resp["ok"], true);
+
+        // Wait for output
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Initial cursor read (after=0 gets everything)
+        reader
+            .get_mut()
+            .write_all(b"{\"cmd\":\"read_buffer_after\",\"session_id\":\"rba1\",\"after\":0,\"max_bytes\":0}\n")
+            .await
+            .unwrap();
+        let resp = loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let val: Value = serde_json::from_str(&line).unwrap();
+            if val.get("event").is_none() {
+                break val;
+            }
+        };
+
+        assert_eq!(resp["ok"], true);
+        assert!(!resp["truncated"].as_bool().unwrap());
+        let cursor = resp["cursor"].as_u64().unwrap();
+        assert!(cursor > 0, "cursor should be non-zero after output");
+        let text = resp["text"].as_str().unwrap();
+        assert!(
+            text.contains("first-line"),
+            "should contain 'first-line', got: {text:?}"
+        );
+
+        // Read again with the cursor — should get empty since no new output
+        let cmd = format!(
+            "{{\"cmd\":\"read_buffer_after\",\"session_id\":\"rba1\",\"after\":{cursor},\"max_bytes\":0}}\n"
+        );
+        reader.get_mut().write_all(cmd.as_bytes()).await.unwrap();
+        let resp = loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let val: Value = serde_json::from_str(&line).unwrap();
+            if val.get("event").is_none() {
+                break val;
+            }
+        };
+
+        assert_eq!(resp["ok"], true);
+        assert!(!resp["truncated"].as_bool().unwrap());
+        let text2 = resp["text"].as_str().unwrap();
+        // No new output, should be empty or very short (no new content)
+        assert!(
+            !text2.contains("first-line"),
+            "second read should NOT re-read 'first-line', got: {text2:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_buffer_after_invalid_session_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let _shutdown = start_server(&sock).await;
+
+        let mut reader = connect_control(&sock).await;
+
+        let resp = send_recv(
+            &mut reader,
+            r#"{"cmd":"read_buffer_after","session_id":"nonexistent","after":0,"max_bytes":0}"#,
+        )
+        .await;
+        assert!(resp["error"]
+            .as_str()
+            .unwrap()
+            .contains("session not found"));
+    }
 }

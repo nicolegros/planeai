@@ -229,6 +229,25 @@ impl DaemonServer {
                 }
                 None => Response::error(format!("session not found: {session_id}")),
             },
+            Request::ReadBufferAfter {
+                session_id,
+                after,
+                max_bytes,
+            } => match reg.get(&session_id) {
+                Some(session) => {
+                    let (raw, write_offset, truncated) =
+                        session.buffer_read_after(after, max_bytes);
+                    let text = planeai_core::text::strip_ansi(&raw);
+                    Response::BufferTextCursor {
+                        ok: true,
+                        session_id,
+                        text,
+                        cursor: write_offset,
+                        truncated,
+                    }
+                }
+                None => Response::error(format!("session not found: {session_id}")),
+            },
         }
     }
 

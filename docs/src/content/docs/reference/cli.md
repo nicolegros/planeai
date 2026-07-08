@@ -288,13 +288,20 @@ Read the last N lines of a session's terminal output (ANSI-stripped).
 
 ```bash
 planeai-cli axi session read <id> [--lines <n>]
+planeai-cli axi session read <id> --after <cursor> [--max-bytes <n>]
 ```
 
-| Flag      | Description                          |
-| --------- | ------------------------------------ |
-| `--lines` | Number of lines to read (default: 100) |
+| Flag           | Description                                                        |
+| -------------- | ------------------------------------------------------------------ |
+| `--lines`      | Number of lines to read (default: 100). Used in tail mode.         |
+| `--after`      | Opaque cursor from a previous read. Returns only new output since that cursor. |
+| `--max-bytes`  | Maximum bytes to return (default: 0 = unlimited). Only used with `--after`. |
 
-Works with both daemon and tmux backends. The `id` can be a prefix.
+**Tail mode** (default): returns the last N lines.
+
+**Cursor mode** (`--after`): returns only output produced since the cursor. See [CONTEXT.md § Session reads](../../../../../CONTEXT.md) for cursor format, truncation semantics, and polling workflow.
+
+Works with both daemon and tmux backends. The local backend does not support cursor mode. The `id` can be a prefix.
 
 ### `axi session prompt`
 

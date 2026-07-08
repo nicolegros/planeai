@@ -111,6 +111,54 @@ Prompts are serialized per session via a SQLite-backed cross-process lock (`prom
 
 This guarantees that concurrent prompts to the same session cannot interleave, regardless of whether they originate from the GUI, CLI, or AXI. Concurrent prompts to different sessions proceed independently.
 
+### Session reads (incremental / cursor-based)
+
+The AXI session read command supports two modes:
+
+1. **Tail mode** (default): `planeai-cli axi session read <id> --lines N` — returns the last N lines.
+2. **Cursor mode**: `planeai-cli axi session read <id> --after <cursor> [--max-bytes N]` — returns only output produced since the cursor.
+
+**Cursor format** — opaque strings, backend-specific:
+
+| Backend | Format                         | Semantics                                                                                          |
+| ------- | ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| daemon  | `daemon:<u64_byte_offset>`     | Monotonic byte offset from ring buffer. O(1) incremental reads.                                   |
+| tmux    | `tmux:<line_count>:<hash>`     | Line count + content hash of first 5 and last 10 lines. Used to detect history rolloff.            |
+| local   | —                              | Not supported. Returns an error.                                                                   |
+
+**Cursor-mode TOON output**:
+
+```
+session_id: <short_id>
+backend: daemon | tmux
+cursor: <opaque_cursor_for_next_read>
+truncated: false | true
+text: <new_output_since_cursor>
+```
+
+- `truncated: true` means data was lost between the cursor position and the earliest available content (ring buffer eviction for daemon, history rolloff for tmux). The cursor is reset to the current position.
+- `--max-bytes` caps the returned text (0 = unlimited). The cursor advances only to cover the content actually returned, so remaining data is delivered on the next poll.
+- Agents should persist the `cursor` value and pass it back on the next `--after` call to receive only new output.
+
+**Workflow for loop observation**:
+
+```bash
+# Initial read — get current output + cursor (use backend-appropriate zero cursor)
+OUTPUT=$(planeai-cli axi session read $CHILD --after "tmux:0:0")
+CURSOR=$(echo "$OUTPUT" | grep "^cursor:" | cut -d' ' -f2)
+
+# Poll loop — only new output each iteration
+while true; do
+  RESULT=$(planeai-cli axi session read $CHILD --after "$CURSOR")
+  CURSOR=$(echo "$RESULT" | grep "^cursor:" | cut -d' ' -f2)
+  TEXT=$(echo "$RESULT" | sed -n '/^text:/,$ p' | tail -n +2)
+  if [ -n "$TEXT" ]; then
+    # Process new output...
+  fi
+  sleep 5
+done
+```
+
 ## Session backend
 
 ### Resolution

@@ -202,8 +202,14 @@ enum AxiSessionAction {
     /// Read session output (last N lines, ANSI stripped)
     Read {
         id: String,
-        #[arg(long, default_value = "100")]
+        #[arg(long, default_value = "100", conflicts_with = "after")]
         lines: usize,
+        /// Opaque cursor from a previous read. Returns only output since that cursor.
+        #[arg(long)]
+        after: Option<String>,
+        /// Maximum bytes to return (0 = unlimited). Only used with --after.
+        #[arg(long, default_value = "0")]
+        max_bytes: usize,
     },
 }
 
@@ -824,11 +830,82 @@ fn run_axi_session(conn: &rusqlite::Connection, action: AxiSessionAction) -> i32
             let ops = planeai::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
             planeai::axi::session_prompt(conn, &id, &prompt_text, &ops)
         }
-        AxiSessionAction::Read { id, lines } => {
+        AxiSessionAction::Read {
+            id,
+            lines,
+            after,
+            max_bytes,
+        } => {
             let session = match planeai::session_ops::resolve_session_by_prefix(conn, &id) {
                 Ok(s) => s,
                 Err(e) => return emit_axi_error(&e.to_string()),
             };
+
+            // If --after is provided, use cursor-based incremental read
+            if let Some(cursor_str) = after {
+                return match session.backend.as_str() {
+                    "daemon" => {
+                        // Parse daemon cursor: "daemon:<offset>"
+                        let offset = match parse_daemon_cursor(&cursor_str) {
+                            Ok(o) => o,
+                            Err(e) => return emit_axi_error(&e),
+                        };
+                        match planeai::session_ops::read_daemon_buffer_after(
+                            &session.id,
+                            offset,
+                            max_bytes,
+                        ) {
+                            Ok(result) => {
+                                let cursor = format!("daemon:{}", result.cursor);
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    "daemon",
+                                    &cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
+                                print!("{output}");
+                                code
+                            }
+                            Err(e) => emit_axi_error(&e),
+                        }
+                    }
+                    "tmux" => {
+                        let tmux_name = match session.tmux_name.as_deref() {
+                            Some(n) => n,
+                            None => return emit_axi_error("tmux session has no tmux_name"),
+                        };
+                        // Validate cursor prefix
+                        if !cursor_str.starts_with("tmux:") {
+                            return emit_axi_error(&format!(
+                                "invalid cursor for tmux backend: {cursor_str}"
+                            ));
+                        }
+                        match planeai::session_ops::read_tmux_pane_after(
+                            tmux_name,
+                            &cursor_str,
+                            max_bytes,
+                        ) {
+                            Ok(result) => {
+                                let (output, code) = planeai::axi::session_read_cursor_output(
+                                    &session.id[..8],
+                                    "tmux",
+                                    &result.cursor,
+                                    result.truncated,
+                                    &result.text,
+                                );
+                                print!("{output}");
+                                code
+                            }
+                            Err(e) => emit_axi_error(&e),
+                        }
+                    }
+                    "local" => emit_axi_error("local backend does not support remote read"),
+                    other => emit_axi_error(&format!("unsupported backend: {other}")),
+                };
+            }
+
+            // Legacy --lines mode (no cursor)
             match session.backend.as_str() {
                 "daemon" => match planeai::session_ops::read_daemon_buffer(&session.id, lines) {
                     Ok(text) => planeai::axi::session_read_output(&session.id[..8], &text),
@@ -857,6 +934,17 @@ fn emit_axi_error(msg: &str) -> i32 {
     let output = planeai_toon::render(&[planeai_toon::field("error", planeai_toon::str_val(msg))]);
     print!("{output}");
     1
+}
+
+/// Parse a daemon cursor string "daemon:<offset>" into the byte offset.
+fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
+    let parts: Vec<&str> = cursor.splitn(2, ':').collect();
+    if parts.len() != 2 || parts[0] != "daemon" {
+        return Err(format!("invalid cursor for daemon backend: {cursor}"));
+    }
+    parts[1]
+        .parse::<u64>()
+        .map_err(|_| format!("invalid cursor offset: {}", parts[1]))
 }
 
 fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {

@@ -125,6 +125,19 @@ impl DaemonSession {
         self.buffer.lock().unwrap().snapshot()
     }
 
+    /// Return the current write offset for cursor-based reads.
+    pub fn buffer_write_offset(&self) -> u64 {
+        self.buffer.lock().unwrap().write_offset()
+    }
+
+    /// Read buffer content written after `after_offset`, up to `max_bytes` (0 = unlimited).
+    /// Returns (raw_bytes, new_write_offset, truncated).
+    pub fn buffer_read_after(&self, after_offset: u64, max_bytes: usize) -> (Vec<u8>, u64, bool) {
+        let buf = self.buffer.lock().unwrap();
+        let (bytes, next_cursor, truncated) = buf.read_after(after_offset, max_bytes);
+        (bytes, next_cursor, truncated)
+    }
+
     pub fn subscribe_output(&self) -> broadcast::Receiver<Vec<u8>> {
         self.tx.subscribe()
     }

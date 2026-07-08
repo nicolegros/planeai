@@ -509,6 +509,80 @@ pub fn read_daemon_buffer(session_id: &str, lines: usize) -> Result<String, Stri
     }
 }
 
+/// Result of a cursor-based daemon buffer read.
+pub struct DaemonCursorReadResult {
+    pub text: String,
+    pub cursor: u64,
+    pub truncated: bool,
+}
+
+/// Read buffer content from a daemon-backend session since the given cursor.
+pub fn read_daemon_buffer_after(
+    session_id: &str,
+    after: u64,
+    max_bytes: usize,
+) -> Result<DaemonCursorReadResult, String> {
+    use std::io::{BufRead, Write};
+
+    let app_dir = planeai_paths::app_data_dir();
+    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+        .map_err(|e| format!("daemon is not running: {e}"))?;
+
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+
+    // Control connection type byte
+    stream
+        .write_all(&[0x00])
+        .map_err(|e| format!("handshake failed: {e}"))?;
+
+    // Send read_buffer_after command
+    let req = serde_json::json!({
+        "cmd": "read_buffer_after",
+        "session_id": session_id,
+        "after": after,
+        "max_bytes": max_bytes,
+    });
+    stream
+        .write_all(format!("{}\n", req).as_bytes())
+        .map_err(|e| format!("write failed: {e}"))?;
+
+    // Read response (skip events)
+    let mut reader = std::io::BufReader::new(stream);
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("read failed: {e}"))?;
+        if line.is_empty() {
+            return Err("connection closed".to_string());
+        }
+        let val: serde_json::Value =
+            serde_json::from_str(line.trim()).map_err(|e| format!("parse failed: {e}"))?;
+        if val.get("event").is_some() {
+            continue; // Skip broadcast events
+        }
+        if let Some(err) = val.get("error") {
+            let msg = err.as_str().unwrap_or("unknown error");
+            if msg.contains("unknown variant") {
+                return Err(
+                    "daemon does not support cursor reads (restart planeai to upgrade)".to_string(),
+                );
+            }
+            return Err(msg.to_string());
+        }
+        let text = val["text"].as_str().unwrap_or("").to_string();
+        let cursor = val["cursor"].as_u64().unwrap_or(0);
+        let truncated = val["truncated"].as_bool().unwrap_or(false);
+        return Ok(DaemonCursorReadResult {
+            text,
+            cursor,
+            truncated,
+        });
+    }
+}
+
 /// Read output from a tmux-backend session via tmux capture-pane.
 pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
     let mut cmd = std::process::Command::new("tmux");
@@ -530,6 +604,165 @@ pub fn read_tmux_pane(tmux_name: &str, lines: usize) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Result of a cursor-based tmux pane read.
+pub struct TmuxCursorReadResult {
+    pub text: String,
+    pub cursor: String,
+    pub truncated: bool,
+}
+
+/// Read tmux pane output since the given cursor.
+///
+/// Tmux cursor format: `tmux:<line_count>:<hash>` where hash is a truncated
+/// hash of the last N lines we returned. On next read, we capture the full pane,
+/// find the overlapping region by matching the hash, and return only new content.
+///
+/// If the cursor cannot be validated (history rolled off, pane reset), we return
+/// truncated=true with a fresh cursor.
+pub fn read_tmux_pane_after(
+    tmux_name: &str,
+    cursor: &str,
+    max_bytes: usize,
+) -> Result<TmuxCursorReadResult, String> {
+    // Capture full scrollback (up to 10000 lines for cursor matching)
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let all_lines: Vec<&str> = full_text.lines().collect();
+
+    // Parse cursor: "tmux:<line_index>:<hash>"
+    let (prev_line_count, prev_hash) = parse_tmux_cursor(cursor)?;
+
+    // Try to validate cursor: check if lines up to prev_line_count still hash the same
+    let truncated = if prev_line_count == 0 {
+        false
+    } else if prev_line_count <= all_lines.len() {
+        let check_lines = &all_lines[..prev_line_count];
+        let current_hash = hash_lines(check_lines);
+        current_hash != prev_hash
+    } else {
+        true // History is shorter than our cursor position
+    };
+
+    let new_content = if truncated {
+        // Can't trust cursor — return all content
+        full_text.clone()
+    } else {
+        // Return only lines after the cursor position
+        if prev_line_count >= all_lines.len() {
+            String::new()
+        } else {
+            all_lines[prev_line_count..].join("\n")
+        }
+    };
+
+    // Apply max_bytes cap: truncate to complete lines within the byte budget so
+    // the line-based cursor can advance precisely. Any partial trailing line is
+    // omitted and will be returned on the next poll.
+    let (text, was_capped) = if max_bytes > 0 && new_content.len() > max_bytes {
+        let safe_end = new_content
+            .char_indices()
+            .take_while(|(i, _)| *i < max_bytes)
+            .last()
+            .map_or(0, |(i, c)| i + c.len_utf8());
+        let capped = &new_content[..safe_end];
+        if let Some(last_nl) = capped.rfind('\n') {
+            (new_content[..last_nl].to_string(), true)
+        } else {
+            (capped.to_string(), true)
+        }
+    } else {
+        (new_content, false)
+    };
+
+    // Build cursor: if max_bytes capped the output, only advance to cover the
+    // lines actually delivered so remaining content is returned on the next poll.
+    let new_cursor = if was_capped && !truncated {
+        let newline_count = text.matches('\n').count();
+        if newline_count == 0 {
+            build_tmux_cursor(&all_lines[..prev_line_count])
+        } else {
+            let delivered_line_count = newline_count + 1;
+            let cursor_line_count = prev_line_count + delivered_line_count;
+            let cursor_lines = &all_lines[..cursor_line_count];
+            build_tmux_cursor(cursor_lines)
+        }
+    } else {
+        build_tmux_cursor(&all_lines)
+    };
+
+    Ok(TmuxCursorReadResult {
+        text,
+        cursor: new_cursor,
+        truncated,
+    })
+}
+
+/// Build an initial tmux cursor (for first read without --after).
+#[allow(dead_code)]
+pub fn build_tmux_cursor_from_pane(tmux_name: &str) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("tmux");
+    cmd.args(["capture-pane", "-p", "-t", tmux_name, "-S", "-10000"]);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run tmux: {e}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let full_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let all_lines: Vec<&str> = full_text.lines().collect();
+    Ok(build_tmux_cursor(&all_lines))
+}
+
+fn parse_tmux_cursor(cursor: &str) -> Result<(usize, u64), String> {
+    let parts: Vec<&str> = cursor.splitn(3, ':').collect();
+    if parts.len() != 3 || parts[0] != "tmux" {
+        return Err(format!("invalid tmux cursor: {cursor}"));
+    }
+    let line_count: usize = parts[1]
+        .parse()
+        .map_err(|_| format!("invalid cursor line count: {}", parts[1]))?;
+    let hash: u64 = parts[2]
+        .parse()
+        .map_err(|_| format!("invalid cursor hash: {}", parts[2]))?;
+    Ok((line_count, hash))
+}
+
+fn build_tmux_cursor(lines: &[&str]) -> String {
+    let line_count = lines.len();
+    let hash = hash_lines(lines);
+    format!("tmux:{line_count}:{hash}")
+}
+
+fn hash_lines(lines: &[&str]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    lines.len().hash(&mut hasher);
+    // Hash first 5 lines for anchoring (detects history trimming)
+    let first_end = lines.len().min(5);
+    for line in &lines[..first_end] {
+        line.hash(&mut hasher);
+    }
+    // Hash last 10 lines for tail stability
+    let start = lines.len().saturating_sub(10);
+    for line in &lines[start..] {
+        line.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Session, ResolveError> {
@@ -1354,5 +1587,49 @@ mod tests {
         // Lock should have been released — next acquire should succeed
         let lock = planeai_core::prompt_lock::acquire(&conn, id).unwrap();
         assert_eq!(lock.session_id, id);
+    }
+
+    #[test]
+    fn parse_tmux_cursor_valid() {
+        let (line_count, hash) = super::parse_tmux_cursor("tmux:42:12345678901234").unwrap();
+        assert_eq!(line_count, 42);
+        assert_eq!(hash, 12345678901234);
+    }
+
+    #[test]
+    fn parse_tmux_cursor_invalid_prefix() {
+        let result = super::parse_tmux_cursor("daemon:42:12345");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_tmux_cursor_invalid_format() {
+        let result = super::parse_tmux_cursor("tmux:abc:def");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_tmux_cursor_roundtrips() {
+        let lines: Vec<&str> = vec!["line 1", "line 2", "line 3"];
+        let cursor = super::build_tmux_cursor(&lines);
+        assert!(cursor.starts_with("tmux:3:"));
+        let (count, hash) = super::parse_tmux_cursor(&cursor).unwrap();
+        assert_eq!(count, 3);
+        assert!(hash > 0);
+    }
+
+    #[test]
+    fn hash_lines_deterministic() {
+        let lines: Vec<&str> = vec!["hello", "world"];
+        let h1 = super::hash_lines(&lines);
+        let h2 = super::hash_lines(&lines);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_lines_different_for_different_content() {
+        let lines1: Vec<&str> = vec!["hello", "world"];
+        let lines2: Vec<&str> = vec!["hello", "mars"];
+        assert_ne!(super::hash_lines(&lines1), super::hash_lines(&lines2));
     }
 }
