@@ -19,6 +19,7 @@ PlaneAI manages AI coding agent sessions. The domain model is shared across fron
 │  SessionService                  │
 │  WorktreeService                 │
 │  TaskService                     │
+│  LoopService                     │
 └──────────────┬───────────────────┘
                │
                ▼
@@ -206,6 +207,87 @@ Local task status change → JiraWriteback
 ### Authentication
 
 OAuth 2.0 with PKCE via `JiraAuth`. Tokens stored file-based in `<app_data>/jira-tokens/` (600 perms). Refresh tokens used for silent re-auth.
+
+## Loop Runs
+
+A durable loop is an orchestration layer above sessions. It tracks rounds of agent work, verification, and human review — enabling strategies like maker-verifier or multi-agent loops without coupling session lifecycle to loop lifecycle.
+
+### Loop Run
+
+| Field              | Type    | Description                                              |
+| ------------------ | ------- | -------------------------------------------------------- |
+| id                 | UUID    | Unique identifier                                        |
+| project_id         | String  | FK to projects                                           |
+| task_key           | String? | Optional link to a tracked task                          |
+| parent_session_id  | String  | Session that owns this loop (loop dies if parent dies)   |
+| strategy           | String  | Freeform strategy identifier (e.g., "maker-verifier")    |
+| goal               | String  | What the loop is trying to accomplish                    |
+| status             | Enum    | See loop statuses below                                  |
+| current_round      | Integer | Current iteration (0-based)                              |
+| max_rounds         | Integer | Maximum rounds before auto-failure                       |
+| created_at         | String  | RFC 3339 timestamp                                       |
+| updated_at         | String  | RFC 3339, advances on any write                          |
+| finished_at        | String? | Set when status transitions to a terminal state          |
+| policy_json        | JSON?   | Retry/timeout/escalation rules (opaque)                  |
+| budget_json        | JSON?   | Token/cost/time limits (opaque)                          |
+
+**Loop statuses:** `draft` → `running` → `observing` → `verifying` → `completed_unreviewed` → `approved` → `merged` → `cleaned`. Also: `blocked`, `needs_human`, `stale`, `failed`, `cancelled`.
+
+**Ownership:** A loop has a hard dependency on its `parent_session_id`. If the parent session dies, the loop should be killed by the executor.
+
+### Loop Session
+
+| Field      | Type    | Description                                    |
+| ---------- | ------- | ---------------------------------------------- |
+| loop_id    | String  | FK to loop_runs                                |
+| session_id | String  | FK to sessions                                 |
+| role       | String  | Strategy-specific role (e.g., "maker", "verifier") |
+| round      | Integer | Which round this session belongs to            |
+| provider   | String? | Agent provider used for this session           |
+| status     | String  | Session-within-loop status                     |
+| created_at | String  | RFC 3339 timestamp                             |
+
+**Primary key:** `(loop_id, session_id)` — a session can only belong to one loop.
+
+### Loop Event
+
+| Field        | Type    | Description                      |
+| ------------ | ------- | -------------------------------- |
+| id           | Integer | Auto-incrementing, ordered       |
+| loop_id      | String  | FK to loop_runs                  |
+| ts           | String  | RFC 3339 timestamp               |
+| kind         | String  | Event type (e.g., "round_started") |
+| payload_json | JSON    | Event-specific payload           |
+
+### Loop Artifact
+
+| Field        | Type    | Description                          |
+| ------------ | ------- | ------------------------------------ |
+| id           | UUID    | Unique identifier                    |
+| loop_id      | String  | FK to loop_runs                      |
+| session_id   | String? | Which session produced this artifact |
+| kind         | String  | Artifact type (e.g., "diff", "patch") |
+| path         | String? | File path if applicable              |
+| content_json | JSON?   | Structured content if applicable     |
+| created_at   | String  | RFC 3339 timestamp                   |
+
+### Verifier Run
+
+| Field         | Type    | Description                                      |
+| ------------- | ------- | ------------------------------------------------ |
+| id            | UUID    | Unique identifier                                |
+| loop_id       | String  | FK to loop_runs                                  |
+| session_id    | String? | Session if agent-based verifier                  |
+| verifier_type | String  | "command" or "agent"                             |
+| name          | String  | Human-readable name (e.g., "cargo test")         |
+| command       | String  | The command or agent launch command               |
+| status        | String  | "pending", "running", "passed", "failed"         |
+| exit_code     | Integer?| Process exit code (command verifiers)            |
+| output_path   | String? | Path to captured output                          |
+| created_at    | String  | RFC 3339 timestamp                               |
+| finished_at   | String? | Set when verifier completes                      |
+
+**Module:** `planeai_core::loop_service::LoopService` — migrated via `planeai_core::services::migrate`.
 
 ## Running Tests
 

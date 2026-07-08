@@ -35,6 +35,7 @@ pub fn migrate(conn: &Connection) -> SqlResult<()> {
     migrate_project_session_schema(conn)?;
     crate::prompt_lock::migrate(conn)?;
     LayoutService::migrate(conn)?;
+    crate::loop_service::LoopService::migrate(conn)?;
     Ok(())
 }
 
