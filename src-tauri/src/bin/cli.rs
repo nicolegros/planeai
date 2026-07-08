@@ -131,6 +131,59 @@ enum AxiAction {
         #[command(subcommand)]
         action: AxiProjectAction,
     },
+    /// Loop operations — create and inspect durable loop runs
+    Loop {
+        #[command(subcommand)]
+        action: AxiLoopAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiLoopAction {
+    /// Create a new loop run
+    Create {
+        /// Goal description for the loop
+        #[arg(long)]
+        goal: String,
+        /// Strategy identifier (e.g., maker-verifier)
+        #[arg(long, default_value = "maker-verifier")]
+        strategy: String,
+        /// Maximum rounds before the loop stops
+        #[arg(long, default_value_t = 3)]
+        max_rounds: i64,
+        /// Task key to associate with this loop
+        #[arg(long)]
+        task: Option<String>,
+        /// Project name (otherwise resolved from CWD)
+        #[arg(long)]
+        project: Option<String>,
+        /// Start the loop immediately (status = running instead of draft)
+        #[arg(long)]
+        start: bool,
+    },
+    /// Observe loop state: summary, sessions, events, artifacts
+    Observe {
+        /// Loop ID (prefix match supported)
+        id: String,
+        /// Maximum number of recent events to show
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// Advance the loop by one tick (append event, return state)
+    Tick {
+        /// Loop ID (prefix match supported)
+        id: String,
+    },
+    /// Stop a loop (mark cancelled)
+    Stop {
+        /// Loop ID (prefix match supported)
+        id: String,
+    },
+    /// Show loop-owned sessions with recursive children
+    Tree {
+        /// Loop ID (prefix match supported)
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -754,6 +807,7 @@ fn run_axi(conn: &rusqlite::Connection, action: Option<AxiAction>) -> i32 {
         Some(AxiAction::Task { action }) => run_axi_task(conn, action, &cwd),
         Some(AxiAction::Session { action }) => run_axi_session(conn, action),
         Some(AxiAction::Project { action }) => run_axi_project(conn, action),
+        Some(AxiAction::Loop { action }) => run_axi_loop(conn, action, &cwd),
     }
 }
 
@@ -1018,6 +1072,34 @@ fn parse_daemon_cursor(cursor: &str) -> Result<u64, String> {
 fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32 {
     let (output, code) = match action {
         AxiProjectAction::List => planeai::axi::project_ls(conn),
+    };
+    print!("{output}");
+    code
+}
+
+fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -> i32 {
+    let (output, code) = match action {
+        AxiLoopAction::Create {
+            goal,
+            strategy,
+            max_rounds,
+            task,
+            project,
+            start,
+        } => planeai::axi::loop_create(
+            conn,
+            cwd,
+            project.as_deref(),
+            task.as_deref(),
+            &strategy,
+            &goal,
+            max_rounds,
+            start,
+        ),
+        AxiLoopAction::Observe { id, limit } => planeai::axi::loop_observe(conn, &id, limit),
+        AxiLoopAction::Tick { id } => planeai::axi::loop_tick(conn, &id),
+        AxiLoopAction::Stop { id } => planeai::axi::loop_stop(conn, &id),
+        AxiLoopAction::Tree { id } => planeai::axi::loop_tree(conn, &id),
     };
     print!("{output}");
     code

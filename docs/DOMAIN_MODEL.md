@@ -292,7 +292,7 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 | created_at    | String   | RFC 3339 timestamp                       |
 | finished_at   | String?  | Set when verifier completes              |
 
-**Module:** `planeai_core::loop_service::LoopService` — migrated via `planeai_core::services::migrate`.
+**Module:** `planeai_core::loop_service::LoopService` — migrated via `LoopService::migrate(conn)` (called from each binary's DB migration chain).
 
 ## Running Tests
 

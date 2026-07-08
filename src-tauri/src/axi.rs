@@ -646,6 +646,585 @@ pub fn home(conn: &rusqlite::Connection, cwd: &str, bin_path: &str) -> (String, 
     (render(&fields), 0)
 }
 
+// ─── Loop ────────────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+pub fn loop_create(
+    conn: &rusqlite::Connection,
+    cwd: &str,
+    project_flag: Option<&str>,
+    task_key: Option<&str>,
+    strategy: &str,
+    goal: &str,
+    max_rounds: i64,
+    start: bool,
+) -> (String, i32) {
+    use planeai_core::loop_run::LoopStrategy;
+    use planeai_core::loop_service::{CreateLoopParams, LoopService};
+
+    // Validate max_rounds
+    if max_rounds < 1 {
+        return (
+            emit_error(
+                "--max-rounds must be >= 1",
+                &["Use --max-rounds 3 for the default".into()],
+            ),
+            1,
+        );
+    }
+
+    // Resolve project
+    let project = match resolve_project(conn, project_flag, cwd) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                emit_error(
+                    &e,
+                    &["Run `planeai-cli axi project ls` to see projects".into()],
+                ),
+                1,
+            )
+        }
+    };
+
+    // Validate task key if provided — scoped to the resolved project prefix
+    if let Some(key) = task_key {
+        match conn
+            .prepare("SELECT 1 FROM tasks WHERE key = ?1 AND project_prefix = ?2")
+            .and_then(|mut stmt| stmt.exists(rusqlite::params![key, project.prefix]))
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    emit_error(
+                        &format!("task not found: {key}"),
+                        &[format!(
+                            "Run `planeai-cli axi task ls --project {}` to see tasks",
+                            project.prefix
+                        )],
+                    ),
+                    1,
+                );
+            }
+            Err(e) => {
+                return (
+                    emit_error(
+                        &format!("task validation failed: {e}"),
+                        &["task database may be unavailable or schema incompatible".into()],
+                    ),
+                    1,
+                );
+            }
+        }
+    }
+
+    let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
+
+    let params = CreateLoopParams {
+        project_id: project.id.clone(),
+        task_key: task_key.map(|s| s.to_string()),
+        created_by_session_id: parent_session_id,
+        strategy: LoopStrategy::new(strategy),
+        goal: goal.to_string(),
+        max_rounds,
+        policy_json: None,
+        budget_json: None,
+    };
+
+    let loop_run = match LoopService::create_loop(conn, params) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    // Append loop_created event
+    if let Err(e) =
+        LoopService::append_loop_event(conn, &loop_run.id, "loop_created", &serde_json::json!({}))
+    {
+        return (emit_error(&e.to_string(), &[]), 1);
+    }
+
+    // If --start, transition to running and append loop_started event
+    if start {
+        if let Err(e) = LoopService::update_loop_status(
+            conn,
+            &loop_run.id,
+            planeai_core::loop_run::LoopStatus::Running,
+        ) {
+            return (emit_error(&e.to_string(), &[]), 1);
+        }
+        if let Err(e) = LoopService::append_loop_event(
+            conn,
+            &loop_run.id,
+            "loop_started",
+            &serde_json::json!({}),
+        ) {
+            return (emit_error(&e.to_string(), &[]), 1);
+        }
+    }
+
+    let status_str = if start { "running" } else { "draft" };
+    let short_id = &loop_run.id[..8];
+
+    let mut loop_fields = vec![
+        field("id", str_val(&loop_run.id)),
+        field("status", str_val(status_str)),
+        field("strategy", str_val(strategy)),
+        field("goal", str_val(goal)),
+        field("current_round", int_val(0)),
+        field("max_rounds", int_val(max_rounds)),
+    ];
+    if let Some(key) = task_key {
+        loop_fields.push(field("task_key", str_val(key)));
+    }
+
+    let next = if start {
+        format!("Run `planeai-cli axi loop tick {short_id}` to dispatch the next step")
+    } else {
+        format!("Run `planeai-cli axi loop tick {short_id}` to start and dispatch the next step")
+    };
+
+    let fields = vec![
+        field("loop", Value::Object(loop_fields)),
+        field(
+            "next_actions",
+            Value::List(vec![
+                next,
+                format!("Run `planeai-cli axi loop observe {short_id}` to inspect state"),
+            ]),
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (String, i32) {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let loop_run = match resolve_loop(conn, id) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    let short_id = &loop_run.id[..8];
+
+    let mut loop_fields = vec![
+        field("id", str_val(&loop_run.id)),
+        field("status", str_val(loop_run.status.as_str())),
+        field("strategy", str_val(loop_run.strategy.as_str())),
+        field("goal", str_val(&loop_run.goal)),
+        field("current_round", int_val(loop_run.current_round)),
+        field("max_rounds", int_val(loop_run.max_rounds)),
+    ];
+    if let Some(ref key) = loop_run.task_key {
+        loop_fields.push(field("task_key", str_val(key)));
+    }
+    if let Some(ref sid) = loop_run.created_by_session_id {
+        loop_fields.push(field("created_by_session_id", str_val(sid)));
+    }
+    loop_fields.push(field("created_at", str_val(&loop_run.created_at)));
+    loop_fields.push(field("updated_at", str_val(&loop_run.updated_at)));
+
+    let mut fields = vec![field("loop", Value::Object(loop_fields))];
+
+    // Loop-owned sessions (use `loop tree` for recursive expansion)
+    let loop_sessions = match LoopService::list_loop_sessions(conn, &loop_run.id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+    if loop_sessions.is_empty() {
+        fields.push(field("sessions", str_val("0 sessions")));
+    } else {
+        let rows: Vec<Vec<String>> = loop_sessions
+            .iter()
+            .map(|s| {
+                vec![
+                    s.session_id[..8].to_string(),
+                    s.role.clone(),
+                    s.provider.clone().unwrap_or_default(),
+                    s.status.clone(),
+                    s.round.to_string(),
+                ]
+            })
+            .collect();
+
+        fields.push(field(
+            "sessions",
+            Value::Table {
+                columns: vec![
+                    "id".into(),
+                    "role".into(),
+                    "provider".into(),
+                    "status".into(),
+                    "round".into(),
+                ],
+                rows,
+            },
+        ));
+    }
+
+    // Events (recent, capped by limit)
+    let events = match LoopService::list_loop_events(conn, &loop_run.id) {
+        Ok(e) => e,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+    let recent: Vec<_> = if events.len() > limit {
+        events[events.len() - limit..].to_vec()
+    } else {
+        events
+    };
+
+    if recent.is_empty() {
+        fields.push(field("events", str_val("0 events")));
+    } else {
+        let rows: Vec<Vec<String>> = recent
+            .iter()
+            .map(|e| vec![e.id.to_string(), e.kind.clone(), e.ts.clone()])
+            .collect();
+        fields.push(field(
+            "events",
+            Value::Table {
+                columns: vec!["id".into(), "kind".into(), "ts".into()],
+                rows,
+            },
+        ));
+    }
+
+    // Next actions (only shown for non-terminal loops)
+    let is_terminal = matches!(
+        loop_run.status,
+        LoopStatus::Cancelled
+            | LoopStatus::Failed
+            | LoopStatus::CompletedUnreviewed
+            | LoopStatus::Approved
+            | LoopStatus::Merged
+            | LoopStatus::Cleaned
+    );
+
+    if is_terminal {
+        fields.push(field(
+            "next_actions",
+            Value::List(vec![format!(
+                "Loop is in terminal status '{}'. No further actions available.",
+                loop_run.status.as_str()
+            )]),
+        ));
+    } else {
+        fields.push(field(
+            "next_actions",
+            Value::List(vec![
+                format!("Run `planeai-cli axi loop tick {short_id}` to dispatch the next step"),
+                format!("Run `planeai-cli axi loop stop {short_id}` to cancel the loop"),
+            ]),
+        ));
+    }
+
+    (render(&fields), 0)
+}
+
+pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let mut loop_run = match resolve_loop(conn, id) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    let is_terminal = matches!(
+        loop_run.status,
+        LoopStatus::Cancelled
+            | LoopStatus::Failed
+            | LoopStatus::CompletedUnreviewed
+            | LoopStatus::Approved
+            | LoopStatus::Merged
+            | LoopStatus::Cleaned
+    );
+
+    if is_terminal {
+        return (
+            emit_error(
+                &format!(
+                    "cannot tick loop {}: already in terminal status '{}'",
+                    &loop_run.id[..8],
+                    loop_run.status.as_str()
+                ),
+                &[],
+            ),
+            1,
+        );
+    }
+
+    // If draft, transition to running and append loop_started event
+    if loop_run.status == LoopStatus::Draft {
+        if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running) {
+            return (emit_error(&e.to_string(), &[]), 1);
+        }
+        if let Err(e) = LoopService::append_loop_event(
+            conn,
+            &loop_run.id,
+            "loop_started",
+            &serde_json::json!({}),
+        ) {
+            return (emit_error(&e.to_string(), &[]), 1);
+        }
+        loop_run.status = LoopStatus::Running;
+    }
+
+    // Append a tick event
+    let payload = serde_json::json!({});
+    let event = match LoopService::append_loop_event(conn, &loop_run.id, "tick", &payload) {
+        Ok(e) => e,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let short_id = &loop_run.id[..8];
+
+    let fields = vec![
+        field(
+            "loop",
+            Value::Object(vec![
+                field("id", str_val(&loop_run.id)),
+                field("status", str_val(loop_run.status.as_str())),
+                field("current_round", int_val(loop_run.current_round)),
+                field("max_rounds", int_val(loop_run.max_rounds)),
+            ]),
+        ),
+        field(
+            "event",
+            Value::Object(vec![
+                field("id", int_val(event.id)),
+                field("kind", str_val("tick")),
+                field("ts", str_val(&event.ts)),
+            ]),
+        ),
+        field(
+            "next_actions",
+            Value::List(vec![
+                format!("Run `planeai-cli axi loop observe {short_id}` to inspect state"),
+                format!("Run `planeai-cli axi loop stop {short_id}` to cancel the loop"),
+            ]),
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn loop_stop(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let loop_run = match resolve_loop(conn, id) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    let short_id = &loop_run.id[..8];
+
+    // Idempotent: if already in a terminal status, just acknowledge
+    let is_terminal = matches!(
+        loop_run.status,
+        LoopStatus::Cancelled
+            | LoopStatus::Failed
+            | LoopStatus::CompletedUnreviewed
+            | LoopStatus::Approved
+            | LoopStatus::Merged
+            | LoopStatus::Cleaned
+    );
+
+    if is_terminal {
+        let fields = vec![
+            field(
+                "loop",
+                Value::Object(vec![
+                    field("id", str_val(&loop_run.id)),
+                    field("status", str_val(loop_run.status.as_str())),
+                ]),
+            ),
+            field("note", str_val("already in terminal status (no-op)")),
+        ];
+        return (render(&fields), 0);
+    }
+
+    // Transition to cancelled and append event atomically
+    if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Cancelled) {
+        return (emit_error(&e.to_string(), &[]), 1);
+    }
+    if let Err(e) =
+        LoopService::append_loop_event(conn, &loop_run.id, "loop_cancelled", &serde_json::json!({}))
+    {
+        return (emit_error(&e.to_string(), &[]), 1);
+    }
+
+    let fields = vec![
+        field(
+            "loop",
+            Value::Object(vec![
+                field("id", str_val(&loop_run.id)),
+                field("status", str_val("cancelled")),
+            ]),
+        ),
+        field(
+            "next_actions",
+            Value::List(vec![
+                format!("Run `planeai-cli axi loop observe {short_id}` to inspect final state"),
+                "Clean up any running sessions manually if needed".into(),
+            ]),
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+pub fn loop_tree(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::loop_service::LoopService;
+    use planeai_core::services::SessionService;
+
+    let loop_run = match resolve_loop(conn, id) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    let short_id = &loop_run.id[..8];
+    let loop_sessions = match LoopService::list_loop_sessions(conn, &loop_run.id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    if loop_sessions.is_empty() {
+        let fields = vec![
+            field("loop_id", str_val(short_id)),
+            field("sessions", str_val("0 sessions")),
+        ];
+        return (render(&fields), 0);
+    }
+
+    // For each loop session, get its full tree (recursive children)
+    let mut all_records: Vec<planeai_core::services::SessionRecord> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for ls in &loop_sessions {
+        if seen.contains(&ls.session_id) {
+            continue;
+        }
+        if let Ok(tree) = SessionService::tree(conn, &ls.session_id) {
+            for record in tree {
+                if seen.insert(record.id.clone()) {
+                    all_records.push(record);
+                }
+            }
+        }
+    }
+
+    let rows: Vec<Vec<String>> = all_records
+        .iter()
+        .map(|s| {
+            vec![
+                s.id[..8].to_string(),
+                s.parent_session_id
+                    .as_ref()
+                    .map(|id| id[..8].to_string())
+                    .unwrap_or_default(),
+                s.name.clone(),
+                s.status.clone(),
+                s.provider.clone().unwrap_or_default(),
+                s.task_key.clone().unwrap_or_default(),
+                s.backend.clone(),
+            ]
+        })
+        .collect();
+
+    let fields = vec![
+        field("loop_id", str_val(short_id)),
+        field(
+            "sessions",
+            Value::Table {
+                columns: vec![
+                    "id".into(),
+                    "parent_session_id".into(),
+                    "name".into(),
+                    "status".into(),
+                    "provider".into(),
+                    "task_key".into(),
+                    "backend".into(),
+                ],
+                rows,
+            },
+        ),
+    ];
+    (render(&fields), 0)
+}
+
+// ─── Loop Helpers ────────────────────────────────────────────────────────────
+
+/// Resolve a project from --project flag or CWD, returning (id, prefix, name, path).
+fn resolve_project(
+    conn: &rusqlite::Connection,
+    project_flag: Option<&str>,
+    cwd: &str,
+) -> Result<db::Project, String> {
+    let projects = db::list_projects(conn).unwrap_or_default();
+
+    if let Some(name) = project_flag {
+        projects
+            .into_iter()
+            .find(|p| p.name == name || p.prefix == name)
+            .ok_or_else(|| format!("project not found: {name}"))
+    } else {
+        projects
+            .into_iter()
+            .find(|p| cwd.starts_with(&p.path))
+            .ok_or_else(|| "could not resolve project from current directory".to_string())
+    }
+}
+
+/// Resolve a loop by full ID or prefix match.
+fn resolve_loop(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<planeai_core::loop_run::LoopRun, String> {
+    use planeai_core::loop_service::LoopService;
+
+    // Try exact match first
+    match LoopService::get_loop(conn, id) {
+        Ok(Some(run)) => return Ok(run),
+        Ok(None) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+
+    // Prefix match: query all loops and find prefix match
+    // We need a list of all loops — use a raw query for prefix matching
+    let mut stmt = conn
+        .prepare("SELECT id FROM loop_runs WHERE id GLOB ?1")
+        .map_err(|e| e.to_string())?;
+    let escaped_id: String = id
+        .chars()
+        .flat_map(|c| match c {
+            '*' | '?' | '[' | ']' => vec!['[', c, ']'],
+            _ => vec![c],
+        })
+        .collect();
+    let prefix_pattern = format!("{escaped_id}*");
+    let ids: Vec<String> = stmt
+        .query_map(rusqlite::params![prefix_pattern], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    match ids.len() {
+        0 => Err(format!("loop not found: {id}")),
+        1 => match LoopService::get_loop(conn, &ids[0]) {
+            Ok(Some(run)) => Ok(run),
+            Ok(None) => Err(format!("loop not found: {id}")),
+            Err(e) => Err(e.to_string()),
+        },
+        n => {
+            let previews: Vec<String> = ids.iter().take(5).map(|i| i[..8].to_string()).collect();
+            Err(format!(
+                "ambiguous loop prefix '{id}' matches {n} loops: {}",
+                previews.join(", ")
+            ))
+        }
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn task_detail_object(task: &Task) -> Value {
@@ -1021,6 +1600,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::migrate(&conn).unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
+        planeai_core::loop_service::LoopService::migrate(&conn).unwrap();
         conn
     }
 
@@ -1180,5 +1760,489 @@ mod tests {
         assert_eq!(code, 0);
         assert!(output.contains("root: aaaaaaaa"), "output:\n{output}");
         assert!(output.contains("sessions[4]"), "output:\n{output}");
+    }
+
+    // ─── Loop tests ──────────────────────────────────────────────────────────
+
+    fn extract_loop_id(toon_output: &str) -> String {
+        toon_output
+            .lines()
+            .find(|l| l.trim().starts_with("id: "))
+            .and_then(|l| l.trim().strip_prefix("id: "))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    #[test]
+    fn loop_create_outputs_toon_with_loop_id_and_status() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Implement auth",
+            3,
+            false,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("loop:"), "output:\n{output}");
+        assert!(output.contains("status: draft"), "output:\n{output}");
+        assert!(
+            output.contains("strategy: maker-verifier"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("goal: Implement auth"), "output:\n{output}");
+        assert!(output.contains("max_rounds: 3"), "output:\n{output}");
+        assert!(output.contains("current_round: 0"), "output:\n{output}");
+        assert!(output.contains("next_actions[2]:"), "output:\n{output}");
+        assert!(
+            output.contains("planeai-cli axi loop tick"),
+            "output:\n{output}"
+        );
+        // ID should be a valid UUID prefix (8 hex chars)
+        assert!(output.contains("id: "), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_create_with_start_outputs_running_status() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Build feature",
+            5,
+            true,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("status: running"), "output:\n{output}");
+        assert!(output.contains("max_rounds: 5"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_create_with_session_id_env_stores_parent() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Set the env var for this test
+        std::env::set_var("PLANEAI_SESSION_ID", "parent-session-1234");
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        std::env::remove_var("PLANEAI_SESSION_ID");
+
+        assert_eq!(code, 0, "output:\n{output}");
+        // Verify via observe that created_by_session_id is stored
+        // Extract loop ID from the output
+        let id_line = output
+            .lines()
+            .find(|l| l.trim().starts_with("id: "))
+            .unwrap();
+        let loop_id = id_line.trim().strip_prefix("id: ").unwrap();
+
+        let (obs_output, obs_code) = loop_observe(&conn, loop_id, 20);
+        assert_eq!(obs_code, 0, "observe output:\n{obs_output}");
+        assert!(
+            obs_output.contains("created_by_session_id: parent-session-1234"),
+            "observe output:\n{obs_output}"
+        );
+    }
+
+    #[test]
+    fn loop_create_validates_task_key() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Insert a task directly so it exists in the same DB
+        conn.execute(
+            "INSERT OR IGNORE INTO task_projects (prefix) VALUES ('MYA')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (key, project_prefix, title, status, created_at, updated_at)
+             VALUES ('MYA-1', 'MYA', 'Real task', 'todo', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+
+        // Valid task key works
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            Some("MYA-1"),
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("task_key: MYA-1"), "output:\n{output}");
+
+        // Invalid task key fails
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            Some("NONEXIST-999"),
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        assert_eq!(code, 1, "output:\n{output}");
+        assert!(output.contains("task not found"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_create_rejects_invalid_max_rounds() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            0,
+            false,
+        );
+        assert_eq!(code, 1, "output:\n{output}");
+        assert!(
+            output.contains("--max-rounds must be >= 1"),
+            "output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn loop_observe_returns_status_and_events() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Create a loop
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Build auth",
+            3,
+            false,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        // Observe it
+        let (output, code) = loop_observe(&conn, &loop_id, 20);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("loop:"), "output:\n{output}");
+        assert!(output.contains("status: draft"), "output:\n{output}");
+        assert!(
+            output.contains("strategy: maker-verifier"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("goal: Build auth"), "output:\n{output}");
+        assert!(output.contains("sessions: 0 sessions"), "output:\n{output}");
+        // loop_created event should exist from the create call
+        assert!(
+            output.contains("loop_created"),
+            "expected loop_created event, output:\n{output}"
+        );
+        assert!(output.contains("next_actions"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_tick_appends_event_and_returns_state() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Create a draft loop (no --start)
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        // Tick should transition draft → running
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("loop:"), "output:\n{output}");
+        assert!(output.contains("status: running"), "output:\n{output}");
+        assert!(output.contains("event:"), "output:\n{output}");
+        assert!(output.contains("kind: tick"), "output:\n{output}");
+        assert!(output.contains("next_actions"), "output:\n{output}");
+
+        // Verify loop_started event was appended via observe
+        let (obs_output, _) = loop_observe(&conn, &loop_id, 20);
+        assert!(
+            obs_output.contains("loop_started"),
+            "expected loop_started event, output:\n{obs_output}"
+        );
+    }
+
+    #[test]
+    fn loop_stop_cancels_running_loop() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        let (output, code) = loop_stop(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("status: cancelled"), "output:\n{output}");
+        assert!(output.contains("next_actions"), "output:\n{output}");
+        assert!(
+            output.contains("Clean up any running sessions manually"),
+            "output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn loop_stop_is_idempotent_on_terminal_status() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        // Stop once
+        loop_stop(&conn, &loop_id);
+        // Stop again — should be idempotent
+        let (output, code) = loop_stop(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("status: cancelled"), "output:\n{output}");
+        assert!(output.contains("no-op"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_stop_treats_completed_unreviewed_as_terminal() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        // Manually transition to completed_unreviewed
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::CompletedUnreviewed).unwrap();
+
+        // Stop should be a no-op
+        let (output, code) = loop_stop(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("status: completed_unreviewed"),
+            "output:\n{output}"
+        );
+        assert!(output.contains("no-op"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_tick_rejects_terminal_status() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            true,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        loop_stop(&conn, &loop_id);
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 1, "expected error exit code, output:\n{output}");
+        assert!(
+            output.contains("terminal status"),
+            "expected terminal status error, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn loop_tree_handles_zero_sessions() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        let (output, code) = loop_tree(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("sessions: 0 sessions"), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_prefix_resolution_works() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        let loop_id = extract_loop_id(&create_output);
+        let prefix = &loop_id[..8];
+
+        // Should resolve via prefix
+        let (output, code) = loop_observe(&conn, prefix, 20);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains(&loop_id), "output:\n{output}");
+    }
+
+    #[test]
+    fn loop_tree_shows_sessions_with_children() {
+        let conn = setup_db();
+        let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Create a loop
+        let (create_output, _) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            "Goal",
+            3,
+            false,
+        );
+        let loop_id = extract_loop_id(&create_output);
+
+        // Create sessions and register them with the loop
+        let maker_id = "11111111-aaaa-bbbb-cccc-dddddddddddd".to_string();
+        let child_id = "22222222-aaaa-bbbb-cccc-dddddddddddd".to_string();
+
+        crate::db::create_session_with_id(
+            &conn,
+            &maker_id,
+            &project.id,
+            "Maker",
+            None,
+            "main",
+            None,
+            Some("claude"),
+            "daemon",
+            true,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        crate::db::create_session_with_id(
+            &conn,
+            &child_id,
+            &project.id,
+            "Sub-worker",
+            None,
+            "main",
+            None,
+            Some("codex"),
+            "daemon",
+            true,
+            None,
+            None,
+            Some(&maker_id),
+        )
+        .unwrap();
+
+        // Add maker as a loop session
+        use planeai_core::loop_service::{AddLoopSessionParams, LoopService};
+        LoopService::add_loop_session(
+            &conn,
+            AddLoopSessionParams {
+                loop_id: loop_id.clone(),
+                session_id: maker_id.clone(),
+                role: "maker".to_string(),
+                round: 0,
+                provider: Some("claude".to_string()),
+                status: "active".to_string(),
+            },
+        )
+        .unwrap();
+
+        // loop tree should show both the maker and its child
+        let (output, code) = loop_tree(&conn, &loop_id[..8]);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("sessions[2]"),
+            "expected 2 sessions (maker + child), output:\n{output}"
+        );
+        assert!(output.contains("11111111"), "output:\n{output}");
+        assert!(output.contains("22222222"), "output:\n{output}");
+        assert!(output.contains("Maker"), "output:\n{output}");
+        assert!(output.contains("Sub-worker"), "output:\n{output}");
     }
 }
