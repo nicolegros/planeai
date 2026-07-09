@@ -273,7 +273,15 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
             status: "active".to_string(),
         },
     )
-    .map_err(|e| format!("failed to link session to loop: {e}"))?;
+    .map_err(|e| {
+        tracing::warn!(
+            session_id = %session.id,
+            loop_id = %ctx.loop_id,
+            role = %role_id,
+            "orphaned session: created but failed to link to loop; manual cleanup may be needed"
+        );
+        format!("failed to link session to loop: {e}")
+    })?;
 
     // 7. Track session in runtime state
     ctx.snapshot
@@ -721,24 +729,37 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         ));
     }
 
-    // Resolve a session to run gates in — use the latest session from any role
-    let all_session_ids: Vec<String> = ctx
-        .snapshot
-        .runtime
-        .created_session_ids
-        .values()
-        .flatten()
-        .cloned()
-        .collect();
-
-    if all_session_ids.is_empty() {
-        return Err(format!(
-            "step '{}': no sessions available for gate execution",
-            step.id
-        ));
-    }
-
-    let session_id = all_session_ids.last().unwrap().clone();
+    // Resolve a session to run gates in.
+    // If step.role is specified, use that role's latest session; otherwise fall back to
+    // the last session across all roles.
+    let session_id = if let Some(ref role) = step.role {
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .get(role)
+            .and_then(|ids| ids.last())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "step '{}': no sessions found for role '{}'",
+                    step.id, role
+                )
+            })?
+    } else {
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .values()
+            .flatten()
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "step '{}': no sessions available for gate execution",
+                    step.id
+                )
+            })?
+    };
 
     // Resolve project path for CWD
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
@@ -905,13 +926,17 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
     // Disable auto-escaping (templates produce plain text, not HTML)
     env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
 
-    // Attempt to add the template; if it's malformed syntax, we'll fall through
-    // to the get_template error path and return the raw template.
-    let _ = env.add_template("prompt", template);
+    if let Err(e) = env.add_template("prompt", template) {
+        tracing::warn!(error = %e, "recipe template parse failed; using raw template");
+        return template.to_string();
+    }
 
     let tpl = match env.get_template("prompt") {
         Ok(t) => t,
-        Err(_) => return template.to_string(),
+        Err(e) => {
+            tracing::warn!(error = %e, "recipe template retrieval failed; using raw template");
+            return template.to_string();
+        }
     };
 
     // Build knowledge.files as a formatted string
@@ -941,13 +966,16 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
         },
         runtime => context! {
             round => snapshot.runtime.round,
-            last_error => "",
+            last_error => snapshot.runtime.last_error.as_deref().unwrap_or(""),
         },
     };
 
     match tpl.render(ctx) {
         Ok(rendered) => rendered,
-        Err(_) => template.to_string(),
+        Err(e) => {
+            tracing::warn!(error = %e, "recipe template render failed; using raw template");
+            template.to_string()
+        }
     }
 }
 
@@ -989,6 +1017,7 @@ mod tests {
                 tick_count: 0,
                 round: 1,
                 created_session_ids: BTreeMap::new(),
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,

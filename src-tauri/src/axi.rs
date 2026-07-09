@@ -3469,6 +3469,7 @@ mod tests {
                 tick_count: 0,
                 round: 1,
                 created_session_ids: BTreeMap::new(), // No sessions!
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
@@ -3604,6 +3605,7 @@ mod tests {
                 tick_count: 0,
                 round: 1,
                 created_session_ids: BTreeMap::new(),
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
@@ -3689,6 +3691,7 @@ mod tests {
                 tick_count: 5,
                 round: 3, // Already at max_rounds
                 created_session_ids: BTreeMap::new(),
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,

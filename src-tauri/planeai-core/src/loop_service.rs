@@ -574,9 +574,7 @@ impl LoopService {
         // Enforce invariant: handoff artifacts must go through record_handoff
         // which performs atomic session status update + event append.
         if params.kind == "handoff" {
-            return Err(rusqlite::Error::InvalidParameterName(
-                "use LoopService::record_handoff for handoff artifacts".to_string(),
-            ));
+            return Err(rusqlite::Error::InvalidQuery);
         }
 
         let id = uuid::Uuid::new_v4().to_string();
