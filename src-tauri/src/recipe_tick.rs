@@ -58,6 +58,39 @@ pub fn tick_recipe(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
 ) -> (String, i32) {
+    // Top-level terminal guard: do not execute any step if the loop is terminal.
+    if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
+        if run.status.is_executor_terminal() {
+            return (
+                render(&[field(
+                    "error",
+                    str_val(&format!(
+                        "loop {} is in terminal status '{}' — cannot execute steps",
+                        short_id(loop_id),
+                        run.status.as_str()
+                    )),
+                )]),
+                1,
+            );
+        }
+        // Also guard intervention-required statuses (blocked, needs_human, stale)
+        if run.status.is_intervention_required() {
+            return render_tick_result(
+                loop_id,
+                &snapshot.recipe_id,
+                TickResult {
+                    step_id: snapshot.runtime.current_step.clone(),
+                    step_kind: "(guarded)".into(),
+                    status: run.status.as_str().to_string(),
+                    extra: vec![],
+                    next_actions: vec![
+                        "loop requires human intervention before it can proceed".into()
+                    ],
+                },
+            );
+        }
+    }
+
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Failed);
@@ -114,28 +147,6 @@ pub fn tick_recipe(
         );
     }
 
-    // Guard: if the loop is already in an intervention-required status,
-    // don't consume another tick for steps that would set that status.
-    if step.kind == STEP_HUMAN_WAIT || step.kind == STEP_LOOP_STATUS {
-        if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
-            if run.status.is_intervention_required() {
-                return render_tick_result(
-                    loop_id,
-                    &snapshot.recipe_id,
-                    TickResult {
-                        step_id: step.id.clone(),
-                        step_kind: step.kind.clone(),
-                        status: run.status.as_str().to_string(),
-                        extra: vec![],
-                        next_actions: vec![
-                            "human intervention required before the loop can proceed".into(),
-                        ],
-                    },
-                );
-            }
-        }
-    }
-
     // Increment tick
     snapshot.runtime.tick_count += 1;
 
@@ -164,146 +175,31 @@ pub fn tick_recipe(
 
 // ─── Step Executors ──────────────────────────────────────────────────────────
 
-fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    let role_id = step.role.as_deref().unwrap_or("default");
-
-    let provider = ctx
-        .snapshot
-        .roles
-        .get(role_id)
-        .map(|r| r.provider.clone())
-        .unwrap_or_else(|| "default".to_string());
-    let isolation = ctx
-        .snapshot
-        .roles
-        .get(role_id)
-        .map(|r| r.isolation.clone())
-        .unwrap_or_else(|| "worktree".to_string());
-
-    let prompt = render_prompt(
-        step.prompt.as_deref().unwrap_or(""),
-        ctx.snapshot,
-        ctx.loop_id,
-    );
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    let params = planeai_core::loop_service::AddLoopSessionParams {
-        loop_id: ctx.loop_id.to_string(),
-        session_id: session_id.clone(),
-        role: role_id.to_string(),
-        round: ctx.snapshot.runtime.round as i64,
-        provider: Some(provider.clone()),
-        status: "active".to_string(),
-    };
-    LoopService::add_loop_session(ctx.conn, params)
-        .map_err(|e| format!("failed to add loop session: {e}"))?;
-
-    ctx.snapshot
-        .runtime
-        .created_session_ids
-        .entry(role_id.to_string())
-        .or_default()
-        .push(session_id.clone());
-
-    let _ = LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing);
-    let _ = LoopService::append_loop_event(
-        ctx.conn,
-        ctx.loop_id,
-        "recipe_step_completed",
-        &serde_json::json!({
-            "step_id": step.id, "kind": step.kind,
-            "session_id": session_id, "role": role_id,
-        }),
-    );
-
-    advance_step(ctx.snapshot, step);
-    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
-
-    Ok(TickResult {
-        step_id: step.id.clone(),
-        step_kind: step.kind.clone(),
-        status: "observing".into(),
-        extra: vec![
-            field(
-                "created_sessions",
-                Value::Table {
-                    columns: vec![
-                        "id".into(),
-                        "role".into(),
-                        "provider".into(),
-                        "status".into(),
-                        "round".into(),
-                        "isolation".into(),
-                    ],
-                    rows: vec![vec![
-                        short_id(&session_id).to_string(),
-                        role_id.to_string(),
-                        provider,
-                        "active".to_string(),
-                        ctx.snapshot.runtime.round.to_string(),
-                        isolation,
-                    ]],
-                },
-            ),
-            field("prompt", str_val(&truncate(&prompt, 500))),
-        ],
-        next_actions: vec![format!(
-            "wait for maker handoff, then run `planeai-cli axi loop tick {}`",
-            short_id(ctx.loop_id)
-        )],
-    })
+fn exec_session_create(_ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    // TODO(PLA-223): Wire to real session spawn path. When implemented:
+    // 1. Check max_sessions: count loop_sessions, reject if >= policy.max_sessions
+    // 2. Resolve role provider/isolation
+    // 3. Create real PlaneAI session (daemon/tmux/local)
+    // 4. Create worktree if isolation == worktree
+    // 5. Link real session_id to loop_sessions
+    // 6. Send rendered prompt via send_prompt
+    // 7. Track session_id in snapshot runtime state
+    Err(format!(
+        "step '{}': session.create is not yet wired to the real session spawn path. \
+         Create a session manually with `planeai-cli axi session create` and link it \
+         to this loop via loop_sessions.",
+        step.id
+    ))
 }
 
-fn exec_session_prompt(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    let role_id = step.role.as_deref().unwrap_or("default");
-
-    let session_id = ctx
-        .snapshot
-        .runtime
-        .created_session_ids
-        .get(role_id)
-        .and_then(|ids| ids.last())
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "no session found for role '{}' — run session.create first",
-                role_id
-            )
-        })?;
-
-    let prompt = render_prompt(
-        step.prompt.as_deref().unwrap_or(""),
-        ctx.snapshot,
-        ctx.loop_id,
-    );
-
-    let _ = LoopService::append_loop_event(
-        ctx.conn,
-        ctx.loop_id,
-        "recipe_step_completed",
-        &serde_json::json!({
-            "step_id": step.id, "kind": step.kind,
-            "session_id": session_id, "role": role_id,
-        }),
-    );
-
-    advance_step(ctx.snapshot, step);
-    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
-
-    Ok(TickResult {
-        step_id: step.id.clone(),
-        step_kind: step.kind.clone(),
-        status: "observing".into(),
-        extra: vec![
-            field("session_id", str_val(short_id(&session_id))),
-            field("role", str_val(role_id)),
-            field("prompt", str_val(&truncate(&prompt, 500))),
-        ],
-        next_actions: vec![format!(
-            "run `planeai-cli axi loop tick {}` to continue",
-            short_id(ctx.loop_id)
-        )],
-    })
+fn exec_session_prompt(_ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    // session.prompt requires integration with PlaneAI's prompt-lock-protected
+    // send_prompt flow. This is not yet wired.
+    Err(format!(
+        "step '{}': session.prompt is not yet wired to the real prompt path. \
+         Prompt the session manually with `planeai-cli axi session prompt`.",
+        step.id
+    ))
 }
 
 fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
@@ -329,12 +225,13 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     match found_handoff {
         None => {
-            let _ = LoopService::append_loop_event(
+            LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
                 "recipe_step_waiting",
                 &serde_json::json!({"step_id": step.id, "waiting_for": "handoff", "role": role_id}),
-            );
+            )
+            .map_err(|e| format!("failed to append loop event: {e}"))?;
             save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
             Ok(TickResult {
@@ -361,7 +258,7 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
                 .and_then(|m| m.get(&handoff_status))
                 .cloned();
 
-            let _ = LoopService::append_loop_event(
+            LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
                 "recipe_step_completed",
@@ -370,7 +267,8 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
                     "handoff_status": handoff_status,
                     "session_id": session_id, "next_step": next_step,
                 }),
-            );
+            )
+            .map_err(|e| format!("failed to append loop event: {e}"))?;
 
             if let Some(ref ns) = next_step {
                 ctx.snapshot.runtime.current_step = ns.clone();
@@ -428,12 +326,13 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     LoopService::update_loop_status(ctx.conn, ctx.loop_id, new_status.clone())
         .map_err(|e| format!("failed to update status: {e}"))?;
 
-    let _ = LoopService::append_loop_event(
+    LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
         "recipe_step_completed",
         &serde_json::json!({"step_id": step.id, "kind": step.kind, "status": status_str}),
-    );
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
 
     if !new_status.is_executor_terminal() && !new_status.is_intervention_required() {
         advance_step(ctx.snapshot, step);
@@ -463,12 +362,13 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
 fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     let event_kind = step.event_kind.as_deref().unwrap_or("recipe_event");
 
-    let _ = LoopService::append_loop_event(
+    LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
         event_kind,
         &serde_json::json!({"step_id": step.id}),
-    );
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
 
     advance_step(ctx.snapshot, step);
     save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
@@ -486,13 +386,15 @@ fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    let _ = LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman);
-    let _ = LoopService::append_loop_event(
+    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+        .map_err(|e| format!("failed to update loop status: {e}"))?;
+    LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
         "recipe_step_completed",
         &serde_json::json!({"step_id": step.id, "kind": step.kind}),
-    );
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
 
     // Advance past human.wait so that when the human resumes, the next tick
     // progresses to the following step instead of re-executing this one.
@@ -560,12 +462,14 @@ fn find_handoff_from_events(
                 .and_then(|v| v.as_str())
             {
                 if session_ids.iter().any(|s| s == sid) {
-                    let status = event
+                    if let Some(status) = event
                         .payload_json
                         .get("handoff_status")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("completed");
-                    return Some((sid.to_string(), status.to_string()));
+                    {
+                        return Some((sid.to_string(), status.to_string()));
+                    }
+                    // Missing handoff_status in event payload — skip this event
                 }
             }
         }
@@ -577,6 +481,7 @@ fn find_handoff_from_events(
 ///
 /// Substitutes variables from a flat map, handles simple `{% if %}` conditionals
 /// for absent keys, and renders knowledge files.
+#[allow(dead_code)] // Used by tests; production usage will return when session.create is wired.
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
     // Build substitution map
     let mut vars: Vec<(&str, String)> = Vec::new();
@@ -646,6 +551,7 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
     result
 }
 
+#[allow(dead_code)] // Used by tests; production usage will return when session.prompt is wired.
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();

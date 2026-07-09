@@ -6,8 +6,8 @@ use planeai_toon::{field, int_val, render, str_val, Value};
 pub fn recipe_ls(cwd: &str) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeService;
 
-    let project_root = std::path::Path::new(cwd);
-    let recipes = RecipeService::discover_all(Some(project_root));
+    let project_root = resolve_project_root(cwd);
+    let recipes = RecipeService::discover_all(Some(&project_root));
 
     if recipes.is_empty() {
         let fields = vec![
@@ -50,8 +50,8 @@ pub fn recipe_ls(cwd: &str) -> (String, i32) {
 pub fn recipe_show(id_or_path: &str, cwd: &str) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeService;
 
-    let project_root = std::path::Path::new(cwd);
-    let discovered = match RecipeService::resolve(id_or_path, Some(project_root)) {
+    let project_root = resolve_project_root(cwd);
+    let discovered = match RecipeService::resolve(id_or_path, Some(&project_root)) {
         Ok(d) => d,
         Err(e) => {
             return (
@@ -65,7 +65,7 @@ pub fn recipe_show(id_or_path: &str, cwd: &str) -> (String, i32) {
     };
 
     let recipe = &discovered.recipe;
-    let validation = RecipeService::validate(recipe, Some(project_root));
+    let validation = RecipeService::validate(recipe, Some(&project_root));
 
     let mut recipe_fields = vec![
         field("id", str_val(&recipe.id)),
@@ -164,8 +164,8 @@ pub fn recipe_show(id_or_path: &str, cwd: &str) -> (String, i32) {
 pub fn recipe_validate(id_or_path: &str, cwd: &str) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeService;
 
-    let project_root = std::path::Path::new(cwd);
-    let discovered = match RecipeService::resolve(id_or_path, Some(project_root)) {
+    let project_root = resolve_project_root(cwd);
+    let discovered = match RecipeService::resolve(id_or_path, Some(&project_root)) {
         Ok(d) => d,
         Err(e) => {
             return (
@@ -179,7 +179,7 @@ pub fn recipe_validate(id_or_path: &str, cwd: &str) -> (String, i32) {
     };
 
     let recipe = &discovered.recipe;
-    let result = RecipeService::validate(recipe, Some(project_root));
+    let result = RecipeService::validate(recipe, Some(&project_root));
 
     if !result.valid {
         let details: Vec<String> = result.errors.clone();
@@ -209,4 +209,20 @@ pub fn recipe_validate(id_or_path: &str, cwd: &str) -> (String, i32) {
     }
 
     (render(&fields), 0)
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Walk up from cwd to find the project root (directory containing .git or .planeai).
+/// Falls back to cwd if neither is found.
+fn resolve_project_root(cwd: &str) -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::from(cwd);
+    loop {
+        if path.join(".git").exists() || path.join(".planeai").exists() {
+            return path;
+        }
+        if !path.pop() {
+            return std::path::PathBuf::from(cwd);
+        }
+    }
 }

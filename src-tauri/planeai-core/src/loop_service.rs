@@ -608,26 +608,49 @@ impl LoopService {
         loop_id: &str,
         session_ids: &[String],
     ) -> SqlResult<Option<(String, String)>> {
+        if session_ids.is_empty() {
+            return Ok(None);
+        }
+        // Build IN clause with positional params
+        let placeholders: Vec<String> = (0..session_ids.len())
+            .map(|i| format!("?{}", i + 2))
+            .collect();
+        let sql = format!(
+            "SELECT session_id, content_json FROM loop_artifacts \
+             WHERE loop_id = ?1 AND kind = 'handoff' \
+             AND session_id IN ({}) \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            placeholders.join(", ")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        // Bind params: ?1 = loop_id, ?2..N = session_ids
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        params_vec.push(Box::new(loop_id.to_string()));
         for sid in session_ids {
-            let result = conn.query_row(
-                "SELECT content_json FROM loop_artifacts WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' ORDER BY created_at DESC LIMIT 1",
-                params![loop_id, sid],
-                |row| row.get::<_, Option<String>>(0),
-            );
-            match result {
-                Ok(Some(json_str)) => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                        if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
-                            return Ok(Some((sid.clone(), status.to_string())));
-                        }
+            params_vec.push(Box::new(sid.clone()));
+        }
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+
+        let result = stmt.query_row(params_refs.as_slice(), |row| {
+            let session_id: String = row.get(0)?;
+            let content_json: Option<String> = row.get(1)?;
+            Ok((session_id, content_json))
+        });
+
+        match result {
+            Ok((session_id, Some(json_str))) => {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
+                        return Ok(Some((session_id, status.to_string())));
                     }
                 }
-                Ok(None) => {}
-                Err(rusqlite::Error::QueryReturnedNoRows) => {}
-                Err(e) => return Err(e),
+                Ok(None)
             }
+            Ok((_, None)) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
         }
-        Ok(None)
     }
 
     // ─── Handoff Recording (atomic) ──────────────────────────────────────────

@@ -307,6 +307,35 @@ These are reserved in the schema but not implemented:
 | `task.create` | Create a task in the internal tracker |
 | `connector.call` | Call an external connector (Jira, Slack, etc.) |
 
+## Supported Template Variables (v1)
+
+The following variables are available in step prompt templates:
+
+| Variable | Description |
+|----------|-------------|
+| `{{ inputs.goal }}` | The goal passed at loop creation |
+| `{{ inputs.task_key }}` | The task key (if provided) |
+| `{{ inputs.<key> }}` | Any custom input defined in the recipe |
+| `{{ loop.id }}` | The loop run ID |
+| `{{ recipe.id }}` | The recipe ID |
+| `{{ knowledge.files }}` | Rendered list of knowledge file references |
+
+**Conditional blocks:**
+
+```
+{% if inputs.task_key %}
+Task: {{ inputs.task_key }}
+{% endif %}
+```
+
+Blocks are removed entirely when the referenced input is absent.
+
+**Not yet supported (planned for future versions):**
+
+- `{{ role.id }}` — the current role identifier
+- `{{ role.instructions }}` — the role's instruction text
+- `{{ tools.required }}` — list of required tools
+
 ## Safety Rules
 
 1. **Bounded execution** — Every recipe must declare `max_ticks` in `policy`. The runner refuses to start unbounded loops.
