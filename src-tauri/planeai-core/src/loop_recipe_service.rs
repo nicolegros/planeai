@@ -2,6 +2,13 @@
 //!
 //! Recipes are discovered from three locations with project > user > builtin precedence.
 //! No database connection required — purely file-based.
+//!
+//! # I/O safety
+//!
+//! All file I/O in this module is synchronous (`std::fs`). This is safe because
+//! the service is only called from the CLI binary (`planeai-cli`), never from
+//! Tauri IPC handlers. If recipe operations are ever exposed as Tauri commands,
+//! they must be wrapped with `commands::blocking(|| { ... }).await`.
 
 use crate::loop_recipe::*;
 use serde::{Deserialize, Serialize};
@@ -332,6 +339,22 @@ impl RecipeService {
             }
         }
 
+        // Warnings: tools.required not available (basic check — we only check
+        // that common CLI tools exist on PATH)
+        for tool in &recipe.tools.required {
+            // Only warn for tools we can reasonably check (CLI tools on PATH)
+            if matches!(tool.as_str(), "git" | "gh" | "jira")
+                && std::process::Command::new(tool)
+                    .arg("--version")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_err()
+            {
+                warnings.push(format!("tools.required '{}' not found on PATH", tool));
+            }
+        }
+
         let valid = errors.is_empty();
         RecipeValidationResult {
             valid,
@@ -379,7 +402,7 @@ impl RecipeService {
 
     /// Parse YAML content into a LoopRecipe.
     pub fn parse_yaml(content: &str) -> Result<LoopRecipe, String> {
-        serde_yaml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))
+        serde_yml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────────

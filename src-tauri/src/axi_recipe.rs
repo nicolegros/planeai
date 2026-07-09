@@ -1,5 +1,6 @@
 //! AXI recipe subcommands — list, show, validate loop recipes.
 
+use crate::axi::emit_error;
 use planeai_toon::{field, int_val, render, str_val, Value};
 
 pub fn recipe_ls(cwd: &str) -> (String, i32) {
@@ -208,14 +209,4 @@ pub fn recipe_validate(id_or_path: &str, cwd: &str) -> (String, i32) {
     }
 
     (render(&fields), 0)
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn emit_error(msg: &str, help: &[String]) -> String {
-    let mut fields = vec![field("error", str_val(msg))];
-    if !help.is_empty() {
-        fields.push(field("help", Value::List(help.to_vec())));
-    }
-    render(&fields)
 }

@@ -721,7 +721,16 @@ pub fn loop_create(
         }
     }
 
-    // Resolve recipe: --recipe flag takes priority, then --strategy as alias
+    // Conflict check: if both --recipe and non-default --strategy are provided, error
+    if recipe_flag.is_some() && strategy != "maker-verifier" {
+        return (
+            emit_error(
+                "cannot specify both --recipe and --strategy",
+                &["Use --recipe to specify a recipe, or --strategy as an alias (not both)".into()],
+            ),
+            1,
+        );
+    }
     let recipe_id = recipe_flag.unwrap_or(strategy);
     let project_root = std::path::Path::new(&project.path);
 
@@ -760,6 +769,22 @@ pub fn loop_create(
             max_rounds,
         },
     };
+
+    // Block creation if recipe uses a non-manual trigger (not executable in v1)
+    if let Some(ref dr) = discovered {
+        if !dr.recipe.trigger.is_v1_executable() {
+            return (
+                emit_error(
+                    &format!(
+                        "recipe '{}' uses trigger kind '{}' which is not executable in v1",
+                        dr.recipe.id, dr.recipe.trigger.kind
+                    ),
+                    &["Only 'manual' trigger is supported for loop creation".into()],
+                ),
+                1,
+            );
+        }
+    }
 
     let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
 
@@ -1821,15 +1846,13 @@ pub use crate::axi_recipe::{recipe_ls, recipe_show, recipe_validate};
 
 // ─── TOON Helpers ────────────────────────────────────────────────────────────
 
-fn emit_error(msg: &str, help: &[String]) -> String {
+pub(crate) fn emit_error(msg: &str, help: &[String]) -> String {
     let mut fields = vec![field("error", str_val(msg))];
     if !help.is_empty() {
         fields.push(field("help", Value::List(help.to_vec())));
     }
     render(&fields)
 }
-
-// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {

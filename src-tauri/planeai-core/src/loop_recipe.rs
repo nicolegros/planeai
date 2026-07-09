@@ -31,6 +31,7 @@ pub const MODE_READONLY: &str = "readonly";
 // Supported isolation values
 pub const ISOLATION_WORKTREE: &str = "worktree";
 pub const ISOLATION_PROJECT: &str = "project";
+pub const ISOLATION_READONLY: &str = "readonly";
 
 // ─── Structs ─────────────────────────────────────────────────────────────────
 

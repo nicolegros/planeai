@@ -18,7 +18,7 @@ uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 planeai-tasks = { path = "../planeai-tasks" }
-serde_yaml = "0.9"
+serde_yml = "0.0.12"
 
 [dev-dependencies]
 tempfile = { workspace = true }
