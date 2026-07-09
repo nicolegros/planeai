@@ -1569,7 +1569,7 @@ pub fn loop_verify(
     max_output_bytes: usize,
 ) -> (String, i32) {
     use planeai_core::loop_service::LoopService;
-    use planeai_core::verifier::{self, VerifyGateRequest};
+    use planeai_core::verifier::{self, VerifierLimits, VerifyGateRequest};
 
     // 1. Resolve loop
     let loop_run = match resolve_loop(conn, loop_id_arg) {
@@ -1615,8 +1615,10 @@ pub fn loop_verify(
         command: command.to_string(),
         project_path,
         session_worktree_path,
-        timeout_ms,
-        max_output_bytes,
+        limits: VerifierLimits {
+            timeout_ms,
+            max_output_bytes,
+        },
     };
 
     match verifier::run_verifier_gate(conn, request) {

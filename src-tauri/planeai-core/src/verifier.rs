@@ -38,6 +38,24 @@ impl VerifierStatus {
     }
 }
 
+/// Resource limits for verifier gate execution.
+#[derive(Debug, Clone)]
+pub struct VerifierLimits {
+    /// Timeout in milliseconds. 0 means no timeout.
+    pub timeout_ms: u64,
+    /// Maximum output bytes to capture in memory.
+    pub max_output_bytes: usize,
+}
+
+impl Default for VerifierLimits {
+    fn default() -> Self {
+        Self {
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+        }
+    }
+}
+
 /// Input request for running a verifier gate.
 #[derive(Debug, Clone)]
 pub struct VerifyGateRequest {
@@ -49,10 +67,8 @@ pub struct VerifyGateRequest {
     pub project_path: String,
     /// Session worktree path (preferred execution CWD).
     pub session_worktree_path: Option<String>,
-    /// Timeout in milliseconds. 0 means no timeout.
-    pub timeout_ms: u64,
-    /// Maximum output bytes to capture in memory.
-    pub max_output_bytes: usize,
+    /// Resource limits (timeout, output cap).
+    pub limits: VerifierLimits,
 }
 
 /// Successful result of a verifier gate execution.
@@ -188,7 +204,7 @@ pub fn run_verifier_gate(
 
     // 4. Run the command with timeout and output cap
     let (status, exit_code, output_bytes, truncated) =
-        execute_command(&request.command, &cwd, request.timeout_ms, request.max_output_bytes);
+        execute_command(&request.command, &cwd, request.limits.timeout_ms, request.limits.max_output_bytes);
 
     // 5. Write log to project-level artifact root
     let log_path = artifact_log_path(&request.project_path, &request.loop_id, &verifier_run.id);
@@ -425,8 +441,7 @@ mod tests {
                 command: "echo hello".to_string(),
                 project_path: project_path.clone(),
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap();
@@ -454,8 +469,7 @@ mod tests {
                 command: "exit 42".to_string(),
                 project_path,
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap();
@@ -480,8 +494,7 @@ mod tests {
                 command: "echo hi".to_string(),
                 project_path,
                 session_worktree_path: Some("/nonexistent/worktree/path".to_string()),
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap_err();
@@ -510,8 +523,7 @@ mod tests {
                 command: "echo hi".to_string(),
                 project_path: "/nonexistent/project/path".to_string(),
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap_err();
@@ -541,8 +553,7 @@ mod tests {
                 command: "echo hi".to_string(),
                 project_path: "/does/not/exist".to_string(),
                 session_worktree_path: Some("/also/does/not/exist".to_string()),
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap_err();
@@ -566,8 +577,7 @@ mod tests {
                 command: "echo 'test output'".to_string(),
                 project_path: project_path.clone(),
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap();
@@ -598,8 +608,7 @@ mod tests {
                 command: "echo done".to_string(),
                 project_path,
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap();
@@ -645,8 +654,7 @@ mod tests {
                 command: cmd.to_string(),
                 project_path: project_path.clone(),
                 session_worktree_path: Some(wt_path.clone()),
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits::default(),
             },
         )
         .unwrap();
@@ -678,8 +686,10 @@ mod tests {
                 command: "sleep 60".to_string(),
                 project_path,
                 session_worktree_path: None,
-                timeout_ms: 200, // 200ms timeout
-                max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+                limits: VerifierLimits {
+                    timeout_ms: 200, // 200ms timeout
+                    ..Default::default()
+                },
             },
         )
         .unwrap();
@@ -718,8 +728,10 @@ mod tests {
                 command: cmd.to_string(),
                 project_path,
                 session_worktree_path: None,
-                timeout_ms: DEFAULT_TIMEOUT_MS,
-                max_output_bytes: 100, // 100 byte cap
+                limits: VerifierLimits {
+                    max_output_bytes: 100, // 100 byte cap
+                    ..Default::default()
+                },
             },
         )
         .unwrap();
