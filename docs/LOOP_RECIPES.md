@@ -399,7 +399,7 @@ Prompt templates use [minijinja](https://github.com/mitsuhiko/minijinja) syntax 
 | `{{ inputs.goal }}` | The goal passed at loop creation |
 | `{{ inputs.task_key }}` | The task key (if provided) |
 | `{{ inputs.<key> }}` | Any custom input defined in the recipe |
-| `{{ loop.id }}` | The loop run ID |
+| `{{ loop_run.id }}` | The loop run ID |
 | `{{ recipe.id }}` | The recipe ID |
 | `{{ knowledge.files }}` | Rendered list of knowledge file references |
 | `{{ runtime.round }}` | Current round number |

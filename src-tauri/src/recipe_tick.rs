@@ -853,6 +853,30 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
 
     if let Some(ref ns) = next_step {
         ctx.snapshot.runtime.current_step = ns.clone();
+    } else if overall_status != "pass" {
+        tracing::warn!(
+            step_id = %step.id,
+            gates_result = %overall_status,
+            "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
+            overall_status,
+        );
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![
+                field("gates_result", str_val(overall_status)),
+                field("reason", str_val("no on-mapping for gate outcome")),
+            ],
+            next_actions: vec![format!(
+                "gates returned '{}' with no configured transition; manual intervention required",
+                overall_status
+            )],
+        });
     } else {
         advance_step(ctx.snapshot, step);
     }
@@ -917,7 +941,7 @@ fn save_snapshot(
 ///
 /// Supported template variables:
 /// - `{{ inputs.goal }}`, `{{ inputs.task_key }}`, etc. (recipe inputs)
-/// - `{{ loop.id }}` — the loop run ID
+/// - `{{ loop_run.id }}` — the loop run ID
 /// - `{{ recipe.id }}` — the recipe identifier
 /// - `{{ knowledge.files }}` — formatted knowledge file list
 /// - `{{ runtime.round }}` — current round number
@@ -961,7 +985,7 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
     // Build the context
     let ctx = context! {
         inputs => &snapshot.inputs,
-        loop => context! {
+        loop_run => context! {
             id => loop_id,
         },
         recipe => context! {
@@ -1109,7 +1133,7 @@ mod tests {
     fn render_prompt_builtin_vars() {
         let snapshot = minimal_snapshot(vec![], BTreeMap::new());
         let result = render_prompt(
-            "loop={{ loop.id }} recipe={{ recipe.id }}",
+            "loop={{ loop_run.id }} recipe={{ recipe.id }}",
             &snapshot,
             "abc-123",
         );
