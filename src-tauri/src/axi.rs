@@ -3955,22 +3955,21 @@ mod tests {
         assert_eq!(snap.runtime.current_step, "blocked");
     }
 
-    #[test]
-    fn maker_verifier_gates_pass_routes_to_create_verifier() {
+    /// Helper: set up a loop at the `run_gates` step with a real project path
+    /// so gate commands can execute. Returns (loop_id, project_path as String).
+    /// The caller retains `_dir` to keep the tempdir alive.
+    fn setup_maker_verifier_flow_with_path(
+        conn: &rusqlite::Connection,
+        maker_id: &str,
+    ) -> (String, String, tempfile::TempDir) {
         use planeai_core::loop_recipe::*;
         use planeai_core::loop_recipe_service::*;
-        use planeai_core::loop_run::LoopStatus;
-        use planeai_core::loop_service::LoopService;
         use std::collections::BTreeMap;
 
-        let conn = setup_db();
         let dir = tempfile::tempdir().unwrap();
         let project_path = dir.path().to_string_lossy().to_string();
-        let project = crate::db::create_project(&conn, "testapp", &project_path).unwrap();
+        let project = crate::db::create_project(conn, "testapp", &project_path).unwrap();
 
-        let maker_id = "maker-33333333-2222-3333-4444-555555555555";
-
-        // Build snapshot manually pointing at run_gates
         let recipe = RecipeService::parse_yaml(
             include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
         )
@@ -4016,7 +4015,7 @@ mod tests {
         let policy_json = serde_json::to_value(&snapshot).unwrap();
 
         let loop_run = LoopService::create_loop(
-            &conn,
+            conn,
             planeai_core::loop_service::CreateLoopParams {
                 project_id: project.id.clone(),
                 task_key: Some("PLA-210".into()),
@@ -4031,11 +4030,10 @@ mod tests {
         .unwrap();
         let loop_id = loop_run.id;
 
-        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
+        LoopService::update_loop_status(conn, &loop_id, LoopStatus::Running).unwrap();
 
-        // Create session with worktree pointing to the temp dir
         crate::db::create_session_with_id(
-            &conn,
+            conn,
             maker_id,
             &project.id,
             "maker session",
@@ -4052,7 +4050,7 @@ mod tests {
         .unwrap();
 
         LoopService::add_loop_session(
-            &conn,
+            conn,
             planeai_core::loop_service::AddLoopSessionParams {
                 loop_id: loop_id.clone(),
                 session_id: maker_id.to_string(),
@@ -4064,9 +4062,17 @@ mod tests {
         )
         .unwrap();
 
-        // Gates will run build/test commands — since no Cargo.toml or package.json
-        // exists, the gates echo "no build system detected" / "no test runner detected"
-        // which exits 0 = pass.
+        (loop_id, project_path, dir)
+    }
+
+    #[test]
+    fn maker_verifier_gates_pass_routes_to_create_verifier() {
+        let conn = setup_db();
+        let maker_id = "maker-33333333-2222-3333-4444-555555555555";
+        let (loop_id, _project_path, _dir) =
+            setup_maker_verifier_flow_with_path(&conn, maker_id);
+
+        // No Cargo.toml or package.json → gates echo "no build system detected" → exit 0 = pass
         let (output, code) = loop_tick(&conn, &loop_id);
         assert_eq!(code, 0, "gates.run should succeed, output:\n{output}");
         assert!(output.contains("gates.run"), "output:\n{output}");
@@ -4075,7 +4081,6 @@ mod tests {
             "should route to create_verifier on pass, output:\n{output}"
         );
 
-        // Verify snapshot advanced to create_verifier
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
         let snap: RecipeSnapshot =
             serde_json::from_value(updated.policy_json.unwrap()).unwrap();
@@ -4084,117 +4089,15 @@ mod tests {
 
     #[test]
     fn maker_verifier_gates_fail_routes_to_retry() {
-        use planeai_core::loop_recipe::*;
-        use planeai_core::loop_recipe_service::*;
-        use planeai_core::loop_run::LoopStatus;
-        use planeai_core::loop_service::LoopService;
-        use std::collections::BTreeMap;
-
         let conn = setup_db();
-        let dir = tempfile::tempdir().unwrap();
-        let project_path = dir.path().to_string_lossy().to_string();
-        let project = crate::db::create_project(&conn, "testapp", &project_path).unwrap();
+        let maker_id = "maker-44444444-2222-3333-4444-555555555555";
+        let (loop_id, _project_path, dir) =
+            setup_maker_verifier_flow_with_path(&conn, maker_id);
 
-        // Create a Cargo.toml so the gate tries `cargo build` — which will fail
-        // because there's no actual Rust project (no src/main.rs or src/lib.rs)
+        // Create a Cargo.toml so the gate tries `cargo build` — fails (no src/)
         std::fs::write(
             dir.path().join("Cargo.toml"),
             "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
-
-        let maker_id = "maker-44444444-2222-3333-4444-555555555555";
-
-        // Build snapshot at run_gates step
-        let recipe = RecipeService::parse_yaml(
-            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
-        )
-        .unwrap();
-
-        let steps: Vec<RecipeStep> = recipe.steps;
-        let roles: BTreeMap<String, RecipeRole> = recipe.roles;
-
-        let mut created_session_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        created_session_ids
-            .entry("maker".into())
-            .or_default()
-            .push(maker_id.to_string());
-
-        let mut inputs = BTreeMap::new();
-        inputs.insert("goal".to_string(), "Implement the feature".to_string());
-
-        let snapshot = RecipeSnapshot {
-            recipe_schema: RECIPE_SCHEMA_V1.into(),
-            recipe_id: "maker-verifier".into(),
-            recipe_source: "builtin".into(),
-            recipe_path: None,
-            inputs,
-            runtime: RecipeRuntime {
-                current_step: "run_gates".into(),
-                tick_count: 2,
-                round: 1,
-                created_session_ids,
-                last_error: None,
-            },
-            policy: SnapshotPolicy {
-                max_rounds: 3,
-                max_ticks: 50,
-                max_sessions: 5,
-                merge_policy: "human".into(),
-            },
-            roles,
-            steps,
-            knowledge: RecipeKnowledge::default(),
-            tools: RecipeTools::default(),
-        };
-
-        let policy_json = serde_json::to_value(&snapshot).unwrap();
-
-        let loop_run = LoopService::create_loop(
-            &conn,
-            planeai_core::loop_service::CreateLoopParams {
-                project_id: project.id.clone(),
-                task_key: Some("PLA-210".into()),
-                created_by_session_id: None,
-                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
-                goal: "Implement the feature".into(),
-                max_rounds: 3,
-                policy_json: Some(policy_json),
-                budget_json: None,
-            },
-        )
-        .unwrap();
-        let loop_id = loop_run.id;
-
-        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
-
-        crate::db::create_session_with_id(
-            &conn,
-            maker_id,
-            &project.id,
-            "maker session",
-            None,
-            "main",
-            Some(&project_path),
-            Some("claude"),
-            "daemon",
-            true,
-            Some("PLA-210"),
-            None,
-            None,
-        )
-        .unwrap();
-
-        LoopService::add_loop_session(
-            &conn,
-            planeai_core::loop_service::AddLoopSessionParams {
-                loop_id: loop_id.clone(),
-                session_id: maker_id.to_string(),
-                role: "maker".to_string(),
-                round: 1,
-                provider: Some("claude".to_string()),
-                status: "active".to_string(),
-            },
         )
         .unwrap();
 
@@ -4205,7 +4108,6 @@ mod tests {
             "should route to gates_failed_retry on fail, output:\n{output}"
         );
 
-        // Verify snapshot advanced to gates_failed_retry
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
         let snap: RecipeSnapshot =
             serde_json::from_value(updated.policy_json.unwrap()).unwrap();
