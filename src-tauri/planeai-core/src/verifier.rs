@@ -214,8 +214,12 @@ pub fn run_verifier_gate(
         .map_err(|e| VerifyGateError::Db(format!("failed to start verifier run: {e}")))?;
 
     // 4. Run the command with timeout and output cap
-    let (status, exit_code, output_bytes, truncated) =
-        execute_command(&request.command, &cwd, request.limits.timeout_ms, request.limits.max_output_bytes);
+    let (status, exit_code, output_bytes, truncated) = execute_command(
+        &request.command,
+        &cwd,
+        request.limits.timeout_ms,
+        request.limits.max_output_bytes,
+    );
 
     // 5. Write log to project-level artifact root
     let log_path = artifact_log_path(&request.project_path, &request.loop_id, &verifier_run.id);
@@ -304,12 +308,8 @@ fn execute_command(
     let stdout_cap = max_output_bytes;
     let stderr_cap = max_output_bytes; // each stream gets up to max; we combine + trim later
 
-    let stdout_handle = std::thread::spawn(move || {
-        drain_pipe(stdout_pipe, stdout_cap)
-    });
-    let stderr_handle = std::thread::spawn(move || {
-        drain_pipe(stderr_pipe, stderr_cap)
-    });
+    let stdout_handle = std::thread::spawn(move || drain_pipe(stdout_pipe, stdout_cap));
+    let stderr_handle = std::thread::spawn(move || drain_pipe(stderr_pipe, stderr_cap));
 
     // Wait with timeout (pipes are being drained concurrently)
     let wait_result = if timeout_ms == 0 {

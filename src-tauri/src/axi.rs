@@ -1591,12 +1591,7 @@ pub fn loop_verify(
     // 3. Resolve project path for artifact root
     let project_path = match db::get_project(conn, &loop_run.project_id) {
         Ok(Some(p)) => p.path,
-        Ok(None) => {
-            return (
-                emit_error("project not found for this loop", &[]),
-                1,
-            )
-        }
+        Ok(None) => return (emit_error("project not found for this loop", &[]), 1),
         Err(e) => return (emit_error(&e.to_string(), &[]), 1),
     };
 
@@ -1641,14 +1636,20 @@ fn render_verify_result(result: &planeai_core::verifier::VerifyGateResult) -> (S
             field("session_id", str_val(&result.session_id)),
             field("name", str_val(&result.name)),
             field("status", str_val(result.status.as_str())),
-            field("exit_code", match result.exit_code {
-                Some(c) => int_val(c as i64),
-                None => Value::Null,
-            }),
-            field("output_path", match &result.output_path {
-                Some(p) => str_val(p),
-                None => Value::Null,
-            }),
+            field(
+                "exit_code",
+                match result.exit_code {
+                    Some(c) => int_val(c as i64),
+                    None => Value::Null,
+                },
+            ),
+            field(
+                "output_path",
+                match &result.output_path {
+                    Some(p) => str_val(p),
+                    None => Value::Null,
+                },
+            ),
         ]),
     )];
 
@@ -1668,7 +1669,11 @@ fn render_verify_result(result: &planeai_core::verifier::VerifyGateResult) -> (S
     };
     result_fields.push(field("next_actions", Value::List(next_actions)));
 
-    let exit = if result.status == VerifierStatus::Pass { 0 } else { 1 };
+    let exit = if result.status == VerifierStatus::Pass {
+        0
+    } else {
+        1
+    };
     (render(&result_fields), exit)
 }
 
@@ -3028,7 +3033,10 @@ mod tests {
         assert!(output.contains("exit_code: 0"), "output:\n{output}");
         assert!(output.contains("output_path:"), "output:\n{output}");
         assert!(output.contains("next_actions[2]:"), "output:\n{output}");
-        assert!(output.contains("planeai-cli axi loop observe"), "output:\n{output}");
+        assert!(
+            output.contains("planeai-cli axi loop observe"),
+            "output:\n{output}"
+        );
     }
 
     #[test]

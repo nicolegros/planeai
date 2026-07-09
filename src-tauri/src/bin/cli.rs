@@ -1169,7 +1169,15 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             command,
             timeout_ms,
             max_output_bytes,
-        } => planeai::axi::loop_verify(conn, &loop_id, &session, &name, &command, timeout_ms, max_output_bytes),
+        } => planeai::axi::loop_verify(
+            conn,
+            &loop_id,
+            &session,
+            &name,
+            &command,
+            timeout_ms,
+            max_output_bytes,
+        ),
     };
     print!("{output}");
     code

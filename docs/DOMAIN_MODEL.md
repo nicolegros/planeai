@@ -299,6 +299,7 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 **AXI CLI:** `planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>` is a thin TOON-rendering wrapper around the primitive.
 
 **Design notes:**
+
 - Gates are local proof artifacts — they prove a command passed on a specific machine at a specific time. They are not production-level proof.
 - Output lives on disk under the project artifact root (`<project>/.planeai/loops/<loop_id>/verifiers/<run_id>.log`), not in the database.
 - Logs are stored under the project root (not the session worktree) so they survive worktree cleanup.

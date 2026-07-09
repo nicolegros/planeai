@@ -460,14 +460,14 @@ Run a verifier gate command and persist the result to a loop. The command runs s
 planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>
 ```
 
-| Flag                | Description                                              |
-| ------------------- | -------------------------------------------------------- |
-| `--loop-id`         | Loop ID (prefix match supported)                         |
-| `--session`         | Session ID (must belong to the loop, prefix supported)   |
-| `--name`            | Human-readable verifier name (e.g., "rust-tests")        |
-| `--command`         | Shell command to execute (passed to `sh -c` / `cmd /C`)  |
-| `--timeout-ms`      | Timeout in ms (default: 600000 = 10 min). Use 0 for no timeout. |
-| `--max-output-bytes`| Max output bytes to capture (default: 10485760 = 10 MB). Larger output is truncated. |
+| Flag                 | Description                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `--loop-id`          | Loop ID (prefix match supported)                                                     |
+| `--session`          | Session ID (must belong to the loop, prefix supported)                               |
+| `--name`             | Human-readable verifier name (e.g., "rust-tests")                                    |
+| `--command`          | Shell command to execute (passed to `sh -c` / `cmd /C`)                              |
+| `--timeout-ms`       | Timeout in ms (default: 600000 = 10 min). Use 0 for no timeout.                      |
+| `--max-output-bytes` | Max output bytes to capture (default: 10485760 = 10 MB). Larger output is truncated. |
 
 > **Security:** `--command` is a trusted human/recipe-authored command. Do not pass agent-generated command strings to this option. A future `--gate <name>` flag will resolve commands from configured recipe gates.
 
