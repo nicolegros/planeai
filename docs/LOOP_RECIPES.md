@@ -380,7 +380,8 @@ steps:
     select: latest
     prompt: |
       Round {{ runtime.round }} — the verifier has requested changes.
-      Review the verifier's feedback and address the issues. Then record a new handoff.
+      Verifier feedback: {{ runtime.last_error }}
+      Address the issues raised above, then record a new handoff.
     next: increment_round_after_review
 
   - id: increment_round_after_review

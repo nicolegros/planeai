@@ -128,6 +128,11 @@ steps:
     prompt: |
       Round {{ runtime.round }} — verification gates failed.
 
+      {% if runtime.last_error %}
+      Failure details:
+      {{ runtime.last_error }}
+      {% endif %}
+
       Review the gate output and fix the issues. Then record a new handoff.
       Do NOT skip tests or suppress errors. Fix the root cause.
     next: increment_round_after_gates
@@ -177,7 +182,10 @@ steps:
     prompt: |
       Round {{ runtime.round }} — the verifier has requested changes.
 
-      Review the verifier's feedback and address the issues. Then record a new handoff.
+      Verifier feedback:
+      {{ runtime.last_error }}
+
+      Address the issues raised above, then record a new handoff.
       Focus on the specific concerns raised. Do not introduce unrelated changes.
     next: increment_round_after_review
 
