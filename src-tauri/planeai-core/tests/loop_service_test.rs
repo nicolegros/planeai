@@ -886,3 +886,110 @@ fn migrate_from_269_schema_recovers_from_leftover_loop_runs_new() {
         "loop_runs_new should not exist after migration"
     );
 }
+
+// ─── complete_verifier_run tests ─────────────────────────────────────────────
+
+#[test]
+fn complete_verifier_run_updates_row_and_appends_event() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("maker-verifier"),
+            goal: "Test complete".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let verifier = LoopService::add_verifier_run(
+        &conn,
+        AddVerifierRunParams {
+            loop_id: loop_run.id.clone(),
+            session_id: Some("sess-1".into()),
+            verifier_type: "command".into(),
+            name: "cargo-test".into(),
+            command: "cargo test".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(verifier.status, "pending");
+
+    let payload = serde_json::json!({
+        "name": "cargo-test",
+        "status": "pass",
+        "exit_code": 0,
+    });
+
+    LoopService::complete_verifier_run(
+        &conn,
+        &verifier.id,
+        "pass",
+        Some(0),
+        Some("/tmp/out.log"),
+        &payload,
+    )
+    .unwrap();
+
+    // Verify row was updated
+    let row: (String, Option<i32>, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT status, exit_code, output_path, finished_at FROM verifier_runs WHERE id = ?1",
+            rusqlite::params![verifier.id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(row.0, "pass");
+    assert_eq!(row.1, Some(0));
+    assert_eq!(row.2, Some("/tmp/out.log".to_string()));
+    assert!(row.3.is_some(), "finished_at should be set");
+
+    // Verify event was appended
+    let events = LoopService::list_loop_events(&conn, &loop_run.id).unwrap();
+    let completed_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "verifier_completed")
+        .collect();
+    assert_eq!(completed_events.len(), 1);
+    assert_eq!(
+        completed_events[0].payload_json["name"].as_str().unwrap(),
+        "cargo-test"
+    );
+}
+
+#[test]
+fn complete_verifier_run_fails_for_nonexistent_id() {
+    let conn = test_db();
+    // Create a loop so the DB has the tables
+    LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("single"),
+            goal: "x".into(),
+            max_rounds: 1,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let payload = serde_json::json!({"status": "pass"});
+    let result = LoopService::complete_verifier_run(
+        &conn,
+        "nonexistent-id",
+        "pass",
+        Some(0),
+        None,
+        &payload,
+    );
+
+    assert!(result.is_err(), "should fail for nonexistent verifier run");
+}
