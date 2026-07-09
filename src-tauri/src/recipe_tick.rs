@@ -654,9 +654,9 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    // Enforce max_rounds: if we're already at the limit, set needs_human
+    // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Blocked)
             .map_err(|e| format!("failed to update loop status: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
@@ -675,7 +675,7 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
         return Ok(TickResult {
             step_id: step.id.clone(),
             step_kind: step.kind.clone(),
-            status: "needs_human".into(),
+            status: "blocked".into(),
             extra: vec![
                 field("limit", str_val("max_rounds")),
                 field(

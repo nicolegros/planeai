@@ -3728,16 +3728,16 @@ mod tests {
         let (output, code) = loop_tick(&conn, &loop_run.id);
         assert_eq!(
             code, 0,
-            "round.next at limit should return code 0 (sets needs_human), output:\n{output}"
+            "round.next at limit should return code 0 (sets blocked), output:\n{output}"
         );
         assert!(
-            output.contains("needs_human") || output.contains("max_rounds"),
+            output.contains("blocked") || output.contains("max_rounds"),
             "expected max_rounds limit message, output:\n{output}"
         );
 
-        // Verify loop status is now needs_human
+        // Verify loop status is now blocked
         let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
-        assert_eq!(updated.status, LoopStatus::NeedsHuman);
+        assert_eq!(updated.status, LoopStatus::Blocked);
     }
 
     // ─── Maker-Verifier Full Flow Integration Tests ──────────────────────────
@@ -4253,12 +4253,12 @@ mod tests {
         let (output, code) = loop_tick(&conn, &loop_id);
         assert_eq!(code, 0, "output:\n{output}");
         assert!(
-            output.contains("needs_human") || output.contains("max_rounds"),
-            "should mark needs_human at max_rounds, output:\n{output}"
+            output.contains("blocked") || output.contains("max_rounds"),
+            "should mark blocked at max_rounds, output:\n{output}"
         );
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        assert_eq!(updated.status, LoopStatus::NeedsHuman);
+        assert_eq!(updated.status, LoopStatus::Blocked);
     }
 
     #[test]
@@ -4280,12 +4280,12 @@ mod tests {
         let (output, code) = loop_tick(&conn, &loop_id);
         assert_eq!(code, 0, "output:\n{output}");
         assert!(
-            output.contains("needs_human") || output.contains("max_rounds"),
-            "should mark needs_human at max_rounds, output:\n{output}"
+            output.contains("blocked") || output.contains("max_rounds"),
+            "should mark blocked at max_rounds, output:\n{output}"
         );
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        assert_eq!(updated.status, LoopStatus::NeedsHuman);
+        assert_eq!(updated.status, LoopStatus::Blocked);
     }
 
     #[test]
