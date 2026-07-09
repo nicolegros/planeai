@@ -33,6 +33,7 @@
   let fitAddon: FitAddon;
   let webglAddon: WebglAddon | null = null;
   let attached = $state(false);
+  let lastSentDims: { cols: number; rows: number } | null = null;
 
   const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
@@ -40,6 +41,17 @@
   // ── Input write — send immediately for responsive typing ──────────────
   function queueWrite(bytes: number[]) {
     pty.write(sessionId, bytes);
+  }
+
+  // ── Fit terminal and sync PTY dimensions ──────────────────────────────
+  function fitAndResize(force = false) {
+    fitAddon.fit();
+    const { rows, cols } = term;
+    if (rows > 0 && cols > 0) {
+      if (!force && lastSentDims?.cols === cols && lastSentDims?.rows === rows) return;
+      lastSentDims = { cols, rows };
+      pty.resize(sessionId, rows, cols);
+    }
   }
 
   function terminalFontStack(primary: string): string {
@@ -266,18 +278,13 @@
 
     // ── Resize observer with debouncing ──────────────────────────────────
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastSentDims: { cols: number; rows: number } | null = null;
 
     const resizeObserver = new ResizeObserver(() => {
       if (!visible || !attached) return;
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         resizeTimer = null;
-        fitAddon.fit();
-        const { rows, cols } = term;
-        if (lastSentDims?.cols === cols && lastSentDims?.rows === rows) return;
-        lastSentDims = { cols, rows };
-        pty.resize(sessionId, rows, cols);
+        fitAndResize();
       }, RESIZE_DEBOUNCE_MS);
     });
     resizeObserver.observe(containerEl);
@@ -305,12 +312,18 @@
           // WebGL not available, use default canvas renderer
         }
       }
+      // Double-rAF ensures browser has fully reflowed after removing `hidden`.
+      // Then unconditionally fit + send pty.resize so the PTY always has correct
+      // dimensions — the ResizeObserver alone won't fire when only visibility changed.
       requestAnimationFrame(() => {
-        const proposed = fitAddon.proposeDimensions();
-        if (proposed && (proposed.cols !== term.cols || proposed.rows !== term.rows)) {
-          fitAddon.fit();
-        }
+        requestAnimationFrame(() => {
+          fitAndResize(true);
+        });
       });
+    } else {
+      // Invalidate cached dims so the next visibility restore always sends resize,
+      // even if the container size hasn't changed.
+      lastSentDims = null;
     }
     // WebGL addon stays alive — disposed only on unmount via term.dispose()
   });
@@ -319,6 +332,12 @@
     if (!term) return;
     if (focused) {
       term.focus();
+      // Re-fit on focus: another window (or dev instance) may have resized the
+      // container while this pane wasn't focused. The ResizeObserver doesn't fire
+      // reliably in that scenario.
+      requestAnimationFrame(() => {
+        fitAndResize();
+      });
     } else {
       term.blur();
     }
