@@ -10,6 +10,7 @@ pub mod git;
 pub mod ipc;
 pub mod logging;
 pub mod paths;
+pub mod recipe_tick;
 pub mod session_ops;
 pub mod session_restart;
 pub mod task_cli;
