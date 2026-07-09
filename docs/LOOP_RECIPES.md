@@ -20,8 +20,8 @@ Recipes encode the core loop-engineering model:
 
 Recipes are resolved in order (first match wins):
 
-1. **Project** — `.planeai/recipes/*.yaml` in the repo root
-2. **User** — `~/.config/planeai/recipes/*.yaml`
+1. **Project** — `.planeai/loops/*.yaml` in the repo root
+2. **User** — `~/.config/planeai/loops/*.yaml`
 3. **Builtin** — bundled with the app
 
 A project recipe with `id: maker-verifier` shadows the builtin of the same name.

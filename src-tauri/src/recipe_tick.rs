@@ -166,7 +166,9 @@ fn exec_session_create(
     advance_step(snapshot, step);
 
     // Save updated snapshot
-    save_snapshot(conn, loop_id, snapshot);
+    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+        return (emit_error(&e), 1);
+    }
 
     let fields = vec![
         field(
@@ -191,7 +193,7 @@ fn exec_session_create(
                     "isolation".into(),
                 ],
                 rows: vec![vec![
-                    session_id[..8].to_string(),
+                    session_id[..std::cmp::min(8, session_id.len())].to_string(),
                     role_id.to_string(),
                     provider.to_string(),
                     "active".to_string(),
@@ -258,7 +260,9 @@ fn exec_session_prompt(
 
     // Advance to next step
     advance_step(snapshot, step);
-    save_snapshot(conn, loop_id, snapshot);
+    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+        return (emit_error(&e), 1);
+    }
 
     let fields = vec![
         field(
@@ -269,7 +273,7 @@ fn exec_session_prompt(
                 field("step_id", str_val(&step.id)),
                 field("step_kind", str_val(&step.kind)),
                 field("status", str_val("observing")),
-                field("session_id", str_val(&session_id[..8])),
+                field("session_id", str_val(&session_id[..std::cmp::min(8, session_id.len())])),
                 field("role", str_val(role_id)),
             ]),
         ),
@@ -355,7 +359,9 @@ fn exec_handoff_wait(
                 "recipe_step_waiting",
                 &serde_json::json!({"step_id": step.id, "waiting_for": "handoff", "role": role_id}),
             );
-            save_snapshot(conn, loop_id, snapshot);
+            if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+                return (emit_error(&e), 1);
+            }
 
             let fields = vec![
                 field(
@@ -412,7 +418,9 @@ fn exec_handoff_wait(
             } else {
                 advance_step(snapshot, step);
             }
-            save_snapshot(conn, loop_id, snapshot);
+            if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+                return (emit_error(&e), 1);
+            }
 
             let next_step_display = next_step.as_deref().unwrap_or("(end)");
 
@@ -430,7 +438,7 @@ fn exec_handoff_wait(
                 field(
                     "matched_handoff",
                     Value::Object(vec![
-                        field("session_id", str_val(&session_id[..8])),
+                        field("session_id", str_val(&session_id[..std::cmp::min(8, session_id.len())])),
                         field("status", str_val(&handoff_status)),
                     ]),
                 ),
@@ -500,7 +508,9 @@ fn exec_loop_status(
     if !new_status.is_executor_terminal() && !new_status.is_intervention_required() {
         advance_step(snapshot, step);
     }
-    save_snapshot(conn, loop_id, snapshot);
+    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+        return (emit_error(&e), 1);
+    }
 
     let next_action = if new_status.is_executor_terminal() {
         "review the loop output before merging".to_string()
@@ -544,7 +554,9 @@ fn exec_loop_event(
     );
 
     advance_step(snapshot, step);
-    save_snapshot(conn, loop_id, snapshot);
+    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+        return (emit_error(&e), 1);
+    }
 
     let fields = vec![
         field(
@@ -582,7 +594,9 @@ fn exec_human_wait(
     );
 
     // Do not advance — human must intervene
-    save_snapshot(conn, loop_id, snapshot);
+    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+        return (emit_error(&e), 1);
+    }
 
     let fields = vec![
         field(
@@ -629,13 +643,19 @@ fn advance_step(snapshot: &mut RecipeSnapshot, current: &RecipeStep) {
 }
 
 /// Save the updated snapshot back to policy_json.
-fn save_snapshot(conn: &rusqlite::Connection, loop_id: &str, snapshot: &RecipeSnapshot) {
-    if let Ok(json_str) = serde_json::to_string(snapshot) {
-        let _ = conn.execute(
-            "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![json_str, chrono::Utc::now().to_rfc3339(), loop_id],
-        );
-    }
+fn save_snapshot(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+    snapshot: &RecipeSnapshot,
+) -> Result<(), String> {
+    let json_str = serde_json::to_string(snapshot)
+        .map_err(|e| format!("failed to serialize snapshot: {e}"))?;
+    conn.execute(
+        "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
+        rusqlite::params![json_str, chrono::Utc::now().to_rfc3339(), loop_id],
+    )
+    .map_err(|e| format!("failed to persist snapshot: {e}"))?;
+    Ok(())
 }
 
 /// Simple template rendering for recipe prompts.
@@ -687,7 +707,13 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max])
+        let end = s
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= max)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &s[..end])
     }
 }
 
