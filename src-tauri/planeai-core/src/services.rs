@@ -612,6 +612,17 @@ impl SessionService {
         rows.collect()
     }
 
+    /// List active/exited sessions linked to a specific task key.
+    pub fn list_by_task_key(conn: &Connection, task_key: &str) -> SqlResult<Vec<SessionRecord>> {
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions \
+             WHERE task_key = ?1 AND status IN ('active', 'exited')"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![task_key], row_to_session)?;
+        rows.collect()
+    }
+
     /// List all sessions for a project regardless of status.
     pub fn list_all_for_project(
         conn: &Connection,
