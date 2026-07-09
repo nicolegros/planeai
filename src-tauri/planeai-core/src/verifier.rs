@@ -233,6 +233,10 @@ pub fn run_verifier_gate(
 
 /// Execute a shell command with timeout and output cap.
 ///
+/// Stdout and stderr are drained concurrently with the wait loop to prevent
+/// pipe deadlocks when the child produces more output than the OS pipe buffer
+/// (~64 KB). Reader threads consume up to `max_output_bytes` total.
+///
 /// Returns (status, exit_code, combined_output, was_truncated).
 fn execute_command(
     command: &str,
@@ -240,7 +244,6 @@ fn execute_command(
     timeout_ms: u64,
     max_output_bytes: usize,
 ) -> (VerifierStatus, Option<i32>, Vec<u8>, bool) {
-    use std::io::Read;
     use std::process::{Command, Stdio};
 
     let shell = if cfg!(windows) { "cmd" } else { "sh" };
@@ -262,34 +265,37 @@ fn execute_command(
         }
     };
 
-    // Wait with timeout
+    // Take pipes immediately and drain them in background threads to avoid
+    // deadlock when output exceeds the OS pipe buffer.
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    let stdout_cap = max_output_bytes;
+    let stderr_cap = max_output_bytes; // each stream gets up to max; we combine + trim later
+
+    let stdout_handle = std::thread::spawn(move || {
+        drain_pipe(stdout_pipe, stdout_cap)
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        drain_pipe(stderr_pipe, stderr_cap)
+    });
+
+    // Wait with timeout (pipes are being drained concurrently)
     let wait_result = if timeout_ms == 0 {
         child.wait().map(Some)
     } else {
         wait_with_timeout(&mut child, timeout_ms)
     };
 
+    // Collect drained output
+    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+    let stderr_bytes = stderr_handle.join().unwrap_or_default();
+
     match wait_result {
         Ok(Some(exit_status)) => {
             let code = exit_status.code().unwrap_or(-1);
 
-            // Read output with cap
-            let mut stdout_bytes = Vec::new();
-            let mut stderr_bytes = Vec::new();
-            if let Some(mut stdout) = child.stdout.take() {
-                stdout_bytes.resize(max_output_bytes, 0);
-                let n = stdout.read(&mut stdout_bytes).unwrap_or(0);
-                stdout_bytes.truncate(n);
-            }
-            if let Some(mut stderr) = child.stderr.take() {
-                let remaining = max_output_bytes.saturating_sub(stdout_bytes.len());
-                stderr_bytes.resize(remaining, 0);
-                let n = stderr.read(&mut stderr_bytes).unwrap_or(0);
-                stderr_bytes.truncate(n);
-            }
-
-            let truncated = stdout_bytes.len() + stderr_bytes.len() >= max_output_bytes;
-
+            // Combine and enforce total cap
             let mut combined = stdout_bytes;
             if !stderr_bytes.is_empty() {
                 if !combined.is_empty() {
@@ -298,7 +304,9 @@ fn execute_command(
                 combined.extend_from_slice(&stderr_bytes);
             }
 
+            let truncated = combined.len() >= max_output_bytes;
             if truncated {
+                combined.truncate(max_output_bytes);
                 combined.extend_from_slice(b"\n--- OUTPUT TRUNCATED ---\n");
             }
 
@@ -321,6 +329,32 @@ fn execute_command(
             (VerifierStatus::Error, None, msg.into_bytes(), false)
         }
     }
+}
+
+/// Drain a pipe into a Vec, reading up to `max_bytes`. Consumes the full stream
+/// but discards bytes beyond the cap so the child doesn't block.
+fn drain_pipe(pipe: Option<impl std::io::Read>, max_bytes: usize) -> Vec<u8> {
+    let Some(mut reader) = pipe else {
+        return Vec::new();
+    };
+
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let remaining = max_bytes.saturating_sub(buf.len());
+                if remaining > 0 {
+                    let take = n.min(remaining);
+                    buf.extend_from_slice(&chunk[..take]);
+                }
+                // Keep reading even past cap to prevent child from blocking
+            }
+            Err(_) => break,
+        }
+    }
+    buf
 }
 
 /// Wait for a child process with a timeout. Returns Ok(None) on timeout.
