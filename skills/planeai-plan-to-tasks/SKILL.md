@@ -105,7 +105,7 @@ planeai-cli axi task add "Title" [flags]
 
 Flags:
   --desc <string>         Task description
-  --priority <int>        Priority (1 = highest, 0 = default)
+  --priority <int>        Priority (higher number = higher priority, 0 = default)
   --tags <a,b,c>          Comma-separated tags
   --blocked-by <K1,K2>    Comma-separated blocker keys
   --parent <KEY>          Parent task key
