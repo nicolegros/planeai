@@ -571,6 +571,12 @@ impl LoopService {
     // ─── Artifacts ───────────────────────────────────────────────────────────
 
     pub fn add_artifact(conn: &Connection, params: AddArtifactParams) -> SqlResult<LoopArtifact> {
+        // Enforce invariant: handoff artifacts must go through record_handoff
+        // which performs atomic session status update + event append.
+        if params.kind == "handoff" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let content_str = params.content_json.as_ref().map(|v| v.to_string());
@@ -603,6 +609,16 @@ impl LoopService {
 
     /// Find the most recent accepted handoff artifact for any of the given session IDs.
     /// Returns (session_id, handoff_status) if found.
+    ///
+    /// Strict validation rules:
+    /// - content_json.schema must equal "planeai.handoff.v1"
+    /// - content_json.status must be one of: completed, blocked, needs_human, failed
+    /// - Returns the globally latest matching handoff across all candidate sessions
+    ///
+    /// A handoff is "accepted" when it was recorded through `LoopService::record_handoff`.
+    /// The durable representation is `loop_artifacts(kind = "handoff")`.
+    /// Recipe steps must not treat arbitrary artifact rows as accepted unless they
+    /// came through the record_handoff path and pass schema/status validation.
     pub fn find_handoff_for_sessions(
         conn: &Connection,
         loop_id: &str,
@@ -611,15 +627,20 @@ impl LoopService {
         if session_ids.is_empty() {
             return Ok(None);
         }
+
+        const VALID_HANDOFF_STATUSES: &[&str] = &["completed", "blocked", "needs_human", "failed"];
+
         // Build IN clause with positional params
         let placeholders: Vec<String> = (0..session_ids.len())
             .map(|i| format!("?{}", i + 2))
             .collect();
+        // Fetch recent handoff artifacts (newest first) — we validate in Rust
+        // because SQLite JSON functions aren't guaranteed available.
         let sql = format!(
             "SELECT session_id, content_json FROM loop_artifacts \
              WHERE loop_id = ?1 AND kind = 'handoff' \
              AND session_id IN ({}) \
-             ORDER BY created_at DESC, id DESC LIMIT 1",
+             ORDER BY created_at DESC, id DESC",
             placeholders.join(", ")
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -632,25 +653,36 @@ impl LoopService {
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
 
-        let result = stmt.query_row(params_refs.as_slice(), |row| {
+        let mut rows = stmt.query(params_refs.as_slice())?;
+        while let Some(row) = rows.next()? {
             let session_id: String = row.get(0)?;
             let content_json: Option<String> = row.get(1)?;
-            Ok((session_id, content_json))
-        });
 
-        match result {
-            Ok((session_id, Some(json_str))) => {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
-                        return Ok(Some((session_id, status.to_string())));
-                    }
-                }
-                Ok(None)
+            let Some(json_str) = content_json else {
+                continue;
+            };
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) else {
+                continue;
+            };
+
+            // Require schema == "planeai.handoff.v1"
+            let schema = val.get("schema").and_then(|v| v.as_str()).unwrap_or("");
+            if schema != "planeai.handoff.v1" {
+                continue;
             }
-            Ok((_, None)) => Ok(None),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e),
+
+            // Require status is one of the valid handoff statuses
+            let Some(status) = val.get("status").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if !VALID_HANDOFF_STATUSES.contains(&status) {
+                continue;
+            }
+
+            return Ok(Some((session_id, status.to_string())));
         }
+
+        Ok(None)
     }
 
     // ─── Handoff Recording (atomic) ──────────────────────────────────────────

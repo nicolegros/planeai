@@ -15,9 +15,10 @@ pub const STEP_SESSION_CREATE: &str = "session.create";
 pub const STEP_SESSION_PROMPT: &str = "session.prompt";
 pub const STEP_HANDOFF_WAIT: &str = "handoff.wait";
 pub const STEP_HUMAN_WAIT: &str = "human.wait";
+pub const STEP_ROUND_NEXT: &str = "round.next";
+pub const STEP_GATES_RUN: &str = "gates.run";
 
 // Recognized but not executable step kinds
-pub const STEP_GATES_RUN: &str = "gates.run";
 pub const STEP_PR_FEEDBACK_WAIT: &str = "pr.feedback.wait";
 pub const STEP_ARBITER_RANK: &str = "arbiter.rank";
 pub const STEP_TASK_CREATE: &str = "task.create";
@@ -147,6 +148,15 @@ pub struct RecipeStep {
     pub select: Option<String>,
     #[serde(default)]
     pub event_kind: Option<String>,
+    #[serde(default)]
+    pub gates: Vec<RecipeGate>,
+}
+
+/// Inline gate declaration for gates.run steps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeGate {
+    pub name: String,
+    pub command: String,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -159,11 +169,12 @@ const V1_STEP_KINDS: &[&str] = &[
     STEP_SESSION_PROMPT,
     STEP_HANDOFF_WAIT,
     STEP_HUMAN_WAIT,
+    STEP_ROUND_NEXT,
+    STEP_GATES_RUN,
 ];
 
 /// Recognized but not yet executable step kinds.
 const FUTURE_STEP_KINDS: &[&str] = &[
-    STEP_GATES_RUN,
     STEP_PR_FEEDBACK_WAIT,
     STEP_ARBITER_RANK,
     STEP_TASK_CREATE,
@@ -263,6 +274,7 @@ mod tests {
             next: None,
             select: None,
             event_kind: None,
+            gates: vec![],
         };
         assert!(step.is_v1_executable());
         assert!(step.is_recognized());
@@ -272,7 +284,7 @@ mod tests {
     fn step_future_recognized() {
         let step = RecipeStep {
             id: "s2".into(),
-            kind: STEP_GATES_RUN.into(),
+            kind: STEP_PR_FEEDBACK_WAIT.into(),
             role: None,
             prompt: None,
             from: None,
@@ -281,6 +293,7 @@ mod tests {
             next: None,
             select: None,
             event_kind: None,
+            gates: vec![],
         };
         assert!(!step.is_v1_executable());
         assert!(step.is_recognized());
@@ -299,6 +312,7 @@ mod tests {
             next: None,
             select: None,
             event_kind: None,
+            gates: vec![],
         };
         assert!(!step.is_v1_executable());
         assert!(!step.is_recognized());

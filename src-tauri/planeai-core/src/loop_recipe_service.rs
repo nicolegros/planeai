@@ -80,6 +80,8 @@ pub struct RecipeRuntime {
     pub tick_count: u32,
     pub round: u32,
     pub created_session_ids: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,6 +388,7 @@ impl RecipeService {
                 tick_count: 0,
                 round: 1,
                 created_session_ids: BTreeMap::new(),
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,

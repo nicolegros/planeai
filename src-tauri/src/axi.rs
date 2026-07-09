@@ -3401,7 +3401,7 @@ mod tests {
     }
 
     #[test]
-    fn recipe_tick_session_create_returns_not_wired_error() {
+    fn recipe_tick_session_create_fails_gracefully_when_backend_unavailable() {
         let conn = setup_db();
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
@@ -3422,42 +3422,92 @@ mod tests {
         let loop_id = extract_loop_id(&create_output);
         assert!(!loop_id.is_empty(), "failed to extract loop_id");
 
-        // First tick: draft->running transition + session.create step returns error
+        // First tick: draft->running transition + session.create step fails because
+        // /tmp/myapp is not a valid git repo and no backend is available
         let (output, code) = loop_tick(&conn, &loop_id);
         assert_eq!(code, 1, "tick output:\n{output}");
         assert!(
-            output.contains("session.create is not yet wired"),
-            "expected not-yet-wired error, output:\n{output}"
+            output.contains("session.create failed"),
+            "expected session.create failure message, output:\n{output}"
         );
     }
 
     #[test]
-    fn recipe_tick_session_prompt_returns_not_wired_error() {
+    fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        use std::collections::BTreeMap;
+
         let conn = setup_db();
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
-        let (create_output, create_code) = loop_create(
+        // Create a loop with a snapshot that starts on session.prompt (no sessions exist)
+        let steps = vec![RecipeStep {
+            id: "prompt_maker".into(),
+            kind: STEP_SESSION_PROMPT.into(),
+            role: Some("maker".into()),
+            prompt: Some("Do the thing".into()),
+            from: None,
+            on: None,
+            status: None,
+            next: None,
+            select: Some("latest".into()),
+            event_kind: None,
+            gates: vec![],
+        }];
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "test-recipe".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs: BTreeMap::new(),
+            runtime: RecipeRuntime {
+                current_step: "prompt_maker".into(),
+                tick_count: 0,
+                round: 1,
+                created_session_ids: BTreeMap::new(), // No sessions!
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles: BTreeMap::new(),
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        let loop_run = LoopService::create_loop(
             &conn,
-            "/tmp/myapp",
-            None,
-            None,
-            "maker-verifier",
-            Some("maker-verifier"),
-            "Implement feature",
-            3,
-            false,
-        );
-        assert_eq!(create_code, 0, "create output:\n{create_output}");
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: "proj-1".into(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("test-recipe"),
+                goal: "test prompt".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
 
-        let loop_id = extract_loop_id(&create_output);
-        assert!(!loop_id.is_empty(), "failed to extract loop_id");
+        LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
 
-        // First tick: session.create — fails with not-wired error
-        let (tick1_output, tick1_code) = loop_tick(&conn, &loop_id);
-        assert_eq!(tick1_code, 1, "tick1 output:\n{tick1_output}");
+        // Tick — session.prompt should fail because no sessions for role
+        let (output, code) = loop_tick(&conn, &loop_run.id);
+        assert_eq!(code, 1, "expected failure, output:\n{output}");
         assert!(
-            tick1_output.contains("session.create is not yet wired"),
-            "expected session.create not-wired error, output:\n{tick1_output}"
+            output.contains("no sessions exist for role"),
+            "expected no-sessions error, output:\n{output}"
         );
     }
 
@@ -3501,5 +3551,192 @@ mod tests {
             output.contains("max_ticks"),
             "expected max_ticks error message, output:\n{output}"
         );
+    }
+
+    #[test]
+    fn recipe_tick_round_next_increments_round() {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        use std::collections::BTreeMap;
+
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Build a snapshot with a round.next step
+        let steps = vec![
+            RecipeStep {
+                id: "next_round".into(),
+                kind: STEP_ROUND_NEXT.into(),
+                role: None,
+                prompt: None,
+                from: None,
+                on: None,
+                status: None,
+                next: Some("after_round".into()),
+                select: None,
+                event_kind: None,
+                gates: vec![],
+            },
+            RecipeStep {
+                id: "after_round".into(),
+                kind: STEP_LOOP_EVENT.into(),
+                role: None,
+                prompt: None,
+                from: None,
+                on: None,
+                status: None,
+                next: None,
+                select: None,
+                event_kind: Some("post_round".into()),
+                gates: vec![],
+            },
+        ];
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "test-recipe".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs: BTreeMap::new(),
+            runtime: RecipeRuntime {
+                current_step: "next_round".into(),
+                tick_count: 0,
+                round: 1,
+                created_session_ids: BTreeMap::new(),
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles: BTreeMap::new(),
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        // Create loop with this snapshot
+        let loop_run = LoopService::create_loop(
+            &conn,
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: "proj-1".into(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("test-recipe"),
+                goal: "test round".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+
+        // Move to running
+        LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
+
+        // Tick — should execute round.next
+        let (output, code) = loop_tick(&conn, &loop_run.id);
+        assert_eq!(code, 0, "round.next should succeed, output:\n{output}");
+        assert!(output.contains("round.next"), "output:\n{output}");
+
+        // Verify round was incremented in DB
+        let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+        assert_eq!(updated.current_round, 2, "current_round should be 2");
+
+        // Verify snapshot runtime.round was updated
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.round, 2);
+        assert_eq!(snap.runtime.current_step, "after_round");
+    }
+
+    #[test]
+    fn recipe_tick_round_next_enforces_max_rounds() {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        use std::collections::BTreeMap;
+
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let steps = vec![RecipeStep {
+            id: "next_round".into(),
+            kind: STEP_ROUND_NEXT.into(),
+            role: None,
+            prompt: None,
+            from: None,
+            on: None,
+            status: None,
+            next: Some("start".into()),
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        }];
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "test-recipe".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs: BTreeMap::new(),
+            runtime: RecipeRuntime {
+                current_step: "next_round".into(),
+                tick_count: 5,
+                round: 3, // Already at max_rounds
+                created_session_ids: BTreeMap::new(),
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles: BTreeMap::new(),
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        let loop_run = LoopService::create_loop(
+            &conn,
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: "proj-1".into(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("test-recipe"),
+                goal: "test limit".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+
+        LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
+
+        // Tick — should fail because we're at max_rounds
+        let (output, code) = loop_tick(&conn, &loop_run.id);
+        assert_eq!(
+            code, 0,
+            "round.next at limit should return code 0 (sets needs_human), output:\n{output}"
+        );
+        assert!(
+            output.contains("needs_human") || output.contains("max_rounds"),
+            "expected max_rounds limit message, output:\n{output}"
+        );
+
+        // Verify loop status is now needs_human
+        let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+        assert_eq!(updated.status, LoopStatus::NeedsHuman);
     }
 }

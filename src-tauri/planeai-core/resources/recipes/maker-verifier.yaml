@@ -65,7 +65,7 @@ steps:
       You are running inside a PlaneAI loop.
 
       Loop:
-      {{ loop.id }}
+      {{ loop_run.id }}
 
       Goal:
       {{ inputs.goal }}

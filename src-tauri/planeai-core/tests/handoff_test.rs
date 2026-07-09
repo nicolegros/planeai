@@ -170,39 +170,23 @@ fn handoff_completed_transitions_running_to_observing() {
     let session_id = "sess-maker-001";
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
-    // Record a completed handoff
+    // Record a completed handoff via record_handoff (not add_artifact)
     let handoff_json = make_handoff_json(&loop_run.id, session_id, "completed");
     let handoff: HandoffV1 = serde_json::from_str(&handoff_json).unwrap();
 
-    // Store artifact
-    let artifact = LoopService::add_artifact(
+    LoopService::record_handoff(
         &conn,
-        AddArtifactParams {
+        RecordHandoffParams {
             loop_id: loop_run.id.clone(),
-            session_id: Some(session_id.to_string()),
-            kind: "handoff".to_string(),
-            path: Some("/tmp/handoff.json".to_string()),
+            session_id: session_id.to_string(),
+            artifact_path: Some("/tmp/handoff.json".to_string()),
             content_json: Some(serde_json::to_value(&handoff).unwrap()),
+            handoff_status: "completed".into(),
+            event_payload: serde_json::json!({"status": "completed", "session_id": session_id}),
+            new_loop_status: Some(LoopStatus::Observing),
         },
     )
     .unwrap();
-    assert_eq!(artifact.kind, "handoff");
-
-    // Append event
-    let event = LoopService::append_loop_event(
-        &conn,
-        &loop_run.id,
-        "handoff_recorded",
-        &serde_json::json!({"status": "completed", "session_id": session_id}),
-    )
-    .unwrap();
-    assert_eq!(event.kind, "handoff_recorded");
-
-    // Update session status
-    LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "completed").unwrap();
-
-    // Transition: running → observing for "completed" handoff
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Observing).unwrap();
 
     // Verify final state
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
@@ -313,23 +297,44 @@ fn handoff_artifact_is_persisted_with_correct_fields() {
     let handoff: HandoffV1 = serde_json::from_str(&handoff_json).unwrap();
     let content_json = serde_json::to_value(&handoff).unwrap();
 
-    let artifact = LoopService::add_artifact(
+    // Handoff artifacts must go through record_handoff (not add_artifact)
+    let result = LoopService::record_handoff(
         &conn,
-        AddArtifactParams {
+        RecordHandoffParams {
             loop_id: loop_run.id.clone(),
-            session_id: Some(session_id.to_string()),
-            kind: "handoff".to_string(),
-            path: Some("/project/.planeai/loops/loop_id/sessions/sess/handoff.json".to_string()),
+            session_id: session_id.to_string(),
+            artifact_path: Some(
+                "/project/.planeai/loops/loop_id/sessions/sess/handoff.json".to_string(),
+            ),
             content_json: Some(content_json.clone()),
+            handoff_status: "completed".into(),
+            event_payload: serde_json::json!({"session_id": session_id, "status": "completed"}),
+            new_loop_status: None,
         },
     )
     .unwrap();
 
-    assert_eq!(artifact.loop_id, loop_run.id);
-    assert_eq!(artifact.session_id, Some(session_id.to_string()));
-    assert_eq!(artifact.kind, "handoff");
-    assert!(artifact.path.is_some());
-    assert_eq!(artifact.content_json.unwrap(), content_json);
+    // Verify artifact was created by querying loop_artifacts directly
+    let artifact_row: (String, String, Option<String>, String, Option<String>) = conn
+        .query_row(
+            "SELECT id, loop_id, session_id, kind, content_json FROM loop_artifacts WHERE id = ?1",
+            rusqlite::params![result.artifact_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .unwrap();
+
+    assert_eq!(artifact_row.1, loop_run.id);
+    assert_eq!(artifact_row.2, Some(session_id.to_string()));
+    assert_eq!(artifact_row.3, "handoff");
+    assert!(artifact_row.4.is_some());
 }
 
 #[test]

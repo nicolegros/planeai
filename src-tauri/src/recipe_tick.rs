@@ -164,6 +164,8 @@ pub fn tick_recipe(
         STEP_LOOP_STATUS => exec_loop_status(&mut ctx, &step),
         STEP_LOOP_EVENT => exec_loop_event(&mut ctx, &step),
         STEP_HUMAN_WAIT => exec_human_wait(&mut ctx, &step),
+        STEP_ROUND_NEXT => exec_round_next(&mut ctx, &step),
+        STEP_GATES_RUN => exec_gates_run(&mut ctx, &step),
         _ => return render_error("unsupported recipe step kind"),
     };
 
@@ -175,31 +177,277 @@ pub fn tick_recipe(
 
 // ─── Step Executors ──────────────────────────────────────────────────────────
 
-fn exec_session_create(_ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    // TODO(PLA-223): Wire to real session spawn path. When implemented:
-    // 1. Check max_sessions: count loop_sessions, reject if >= policy.max_sessions
-    // 2. Resolve role provider/isolation
-    // 3. Create real PlaneAI session (daemon/tmux/local)
-    // 4. Create worktree if isolation == worktree
-    // 5. Link real session_id to loop_sessions
-    // 6. Send rendered prompt via send_prompt
-    // 7. Track session_id in snapshot runtime state
-    Err(format!(
-        "step '{}': session.create is not yet wired to the real session spawn path. \
-         Create a session manually with `planeai-cli axi session create` and link it \
-         to this loop via loop_sessions.",
-        step.id
-    ))
+fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    let role_id = step.role.as_deref().unwrap_or("default");
+
+    // 1. Check max_sessions
+    let existing_sessions =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
+    if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman).ok();
+        LoopService::append_loop_event(
+            ctx.conn,
+            ctx.loop_id,
+            "recipe_runtime_limit_reached",
+            &serde_json::json!({"step_id": step.id, "limit": "max_sessions"}),
+        )
+        .ok();
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![field("limit", str_val("max_sessions"))],
+            next_actions: vec!["max_sessions reached — cannot create more sessions".to_string()],
+        });
+    }
+
+    // 2. Resolve role from recipe
+    let role = ctx.snapshot.roles.get(role_id).cloned();
+    let provider = role
+        .as_ref()
+        .map(|r| r.provider.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let isolation = role
+        .as_ref()
+        .map(|r| r.isolation.clone())
+        .unwrap_or_else(|| "worktree".to_string());
+
+    // 3. Resolve project from loop
+    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
+        .map_err(|e| format!("failed to load loop: {e}"))?
+        .ok_or_else(|| "loop not found".to_string())?;
+
+    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
+        .map_err(|e| format!("failed to resolve project: {e}"))?
+        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+
+    // 4. Build branch name for the session
+    let round = ctx.snapshot.runtime.round;
+    let branch_name = format!("loop/{}/{}-r{}", short_id(ctx.loop_id), role_id, round);
+
+    // 5. Create the session via the standard path
+    let use_worktree = isolation == "worktree";
+    let base_branch = if round > 1 {
+        Some(format!(
+            "loop/{}/{}-r{}",
+            short_id(ctx.loop_id),
+            role_id,
+            round - 1
+        ))
+    } else {
+        None
+    };
+    let opts = crate::cli::SessionCreateOpts {
+        project: project.name.clone(),
+        branch: branch_name.clone(),
+        name: Some(format!("{} ({})", role_id, short_id(ctx.loop_id))),
+        new_branch: true,
+        worktree: use_worktree,
+        base_branch,
+        yolo: false,
+        provider: Some(provider.clone()),
+        task_key: loop_run.task_key.clone(),
+        prompt: None, // We send prompt separately after creation
+        parent_session_id: loop_run.created_by_session_id.clone(),
+    };
+
+    let session = match crate::cli::create_session(ctx.conn, opts) {
+        Ok(s) => s,
+        Err(e) => {
+            // Rollback: on failure, append error event and return
+            LoopService::append_loop_event(
+                ctx.conn,
+                ctx.loop_id,
+                "recipe_step_failed",
+                &serde_json::json!({
+                    "step_id": step.id,
+                    "kind": step.kind,
+                    "error": e,
+                }),
+            )
+            .ok();
+            return Err(format!("session.create failed: {e}"));
+        }
+    };
+
+    // 6. Link session to loop_sessions
+    LoopService::add_loop_session(
+        ctx.conn,
+        planeai_core::loop_service::AddLoopSessionParams {
+            loop_id: ctx.loop_id.to_string(),
+            session_id: session.id.clone(),
+            role: role_id.to_string(),
+            round: round as i64,
+            provider: Some(provider.clone()),
+            status: "active".to_string(),
+        },
+    )
+    .map_err(|e| {
+        tracing::warn!(
+            session_id = %session.id,
+            loop_id = %ctx.loop_id,
+            role = %role_id,
+            "orphaned session: created but failed to link to loop; manual cleanup may be needed"
+        );
+        format!("failed to link session to loop: {e}")
+    })?;
+
+    // 7. Track session in runtime state
+    ctx.snapshot
+        .runtime
+        .created_session_ids
+        .entry(role_id.to_string())
+        .or_default()
+        .push(session.id.clone());
+
+    // 8. Render and send prompt (if step has a prompt template)
+    if let Some(ref prompt_template) = step.prompt {
+        let rendered = render_prompt(prompt_template, ctx.snapshot, ctx.loop_id);
+        let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+        match crate::session_ops::send_prompt(ctx.conn, &session.id, &rendered, &ops) {
+            Ok(_) => {}
+            Err(e) => {
+                // Session was created but prompt failed — log but don't fail the step
+                LoopService::append_loop_event(
+                    ctx.conn,
+                    ctx.loop_id,
+                    "recipe_step_warning",
+                    &serde_json::json!({
+                        "step_id": step.id,
+                        "warning": format!("prompt delivery failed: {e}"),
+                        "session_id": session.id,
+                    }),
+                )
+                .ok();
+            }
+        }
+    }
+
+    // 9. Set loop status to observing
+    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing).ok();
+
+    // 10. Append events and advance
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_step_completed",
+        &serde_json::json!({
+            "step_id": step.id,
+            "kind": step.kind,
+            "session_id": session.id,
+            "role": role_id,
+            "round": round,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    advance_step(ctx.snapshot, step);
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field(
+            "created_session",
+            Value::Object(vec![
+                field("id", str_val(short_id(&session.id))),
+                field("role", str_val(role_id)),
+                field("provider", str_val(&provider)),
+                field("round", str_val(&round.to_string())),
+            ]),
+        )],
+        next_actions: vec![format!(
+            "wait for {} handoff, then run `planeai-cli axi loop tick {}`",
+            role_id,
+            short_id(ctx.loop_id)
+        )],
+    })
 }
 
-fn exec_session_prompt(_ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    // session.prompt requires integration with PlaneAI's prompt-lock-protected
-    // send_prompt flow. This is not yet wired.
-    Err(format!(
-        "step '{}': session.prompt is not yet wired to the real prompt path. \
-         Prompt the session manually with `planeai-cli axi session prompt`.",
-        step.id
-    ))
+fn exec_session_prompt(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    let role_id = step.role.as_deref().unwrap_or("default");
+
+    // 1. Resolve session for the role
+    let session_ids = ctx
+        .snapshot
+        .runtime
+        .created_session_ids
+        .get(role_id)
+        .cloned()
+        .unwrap_or_default();
+
+    if session_ids.is_empty() {
+        return Err(format!(
+            "step '{}': no sessions exist for role '{role_id}' — \
+             create a session first with session.create",
+            step.id
+        ));
+    }
+
+    // select: latest means last element (sessions are appended in creation order)
+    let select = step.select.as_deref().unwrap_or("latest");
+    let session_id = match select {
+        "latest" => session_ids.last().unwrap().clone(),
+        _ => {
+            return Err(format!(
+                "step '{}': unsupported select value '{}' — only 'latest' is supported",
+                step.id, select
+            ));
+        }
+    };
+
+    // 2. Render prompt
+    let prompt_template = step.prompt.as_deref().unwrap_or("");
+    if prompt_template.is_empty() {
+        return Err(format!(
+            "step '{}': session.prompt requires a 'prompt' template",
+            step.id
+        ));
+    }
+    let rendered = render_prompt(prompt_template, ctx.snapshot, ctx.loop_id);
+
+    // 3. Send prompt via real prompt path
+    let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+    crate::session_ops::send_prompt(ctx.conn, &session_id, &rendered, &ops)
+        .map_err(|e| format!("step '{}': prompt delivery failed: {e}", step.id))?;
+
+    // 4. Append event and advance
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_step_completed",
+        &serde_json::json!({
+            "step_id": step.id,
+            "kind": step.kind,
+            "session_id": session_id,
+            "role": role_id,
+            "round": ctx.snapshot.runtime.round,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    advance_step(ctx.snapshot, step);
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field(
+            "prompted_session",
+            Value::Object(vec![
+                field("id", str_val(short_id(&session_id))),
+                field("role", str_val(role_id)),
+            ]),
+        )],
+        next_actions: vec![format!(
+            "wait for {} to complete, then run `planeai-cli axi loop tick {}`",
+            role_id,
+            short_id(ctx.loop_id)
+        )],
+    })
 }
 
 fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
@@ -213,15 +461,9 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         .cloned()
         .unwrap_or_default();
 
-    // Use LoopService to find handoff (primary: artifact query)
+    // Use LoopService to find handoff (strict: requires schema + valid status)
     let found_handoff = LoopService::find_handoff_for_sessions(ctx.conn, ctx.loop_id, &session_ids)
         .map_err(|e| format!("handoff query failed: {e}"))?;
-
-    // Fallback: check loop_events for handoff_recorded
-    let found_handoff = match found_handoff {
-        Some(h) => Some(h),
-        None => find_handoff_from_events(ctx.conn, ctx.loop_id, &session_ids),
-    };
 
     match found_handoff {
         None => {
@@ -307,6 +549,7 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
 
     const ALLOWED: &[&str] = &[
         "observing",
+        "verifying",
         "completed_unreviewed",
         "blocked",
         "needs_human",
@@ -410,6 +653,253 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
     })
 }
 
+fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    // Enforce max_rounds: if we're already at the limit, set needs_human
+    if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        LoopService::append_loop_event(
+            ctx.conn,
+            ctx.loop_id,
+            "recipe_runtime_limit_reached",
+            &serde_json::json!({
+                "step_id": step.id,
+                "limit": "max_rounds",
+                "value": ctx.snapshot.policy.max_rounds,
+                "current_round": ctx.snapshot.runtime.round,
+            }),
+        )
+        .map_err(|e| format!("failed to append loop event: {e}"))?;
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![
+                field("limit", str_val("max_rounds")),
+                field(
+                    "value",
+                    str_val(&ctx.snapshot.policy.max_rounds.to_string()),
+                ),
+            ],
+            next_actions: vec![
+                "max_rounds reached — inspect the loop and decide whether to continue manually"
+                    .to_string(),
+            ],
+        });
+    }
+
+    // Increment round
+    ctx.snapshot.runtime.round += 1;
+    let new_round = ctx.snapshot.runtime.round;
+
+    // Sync loop_runs.current_round
+    ctx.conn
+        .execute(
+            "UPDATE loop_runs SET current_round = ?1 WHERE id = ?2",
+            rusqlite::params![new_round as i64, ctx.loop_id],
+        )
+        .map_err(|e| format!("failed to update current_round: {e}"))?;
+
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_round_started",
+        &serde_json::json!({
+            "step_id": step.id,
+            "round": new_round,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    advance_step(ctx.snapshot, step);
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "running".into(),
+        extra: vec![field("round", str_val(&new_round.to_string()))],
+        next_actions: vec![format!(
+            "round {} started — run `planeai-cli axi loop tick {}` to continue",
+            new_round,
+            short_id(ctx.loop_id)
+        )],
+    })
+}
+
+fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    use planeai_core::verifier::{VerifierLimits, VerifyGateRequest};
+
+    if step.gates.is_empty() {
+        return Err(format!(
+            "step '{}': gates.run requires at least one gate declaration",
+            step.id
+        ));
+    }
+
+    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Verifying).ok();
+
+    // Resolve a session to run gates in.
+    // If step.role is specified, use that role's latest session; otherwise fall back to
+    // the last session across all roles.
+    let session_id = if let Some(ref role) = step.role {
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .get(role)
+            .and_then(|ids| ids.last())
+            .cloned()
+            .ok_or_else(|| format!("step '{}': no sessions found for role '{}'", step.id, role))?
+    } else {
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .values()
+            .flatten()
+            .last()
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "step '{}': no sessions available for gate execution",
+                    step.id
+                )
+            })?
+    };
+
+    // Resolve project path for CWD
+    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
+        .map_err(|e| format!("failed to load loop: {e}"))?
+        .ok_or_else(|| "loop not found".to_string())?;
+
+    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
+        .map_err(|e| format!("failed to resolve project: {e}"))?
+        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+
+    // Resolve session worktree path
+    let session = crate::db::get_session(ctx.conn, &session_id)
+        .map_err(|e| format!("failed to get session: {e}"))?
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+
+    // Run all gates — stop on first failure
+    let mut overall_status = "pass";
+    for gate in &step.gates {
+        let request = VerifyGateRequest {
+            loop_id: ctx.loop_id.to_string(),
+            session_id: session_id.clone(),
+            name: gate.name.clone(),
+            command: gate.command.clone(),
+            project_path: project.path.clone(),
+            session_worktree_path: session.worktree_path.clone(),
+            limits: VerifierLimits::default(),
+        };
+
+        match planeai_core::verifier::run_verifier_gate(ctx.conn, request) {
+            Ok(result) => {
+                let status_str = result.status.as_str();
+                if status_str != "pass" {
+                    overall_status = if status_str == "error" {
+                        "error"
+                    } else {
+                        "fail"
+                    };
+                    break;
+                }
+            }
+            Err(e) => {
+                LoopService::append_loop_event(
+                    ctx.conn,
+                    ctx.loop_id,
+                    "recipe_step_failed",
+                    &serde_json::json!({
+                        "step_id": step.id,
+                        "gate": gate.name,
+                        "error": e.to_string(),
+                    }),
+                )
+                .ok();
+                overall_status = "error";
+                break;
+            }
+        }
+    }
+
+    // Map result through on.pass / on.fail / on.error
+    let next_step = step
+        .on
+        .as_ref()
+        .and_then(|m| m.get(overall_status))
+        .cloned();
+
+    let event_kind = if overall_status == "pass" {
+        "recipe_step_completed"
+    } else {
+        "recipe_step_failed"
+    };
+
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        event_kind,
+        &serde_json::json!({
+            "step_id": step.id,
+            "kind": step.kind,
+            "gates_result": overall_status,
+            "next_step": next_step,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    if let Some(ref ns) = next_step {
+        ctx.snapshot.runtime.current_step = ns.clone();
+    } else if overall_status != "pass" {
+        tracing::warn!(
+            step_id = %step.id,
+            gates_result = %overall_status,
+            "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
+            overall_status,
+        );
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![
+                field("gates_result", str_val(overall_status)),
+                field("reason", str_val("no on-mapping for gate outcome")),
+            ],
+            next_actions: vec![format!(
+                "gates returned '{}' with no configured transition; manual intervention required",
+                overall_status
+            )],
+        });
+    } else {
+        advance_step(ctx.snapshot, step);
+    }
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    let next_display = next_step.as_deref().unwrap_or("(end)");
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "verifying".into(),
+        extra: vec![
+            field("gates_result", str_val(overall_status)),
+            field("next_step", str_val(next_display)),
+        ],
+        next_actions: vec![format!(
+            "run `planeai-cli axi loop tick {}` to continue to '{}'",
+            short_id(ctx.loop_id),
+            next_display
+        )],
+    })
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep> {
@@ -447,93 +937,39 @@ fn save_snapshot(
         .map_err(|e| format!("failed to persist snapshot: {e}"))
 }
 
-/// Fallback handoff discovery from loop_events (for backward compat).
-fn find_handoff_from_events(
-    conn: &rusqlite::Connection,
-    loop_id: &str,
-    session_ids: &[String],
-) -> Option<(String, String)> {
-    let events = LoopService::list_loop_events(conn, loop_id).ok()?;
-    for event in events.iter().rev() {
-        if event.kind == "handoff_recorded" {
-            if let Some(sid) = event
-                .payload_json
-                .get("session_id")
-                .and_then(|v| v.as_str())
-            {
-                if session_ids.iter().any(|s| s == sid) {
-                    if let Some(status) = event
-                        .payload_json
-                        .get("handoff_status")
-                        .and_then(|v| v.as_str())
-                    {
-                        return Some((sid.to_string(), status.to_string()));
-                    }
-                    // Missing handoff_status in event payload — skip this event
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Single-pass template rendering for recipe prompts.
+/// Safe template rendering for recipe prompts using minijinja.
 ///
-/// Substitutes variables from a flat map, handles simple `{% if %}` conditionals
-/// for absent keys, and renders knowledge files.
-#[allow(dead_code)] // Used by tests; production usage will return when session.create is wired.
+/// Supported template variables:
+/// - `{{ inputs.goal }}`, `{{ inputs.task_key }}`, etc. (recipe inputs)
+/// - `{{ loop_run.id }}` — the loop run ID
+/// - `{{ recipe.id }}` — the recipe identifier
+/// - `{{ knowledge.files }}` — formatted knowledge file list
+/// - `{{ runtime.round }}` — current round number
+/// - `{{ runtime.last_error }}` — last error (if any)
+///
+/// No file inclusion, no shell execution, no arbitrary code.
+#[allow(dead_code)] // Used by tests; production usage lands when session.create is wired.
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
-    // Build substitution map
-    let mut vars: Vec<(&str, String)> = Vec::new();
-    for (key, value) in &snapshot.inputs {
-        vars.push((key.as_str(), value.clone()));
+    use minijinja::{context, Environment};
+
+    let mut env = Environment::new();
+    // Disable auto-escaping (templates produce plain text, not HTML)
+    env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
+
+    if let Err(e) = env.add_template("prompt", template) {
+        tracing::warn!(error = %e, "recipe template parse failed; using raw template");
+        return template.to_string();
     }
 
-    let mut result = template.to_string();
-
-    // 1. Remove conditional blocks for ABSENT inputs (before substitution)
-    let present_keys: std::collections::HashSet<&str> =
-        snapshot.inputs.keys().map(|k| k.as_str()).collect();
-    while let Some(start) = result.find("{% if inputs.") {
-        let after = start + "{% if inputs.".len();
-        let Some(key_end) = result[after..].find(" %}") else {
-            break;
-        };
-        let key = result[after..after + key_end].to_string();
-        let endif_tag = "{% endif %}";
-        let Some(endif_offset) = result[start..].find(endif_tag) else {
-            break;
-        };
-
-        if present_keys.contains(key.as_str()) {
-            // Key is present: strip the if/endif delimiters, keep content
-            let block_end = start + endif_offset + endif_tag.len();
-            let if_close = start + "{% if inputs.".len() + key_end + " %}".len();
-            let content = &result[if_close..start + endif_offset];
-            let content = content.to_string();
-            result = format!("{}{}{}", &result[..start], content, &result[block_end..]);
-        } else {
-            // Key is absent: remove the entire block
-            let block_end = start + endif_offset + endif_tag.len();
-            result = format!("{}{}", &result[..start], &result[block_end..]);
+    let tpl = match env.get_template("prompt") {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(error = %e, "recipe template retrieval failed; using raw template");
+            return template.to_string();
         }
-    }
+    };
 
-    // 2. Substitute input variables
-    for (key, value) in &vars {
-        let spaced = format!("{{{{ inputs.{} }}}}", key);
-        let compact = format!("{{{{inputs.{}}}}}", key);
-        result = result.replace(&spaced, value);
-        result = result.replace(&compact, value);
-    }
-
-    // 3. Substitute built-in variables
-    result = result.replace("{{ loop.id }}", loop_id);
-    result = result.replace("{{loop.id}}", loop_id);
-    result = result.replace("{{ recipe.id }}", &snapshot.recipe_id);
-    result = result.replace("{{recipe.id}}", &snapshot.recipe_id);
-
-    // 4. Knowledge files
+    // Build knowledge.files as a formatted string
     let knowledge_str = if snapshot.knowledge.files.is_empty() {
         "(none)".to_string()
     } else {
@@ -545,10 +981,32 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
             .collect::<Vec<_>>()
             .join("\n")
     };
-    result = result.replace("{{ knowledge.files }}", &knowledge_str);
-    result = result.replace("{{knowledge.files}}", &knowledge_str);
 
-    result
+    // Build the context
+    let ctx = context! {
+        inputs => &snapshot.inputs,
+        loop_run => context! {
+            id => loop_id,
+        },
+        recipe => context! {
+            id => &snapshot.recipe_id,
+        },
+        knowledge => context! {
+            files => &knowledge_str,
+        },
+        runtime => context! {
+            round => snapshot.runtime.round,
+            last_error => snapshot.runtime.last_error.as_deref().unwrap_or(""),
+        },
+    };
+
+    match tpl.render(ctx) {
+        Ok(rendered) => rendered,
+        Err(e) => {
+            tracing::warn!(error = %e, "recipe template render failed; using raw template");
+            template.to_string()
+        }
+    }
 }
 
 #[allow(dead_code)] // Used by tests; production usage will return when session.prompt is wired.
@@ -589,6 +1047,7 @@ mod tests {
                 tick_count: 0,
                 round: 1,
                 created_session_ids: BTreeMap::new(),
+                last_error: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
@@ -615,6 +1074,7 @@ mod tests {
             next: None,
             select: None,
             event_kind: None,
+            gates: vec![],
         }
     }
 
@@ -673,7 +1133,7 @@ mod tests {
     fn render_prompt_builtin_vars() {
         let snapshot = minimal_snapshot(vec![], BTreeMap::new());
         let result = render_prompt(
-            "loop={{ loop.id }} recipe={{ recipe.id }}",
+            "loop={{ loop_run.id }} recipe={{ recipe.id }}",
             &snapshot,
             "abc-123",
         );
