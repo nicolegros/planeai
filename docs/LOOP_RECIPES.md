@@ -183,16 +183,17 @@ Step fields reference:
 | `next` | Explicit next step ID (overrides sequential order) |
 | `select` | Selection criteria |
 | `event_kind` | Event kind for loop.event |
+| `gates` | List of gate declarations for gates.run steps |
 
 ## Built-in Maker-Verifier Recipe
 
-The simplest built-in recipe proves the system works end-to-end:
+The builtin recipe demonstrates `session.create` with an inline prompt and `handoff.wait` with conditional branching:
 
 ```yaml
 schema: planeai.loop.recipe.v1
 id: maker-verifier
-name: Maker → Verifier
-description: One agent implements, another reviews, human merges.
+name: Maker + Verifier
+description: Minimal loop-engineering recipe. Maker writes, handoff records state, human reviews.
 
 trigger:
   kind: manual
@@ -200,54 +201,90 @@ trigger:
 inputs:
   goal:
     required: true
+  task_key:
+    required: false
 
 knowledge:
-  files: []
-  instructions: []
+  files:
+    - AGENTS.md
+    - CONTEXT.md
+  instructions:
+    - Follow repository conventions.
+    - Prefer existing PlaneAI services and domain types.
+    - Record progress through structured handoffs, not terminal claims.
 
 tools:
   required:
     - git
-    - filesystem
-  optional: []
+    - plane_sessions
+    - plane_loops
+  optional:
+    - github
+    - jira
+    - mcp
 
 roles:
   maker:
     provider: default
     mode: write
     isolation: worktree
-    instructions: "Implement the goal using TDD."
+    instructions: |
+      You are the maker agent.
+      Implement the requested change in your isolated worktree.
+      Do not claim completion unless you have recorded a structured handoff.
   verifier:
     provider: default
     mode: review
-    isolation: worktree
-    instructions: "Review for correctness and test coverage."
+    isolation: readonly
+    instructions: |
+      You are the verifier agent.
+      This role is declared now so the recipe can evolve into full maker-verifier later.
+      Do not edit files.
 
 policy:
-  max_ticks: 12
+  max_rounds: 3
+  max_ticks: 50
+  max_sessions: 5
+  stale_after_ms: 600000
   merge_policy: human
 
 steps:
-  - id: create-maker
+  - id: start
     kind: session.create
     role: maker
-  - id: prompt-maker
-    kind: session.prompt
-    role: maker
-    prompt: "{{inputs.goal}}"
-  - id: wait-handoff
+    prompt: |
+      You are running inside a PlaneAI loop.
+      Loop: {{ loop_run.id }}
+      Goal: {{ inputs.goal }}
+      {% if inputs.task_key %}
+      Task: {{ inputs.task_key }}
+      {% endif %}
+      Project knowledge: {{ knowledge.files }}
+
+  - id: wait_for_maker_handoff
     kind: handoff.wait
     from: maker
-  - id: prompt-verifier
-    kind: session.prompt
-    role: verifier
-    prompt: "Review the maker's changes."
-  - id: wait-human
-    kind: human.wait
-    prompt: "Approve, request changes, or abort."
-  - id: done
+    on:
+      completed: completed_unreviewed
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  - id: completed_unreviewed
     kind: loop.status
     status: completed_unreviewed
+
+  - id: blocked
+    kind: loop.status
+    status: blocked
+
+  - id: needs_human
+    kind: loop.status
+    status: needs_human
+
+  - id: failed
+    kind: loop.status
+    status: failed
 ```
 
 ## CLI Commands
@@ -326,7 +363,8 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
     "current_step": "wait_for_maker_handoff",
     "tick_count": 3,
     "round": 1,
-    "created_session_ids": { "maker": ["session-abc123"] }
+    "created_session_ids": { "maker": ["session-abc123"] },
+    "last_error": null
   },
   "policy": { "max_rounds": 3, "max_ticks": 50, "max_sessions": 5, "merge_policy": "human" }
 }
@@ -420,7 +458,7 @@ Blocks are removed entirely when the referenced input is absent.
 1. **Bounded execution** — Every recipe must declare `max_ticks` in `policy`. The runner refuses to start unbounded loops.
 2. **Human merge only** — `merge_policy` only accepts `human` in v1. No auto-merge.
 3. **No auto-merge** — Even if all agents agree, a human must approve before changes land on the target branch.
-4. **No arbitrary shell** — Steps cannot execute raw shell commands. Agents interact through declared `tools` only.
+4. **No arbitrary shell** — Steps cannot execute arbitrary shell commands. The `gates.run` step kind executes only recipe-authored gate commands declared in the YAML — agents cannot inject commands at runtime.
 
 ## Example: Planner → Implementer → Reviewer
 

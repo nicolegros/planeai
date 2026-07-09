@@ -433,7 +433,7 @@ Advance the loop by one tick. If the loop is in `draft` status, tick first trans
 planeai-cli axi loop tick <id>
 ```
 
-If the loop has a recipe snapshot in `policy_json`, the tick executes the current recipe step (e.g., `session.create`, `session.prompt`, `handoff.wait`, `human.wait`, `loop.status`, `loop.event`). The runner advances one step per tick, persists the updated snapshot, and emits appropriate events.
+If the loop has a recipe snapshot in `policy_json`, the tick executes the current recipe step (e.g., `session.create`, `session.prompt`, `handoff.wait`, `human.wait`, `loop.status`, `loop.event`, `round.next`, `gates.run`). The runner advances one step per tick, persists the updated snapshot, and emits appropriate events.
 
 If the loop has no recipe (legacy mode), the tick appends a generic `tick` event for observability.
 
