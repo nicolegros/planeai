@@ -73,6 +73,34 @@ pub fn tick_recipe(
         return (render(&fields), 1);
     }
 
+    // Guard: if the current step is human.wait and the loop is already in
+    // NeedsHuman status, return immediately without consuming a tick.
+    if step.kind == STEP_HUMAN_WAIT {
+        if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
+            if run.status == LoopStatus::NeedsHuman {
+                let fields = vec![
+                    field(
+                        "loop_tick",
+                        Value::Object(vec![
+                            field("loop_id", str_val(loop_id)),
+                            field("recipe_id", str_val(&snapshot.recipe_id)),
+                            field("step_id", str_val(&step.id)),
+                            field("step_kind", str_val(&step.kind)),
+                            field("status", str_val("needs_human")),
+                        ]),
+                    ),
+                    field(
+                        "next_actions",
+                        Value::List(vec![
+                            "human review required before the loop can proceed".to_string(),
+                        ]),
+                    ),
+                ];
+                return (render(&fields), 0);
+            }
+        }
+    }
+
     // Increment tick
     snapshot.runtime.tick_count += 1;
 

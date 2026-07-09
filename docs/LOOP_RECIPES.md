@@ -41,74 +41,79 @@ description: One-line summary of what this loop does.
 
 ### trigger
 
-Optional. Declares when the recipe can be auto-suggested or auto-started.
+Required. Declares what kind of event starts the recipe. Only `manual` is executable in v1.
 
 ```yaml
 trigger:
-  on: task.assigned          # event type
-  filter:
-    label: backend           # only tasks with this label
+  kind: manual
 ```
+
+Future trigger kinds (recognized but not yet executable): `schedule`, `github_event`, `task_event`, `pr_feedback`, `ci_failure`.
 
 ### inputs
 
-Parameters the user supplies when creating a loop run.
+Parameters the user supplies when creating a loop run. A map of input name to options.
 
 ```yaml
 inputs:
-  - name: goal
-    type: string
+  goal:
     required: true
-    description: What the loop should accomplish
-  - name: branch_prefix
-    type: string
-    default: loop/
+  branch_prefix:
+    required: false
 ```
 
 ### knowledge
 
-Files and globs injected into agent context for every session in the loop.
+Files and instructions injected into agent context for every session in the loop.
 
 ```yaml
 knowledge:
-  - path: AGENTS.md
-  - path: CONTEXT.md
-  - glob: docs/adr/*.md
+  files:
+    - AGENTS.md
+    - CONTEXT.md
+    - docs/adr/001-loop-recipes.md
+  instructions:
+    - Follow TDD workflow
+    - Use conventional commits
 ```
 
 ### tools
 
-MCP servers or CLI tools available to agents in this loop.
+MCP servers or CLI tools available to agents in this loop. Separated into required and optional.
 
 ```yaml
 tools:
-  - id: git
-  - id: filesystem
-  - id: planeai-tasks
-    config:
-      project: current
+  required:
+    - git
+    - filesystem
+  optional:
+    - planeai-tasks
 ```
 
 ### roles
 
-Named agent personas. Each role gets its own system prompt, tool subset, and constraints.
+Named agent personas. A map of role ID to role configuration. Each role has a provider, mode, isolation level, and optional instructions.
 
 ```yaml
 roles:
-  - id: maker
-    agent: kiro
-    prompt: |
+  maker:
+    provider: default
+    mode: write
+    isolation: worktree
+    instructions: |
       You implement features using TDD. Write failing tests first,
       then make them pass with minimal code.
-    tools: [git, filesystem]
-
-  - id: verifier
-    agent: kiro
-    prompt: |
+  verifier:
+    provider: default
+    mode: review
+    isolation: worktree
+    instructions: |
       You review code for correctness, style, and test coverage.
       Be critical. List concrete issues.
-    tools: [git, filesystem]
 ```
+
+Supported modes: `write`, `review`, `readonly`, `plan`, `triage`, `arbiter`.
+Supported isolation values: `worktree`, `project`, `readonly`.
 
 ### policy
 
@@ -116,42 +121,68 @@ Loop-level constraints and resource limits.
 
 ```yaml
 policy:
-  max_ticks: 20              # hard cap on total steps executed
-  max_duration: 2h           # wall-clock timeout
-  merge_policy: human        # only 'human' is supported in v1
-  retry_on_failure: true     # retry a failed step once before halting
+  max_rounds: 3
+  max_ticks: 20
+  max_sessions: 5
+  stale_after_ms: 3600000
+  merge_policy: human
 ```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_rounds` | integer | 3 | Maximum iteration rounds |
+| `max_ticks` | integer | 50 | Hard cap on total steps executed |
+| `max_sessions` | integer | 5 | Maximum concurrent agent sessions |
+| `stale_after_ms` | integer | null | Wall-clock staleness timeout in milliseconds |
+| `merge_policy` | string | `human` | Only `human` is supported in v1 |
 
 ### steps
 
-Ordered list of actions the loop runner executes. Each step has a `kind` and kind-specific fields.
+Ordered list of actions the loop runner executes. Each step has an `id`, a `kind`, and kind-specific fields.
 
 ```yaml
 steps:
-  - kind: session.create
+  - id: create-maker
+    kind: session.create
     role: maker
-    worktree: true
-    branch: "{{inputs.branch_prefix}}{{run.id}}"
 
-  - kind: session.prompt
+  - id: prompt-maker
+    kind: session.prompt
     role: maker
-    message: "Implement: {{inputs.goal}}"
+    prompt: "Implement: {{inputs.goal}}"
 
-  - kind: handoff.wait
+  - id: wait-handoff
+    kind: handoff.wait
     from: maker
-    to: verifier
-    artifact: loop_artifacts/handoff.md
 
-  - kind: session.prompt
+  - id: prompt-verifier
+    kind: session.prompt
     role: verifier
-    message: "Review the changes in {{step.prev.branch}}."
+    prompt: "Review the changes in the maker's branch."
 
-  - kind: human.wait
+  - id: wait-human
+    kind: human.wait
     prompt: "Review the verifier's feedback and approve or request changes."
 
-  - kind: loop.status
-    set: completed
+  - id: done
+    kind: loop.status
+    status: completed
 ```
+
+Step fields reference:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique step identifier (required) |
+| `kind` | Step kind — see supported kinds below (required) |
+| `role` | Target role for session steps |
+| `prompt` | Message/instruction text |
+| `from` | Source role for handoff.wait |
+| `on` | Condition map for conditional steps |
+| `status` | Target status for loop.status |
+| `next` | Explicit next step ID (overrides sequential order) |
+| `select` | Selection criteria |
+| `event_kind` | Event kind for loop.event |
 
 ## Built-in Maker-Verifier Recipe
 
@@ -163,42 +194,60 @@ id: maker-verifier
 name: Maker → Verifier
 description: One agent implements, another reviews, human merges.
 
+trigger:
+  kind: manual
+
 inputs:
-  - name: goal
-    type: string
+  goal:
     required: true
 
+knowledge:
+  files: []
+  instructions: []
+
+tools:
+  required:
+    - git
+    - filesystem
+  optional: []
+
 roles:
-  - id: maker
-    agent: kiro
-    prompt: "Implement the goal using TDD."
-    tools: [git, filesystem]
-  - id: verifier
-    agent: kiro
-    prompt: "Review for correctness and test coverage."
-    tools: [git, filesystem]
+  maker:
+    provider: default
+    mode: write
+    isolation: worktree
+    instructions: "Implement the goal using TDD."
+  verifier:
+    provider: default
+    mode: review
+    isolation: worktree
+    instructions: "Review for correctness and test coverage."
 
 policy:
   max_ticks: 12
   merge_policy: human
 
 steps:
-  - kind: session.create
+  - id: create-maker
+    kind: session.create
     role: maker
-    worktree: true
-  - kind: session.prompt
+  - id: prompt-maker
+    kind: session.prompt
     role: maker
-    message: "{{inputs.goal}}"
-  - kind: handoff.wait
+    prompt: "{{inputs.goal}}"
+  - id: wait-handoff
+    kind: handoff.wait
     from: maker
-    to: verifier
-  - kind: session.prompt
+  - id: prompt-verifier
+    kind: session.prompt
     role: verifier
-    message: "Review the maker's changes."
-  - kind: human.wait
+    prompt: "Review the maker's changes."
+  - id: wait-human
+    kind: human.wait
     prompt: "Approve, request changes, or abort."
-  - kind: loop.status
-    set: completed
+  - id: done
+    kind: loop.status
+    status: completed
 ```
 
 ## CLI Commands
@@ -260,7 +309,7 @@ These are reserved in the schema but not implemented:
 
 ## Safety Rules
 
-1. **Bounded execution** — Every recipe must declare `max_ticks` or `max_duration` in `policy`. The runner refuses to start unbounded loops.
+1. **Bounded execution** — Every recipe must declare `max_ticks` in `policy`. The runner refuses to start unbounded loops.
 2. **Human merge only** — `merge_policy` only accepts `human` in v1. No auto-merge.
 3. **No auto-merge** — Even if all agents agree, a human must approve before changes land on the target branch.
 4. **No arbitrary shell** — Steps cannot execute raw shell commands. Agents interact through declared `tools` only.
@@ -275,69 +324,87 @@ id: plan-implement-review
 name: Plan → Implement → Review
 description: Planner breaks down work, implementer builds, reviewer validates.
 
+trigger:
+  kind: manual
+
 inputs:
-  - name: goal
-    type: string
+  goal:
     required: true
-  - name: context
-    type: string
-    description: Additional context or constraints
+  context:
+    required: false
 
 knowledge:
-  - path: CONTEXT.md
-  - path: AGENTS.md
+  files:
+    - CONTEXT.md
+    - AGENTS.md
+  instructions: []
+
+tools:
+  required:
+    - git
+    - filesystem
+  optional: []
 
 roles:
-  - id: planner
-    agent: kiro
-    prompt: "Break the goal into a concrete implementation plan with files to change."
-    tools: [git, filesystem]
-  - id: implementer
-    agent: kiro
-    prompt: "Implement the plan using TDD. Follow AGENTS.md conventions."
-    tools: [git, filesystem]
-  - id: reviewer
-    agent: kiro
-    prompt: "Review for correctness, missed edge cases, and adherence to the plan."
-    tools: [git, filesystem]
+  planner:
+    provider: default
+    mode: plan
+    isolation: worktree
+    instructions: "Break the goal into a concrete implementation plan with files to change."
+  implementer:
+    provider: default
+    mode: write
+    isolation: worktree
+    instructions: "Implement the plan using TDD. Follow AGENTS.md conventions."
+  reviewer:
+    provider: default
+    mode: review
+    isolation: worktree
+    instructions: "Review for correctness, missed edge cases, and adherence to the plan."
 
 policy:
+  max_rounds: 3
   max_ticks: 30
-  max_duration: 4h
+  max_sessions: 5
   merge_policy: human
 
 steps:
-  - kind: session.create
+  - id: create-planner
+    kind: session.create
     role: planner
-    worktree: true
-  - kind: session.prompt
+  - id: prompt-planner
+    kind: session.prompt
     role: planner
-    message: "Plan: {{inputs.goal}}. Context: {{inputs.context}}"
-  - kind: handoff.wait
+    prompt: "Plan: {{inputs.goal}}. Context: {{inputs.context}}"
+  - id: wait-plan-handoff
+    kind: handoff.wait
     from: planner
-    to: implementer
-    artifact: loop_artifacts/plan.md
-  - kind: session.create
+  - id: create-implementer
+    kind: session.create
     role: implementer
-    worktree: true
-  - kind: session.prompt
+  - id: prompt-implementer
+    kind: session.prompt
     role: implementer
-    message: "Implement according to the plan in loop_artifacts/plan.md"
-  - kind: handoff.wait
+    prompt: "Implement according to the plan in loop_artifacts/plan.md"
+  - id: wait-impl-handoff
+    kind: handoff.wait
     from: implementer
-    to: reviewer
-    artifact: loop_artifacts/handoff.md
-  - kind: session.create
+  - id: create-reviewer
+    kind: session.create
     role: reviewer
-  - kind: session.prompt
+  - id: prompt-reviewer
+    kind: session.prompt
     role: reviewer
-    message: "Review the implementer's changes against the plan."
-  - kind: loop.event
-    name: review.complete
-  - kind: human.wait
+    prompt: "Review the implementer's changes against the plan."
+  - id: review-event
+    kind: loop.event
+    event_kind: review.complete
+  - id: wait-human
+    kind: human.wait
     prompt: "Review complete. Approve, iterate, or abort."
-  - kind: loop.status
-    set: completed
+  - id: done
+    kind: loop.status
+    status: completed
 ```
 
 ## Relationship to Handoffs
