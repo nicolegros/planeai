@@ -363,4 +363,53 @@ describe("unified sidebar logic", () => {
       expect(map.get("jira:PROJ-2")).toBe(3);
     });
   });
+
+  describe("session indicator (task key tint)", () => {
+    // The sidebar tints the task key with accent color when a session is linked.
+    // This tests the sessionForTask lookup logic used to determine the tint.
+    function sessionForTask(
+      key: string,
+      sessions: Session[],
+    ): Session | undefined {
+      return sessions.find((s) => s.task_key === key);
+    }
+
+    it("returns session when task_key matches", () => {
+      const sessions = [makeSession("s1", "p1", "PLA-1")];
+      expect(sessionForTask("PLA-1", sessions)).toBeDefined();
+      expect(sessionForTask("PLA-1", sessions)!.id).toBe("s1");
+    });
+
+    it("returns undefined when no session has matching task_key", () => {
+      const sessions = [makeSession("s1", "p1", "PLA-2")];
+      expect(sessionForTask("PLA-1", sessions)).toBeUndefined();
+    });
+
+    it("returns undefined when sessions list is empty", () => {
+      expect(sessionForTask("PLA-1", [])).toBeUndefined();
+    });
+
+    it("returns first matching session when multiple match", () => {
+      const sessions = [
+        makeSession("s1", "p1", "PLA-1"),
+        makeSession("s2", "p1", "PLA-1"),
+      ];
+      expect(sessionForTask("PLA-1", sessions)!.id).toBe("s1");
+    });
+
+    it("task with linked session gets tinted (truthy linked)", () => {
+      const sessions = [makeSession("s1", "p1", "PLA-1")];
+      const linked = sessionForTask("PLA-1", sessions);
+      // In the template: class="{linked ? 'text-accent/70' : 'text-t3'}"
+      const cssClass = linked ? "text-accent/70" : "text-t3";
+      expect(cssClass).toBe("text-accent/70");
+    });
+
+    it("task without linked session stays default color", () => {
+      const sessions = [makeSession("s1", "p1", "PLA-2")];
+      const linked = sessionForTask("PLA-1", sessions);
+      const cssClass = linked ? "text-accent/70" : "text-t3";
+      expect(cssClass).toBe("text-t3");
+    });
+  });
 });

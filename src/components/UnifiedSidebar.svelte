@@ -575,7 +575,7 @@
                             oncontextmenu={(e) => onTaskContextMenu(e, task, project.path)}
                           >
                           {#if task.parent_key}<span class="shrink-0 font-mono text-[10px] text-t3">{task.parent_key} ›</span>{/if}
-                          <span class="shrink-0 font-mono text-[10px] text-t3">{task.key}</span>
+                          <span class="shrink-0 font-mono text-[10px] {linked ? 'text-accent/70' : 'text-t3'}">{task.key}</span>
                           <span class="truncate text-[12.5px] {task.status === 'done' ? 'line-through text-t3' : 'text-t1'}">{task.title}</span>
                           {#if linked}
                             <span class="ml-auto shrink-0 flex items-center gap-1.5">
