@@ -73,11 +73,13 @@ pub fn tick_recipe(
         return (render(&fields), 1);
     }
 
-    // Guard: if the current step is human.wait and the loop is already in
-    // NeedsHuman status, return immediately without consuming a tick.
-    if step.kind == STEP_HUMAN_WAIT {
+    // Guard: if the loop is already in an intervention-required status and the
+    // current step would set such a status (loop.status) or wait for human
+    // input (human.wait), return immediately without consuming a tick.
+    if step.kind == STEP_HUMAN_WAIT || step.kind == STEP_LOOP_STATUS {
         if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
-            if run.status == LoopStatus::NeedsHuman {
+            if run.status.is_intervention_required() {
+                let status_str = run.status.as_str();
                 let fields = vec![
                     field(
                         "loop_tick",
@@ -86,13 +88,13 @@ pub fn tick_recipe(
                             field("recipe_id", str_val(&snapshot.recipe_id)),
                             field("step_id", str_val(&step.id)),
                             field("step_kind", str_val(&step.kind)),
-                            field("status", str_val("needs_human")),
+                            field("status", str_val(status_str)),
                         ]),
                     ),
                     field(
                         "next_actions",
                         Value::List(vec![
-                            "human review required before the loop can proceed".to_string(),
+                            "human intervention required before the loop can proceed".to_string(),
                         ]),
                     ),
                 ];
@@ -690,12 +692,14 @@ fn save_snapshot(
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
     let mut result = template.to_string();
 
-    // Replace simple variables
+    // Replace simple variables (support both "{{ var }}" and "{{var}}" syntax)
     if let Some(goal) = snapshot.inputs.get("goal") {
         result = result.replace("{{ inputs.goal }}", goal);
+        result = result.replace("{{inputs.goal}}", goal);
     }
     if let Some(task_key) = snapshot.inputs.get("task_key") {
         result = result.replace("{{ inputs.task_key }}", task_key);
+        result = result.replace("{{inputs.task_key}}", task_key);
         // Handle conditional
         result = result.replace("{% if inputs.task_key %}", "");
         result = result.replace("{% endif %}", "");
@@ -712,7 +716,9 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
     }
 
     result = result.replace("{{ loop.id }}", loop_id);
+    result = result.replace("{{loop.id}}", loop_id);
     result = result.replace("{{ recipe.id }}", &snapshot.recipe_id);
+    result = result.replace("{{recipe.id}}", &snapshot.recipe_id);
 
     // Knowledge files
     let knowledge_str = if snapshot.knowledge.files.is_empty() {
@@ -727,6 +733,7 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
             .join("\n")
     };
     result = result.replace("{{ knowledge.files }}", &knowledge_str);
+    result = result.replace("{{knowledge.files}}", &knowledge_str);
 
     result
 }
