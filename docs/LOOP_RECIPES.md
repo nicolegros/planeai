@@ -187,13 +187,60 @@ Step fields reference:
 
 ## Built-in Maker-Verifier Recipe
 
-The builtin recipe demonstrates `session.create` with an inline prompt and `handoff.wait` with conditional branching:
+The builtin recipe implements the full maker-verifier state machine: maker implements → gates verify automatically → verifier agent reviews → rounds cycle on rejection.
+
+### State Machine
+
+```
+                            ┌─────────────────────────────────────────────┐
+                            │                                             │
+                            ▼                                             │
+┌──────────────┐     ┌──────────────┐     ┌──────────┐     ┌──────────────────────┐
+│ create_maker │────▶│wait_for_maker│────▶│ run_gates │────▶│   create_verifier    │
+└──────────────┘     └──────────────┘     └──────────┘     └──────────────────────┘
+                            ▲              │ fail/error            │
+                            │              ▼                       ▼
+                            │       ┌─────────────────┐    ┌──────────────────┐
+                            │       │gates_failed_retry│    │ wait_for_verifier │
+                            │       └────────┬────────┘    └────────┬─────────┘
+                            │                ▼                      │
+                            │    ┌────────────────────────┐         │ completed
+                            │    │increment_round_after_  │         ▼
+                            │    │        gates           │  ┌──────────────────────┐
+                            │    └────────────┬───────────┘  │ completed_unreviewed │ (terminal)
+                            │                 │              └──────────────────────┘
+                            │                 │                     │ needs_human
+                            │                 │                     ▼
+                            │                 │              ┌──────────────────────┐
+                            │                 │              │verifier_rejected_retry│
+                            │                 │              └────────┬─────────────┘
+                            │                 │                       ▼
+                            │                 │              ┌────────────────────────┐
+                            │                 │              │increment_round_after_  │
+                            │                 │              │       review           │
+                            │                 │              └────────┬───────────────┘
+                            │                 │                       │
+                            └─────────────────┴───────────────────────┘
+                                      (cycles back to wait_for_maker)
+```
+
+**Terminal states:**
+- `completed_unreviewed` — verifier approved; human should review/merge.
+- `blocked` / `needs_human` / `failed` — maker declared a non-completable outcome.
+
+**Safety:**
+- `max_rounds` (default: 3) limits retry cycles. When reached at any `round.next` step, the loop transitions to `needs_human`.
+- `merge_policy: human` ensures no auto-merge. `completed_unreviewed` is the furthest automated state; a human must promote it to `approved` → `merged`.
+
+### Full Recipe YAML
 
 ```yaml
 schema: planeai.loop.recipe.v1
 id: maker-verifier
 name: Maker + Verifier
-description: Minimal loop-engineering recipe. Maker writes, handoff records state, human reviews.
+description: >
+  Full maker-verifier loop. Maker implements, gates verify automatically,
+  a verifier agent reviews, and rounds cycle on rejection until max_rounds.
 
 trigger:
   kind: manual
@@ -232,14 +279,16 @@ roles:
       You are the maker agent.
       Implement the requested change in your isolated worktree.
       Do not claim completion unless you have recorded a structured handoff.
+
   verifier:
     provider: default
     mode: review
     isolation: readonly
     instructions: |
       You are the verifier agent.
-      This role is declared now so the recipe can evolve into full maker-verifier later.
-      Do not edit files.
+      Review the maker's changes. Do not edit files.
+      If the changes satisfy the goal and pass your review, record a handoff with status: completed.
+      If the changes need work, record a handoff with status: needs_human and describe what must change.
 
 policy:
   max_rounds: 3
@@ -249,26 +298,94 @@ policy:
   merge_policy: human
 
 steps:
-  - id: start
+  - id: create_maker
     kind: session.create
     role: maker
     prompt: |
       You are running inside a PlaneAI loop.
       Loop: {{ loop_run.id }}
       Goal: {{ inputs.goal }}
-      {% if inputs.task_key %}
-      Task: {{ inputs.task_key }}
-      {% endif %}
+      {% if inputs.task_key %}Task: {{ inputs.task_key }}{% endif %}
+      Round: {{ runtime.round }}
+      {% if runtime.last_error %}Previous round feedback: {{ runtime.last_error }}{% endif %}
       Project knowledge: {{ knowledge.files }}
+      Instructions:
+      - Work only in your assigned workspace.
+      - Make the smallest safe change that satisfies the goal.
+      - Run relevant checks if possible.
+      - When done, write and record a planeai.handoff.v1 handoff.
 
-  - id: wait_for_maker_handoff
+  - id: wait_for_maker
     kind: handoff.wait
     from: maker
     on:
-      completed: completed_unreviewed
+      completed: run_gates
       blocked: blocked
       needs_human: needs_human
       failed: failed
+
+  - id: run_gates
+    kind: gates.run
+    role: maker
+    gates:
+      - name: build
+        command: "if [ -f Cargo.toml ]; then cargo build 2>&1; elif [ -f package.json ]; then npm run build 2>&1; else echo 'no build system detected'; fi"
+      - name: test
+        command: "if [ -f Cargo.toml ]; then cargo test 2>&1; elif [ -f package.json ]; then npm test 2>&1; else echo 'no test runner detected'; fi"
+    on:
+      pass: create_verifier
+      fail: gates_failed_retry
+      error: gates_failed_retry
+
+  - id: gates_failed_retry
+    kind: session.prompt
+    role: maker
+    select: latest
+    prompt: |
+      Round {{ runtime.round }} — verification gates failed.
+      Review the gate output and fix the issues. Then record a new handoff.
+    next: increment_round_after_gates
+
+  - id: increment_round_after_gates
+    kind: round.next
+    next: wait_for_maker
+
+  - id: create_verifier
+    kind: session.create
+    role: verifier
+    prompt: |
+      You are the verifier agent in a PlaneAI maker-verifier loop.
+      Loop: {{ loop_run.id }}
+      Goal: {{ inputs.goal }}
+      Round: {{ runtime.round }}
+      The maker has completed their implementation and gates have passed.
+      Review the diff and changed files. Check correctness, edge cases, missing tests.
+      Do NOT make changes yourself.
+      Record a planeai.handoff.v1 handoff:
+      - status: completed — if the changes are good and ready for human review.
+      - status: needs_human — if the changes need work.
+
+  - id: wait_for_verifier
+    kind: handoff.wait
+    from: verifier
+    on:
+      completed: completed_unreviewed
+      needs_human: verifier_rejected_retry
+      blocked: blocked
+      failed: failed
+
+  - id: verifier_rejected_retry
+    kind: session.prompt
+    role: maker
+    select: latest
+    prompt: |
+      Round {{ runtime.round }} — the verifier has requested changes.
+      Review the verifier's feedback and address the issues. Then record a new handoff.
+    next: increment_round_after_review
+
+  - id: increment_round_after_review
+    kind: round.next
+    next: wait_for_maker
 
   - id: completed_unreviewed
     kind: loop.status
@@ -286,6 +403,58 @@ steps:
     kind: loop.status
     status: failed
 ```
+
+### Typical Tick Sequence
+
+A successful run with no rejections:
+
+```bash
+# Create the loop
+planeai-cli axi loop create --strategy maker-verifier --goal "Implement pagination"
+# → loop created, status: draft
+
+# Tick 1: create_maker → spawns maker session in worktree
+planeai-cli axi loop tick <LOOP_ID>
+# → session created, status: observing
+
+# Tick 2+: wait_for_maker → no handoff yet
+planeai-cli axi loop tick <LOOP_ID>
+# → waiting for handoff from maker
+
+# After maker runs `planeai-cli axi loop handoff record ...`
+# Tick N: wait_for_maker → detects completed handoff → advances to run_gates
+planeai-cli axi loop tick <LOOP_ID>
+# → handoff detected, next: run_gates
+
+# Tick N+1: run_gates → builds and tests pass
+planeai-cli axi loop tick <LOOP_ID>
+# → gates: pass, next: create_verifier
+
+# Tick N+2: create_verifier → spawns verifier session
+planeai-cli axi loop tick <LOOP_ID>
+# → verifier session created, status: observing
+
+# Tick N+3+: wait_for_verifier → verifier approves
+planeai-cli axi loop tick <LOOP_ID>
+# → handoff detected (completed), next: completed_unreviewed
+
+# Tick final: completed_unreviewed → terminal
+planeai-cli axi loop tick <LOOP_ID>
+# → status: completed_unreviewed — human should review and merge
+```
+
+### `completed_unreviewed` Terminal State
+
+This is the safe terminal state for the maker-verifier strategy. It means:
+
+1. The maker's implementation passed automated gates (build + test)
+2. The verifier agent reviewed and approved the changes
+3. **No merge has happened** — a human must still review the PR/branch and merge
+
+The human can then:
+- Approve and merge manually
+- Request another round by updating the loop status
+- Close the loop if the work is no longer needed
 
 ## CLI Commands
 
@@ -360,7 +529,7 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
   "recipe_source": "builtin",
   "inputs": { "goal": "Fix the bug" },
   "runtime": {
-    "current_step": "wait_for_maker_handoff",
+    "current_step": "wait_for_maker",
     "tick_count": 3,
     "round": 1,
     "created_session_ids": { "maker": ["session-abc123"] },

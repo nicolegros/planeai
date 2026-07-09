@@ -3739,4 +3739,711 @@ mod tests {
         let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
         assert_eq!(updated.status, LoopStatus::NeedsHuman);
     }
+
+    // ─── Maker-Verifier Full Flow Integration Tests ──────────────────────────
+
+    use planeai_core::loop_recipe::RECIPE_SCHEMA_V1;
+    use planeai_core::loop_recipe_service::{RecipeRuntime, RecipeSnapshot, SnapshotPolicy};
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    /// Helper: create a loop with a custom RecipeSnapshot, pre-populated with
+    /// sessions and optional handoff artifacts.
+    /// Returns (loop_id, project_id, snapshot).
+    fn setup_maker_verifier_flow(
+        conn: &rusqlite::Connection,
+        current_step: &str,
+        round: u32,
+        maker_session_id: Option<&str>,
+        verifier_session_id: Option<&str>,
+    ) -> (String, String, RecipeSnapshot) {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use std::collections::BTreeMap;
+
+        let project = crate::db::create_project(conn, "testapp", "/tmp/testapp").unwrap();
+
+        // Parse the actual built-in recipe to get the real steps
+        let recipe = RecipeService::parse_yaml(
+            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
+        )
+        .expect("built-in maker-verifier should parse");
+
+        let steps: Vec<RecipeStep> = recipe.steps;
+        let roles: BTreeMap<String, RecipeRole> = recipe.roles;
+
+        let mut created_session_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        if let Some(sid) = maker_session_id {
+            created_session_ids
+                .entry("maker".into())
+                .or_default()
+                .push(sid.to_string());
+        }
+        if let Some(sid) = verifier_session_id {
+            created_session_ids
+                .entry("verifier".into())
+                .or_default()
+                .push(sid.to_string());
+        }
+
+        let mut inputs = BTreeMap::new();
+        inputs.insert("goal".to_string(), "Implement the feature".to_string());
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "maker-verifier".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs,
+            runtime: RecipeRuntime {
+                current_step: current_step.to_string(),
+                tick_count: 1,
+                round,
+                created_session_ids,
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles,
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        let loop_run = LoopService::create_loop(
+            conn,
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: project.id.clone(),
+                task_key: Some("PLA-210".into()),
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
+                goal: "Implement the feature".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+
+        LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+        (loop_run.id, project.id, snapshot)
+    }
+
+    /// Helper: insert a handoff artifact for a session.
+    fn insert_handoff(
+        conn: &rusqlite::Connection,
+        loop_id: &str,
+        session_id: &str,
+        status: &str,
+    ) {
+        let content = serde_json::json!({
+            "schema": "planeai.handoff.v1",
+            "loop_id": loop_id,
+            "session_id": session_id,
+            "status": status,
+            "summary": "Work completed",
+            "branch": "feat/test",
+            "commit": "abc123",
+            "changed_files": ["src/main.rs"],
+            "risks": [],
+            "next_actions": [],
+            "evidence": []
+        });
+        conn.execute(
+            "INSERT INTO loop_artifacts (id, loop_id, session_id, kind, content_json, created_at)
+             VALUES (?1, ?2, ?3, 'handoff', ?4, datetime('now'))",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                loop_id,
+                session_id,
+                content.to_string(),
+            ],
+        )
+        .unwrap();
+    }
+
+    /// Helper: create a session record and link it to a loop.
+    fn create_and_link_session(
+        conn: &rusqlite::Connection,
+        loop_id: &str,
+        session_id: &str,
+        role: &str,
+        round: i64,
+        project_id: &str,
+    ) {
+        crate::db::create_session_with_id(
+            conn,
+            session_id,
+            project_id,
+            &format!("{role} session"),
+            None,
+            "main",
+            None,
+            Some("claude"),
+            "daemon",
+            true,
+            Some("PLA-210"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        LoopService::add_loop_session(
+            conn,
+            planeai_core::loop_service::AddLoopSessionParams {
+                loop_id: loop_id.to_string(),
+                session_id: session_id.to_string(),
+                role: role.to_string(),
+                round,
+                provider: Some("claude".to_string()),
+                status: "active".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn maker_verifier_handoff_wait_detects_completed_handoff_and_routes_to_gates() {
+        let conn = setup_db();
+        let maker_id = "maker-11111111-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) =
+            setup_maker_verifier_flow(&conn, "wait_for_maker", 1, Some(maker_id), None);
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        insert_handoff(&conn, &loop_id, maker_id, "completed");
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("handoff.wait"), "output:\n{output}");
+        assert!(
+            output.contains("completed") || output.contains("run_gates"),
+            "should route to run_gates, output:\n{output}"
+        );
+
+        // Verify snapshot advanced to run_gates
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "run_gates");
+    }
+
+    #[test]
+    fn maker_verifier_handoff_wait_blocked_routes_to_terminal() {
+        let conn = setup_db();
+        let maker_id = "maker-22222222-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) =
+            setup_maker_verifier_flow(&conn, "wait_for_maker", 1, Some(maker_id), None);
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        insert_handoff(&conn, &loop_id, maker_id, "blocked");
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("blocked"),
+            "should route to blocked, output:\n{output}"
+        );
+
+        // Verify snapshot advanced to blocked step
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "blocked");
+    }
+
+    #[test]
+    fn maker_verifier_gates_pass_routes_to_create_verifier() {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        use std::collections::BTreeMap;
+
+        let conn = setup_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let project = crate::db::create_project(&conn, "testapp", &project_path).unwrap();
+
+        let maker_id = "maker-33333333-2222-3333-4444-555555555555";
+
+        // Build snapshot manually pointing at run_gates
+        let recipe = RecipeService::parse_yaml(
+            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
+        )
+        .unwrap();
+
+        let steps: Vec<RecipeStep> = recipe.steps;
+        let roles: BTreeMap<String, RecipeRole> = recipe.roles;
+
+        let mut created_session_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        created_session_ids
+            .entry("maker".into())
+            .or_default()
+            .push(maker_id.to_string());
+
+        let mut inputs = BTreeMap::new();
+        inputs.insert("goal".to_string(), "Implement the feature".to_string());
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "maker-verifier".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs,
+            runtime: RecipeRuntime {
+                current_step: "run_gates".into(),
+                tick_count: 2,
+                round: 1,
+                created_session_ids,
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles,
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        let loop_run = LoopService::create_loop(
+            &conn,
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: project.id.clone(),
+                task_key: Some("PLA-210".into()),
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
+                goal: "Implement the feature".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+        let loop_id = loop_run.id;
+
+        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
+
+        // Create session with worktree pointing to the temp dir
+        crate::db::create_session_with_id(
+            &conn,
+            maker_id,
+            &project.id,
+            "maker session",
+            None,
+            "main",
+            Some(&project_path),
+            Some("claude"),
+            "daemon",
+            true,
+            Some("PLA-210"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        LoopService::add_loop_session(
+            &conn,
+            planeai_core::loop_service::AddLoopSessionParams {
+                loop_id: loop_id.clone(),
+                session_id: maker_id.to_string(),
+                role: "maker".to_string(),
+                round: 1,
+                provider: Some("claude".to_string()),
+                status: "active".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Gates will run build/test commands — since no Cargo.toml or package.json
+        // exists, the gates echo "no build system detected" / "no test runner detected"
+        // which exits 0 = pass.
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "gates.run should succeed, output:\n{output}");
+        assert!(output.contains("gates.run"), "output:\n{output}");
+        assert!(
+            output.contains("pass") || output.contains("create_verifier"),
+            "should route to create_verifier on pass, output:\n{output}"
+        );
+
+        // Verify snapshot advanced to create_verifier
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "create_verifier");
+    }
+
+    #[test]
+    fn maker_verifier_gates_fail_routes_to_retry() {
+        use planeai_core::loop_recipe::*;
+        use planeai_core::loop_recipe_service::*;
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        use std::collections::BTreeMap;
+
+        let conn = setup_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let project = crate::db::create_project(&conn, "testapp", &project_path).unwrap();
+
+        // Create a Cargo.toml so the gate tries `cargo build` — which will fail
+        // because there's no actual Rust project (no src/main.rs or src/lib.rs)
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+
+        let maker_id = "maker-44444444-2222-3333-4444-555555555555";
+
+        // Build snapshot at run_gates step
+        let recipe = RecipeService::parse_yaml(
+            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
+        )
+        .unwrap();
+
+        let steps: Vec<RecipeStep> = recipe.steps;
+        let roles: BTreeMap<String, RecipeRole> = recipe.roles;
+
+        let mut created_session_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        created_session_ids
+            .entry("maker".into())
+            .or_default()
+            .push(maker_id.to_string());
+
+        let mut inputs = BTreeMap::new();
+        inputs.insert("goal".to_string(), "Implement the feature".to_string());
+
+        let snapshot = RecipeSnapshot {
+            recipe_schema: RECIPE_SCHEMA_V1.into(),
+            recipe_id: "maker-verifier".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs,
+            runtime: RecipeRuntime {
+                current_step: "run_gates".into(),
+                tick_count: 2,
+                round: 1,
+                created_session_ids,
+                last_error: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+            },
+            roles,
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
+        };
+
+        let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+        let loop_run = LoopService::create_loop(
+            &conn,
+            planeai_core::loop_service::CreateLoopParams {
+                project_id: project.id.clone(),
+                task_key: Some("PLA-210".into()),
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
+                goal: "Implement the feature".into(),
+                max_rounds: 3,
+                policy_json: Some(policy_json),
+                budget_json: None,
+            },
+        )
+        .unwrap();
+        let loop_id = loop_run.id;
+
+        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
+
+        crate::db::create_session_with_id(
+            &conn,
+            maker_id,
+            &project.id,
+            "maker session",
+            None,
+            "main",
+            Some(&project_path),
+            Some("claude"),
+            "daemon",
+            true,
+            Some("PLA-210"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        LoopService::add_loop_session(
+            &conn,
+            planeai_core::loop_service::AddLoopSessionParams {
+                loop_id: loop_id.clone(),
+                session_id: maker_id.to_string(),
+                role: "maker".to_string(),
+                round: 1,
+                provider: Some("claude".to_string()),
+                status: "active".to_string(),
+            },
+        )
+        .unwrap();
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "gates.run returns 0 (routes through on.fail), output:\n{output}");
+        assert!(
+            output.contains("fail") || output.contains("gates_failed_retry"),
+            "should route to gates_failed_retry on fail, output:\n{output}"
+        );
+
+        // Verify snapshot advanced to gates_failed_retry
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "gates_failed_retry");
+    }
+
+    #[test]
+    fn maker_verifier_verifier_approval_marks_completed_unreviewed() {
+        let conn = setup_db();
+        let maker_id = "maker-55555555-2222-3333-4444-555555555555";
+        let verifier_id = "verif-55555555-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "wait_for_verifier",
+            1,
+            Some(maker_id),
+            Some(verifier_id),
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
+        insert_handoff(&conn, &loop_id, verifier_id, "completed");
+
+        // Tick: handoff.wait should detect verifier completed → route to completed_unreviewed
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("completed_unreviewed") || output.contains("completed"),
+            "should route to completed_unreviewed, output:\n{output}"
+        );
+
+        // Tick again: the loop.status step should set completed_unreviewed
+        let (output2, code2) = loop_tick(&conn, &loop_id);
+        assert_eq!(code2, 0, "output:\n{output2}");
+        assert!(
+            output2.contains("completed_unreviewed"),
+            "should set completed_unreviewed status, output:\n{output2}"
+        );
+
+        // Verify loop is now in terminal state
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.status, LoopStatus::CompletedUnreviewed);
+    }
+
+    #[test]
+    fn maker_verifier_verifier_rejection_routes_to_retry() {
+        let conn = setup_db();
+        let maker_id = "maker-66666666-2222-3333-4444-555555555555";
+        let verifier_id = "verif-66666666-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "wait_for_verifier",
+            1,
+            Some(maker_id),
+            Some(verifier_id),
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
+        insert_handoff(&conn, &loop_id, verifier_id, "needs_human");
+
+        // Tick: handoff.wait should route to verifier_rejected_retry
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("verifier_rejected_retry") || output.contains("needs_human"),
+            "should route to verifier_rejected_retry, output:\n{output}"
+        );
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "verifier_rejected_retry");
+    }
+
+    #[test]
+    fn maker_verifier_round_increment_after_gates_fail_cycles_back() {
+        let conn = setup_db();
+        let maker_id = "maker-77777777-2222-3333-4444-555555555555";
+        // Start at increment_round_after_gates step
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "increment_round_after_gates",
+            1,
+            Some(maker_id),
+            None,
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+
+        // Tick: round.next should increment round and advance to wait_for_maker
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("round.next"), "output:\n{output}");
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.current_round, 2);
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.round, 2);
+        assert_eq!(snap.runtime.current_step, "wait_for_maker");
+    }
+
+    #[test]
+    fn maker_verifier_round_increment_after_review_cycles_back() {
+        let conn = setup_db();
+        let maker_id = "maker-88888888-2222-3333-4444-555555555555";
+        let verifier_id = "verif-88888888-2222-3333-4444-555555555555";
+        // Start at increment_round_after_review step
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "increment_round_after_review",
+            1,
+            Some(maker_id),
+            Some(verifier_id),
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("round.next"), "output:\n{output}");
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.current_round, 2);
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.round, 2);
+        assert_eq!(snap.runtime.current_step, "wait_for_maker");
+    }
+
+    #[test]
+    fn maker_verifier_max_rounds_blocks_at_gates_retry() {
+        let conn = setup_db();
+        let maker_id = "maker-99999999-2222-3333-4444-555555555555";
+        // Already at round 3 (max_rounds=3), trying to increment
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "increment_round_after_gates",
+            3, // at max
+            Some(maker_id),
+            None,
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 3, &project_id);
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("needs_human") || output.contains("max_rounds"),
+            "should mark needs_human at max_rounds, output:\n{output}"
+        );
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.status, LoopStatus::NeedsHuman);
+    }
+
+    #[test]
+    fn maker_verifier_max_rounds_blocks_at_review_retry() {
+        let conn = setup_db();
+        let maker_id = "maker-aaaaaaaa-2222-3333-4444-555555555555";
+        let verifier_id = "verif-aaaaaaaa-2222-3333-4444-555555555555";
+        // Already at round 3 (max_rounds=3), trying to increment after review
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "increment_round_after_review",
+            3,
+            Some(maker_id),
+            Some(verifier_id),
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 3, &project_id);
+        create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 3, &project_id);
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("needs_human") || output.contains("max_rounds"),
+            "should mark needs_human at max_rounds, output:\n{output}"
+        );
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(updated.status, LoopStatus::NeedsHuman);
+    }
+
+    #[test]
+    fn maker_verifier_no_auto_merge_path_exists() {
+        let conn = setup_db();
+        let maker_id = "maker-bbbbbbbb-2222-3333-4444-555555555555";
+        let verifier_id = "verif-bbbbbbbb-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) = setup_maker_verifier_flow(
+            &conn,
+            "wait_for_verifier",
+            1,
+            Some(maker_id),
+            Some(verifier_id),
+        );
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
+        insert_handoff(&conn, &loop_id, verifier_id, "completed");
+
+        // Tick 1: handoff.wait detects verifier completed → routes to completed_unreviewed
+        let (_output, _code) = loop_tick(&conn, &loop_id);
+        // Tick 2: loop.status sets completed_unreviewed
+        let (output2, code2) = loop_tick(&conn, &loop_id);
+        assert_eq!(code2, 0, "output:\n{output2}");
+
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        assert_eq!(
+            updated.status,
+            LoopStatus::CompletedUnreviewed,
+            "final state should be completed_unreviewed, NOT merged/approved"
+        );
+
+        // Trying to tick a terminal loop should fail
+        let (output3, code3) = loop_tick(&conn, &loop_id);
+        assert_eq!(code3, 1, "terminal loop should not tick, output:\n{output3}");
+        assert!(
+            output3.contains("terminal"),
+            "output:\n{output3}"
+        );
+    }
+
+    #[test]
+    fn maker_verifier_handoff_wait_without_handoff_stays_observing() {
+        let conn = setup_db();
+        let maker_id = "maker-cccccccc-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) =
+            setup_maker_verifier_flow(&conn, "wait_for_maker", 1, Some(maker_id), None);
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+        // No handoff recorded
+
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("observing") || output.contains("waiting_for"),
+            "should stay observing without handoff, output:\n{output}"
+        );
+
+        // Step should NOT advance
+        let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let snap: RecipeSnapshot =
+            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        assert_eq!(snap.runtime.current_step, "wait_for_maker");
+    }
 }

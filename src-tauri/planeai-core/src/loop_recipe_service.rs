@@ -576,10 +576,20 @@ mod tests {
 
     #[test]
     fn validate_unreferenced_role_warns() {
-        let recipe = RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap();
+        let mut recipe = RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap();
+        // Add an unused role to trigger the warning
+        recipe.roles.insert(
+            "arbiter".to_string(),
+            crate::loop_recipe::RecipeRole {
+                provider: "default".to_string(),
+                mode: "review".to_string(),
+                isolation: "readonly".to_string(),
+                instructions: None,
+            },
+        );
         let result = RecipeService::validate(&recipe, None);
-        // verifier role is declared but never referenced in steps
-        assert!(result.warnings.iter().any(|w| w.contains("verifier")));
+        // arbiter role is declared but never referenced in steps
+        assert!(result.warnings.iter().any(|w| w.contains("arbiter")));
     }
 
     #[test]
@@ -612,7 +622,7 @@ mod tests {
         assert_eq!(snapshot.recipe_source, "builtin");
         assert!(snapshot.recipe_path.is_none());
         assert_eq!(snapshot.inputs, inputs);
-        assert_eq!(snapshot.runtime.current_step, "start");
+        assert_eq!(snapshot.runtime.current_step, "create_maker");
         assert_eq!(snapshot.runtime.tick_count, 0);
         assert_eq!(snapshot.runtime.round, 1);
         assert_eq!(snapshot.policy.max_rounds, 3);
