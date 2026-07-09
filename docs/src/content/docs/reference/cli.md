@@ -395,14 +395,14 @@ Create a new durable loop run. The loop starts in `draft` status by default. Use
 planeai-cli axi loop create --goal "<goal>" [options]
 ```
 
-| Flag         | Description                                              |
-| ------------ | -------------------------------------------------------- |
-| `--goal`     | Goal description for the loop (required)                 |
-| `--strategy` | Strategy identifier (default: `maker-verifier`)          |
-| `--max-rounds` | Maximum rounds before the loop stops (default: 3)      |
-| `--task`     | Task key to associate with this loop (validated)         |
-| `--project`  | Project name (otherwise resolved from CWD)               |
-| `--start`    | Start immediately (status = `running` instead of `draft`) |
+| Flag           | Description                                               |
+| -------------- | --------------------------------------------------------- |
+| `--goal`       | Goal description for the loop (required)                  |
+| `--strategy`   | Strategy identifier (default: `maker-verifier`)           |
+| `--max-rounds` | Maximum rounds before the loop stops (default: 3)         |
+| `--task`       | Task key to associate with this loop (validated)          |
+| `--project`    | Project name (otherwise resolved from CWD)                |
+| `--start`      | Start immediately (status = `running` instead of `draft`) |
 
 If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by_session_id`.
 
@@ -416,8 +416,8 @@ Observe loop state: summary, loop-owned sessions, recent events. Use `loop tree`
 planeai-cli axi loop observe <id> [--limit <n>]
 ```
 
-| Flag      | Description                                  |
-| --------- | -------------------------------------------- |
+| Flag      | Description                                   |
+| --------- | --------------------------------------------- |
 | `--limit` | Maximum number of recent events (default: 20) |
 
 The `id` can be a prefix — it will match if unambiguous.
