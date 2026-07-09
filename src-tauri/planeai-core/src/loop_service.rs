@@ -116,6 +116,7 @@ impl LoopService {
     pub fn migrate(conn: &Connection) -> SqlResult<()> {
         Self::create_tables_if_missing(conn)?;
         Self::migrate_loop_runs_269_schema_if_needed(conn)?;
+        Self::migrate_verifier_runs_started_at(conn)?;
         Self::create_indexes(conn)?;
         Ok(())
     }
@@ -179,6 +180,7 @@ impl LoopService {
                 exit_code INTEGER,
                 output_path TEXT,
                 created_at TEXT NOT NULL,
+                started_at TEXT,
                 finished_at TEXT
             );",
         )
@@ -266,6 +268,22 @@ impl LoopService {
         ))?;
 
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Add started_at column to verifier_runs if missing (idempotent).
+    fn migrate_verifier_runs_started_at(conn: &Connection) -> SqlResult<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(verifier_runs)")?;
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if columns.is_empty() || columns.iter().any(|c| c == "started_at") {
+            return Ok(());
+        }
+
+        conn.execute_batch("ALTER TABLE verifier_runs ADD COLUMN started_at TEXT;")?;
         Ok(())
     }
 
@@ -668,8 +686,19 @@ impl LoopService {
             exit_code: None,
             output_path: None,
             created_at: now,
+            started_at: None,
             finished_at: None,
         })
+    }
+
+    /// Transition a verifier run from 'pending' to 'running' and set started_at.
+    pub fn start_verifier_run(conn: &Connection, id: &str) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE verifier_runs SET status = 'running', started_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        Ok(())
     }
 
     pub fn update_verifier_run(

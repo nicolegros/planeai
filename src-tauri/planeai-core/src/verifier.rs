@@ -182,11 +182,15 @@ pub fn run_verifier_gate(
     )
     .map_err(|e| VerifyGateError::Db(format!("failed to create verifier run: {e}")))?;
 
-    // 3. Run the command with timeout and output cap
+    // 3. Transition to 'running' with started_at before execution
+    LoopService::start_verifier_run(conn, &verifier_run.id)
+        .map_err(|e| VerifyGateError::Db(format!("failed to start verifier run: {e}")))?;
+
+    // 4. Run the command with timeout and output cap
     let (status, exit_code, output_bytes, truncated) =
         execute_command(&request.command, &cwd, request.timeout_ms, request.max_output_bytes);
 
-    // 4. Write log to project-level artifact root
+    // 5. Write log to project-level artifact root
     let log_path = artifact_log_path(&request.project_path, &request.loop_id, &verifier_run.id);
     let output_path = match write_log(&log_path, &output_bytes) {
         Ok(p) => Some(p),
@@ -196,7 +200,7 @@ pub fn run_verifier_gate(
         }
     };
 
-    // 5. Atomically complete: update verifier_run + append event
+    // 6. Atomically complete: update verifier_run + append event
     let event_payload = serde_json::json!({
         "verifier_run_id": verifier_run.id,
         "name": request.name,
