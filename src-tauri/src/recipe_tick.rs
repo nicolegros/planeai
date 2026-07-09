@@ -705,10 +705,6 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
         result = result.replace(&if_spaced, "");
         result = result.replace(&if_compact, "");
     }
-    // Remove endif tags left over from satisfied conditionals
-    result = result.replace("{% endif %}", "");
-    result = result.replace("{%endif%}", "");
-
     // Remove conditional blocks for inputs that are NOT present
     let all_input_keys: Vec<&str> = snapshot.inputs.keys().map(|k| k.as_str()).collect();
     loop {
@@ -733,6 +729,10 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
             break;
         }
     }
+
+    // Remove endif tags left over from satisfied conditionals (must be after unsatisfied-block removal)
+    result = result.replace("{% endif %}", "");
+    result = result.replace("{%endif%}", "");
 
     result = result.replace("{{ loop.id }}", loop_id);
     result = result.replace("{{loop.id}}", loop_id);
