@@ -69,13 +69,15 @@
   // appear garbled until a resize forces a re-measure. We wait for the font
   // to be ready before opening the terminal to prevent this.
   async function waitForFont(family: string, size: number): Promise<void> {
-    try {
-      // Try loading the specific font first — fast path for web fonts
-      await document.fonts.load(`${size}px "${family}"`);
-    } catch {
-      // Fallback: wait for all fonts to settle
-      await document.fonts.ready;
-    }
+    const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));
+    const fontLoad = (async () => {
+      try {
+        await document.fonts.load(`${size}px "${family}"`);
+      } catch {
+        await document.fonts.ready;
+      }
+    })();
+    await Promise.race([fontLoad, timeout]);
   }
 
   onMount(() => {

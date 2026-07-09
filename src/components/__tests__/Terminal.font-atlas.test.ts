@@ -94,11 +94,15 @@ function onSettingsChange(state: FontAtlasState, fitAddon: ReturnType<typeof cre
 // ── waitForFont logic ────────────────────────────────────────────────────
 
 async function waitForFont(family: string, size: number): Promise<void> {
-  try {
-    await document.fonts.load(`${size}px "${family}"`);
-  } catch {
-    await document.fonts.ready;
-  }
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));
+  const fontLoad = (async () => {
+    try {
+      await document.fonts.load(`${size}px "${family}"`);
+    } catch {
+      await document.fonts.ready;
+    }
+  })();
+  await Promise.race([fontLoad, timeout]);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -229,6 +233,21 @@ describe("Terminal font-atlas garbled glyph fix (PLA-227)", () => {
 
       await expect(waitForFont("Unknown Font", 14)).resolves.toBeUndefined();
       expect(mockLoad).toHaveBeenCalledWith('14px "Unknown Font"');
+    });
+
+    it("resolves after timeout when font load stalls", async () => {
+      vi.useFakeTimers();
+      const neverResolve = new Promise<FontFace[]>(() => {});
+      const mockLoad = vi.fn().mockReturnValue(neverResolve);
+      Object.defineProperty(document, "fonts", {
+        value: { load: mockLoad, ready: new Promise(() => {}) },
+        configurable: true,
+      });
+
+      const result = waitForFont("Stalled Font", 14);
+      vi.advanceTimersByTime(3000);
+      await expect(result).resolves.toBeUndefined();
+      vi.useRealTimers();
     });
   });
 
