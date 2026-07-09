@@ -46,13 +46,13 @@ pub async fn launch_session(
             command: provider_def.command.clone(),
             yolo_flag: provider_def.yolo_flag.clone(),
             prompt_command: provider_def.prompt_command.clone(),
-            autonomous_prompt_template: provider_def.autonomous_prompt_template.clone(),
         };
         let launch_cmd = planeai_core::session_launch::build_provider_launch_command(
             &core_provider,
             auto_approve,
             task_prompt.as_deref(),
             false, // manual launches are not autonomous
+            None,  // autonomous_prompt_template not used for manual launches
         );
         let c = launch_cmd.command;
         tracing::info!(command = %c, prompt_injected = launch_cmd.prompt_was_injected, approve_applied = launch_cmd.auto_approve_was_applied, "launch command built");

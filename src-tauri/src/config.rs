@@ -118,6 +118,8 @@ pub struct Provider {
     pub resume_command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_command: Option<String>,
+    /// Deprecated: migrated to auto_dispatch.autonomous_prompt_template.
+    /// Kept for deserialization of old configs; stripped on save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomous_prompt_template: Option<String>,
 }
@@ -169,6 +171,10 @@ pub struct AutoDispatchConfig {
     pub terminal_states: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// Wraps the rendered task prompt for autonomous (auto-dispatched) sessions.
+    /// Variable: {prompt} is replaced with the rendered task prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomous_prompt_template: Option<String>,
 }
 
 fn default_poll_interval() -> u64 {
@@ -221,7 +227,7 @@ impl Default for Config {
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 resume_command: Some("kiro-cli chat --resume".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None,
+                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
             },
         );
         providers.insert(
@@ -231,7 +237,7 @@ impl Default for Config {
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                 resume_command: Some("claude --resume".to_string()),
                 prompt_command: Some("-p {prompt}".to_string()),
-                autonomous_prompt_template: None,
+                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
             },
         );
         providers.insert(
@@ -241,7 +247,7 @@ impl Default for Config {
                 yolo_flag: Some("--allow-all-tools".to_string()),
                 resume_command: None,
                 prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None,
+                autonomous_prompt_template: None, // deprecated: now on auto_dispatch
             },
         );
         Config {
@@ -320,6 +326,87 @@ fn backfill_provider_defaults(config: &mut Config) {
     }
 }
 
+/// Migrate `autonomous_prompt_template` from providers to `auto_dispatch`.
+/// Takes the value from the auto_dispatch provider (or default provider) — first non-null wins.
+/// Clears the deprecated field from all providers after migration.
+/// Returns `true` if a migration was performed (config was modified).
+fn migrate_autonomous_prompt_template(config: &mut Config) -> bool {
+    // Check if any provider actually has a value to migrate
+    let has_old_value = config
+        .providers
+        .values()
+        .any(|p| p.autonomous_prompt_template.is_some());
+
+    if !has_old_value {
+        return false;
+    }
+
+    // Skip if auto_dispatch already has a value set
+    if config
+        .task_management
+        .as_ref()
+        .and_then(|tm| tm.auto_dispatch.as_ref())
+        .and_then(|ad| ad.autonomous_prompt_template.as_ref())
+        .is_some()
+    {
+        // Clear deprecated fields from providers
+        for provider in config.providers.values_mut() {
+            provider.autonomous_prompt_template = None;
+        }
+        return true;
+    }
+
+    // Determine which provider key to prefer for migration
+    let preferred_key = config
+        .task_management
+        .as_ref()
+        .and_then(|tm| tm.auto_dispatch.as_ref())
+        .and_then(|ad| ad.provider.clone())
+        .unwrap_or_else(|| config.default_provider.clone());
+
+    // Try the preferred provider first, then fall back to any provider with a value
+    let migrated_value = config
+        .providers
+        .get(&preferred_key)
+        .and_then(|p| p.autonomous_prompt_template.clone())
+        .or_else(|| {
+            config
+                .providers
+                .values()
+                .find_map(|p| p.autonomous_prompt_template.clone())
+        });
+
+    if let Some(value) = migrated_value {
+        // Ensure task_management and auto_dispatch exist
+        let tm = config.task_management.get_or_insert(TaskManager {
+            templates: None,
+            on_start: None,
+            on_notify: None,
+            on_restart: None,
+            on_complete: None,
+            on_pr_open: None,
+            on_pr_merge: None,
+            auto_dispatch: None,
+        });
+        let ad = tm.auto_dispatch.get_or_insert(AutoDispatchConfig {
+            poll_interval_ms: default_poll_interval(),
+            max_concurrent: default_max_concurrent(),
+            provider: None,
+            terminal_states: None,
+            base_branch: None,
+            autonomous_prompt_template: None,
+        });
+        ad.autonomous_prompt_template = Some(value);
+    }
+
+    // Clear deprecated fields from all providers
+    for provider in config.providers.values_mut() {
+        provider.autonomous_prompt_template = None;
+    }
+
+    true
+}
+
 pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
     let config_path = config_dir.join("config.json");
     if config_path.exists() {
@@ -341,6 +428,11 @@ pub fn load(config_dir: &Path) -> (Config, Vec<String>) {
         let merged = merge_top_level(default_val, user_val);
         let mut config: Config = serde_json::from_value(merged).unwrap();
         backfill_provider_defaults(&mut config);
+        let migrated = migrate_autonomous_prompt_template(&mut config);
+        if migrated {
+            // Persist the migration so the file reflects the new structure
+            save(config_dir, &config).ok();
+        }
         return (config, vec![]);
     }
     let config = Config::default();

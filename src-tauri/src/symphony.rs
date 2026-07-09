@@ -288,7 +288,7 @@ impl Backend for TauriBackend {
             session_backend: backend_str.to_string(),
             prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
             prompt_command: provider.prompt_command.clone(),
-            prompt_wrapper: provider.autonomous_prompt_template.clone(),
+            prompt_wrapper: auto.autonomous_prompt_template.clone(),
             name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
         })
     }
@@ -457,7 +457,7 @@ pub fn build_orchestrator_config(
                 session_backend: backend_str.to_string(),
                 prompt_template: tm.templates.as_ref().and_then(|t| t.prompt.clone()),
                 prompt_command: provider.prompt_command.clone(),
-                prompt_wrapper: provider.autonomous_prompt_template.clone(),
+                prompt_wrapper: auto.autonomous_prompt_template.clone(),
                 name_template: tm.templates.as_ref().and_then(|t| t.name.clone()),
             },
         });
@@ -535,6 +535,7 @@ mod tests {
                     provider: Some("kiro".to_string()),
                     terminal_states: None,
                     base_branch,
+                    autonomous_prompt_template: None,
                 }),
             }),
             providers,
@@ -587,8 +588,11 @@ mod tests {
         let mut config = minimal_config_with_auto_dispatch(None);
         config.providers.get_mut("kiro").unwrap().prompt_command = Some("{prompt}".to_string());
         config
-            .providers
-            .get_mut("kiro")
+            .task_management
+            .as_mut()
+            .unwrap()
+            .auto_dispatch
+            .as_mut()
             .unwrap()
             .autonomous_prompt_template = Some("Be autonomous.\n{prompt}".to_string());
 

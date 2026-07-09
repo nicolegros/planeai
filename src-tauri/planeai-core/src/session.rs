@@ -130,13 +130,13 @@ impl SessionDispatcher {
             command: self.dispatch_config.provider_command.clone(),
             yolo_flag: self.dispatch_config.yolo_flag.clone(),
             prompt_command: self.dispatch_config.prompt_command.clone(),
-            autonomous_prompt_template: self.dispatch_config.prompt_wrapper.clone(),
         };
         let launch_result = crate::session_launch::build_provider_launch_command(
             &provider_config,
             self.dispatch_config.yolo,
             rendered_prompt.as_deref(),
             true, // autonomous: auto-dispatched sessions always use autonomous template
+            self.dispatch_config.prompt_wrapper.as_deref(),
         );
         let cmd = launch_result.command;
         tracing::info!(

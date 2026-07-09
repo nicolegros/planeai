@@ -373,16 +373,6 @@
                 placeholder={"{prompt} or --prompt {prompt}"}
               />
             </div>
-            <div class="space-y-1">
-              <!-- svelte-ignore a11y_label_has_associated_control -->
-              <label class="text-xs text-t2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Wraps the task prompt in Symphony auto-dispatch mode. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
-              <Input
-                value={provider.autonomous_prompt_template || ""}
-                onchange={(e) => updateProvider(key, "autonomous_prompt_template", e.currentTarget.value)}
-                class="font-mono"
-                placeholder="e.g. Be autonomous.\n{prompt}"
-              />
-            </div>
           </div>
         {/each}
       </div>
@@ -531,6 +521,16 @@
                   <Input value={(taskManagement.auto_dispatch.terminal_states ?? ["done", "cancelled"]).join(", ")} onchange={(e) => {
                     updateAutoDispatch({ terminal_states: e.currentTarget.value.split(",").map((s: string) => s.trim()).filter(Boolean) });
                   }} class="font-mono" placeholder="done, cancelled" />
+                </div>
+                <div class="space-y-1">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
+                  <label class="text-xs text-t2 flex items-center gap-1">Autonomous prompt template <span class="relative group cursor-help">ⓘ<span class="hidden group-hover:block absolute left-4 top-0 z-50 w-64 whitespace-normal rounded bg-panel-hi text-t3 px-2 py-1 text-[10px]">Wraps the task prompt for auto-dispatched sessions. Variable: {"{prompt}"} is replaced with the rendered task prompt. Leave empty to use the task prompt as-is.</span></span></label>
+                  <Input
+                    value={taskManagement.auto_dispatch.autonomous_prompt_template || ""}
+                    onchange={(e) => updateAutoDispatch({ autonomous_prompt_template: e.currentTarget.value || null })}
+                    class="font-mono"
+                    placeholder="e.g. Be autonomous.\n{prompt}"
+                  />
                 </div>
               {/if}
             </div>
