@@ -452,6 +452,85 @@ planeai-cli axi loop tree <id>
 
 Returns all sessions registered to the loop plus their recursive children (via `parent_session_id`). If the loop has no sessions, returns a message indicating zero sessions.
 
+### `axi loop verify`
+
+Run a verifier gate command and persist the result to a loop. The command runs synchronously — the CLI blocks until the process completes, then emits the result as TOON.
+
+```bash
+planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>
+```
+
+| Flag                 | Description                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `--loop-id`          | Loop ID (prefix match supported)                                                     |
+| `--session`          | Session ID (must belong to the loop, prefix supported)                               |
+| `--name`             | Human-readable verifier name (e.g., "rust-tests")                                    |
+| `--command`          | Shell command to execute (passed to `sh -c` / `cmd /C`)                              |
+| `--timeout-ms`       | Timeout in ms (default: 600000 = 10 min). Use 0 for no timeout.                      |
+| `--max-output-bytes` | Max output bytes to capture (default: 10485760 = 10 MB). Larger output is truncated. |
+
+> **Security:** `--command` is a trusted human/recipe-authored command. Do not pass agent-generated command strings to this option. A future `--gate <name>` flag will resolve commands from configured recipe gates.
+
+**Behavior:**
+
+1. Resolves the loop and session (both support prefix matching).
+2. Resolves the working directory: session `worktree_path` → project `path`. If neither exists, returns an error — there is no fallback to the caller's CWD.
+3. Creates a `pending` verifier run in the database.
+4. Runs the command via `sh -c` (macOS/Linux) or `cmd /C` (Windows) with the configured timeout.
+5. Captures combined stdout/stderr (up to `--max-output-bytes`) to a durable log under the project artifact root: `<project_path>/.planeai/loops/<loop_id>/verifiers/<run_id>.log`
+6. Atomically updates the verifier run and appends a `verifier_completed` loop event.
+7. Returns TOON summary with exit code 0 on pass, 1 on fail/error.
+
+**Example output (pass):**
+
+```
+verifier:
+  id: <uuid>
+  loop_id: <uuid>
+  session_id: <uuid>
+  name: rust-tests
+  status: pass
+  exit_code: 0
+  output_path: /path/to/.planeai/loops/<id>/verifiers/<id>.log
+next_actions[2]:
+  - run `planeai-cli axi loop observe <id>` to check overall loop state
+  - run `planeai-cli axi loop tick <id>` to advance the loop
+```
+
+**Example output (fail):**
+
+```
+verifier:
+  id: <uuid>
+  loop_id: <uuid>
+  session_id: <uuid>
+  name: eslint
+  status: fail
+  exit_code: 1
+  output_path: /path/to/.planeai/loops/<id>/verifiers/<id>.log
+next_actions[2]:
+  - inspect output at: /path/to/.planeai/loops/<id>/verifiers/<id>.log
+  - fix the issue and re-run `planeai-cli axi loop verify ...`
+```
+
+> **Note:** Verifier gates are local proof artifacts — they prove a command passed on a specific machine at a specific time. They are not production-level proof. The output log is stored under the project root (not the session worktree), so it survives worktree cleanup.
+
+### `axi loop handoff path`
+
+Print the expected handoff file path for a session within a loop.
+
+```bash
+planeai-cli axi loop handoff path --loop-id <id> --session <id>
+```
+
+### `axi loop handoff record`
+
+Record a structured handoff from a JSON file. Validates schema, IDs, and path security.
+
+```bash
+planeai-cli axi loop handoff record --loop-id <id> --session <id> --path <file>
+```
+
 ---
 
 ## Examples

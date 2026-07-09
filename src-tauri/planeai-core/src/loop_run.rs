@@ -165,5 +165,6 @@ pub struct VerifierRun {
     pub exit_code: Option<i32>,
     pub output_path: Option<String>,
     pub created_at: String,
+    pub started_at: Option<String>,
     pub finished_at: Option<String>,
 }

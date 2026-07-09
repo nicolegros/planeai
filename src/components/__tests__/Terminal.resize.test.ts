@@ -49,7 +49,7 @@ function fitAndResize(
   sessionId: string,
   state: ResizeState,
   ptyResize: (id: string, rows: number, cols: number) => void,
-  force = false
+  force = false,
 ) {
   fitAddon.fit();
   const { rows, cols } = term;
@@ -65,7 +65,7 @@ function onVisibilityRestore(
   fitAddon: { fit: () => void },
   sessionId: string,
   state: ResizeState,
-  ptyResize: (id: string, rows: number, cols: number) => void
+  ptyResize: (id: string, rows: number, cols: number) => void,
 ) {
   // Mirrors the visibility $effect: force=true (sans rAF for testability)
   fitAndResize(term, fitAddon, sessionId, state, ptyResize, true);
@@ -80,7 +80,7 @@ function onFocusGain(
   fitAddon: { fit: () => void },
   sessionId: string,
   state: ResizeState,
-  ptyResize: (id: string, rows: number, cols: number) => void
+  ptyResize: (id: string, rows: number, cols: number) => void,
 ) {
   // Mirrors the focused $effect: force=false (dedup applies)
   fitAndResize(term, fitAddon, sessionId, state, ptyResize, false);
