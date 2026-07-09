@@ -1,0 +1,111 @@
+schema: planeai.loop.recipe.v1
+id: maker-verifier
+name: Maker + Verifier
+description: Minimal loop-engineering recipe. Maker writes, handoff records state, human reviews.
+
+trigger:
+  kind: manual
+
+inputs:
+  goal:
+    required: true
+  task_key:
+    required: false
+
+knowledge:
+  files:
+    - AGENTS.md
+    - CONTEXT.md
+  instructions:
+    - Follow repository conventions.
+    - Prefer existing PlaneAI services and domain types.
+    - Record progress through structured handoffs, not terminal claims.
+
+tools:
+  required:
+    - git
+    - plane_sessions
+    - plane_loops
+  optional:
+    - github
+    - jira
+    - mcp
+
+roles:
+  maker:
+    provider: default
+    mode: write
+    isolation: worktree
+    instructions: |
+      You are the maker agent.
+      Implement the requested change in your isolated worktree.
+      Do not claim completion unless you have recorded a structured handoff.
+
+  verifier:
+    provider: default
+    mode: review
+    isolation: readonly
+    instructions: |
+      You are the verifier agent.
+      This role is declared now so the recipe can evolve into full maker-verifier later.
+      Do not edit files.
+
+policy:
+  max_rounds: 3
+  max_ticks: 50
+  max_sessions: 5
+  stale_after_ms: 600000
+  merge_policy: human
+
+steps:
+  - id: start
+    kind: session.create
+    role: maker
+    prompt: |
+      You are running inside a PlaneAI loop.
+
+      Loop:
+      {{ loop.id }}
+
+      Goal:
+      {{ inputs.goal }}
+
+      {% if inputs.task_key %}
+      Task:
+      {{ inputs.task_key }}
+      {% endif %}
+
+      Project knowledge:
+      {{ knowledge.files }}
+
+      Instructions:
+      - Work only in your assigned workspace.
+      - Make the smallest safe change that satisfies the goal.
+      - Run relevant checks if possible.
+      - When done, write and record a planeai.handoff.v1 handoff.
+      - Your handoff status must be one of: completed, blocked, needs_human, failed.
+
+  - id: wait_for_maker_handoff
+    kind: handoff.wait
+    from: maker
+    on:
+      completed: completed_unreviewed
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  - id: completed_unreviewed
+    kind: loop.status
+    status: completed_unreviewed
+
+  - id: blocked
+    kind: loop.status
+    status: blocked
+
+  - id: needs_human
+    kind: loop.status
+    status: needs_human
+
+  - id: failed
+    kind: loop.status
+    status: failed

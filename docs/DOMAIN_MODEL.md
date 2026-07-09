@@ -20,6 +20,7 @@ PlaneAI manages AI coding agent sessions. The domain model is shared across fron
 │  WorktreeService                 │
 │  TaskService                     │
 │  LoopService                     │
+│  RecipeService                   │
 └──────────────┬───────────────────┘
                │
                ▼
@@ -127,6 +128,7 @@ archived → active (restore)
 | Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
 | Prompt locking (cross-process)           | `planeai_core::prompt_lock`                       |
 | Loop run persistence                     | `planeai_core::loop_service::LoopService`         |
+| Loop recipe discovery and validation     | `planeai_core::loop_recipe_service::RecipeService` |
 | Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
 | Daemon protocol                          | `planeai_daemon::protocol`                        |
 | IPC transport                            | `planeai_ipc`                                     |
@@ -294,7 +296,7 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 
 **Module:** `planeai_core::loop_service::LoopService` — migrated via `LoopService::migrate(conn)` (called from each binary's DB migration chain).
 
-**Execution primitive:** `planeai_core::verifier::run_verifier_gate(conn, request)` — a structured, reusable operation that both the AXI CLI and the future recipe runtime consume. Returns `Result<VerifyGateResult, VerifyGateError>`.
+**Execution primitive:** `planeai_core::verifier::run_verifier_gate(conn, request)` — a structured, reusable operation that both the AXI CLI and the recipe tick runtime consume. Returns `Result<VerifyGateResult, VerifyGateError>`.
 
 **AXI CLI:** `planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>` is a thin TOON-rendering wrapper around the primitive.
 
@@ -308,6 +310,26 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 - Multiple verifiers can run in parallel against the same loop (append-only, no coordination).
 - Default timeout: 10 minutes. Default output cap: 10 MB.
 - `--command` is trusted (human/recipe-authored). Agent-generated commands should not be passed directly.
+
+## Loop Recipes
+
+Declarative YAML definitions that describe reusable loop workflows. A recipe specifies roles, steps, knowledge, tools, and policy constraints — the loop runner executes one step per tick.
+
+**Schema:** `planeai.loop.recipe.v1`
+
+**Key types:**
+
+| Type | Description |
+| --- | --- |
+| `LoopRecipe` | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools) |
+| `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions |
+| `RecipeService` | Discovery, loading, validation, and snapshot creation (file-based, no DB) |
+
+**Discovery precedence:** project (`.planeai/loops/*.yaml`) > user (`~/.config/planeai/loops/*.yaml`) > builtin (embedded in binary).
+
+**Module:** `planeai_core::loop_recipe` (data model), `planeai_core::loop_recipe_service` (service), `planeai::recipe_tick` (runtime executor).
+
+See [docs/LOOP_RECIPES.md](./LOOP_RECIPES.md) for the full schema reference, step kinds, and recipe examples.
 
 ## Running Tests
 

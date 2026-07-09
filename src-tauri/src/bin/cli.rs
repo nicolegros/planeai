@@ -145,9 +145,12 @@ enum AxiLoopAction {
         /// Goal description for the loop
         #[arg(long)]
         goal: String,
-        /// Strategy identifier (e.g., maker-verifier)
+        /// Strategy identifier (e.g., maker-verifier). Alias for --recipe.
         #[arg(long, default_value = "maker-verifier")]
         strategy: String,
+        /// Recipe ID or path (takes precedence over --strategy)
+        #[arg(long)]
+        recipe: Option<String>,
         /// Maximum rounds before the loop stops
         #[arg(long, default_value_t = 3)]
         max_rounds: i64,
@@ -160,6 +163,11 @@ enum AxiLoopAction {
         /// Start the loop immediately (status = running instead of draft)
         #[arg(long)]
         start: bool,
+    },
+    /// Recipe operations — list, inspect, and validate loop recipes
+    Recipe {
+        #[command(subcommand)]
+        action: AxiLoopRecipeAction,
     },
     /// Observe loop state: summary, sessions, events, artifacts
     Observe {
@@ -235,6 +243,23 @@ enum AxiLoopHandoffAction {
         /// Path to the handoff JSON file
         #[arg(long)]
         path: std::path::PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum AxiLoopRecipeAction {
+    /// List all discovered recipes
+    #[command(name = "ls")]
+    List,
+    /// Show recipe details
+    Show {
+        /// Recipe ID or path to a recipe YAML file
+        id: String,
+    },
+    /// Validate a recipe
+    Validate {
+        /// Recipe ID or path to a recipe YAML file
+        id: String,
     },
 }
 
@@ -1134,6 +1159,7 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
         AxiLoopAction::Create {
             goal,
             strategy,
+            recipe,
             max_rounds,
             task,
             project,
@@ -1144,6 +1170,7 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             project.as_deref(),
             task.as_deref(),
             &strategy,
+            recipe.as_deref(),
             &goal,
             max_rounds,
             start,
@@ -1152,6 +1179,11 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
         AxiLoopAction::Tick { id } => planeai::axi::loop_tick(conn, &id),
         AxiLoopAction::Stop { id } => planeai::axi::loop_stop(conn, &id),
         AxiLoopAction::Tree { id } => planeai::axi::loop_tree(conn, &id),
+        AxiLoopAction::Recipe { action } => match action {
+            AxiLoopRecipeAction::List => planeai::axi::recipe_ls(cwd),
+            AxiLoopRecipeAction::Show { id } => planeai::axi::recipe_show(&id, cwd),
+            AxiLoopRecipeAction::Validate { id } => planeai::axi::recipe_validate(&id, cwd),
+        },
         AxiLoopAction::Handoff { action } => match action {
             AxiLoopHandoffAction::Path { loop_id, session } => {
                 planeai::axi::loop_handoff_path(conn, &loop_id, &session, cwd)

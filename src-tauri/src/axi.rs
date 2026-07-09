@@ -655,12 +655,15 @@ pub fn loop_create(
     project_flag: Option<&str>,
     task_key: Option<&str>,
     strategy: &str,
+    recipe_flag: Option<&str>,
     goal: &str,
     max_rounds: i64,
     start: bool,
 ) -> (String, i32) {
+    use planeai_core::loop_recipe_service::RecipeService;
     use planeai_core::loop_run::LoopStrategy;
     use planeai_core::loop_service::{CreateLoopParams, LoopService};
+    use std::collections::BTreeMap;
 
     // Validate max_rounds
     if max_rounds < 1 {
@@ -718,16 +721,117 @@ pub fn loop_create(
         }
     }
 
+    // Conflict check: if both --recipe and non-default --strategy are provided, error
+    if recipe_flag.is_some() && strategy != "maker-verifier" {
+        return (
+            emit_error(
+                "cannot specify both --recipe and --strategy",
+                &["Use --recipe to specify a recipe, or --strategy as an alias (not both)".into()],
+            ),
+            1,
+        );
+    }
+    let recipe_id = recipe_flag.unwrap_or(strategy);
+    let project_root = std::path::Path::new(&project.path);
+
+    // Resolve recipe. If --recipe was explicitly passed, fail loudly on error.
+    // If using --strategy (legacy alias), allow graceful fallback.
+    let discovered = if recipe_flag.is_some() {
+        // Explicit --recipe: must resolve or fail
+        match RecipeService::resolve(recipe_id, Some(project_root)) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                return (
+                    emit_error(
+                        &format!("recipe not found: {}", e),
+                        &["Run `planeai-cli axi loop recipe ls` to see available recipes".into()],
+                    ),
+                    1,
+                );
+            }
+        }
+    } else {
+        // Legacy --strategy: try to resolve, fall back to non-recipe loop
+        RecipeService::resolve(recipe_id, Some(project_root)).ok()
+    };
+
+    // Build resolved recipe state
+    struct ResolvedRecipe {
+        policy_json: Option<serde_json::Value>,
+        strategy: String,
+        source: &'static str,
+        max_rounds: i64,
+    }
+
+    let resolved = match discovered {
+        Some(ref dr) => {
+            let mut inputs = BTreeMap::new();
+            inputs.insert("goal".to_string(), goal.to_string());
+            if let Some(key) = task_key {
+                inputs.insert("task_key".to_string(), key.to_string());
+            }
+            let snapshot = RecipeService::create_snapshot(dr, inputs);
+            let max_r = snapshot.policy.max_rounds as i64;
+            let json_val = serde_json::to_value(&snapshot).ok();
+            ResolvedRecipe {
+                policy_json: json_val,
+                strategy: dr.recipe.id.clone(),
+                source: dr.source.as_str(),
+                max_rounds: max_r,
+            }
+        }
+        None => ResolvedRecipe {
+            policy_json: None,
+            strategy: recipe_id.to_string(),
+            source: "none",
+            max_rounds,
+        },
+    };
+
+    // Block creation if recipe uses a non-manual trigger (not executable in v1)
+    if let Some(ref dr) = discovered {
+        if !dr.recipe.trigger.is_v1_executable() {
+            return (
+                emit_error(
+                    &format!(
+                        "recipe '{}' uses trigger kind '{}' which is not executable in v1",
+                        dr.recipe.id, dr.recipe.trigger.kind
+                    ),
+                    &["Only 'manual' trigger is supported for loop creation".into()],
+                ),
+                1,
+            );
+        }
+    }
+
+    // Validate recipe before creating a LoopRun (reject invalid recipes)
+    if let Some(ref dr) = discovered {
+        let validation = RecipeService::validate(&dr.recipe, Some(project_root));
+        if !validation.valid {
+            return (
+                emit_error(
+                    &format!("recipe '{}' failed validation", dr.recipe.id),
+                    &validation
+                        .errors
+                        .iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                1,
+            );
+        }
+    }
+
     let parent_session_id = std::env::var("PLANEAI_SESSION_ID").ok();
 
     let params = CreateLoopParams {
         project_id: project.id.clone(),
         task_key: task_key.map(|s| s.to_string()),
         created_by_session_id: parent_session_id,
-        strategy: LoopStrategy::new(strategy),
+        strategy: LoopStrategy::new(&resolved.strategy),
         goal: goal.to_string(),
-        max_rounds,
-        policy_json: None,
+        max_rounds: resolved.max_rounds,
+        policy_json: resolved.policy_json,
         budget_json: None,
     };
 
@@ -741,6 +845,16 @@ pub fn loop_create(
         LoopService::append_loop_event(conn, &loop_run.id, "loop_created", &serde_json::json!({}))
     {
         return (emit_error(&e.to_string(), &[]), 1);
+    }
+
+    // If a recipe was resolved, append recipe_loaded event
+    if discovered.is_some() {
+        let _ = LoopService::append_loop_event(
+            conn,
+            &loop_run.id,
+            "recipe_loaded",
+            &serde_json::json!({"recipe_id": resolved.strategy, "source": resolved.source}),
+        );
     }
 
     // If --start, transition to running and append loop_started event
@@ -768,30 +882,34 @@ pub fn loop_create(
     let mut loop_fields = vec![
         field("id", str_val(&loop_run.id)),
         field("status", str_val(status_str)),
-        field("strategy", str_val(strategy)),
+        field("recipe_id", str_val(&resolved.strategy)),
+        field("recipe_source", str_val(resolved.source)),
+        field("trigger", str_val("manual")),
         field("goal", str_val(goal)),
         field("current_round", int_val(0)),
-        field("max_rounds", int_val(max_rounds)),
+        field("max_rounds", int_val(resolved.max_rounds)),
     ];
     if let Some(key) = task_key {
         loop_fields.push(field("task_key", str_val(key)));
     }
+    if let Some(ref dr) = discovered {
+        loop_fields.push(field(
+            "max_ticks",
+            int_val(dr.recipe.policy.max_ticks as i64),
+        ));
+    }
 
     let next = if start {
-        format!("Run `planeai-cli axi loop tick {short_id}` to dispatch the next step")
+        format!("run `planeai-cli axi loop tick {short_id}` to execute the next recipe step")
     } else {
-        format!("Run `planeai-cli axi loop tick {short_id}` to start and dispatch the next step")
+        format!(
+            "run `planeai-cli axi loop tick {short_id}` to start and execute the next recipe step"
+        )
     };
 
     let fields = vec![
         field("loop", Value::Object(loop_fields)),
-        field(
-            "next_actions",
-            Value::List(vec![
-                next,
-                format!("Run `planeai-cli axi loop observe {short_id}` to inspect state"),
-            ]),
-        ),
+        field("next_actions", Value::List(vec![next])),
     ];
     (render(&fields), 0)
 }
@@ -922,6 +1040,7 @@ pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (Str
 }
 
 pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
     use planeai_core::loop_run::LoopStatus;
     use planeai_core::loop_service::LoopService;
 
@@ -970,7 +1089,15 @@ pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
         loop_run.status = LoopStatus::Running;
     }
 
-    // Append a tick event
+    // Check if this loop has a recipe snapshot in policy_json
+    if let Some(ref policy_val) = loop_run.policy_json {
+        if let Ok(mut snapshot) = serde_json::from_value::<RecipeSnapshot>(policy_val.clone()) {
+            // Recipe-aware tick: delegate to recipe_tick runtime
+            return crate::recipe_tick::tick_recipe(conn, &loop_run.id, &mut snapshot);
+        }
+    }
+
+    // Legacy tick (no recipe) — append a tick event
     let payload = serde_json::json!({});
     let event = match LoopService::append_loop_event(conn, &loop_run.id, "tick", &payload) {
         Ok(e) => e,
@@ -1749,15 +1876,19 @@ fn truncate_desc(s: &str, limit: usize) -> String {
     format!("{}... (truncated, {} chars total)", &s[..end], total)
 }
 
-fn emit_error(msg: &str, help: &[String]) -> String {
+// ─── Recipe Commands (delegated to axi_recipe module) ────────────────────────
+
+pub use crate::axi_recipe::{recipe_ls, recipe_show, recipe_validate};
+
+// ─── TOON Helpers ────────────────────────────────────────────────────────────
+
+pub(crate) fn emit_error(msg: &str, help: &[String]) -> String {
     let mut fields = vec![field("error", str_val(msg))];
     if !help.is_empty() {
         fields.push(field("help", Value::List(help.to_vec())));
     }
     render(&fields)
 }
-
-// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -2267,6 +2398,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Implement auth",
             3,
             false,
@@ -2275,13 +2407,13 @@ mod tests {
         assert!(output.contains("loop:"), "output:\n{output}");
         assert!(output.contains("status: draft"), "output:\n{output}");
         assert!(
-            output.contains("strategy: maker-verifier"),
+            output.contains("recipe_id: maker-verifier"),
             "output:\n{output}"
         );
         assert!(output.contains("goal: Implement auth"), "output:\n{output}");
         assert!(output.contains("max_rounds: 3"), "output:\n{output}");
         assert!(output.contains("current_round: 0"), "output:\n{output}");
-        assert!(output.contains("next_actions[2]:"), "output:\n{output}");
+        assert!(output.contains("next_actions[1]:"), "output:\n{output}");
         assert!(
             output.contains("planeai-cli axi loop tick"),
             "output:\n{output}"
@@ -2301,13 +2433,15 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Build feature",
             5,
             true,
         );
         assert_eq!(code, 0, "output:\n{output}");
         assert!(output.contains("status: running"), "output:\n{output}");
-        assert!(output.contains("max_rounds: 5"), "output:\n{output}");
+        // Recipe's policy overrides CLI max_rounds
+        assert!(output.contains("max_rounds: 3"), "output:\n{output}");
     }
 
     #[test]
@@ -2323,6 +2457,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -2371,6 +2506,7 @@ mod tests {
             None,
             Some("MYA-1"),
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -2385,6 +2521,7 @@ mod tests {
             None,
             Some("NONEXIST-999"),
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -2404,6 +2541,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             0,
             false,
@@ -2427,6 +2565,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Build auth",
             3,
             false,
@@ -2457,13 +2596,14 @@ mod tests {
         let conn = setup_db();
         crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
 
-        // Create a draft loop (no --start)
+        // Create a draft loop with a non-recipe strategy (legacy path)
         let (create_output, _) = loop_create(
             &conn,
             "/tmp/myapp",
             None,
             None,
-            "maker-verifier",
+            "legacy-strategy",
+            None,
             "Goal",
             3,
             false,
@@ -2498,6 +2638,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             true,
@@ -2525,6 +2666,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             true,
@@ -2551,6 +2693,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             true,
@@ -2583,6 +2726,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             true,
@@ -2610,6 +2754,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -2632,6 +2777,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -2657,6 +2803,7 @@ mod tests {
             None,
             None,
             "maker-verifier",
+            None,
             "Goal",
             3,
             false,
@@ -3125,6 +3272,234 @@ mod tests {
         assert!(
             output.contains("worktree_path does not exist"),
             "output:\n{output}"
+        );
+    }
+
+    // ─── Recipe AXI & Tick Runtime Tests ─────────────────────────────────────
+
+    #[test]
+    fn recipe_ls_emits_toon() {
+        let (output, code) = recipe_ls("/tmp");
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("recipes["),
+            "expected recipes table header, output:\n{output}"
+        );
+        assert!(
+            output.contains("maker-verifier"),
+            "expected built-in maker-verifier recipe, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn recipe_show_emits_roles_and_steps() {
+        let (output, code) = recipe_show("maker-verifier", "/tmp");
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("recipe:"),
+            "expected recipe object header, output:\n{output}"
+        );
+        assert!(
+            output.contains("roles["),
+            "expected roles table, output:\n{output}"
+        );
+        assert!(
+            output.contains("steps["),
+            "expected steps table, output:\n{output}"
+        );
+        assert!(
+            output.contains("id: maker-verifier"),
+            "expected recipe id, output:\n{output}"
+        );
+        assert!(
+            output.contains("valid: true"),
+            "expected valid: true, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn recipe_validate_succeeds() {
+        let (output, code) = recipe_validate("maker-verifier", "/tmp");
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("recipe_validation:"),
+            "expected recipe_validation header, output:\n{output}"
+        );
+        assert!(
+            output.contains("valid: true"),
+            "expected valid: true, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn recipe_validate_fails_for_nonexistent() {
+        let (output, code) = recipe_validate("nonexistent", "/tmp");
+        assert_eq!(code, 1, "output:\n{output}");
+        assert!(
+            output.contains("error"),
+            "expected error in output, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn loop_create_with_recipe_stores_snapshot() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            Some("maker-verifier"),
+            "Build auth",
+            3,
+            false,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+
+        let loop_id = extract_loop_id(&output);
+        assert!(
+            !loop_id.is_empty(),
+            "failed to extract loop_id from output:\n{output}"
+        );
+
+        let (obs_output, obs_code) = loop_observe(&conn, &loop_id, 20);
+        assert_eq!(obs_code, 0, "observe output:\n{obs_output}");
+        assert!(
+            obs_output.contains("strategy: maker-verifier"),
+            "expected strategy in observe output:\n{obs_output}"
+        );
+    }
+
+    #[test]
+    fn loop_create_strategy_alias_works() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (output, code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            None,
+            "Build feature",
+            3,
+            false,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("loop:"),
+            "expected loop TOON object, output:\n{output}"
+        );
+        assert!(
+            output.contains("status: draft"),
+            "expected draft status, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn recipe_tick_session_create_returns_not_wired_error() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        // Create a loop with recipe and start=false (draft)
+        let (create_output, create_code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            Some("maker-verifier"),
+            "Implement feature",
+            3,
+            false,
+        );
+        assert_eq!(create_code, 0, "create output:\n{create_output}");
+
+        let loop_id = extract_loop_id(&create_output);
+        assert!(!loop_id.is_empty(), "failed to extract loop_id");
+
+        // First tick: draft->running transition + session.create step returns error
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 1, "tick output:\n{output}");
+        assert!(
+            output.contains("session.create is not yet wired"),
+            "expected not-yet-wired error, output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn recipe_tick_session_prompt_returns_not_wired_error() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, create_code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            Some("maker-verifier"),
+            "Implement feature",
+            3,
+            false,
+        );
+        assert_eq!(create_code, 0, "create output:\n{create_output}");
+
+        let loop_id = extract_loop_id(&create_output);
+        assert!(!loop_id.is_empty(), "failed to extract loop_id");
+
+        // First tick: session.create — fails with not-wired error
+        let (tick1_output, tick1_code) = loop_tick(&conn, &loop_id);
+        assert_eq!(tick1_code, 1, "tick1 output:\n{tick1_output}");
+        assert!(
+            tick1_output.contains("session.create is not yet wired"),
+            "expected session.create not-wired error, output:\n{tick1_output}"
+        );
+    }
+
+    #[test]
+    fn recipe_tick_max_ticks_prevents_runaway() {
+        let conn = setup_db();
+        crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+        let (create_output, create_code) = loop_create(
+            &conn,
+            "/tmp/myapp",
+            None,
+            None,
+            "maker-verifier",
+            Some("maker-verifier"),
+            "Implement feature",
+            3,
+            false,
+        );
+        assert_eq!(create_code, 0, "create output:\n{create_output}");
+
+        let loop_id = extract_loop_id(&create_output);
+        assert!(!loop_id.is_empty(), "failed to extract loop_id");
+
+        // Transition to running so tick_recipe is invoked
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::LoopService;
+        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
+
+        // Set tick_count = max_ticks so next tick is blocked
+        conn.execute(
+            "UPDATE loop_runs SET policy_json = json_set(policy_json, '$.runtime.tick_count', json_extract(policy_json, '$.policy.max_ticks')) WHERE id = ?1",
+            rusqlite::params![loop_id],
+        )
+        .unwrap();
+
+        // Next tick should fail with max_ticks exceeded
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 1, "expected failure code, output:\n{output}");
+        assert!(
+            output.contains("max_ticks"),
+            "expected max_ticks error message, output:\n{output}"
         );
     }
 }

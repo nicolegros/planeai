@@ -25,6 +25,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Provider-agnostic** — works with Kiro, Claude, Copilot, or any CLI agent
 - **Keyboard-first** — command menu (Cmd+K / Ctrl+K), shortcuts for every action
 - **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
+- **Loop recipes** — declarative YAML workflows for multi-agent loops (maker-verifier, plan-implement-review, custom)
 - **Jira integration** — sync issues from Jira Cloud, assign to agents, and write back status changes
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows
