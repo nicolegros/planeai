@@ -278,6 +278,11 @@ impl RecipeService {
                     step.id, step.kind
                 ));
             }
+
+            // Per-kind field validation
+            for problem in step.validate_for_kind() {
+                errors.push(problem);
+            }
         }
 
         // Policy validation
@@ -496,7 +501,7 @@ mod tests {
     #[test]
     fn validate_future_trigger_warns() {
         let mut recipe = RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap();
-        recipe.trigger.kind = TRIGGER_SCHEDULE.to_string();
+        recipe.trigger.kind = "schedule".to_string();
         let result = RecipeService::validate(&recipe, None);
         assert!(result.valid);
         assert!(result.warnings.iter().any(|w| w.contains("schedule")));

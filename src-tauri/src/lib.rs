@@ -1,4 +1,5 @@
 pub mod axi;
+pub mod axi_recipe;
 pub mod bench;
 pub mod cleanup;
 pub mod cli;

@@ -8,13 +8,6 @@ pub const RECIPE_SCHEMA_V1: &str = "planeai.loop.recipe.v1";
 // Supported trigger kinds for v1 execution
 pub const TRIGGER_MANUAL: &str = "manual";
 
-// Recognized but not yet executable trigger kinds
-pub const TRIGGER_SCHEDULE: &str = "schedule";
-pub const TRIGGER_GITHUB_EVENT: &str = "github_event";
-pub const TRIGGER_TASK_EVENT: &str = "task_event";
-pub const TRIGGER_PR_FEEDBACK: &str = "pr_feedback";
-pub const TRIGGER_CI_FAILURE: &str = "ci_failure";
-
 // Supported step kinds for v1 execution
 pub const STEP_LOOP_EVENT: &str = "loop.event";
 pub const STEP_LOOP_STATUS: &str = "loop.status";
@@ -34,14 +27,10 @@ pub const STEP_CONNECTOR_CALL: &str = "connector.call";
 pub const MODE_WRITE: &str = "write";
 pub const MODE_REVIEW: &str = "review";
 pub const MODE_READONLY: &str = "readonly";
-pub const MODE_PLAN: &str = "plan";
-pub const MODE_TRIAGE: &str = "triage";
-pub const MODE_ARBITER: &str = "arbiter";
 
 // Supported isolation values
 pub const ISOLATION_WORKTREE: &str = "worktree";
 pub const ISOLATION_PROJECT: &str = "project";
-pub const ISOLATION_READONLY: &str = "readonly";
 
 // ─── Structs ─────────────────────────────────────────────────────────────────
 
@@ -185,11 +174,11 @@ const V1_TRIGGER_KINDS: &[&str] = &[TRIGGER_MANUAL];
 
 /// Recognized but not yet executable trigger kinds.
 const FUTURE_TRIGGER_KINDS: &[&str] = &[
-    TRIGGER_SCHEDULE,
-    TRIGGER_GITHUB_EVENT,
-    TRIGGER_TASK_EVENT,
-    TRIGGER_PR_FEEDBACK,
-    TRIGGER_CI_FAILURE,
+    "schedule",
+    "github_event",
+    "task_event",
+    "pr_feedback",
+    "ci_failure",
 ];
 
 impl RecipeStep {
@@ -202,6 +191,42 @@ impl RecipeStep {
     pub fn is_recognized(&self) -> bool {
         V1_STEP_KINDS.contains(&self.kind.as_str())
             || FUTURE_STEP_KINDS.contains(&self.kind.as_str())
+    }
+
+    /// Validate that the correct fields are present for the declared step kind.
+    /// Returns a list of problems (empty = valid).
+    pub fn validate_for_kind(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        match self.kind.as_str() {
+            STEP_SESSION_CREATE if self.role.is_none() => {
+                problems.push(format!(
+                    "step '{}': session.create requires 'role'",
+                    self.id
+                ));
+            }
+            STEP_SESSION_PROMPT if self.role.is_none() => {
+                problems.push(format!(
+                    "step '{}': session.prompt requires 'role'",
+                    self.id
+                ));
+            }
+            STEP_HANDOFF_WAIT => {
+                if self.from.is_none() {
+                    problems.push(format!("step '{}': handoff.wait requires 'from'", self.id));
+                }
+                if self.on.is_none() {
+                    problems.push(format!(
+                        "step '{}': handoff.wait requires 'on' mapping",
+                        self.id
+                    ));
+                }
+            }
+            STEP_LOOP_STATUS if self.status.is_none() => {
+                problems.push(format!("step '{}': loop.status requires 'status'", self.id));
+            }
+            _ => {}
+        }
+        problems
     }
 }
 
@@ -290,7 +315,7 @@ mod tests {
     #[test]
     fn trigger_schedule_future() {
         let trigger = RecipeTrigger {
-            kind: TRIGGER_SCHEDULE.into(),
+            kind: "schedule".into(),
         };
         assert!(!trigger.is_v1_executable());
         assert!(trigger.is_recognized());

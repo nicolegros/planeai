@@ -429,6 +429,28 @@ impl LoopService {
         Ok(())
     }
 
+    /// Update the resolved recipe snapshot stored in policy_json.
+    /// Wraps the raw column update with touch_loop semantics so staleness
+    /// detection and future audit hooks work correctly.
+    pub fn update_policy_json(
+        conn: &Connection,
+        id: &str,
+        policy_json: &serde_json::Value,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let json_str = policy_json.to_string();
+        let tx = conn.unchecked_transaction()?;
+        let rows = tx.execute(
+            "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![json_str, now, id],
+        )?;
+        if rows == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // ─── Loop Sessions ───────────────────────────────────────────────────────
 
     pub fn add_loop_session(
@@ -577,6 +599,35 @@ impl LoopService {
             content_json: params.content_json,
             created_at: now,
         })
+    }
+
+    /// Find the most recent accepted handoff artifact for any of the given session IDs.
+    /// Returns (session_id, handoff_status) if found.
+    pub fn find_handoff_for_sessions(
+        conn: &Connection,
+        loop_id: &str,
+        session_ids: &[String],
+    ) -> SqlResult<Option<(String, String)>> {
+        for sid in session_ids {
+            let result = conn.query_row(
+                "SELECT content_json FROM loop_artifacts WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' ORDER BY created_at DESC LIMIT 1",
+                params![loop_id, sid],
+                |row| row.get::<_, Option<String>>(0),
+            );
+            match result {
+                Ok(Some(json_str)) => {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                        if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
+                            return Ok(Some((sid.clone(), status.to_string())));
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(None)
     }
 
     // ─── Handoff Recording (atomic) ──────────────────────────────────────────

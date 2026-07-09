@@ -1,13 +1,47 @@
 //! Recipe tick runtime — executes one recipe step per tick.
 //!
-//! Supports v1 step kinds: session.create, session.prompt, handoff.wait,
-//! loop.status, loop.event, human.wait.
+//! Each step executor returns a [`TickResult`] describing what happened.
+//! The single [`render_tick_result`] function converts it to TOON output,
+//! eliminating repetitive field-construction boilerplate.
 
 use planeai_core::loop_recipe::*;
 use planeai_core::loop_recipe_service::RecipeSnapshot;
 use planeai_core::loop_run::LoopStatus;
 use planeai_core::loop_service::LoopService;
-use planeai_toon::{field, render, str_val, Value};
+use planeai_toon::{field, render, str_val, Field, Value};
+
+// ─── TickResult ──────────────────────────────────────────────────────────────
+
+/// The outcome of executing one recipe step. Converted to TOON at the boundary.
+struct TickResult {
+    step_id: String,
+    step_kind: String,
+    status: String,
+    extra: Vec<Field>,
+    next_actions: Vec<String>,
+}
+
+/// Render a TickResult into TOON output.
+fn render_tick_result(loop_id: &str, recipe_id: &str, result: TickResult) -> (String, i32) {
+    let tick_fields = vec![
+        field("loop_id", str_val(loop_id)),
+        field("recipe_id", str_val(recipe_id)),
+        field("step_id", str_val(&result.step_id)),
+        field("step_kind", str_val(&result.step_kind)),
+        field("status", str_val(&result.status)),
+    ];
+
+    let mut fields = vec![field("loop_tick", Value::Object(tick_fields))];
+    fields.extend(result.extra);
+    fields.push(field("next_actions", Value::List(result.next_actions)));
+    (render(&fields), 0)
+}
+
+fn render_error(msg: &str) -> (String, i32) {
+    (render(&[field("error", str_val(msg))]), 1)
+}
+
+// ─── Main Entry ──────────────────────────────────────────────────────────────
 
 /// Execute one recipe step for the given loop. Returns TOON output.
 pub fn tick_recipe(
@@ -15,11 +49,8 @@ pub fn tick_recipe(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
 ) -> (String, i32) {
-    let _short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
-
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
-        // Transition to failed
         let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Failed);
         let _ = LoopService::append_loop_event(
             conn,
@@ -27,78 +58,71 @@ pub fn tick_recipe(
             "recipe_step_failed",
             &serde_json::json!({"reason": "max_ticks exceeded"}),
         );
-        let fields = vec![
-            field("error", str_val("max_ticks exceeded")),
-            field(
-                "loop_tick",
-                Value::Object(vec![
-                    field("loop_id", str_val(loop_id)),
-                    field("status", str_val("failed")),
-                ]),
-            ),
-        ];
-        return (render(&fields), 1);
+        return (
+            render(&[
+                field("error", str_val("max_ticks exceeded")),
+                field(
+                    "loop_tick",
+                    Value::Object(vec![
+                        field("loop_id", str_val(loop_id)),
+                        field("status", str_val("failed")),
+                    ]),
+                ),
+            ]),
+            1,
+        );
     }
 
     // Find current step
     let step = match find_step(&snapshot.steps, &snapshot.runtime.current_step) {
         Some(s) => s.clone(),
         None => {
-            let fields = vec![field(
-                "error",
-                str_val(&format!(
-                    "recipe step not found: {}",
-                    snapshot.runtime.current_step
-                )),
-            )];
-            return (render(&fields), 1);
+            return render_error(&format!(
+                "recipe step not found: {}",
+                snapshot.runtime.current_step
+            ));
         }
     };
 
     // Check if step kind is v1-executable
     if !step.is_v1_executable() {
-        let mut help = Vec::new();
-        if step.is_recognized() {
-            help.push(format!(
+        let help = if step.is_recognized() {
+            format!(
                 "step kind '{}' is recognized but not executable until a future release",
                 step.kind
-            ));
-        }
-        let fields = vec![
-            field("error", str_val("unsupported recipe step kind")),
-            field("step_id", str_val(&step.id)),
-            field("kind", str_val(&step.kind)),
-            field("help", Value::List(help)),
-        ];
-        return (render(&fields), 1);
+            )
+        } else {
+            format!("step kind '{}' is unknown", step.kind)
+        };
+        return (
+            render(&[
+                field("error", str_val("unsupported recipe step kind")),
+                field("step_id", str_val(&step.id)),
+                field("kind", str_val(&step.kind)),
+                field("help", Value::List(vec![help])),
+            ]),
+            1,
+        );
     }
 
-    // Guard: if the loop is already in an intervention-required status and the
-    // current step would set such a status (loop.status) or wait for human
-    // input (human.wait), return immediately without consuming a tick.
+    // Guard: if the loop is already in an intervention-required status,
+    // don't consume another tick for steps that would set that status.
     if step.kind == STEP_HUMAN_WAIT || step.kind == STEP_LOOP_STATUS {
         if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
             if run.status.is_intervention_required() {
-                let status_str = run.status.as_str();
-                let fields = vec![
-                    field(
-                        "loop_tick",
-                        Value::Object(vec![
-                            field("loop_id", str_val(loop_id)),
-                            field("recipe_id", str_val(&snapshot.recipe_id)),
-                            field("step_id", str_val(&step.id)),
-                            field("step_kind", str_val(&step.kind)),
-                            field("status", str_val(status_str)),
-                        ]),
-                    ),
-                    field(
-                        "next_actions",
-                        Value::List(vec![
-                            "human intervention required before the loop can proceed".to_string(),
-                        ]),
-                    ),
-                ];
-                return (render(&fields), 0);
+                return render_tick_result(
+                    loop_id,
+                    &snapshot.recipe_id,
+                    TickResult {
+                        step_id: step.id.clone(),
+                        step_kind: step.kind.clone(),
+                        status: run.status.as_str().to_string(),
+                        extra: vec![],
+                        next_actions: vec![
+                            "human intervention required before the loop can proceed".into(),
+                        ],
+                    },
+                );
             }
         }
     }
@@ -107,21 +131,19 @@ pub fn tick_recipe(
     snapshot.runtime.tick_count += 1;
 
     // Dispatch by step kind
-    match step.kind.as_str() {
+    let result = match step.kind.as_str() {
         STEP_SESSION_CREATE => exec_session_create(conn, loop_id, snapshot, &step),
         STEP_SESSION_PROMPT => exec_session_prompt(conn, loop_id, snapshot, &step),
         STEP_HANDOFF_WAIT => exec_handoff_wait(conn, loop_id, snapshot, &step),
         STEP_LOOP_STATUS => exec_loop_status(conn, loop_id, snapshot, &step),
         STEP_LOOP_EVENT => exec_loop_event(conn, loop_id, snapshot, &step),
         STEP_HUMAN_WAIT => exec_human_wait(conn, loop_id, snapshot, &step),
-        _ => {
-            let fields = vec![
-                field("error", str_val("unsupported recipe step kind")),
-                field("step_id", str_val(&step.id)),
-                field("kind", str_val(&step.kind)),
-            ];
-            (render(&fields), 1)
-        }
+        _ => return render_error("unsupported recipe step kind"),
+    };
+
+    match result {
+        Ok(tr) => render_tick_result(loop_id, &snapshot.recipe_id, tr),
+        Err(msg) => render_error(&msg),
     }
 }
 
@@ -132,11 +154,10 @@ fn exec_session_create(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
     let role_id = step.role.as_deref().unwrap_or("default");
 
-    // Get role details (clone to avoid borrow conflicts)
     let provider = snapshot
         .roles
         .get(role_id)
@@ -148,27 +169,20 @@ fn exec_session_create(
         .map(|r| r.isolation.clone())
         .unwrap_or_else(|| "worktree".to_string());
 
-    // Render prompt
     let prompt = render_prompt(step.prompt.as_deref().unwrap_or(""), snapshot, loop_id);
-
-    // Record the session creation (we generate an ID; actual session spawn is
-    // done by the orchestrator/daemon — here we just register the intent)
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    // Add loop_session
     let params = planeai_core::loop_service::AddLoopSessionParams {
         loop_id: loop_id.to_string(),
         session_id: session_id.clone(),
         role: role_id.to_string(),
         round: snapshot.runtime.round as i64,
-        provider: Some(provider.to_string()),
+        provider: Some(provider.clone()),
         status: "active".to_string(),
     };
-    if let Err(e) = LoopService::add_loop_session(conn, params) {
-        return (emit_error(&format!("failed to add loop session: {e}")), 1);
-    }
+    LoopService::add_loop_session(conn, params)
+        .map_err(|e| format!("failed to add loop session: {e}"))?;
 
-    // Track in snapshot
     snapshot
         .runtime
         .created_session_ids
@@ -176,71 +190,52 @@ fn exec_session_create(
         .or_default()
         .push(session_id.clone());
 
-    // Transition to observing
     let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Observing);
-
-    // Append event
     let _ = LoopService::append_loop_event(
         conn,
         loop_id,
         "recipe_step_completed",
         &serde_json::json!({
-            "step_id": step.id,
-            "kind": step.kind,
-            "session_id": session_id,
-            "role": role_id,
+            "step_id": step.id, "kind": step.kind,
+            "session_id": session_id, "role": role_id,
         }),
     );
 
-    // Advance to next step
     advance_step(snapshot, step);
+    save_snapshot(conn, loop_id, snapshot)?;
 
-    // Save updated snapshot
-    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-        return (emit_error(&e), 1);
-    }
-
-    let fields = vec![
-        field(
-            "loop_tick",
-            Value::Object(vec![
-                field("loop_id", str_val(loop_id)),
-                field("recipe_id", str_val(&snapshot.recipe_id)),
-                field("step_id", str_val(&step.id)),
-                field("step_kind", str_val(&step.kind)),
-                field("status", str_val("observing")),
-            ]),
-        ),
-        field(
-            "created_sessions",
-            Value::Table {
-                columns: vec![
-                    "id".into(),
-                    "role".into(),
-                    "provider".into(),
-                    "status".into(),
-                    "round".into(),
-                    "isolation".into(),
-                ],
-                rows: vec![vec![
-                    session_id[..std::cmp::min(8, session_id.len())].to_string(),
-                    role_id.to_string(),
-                    provider.to_string(),
-                    "active".to_string(),
-                    snapshot.runtime.round.to_string(),
-                    isolation.to_string(),
-                ]],
-            },
-        ),
-        field("prompt", str_val(&truncate(&prompt, 500))),
-        field(
-            "next_actions",
-            Value::List(vec![format!(
-                "wait for maker handoff, then run `planeai-cli axi loop tick {short_id}`"
-            )]),
-        ),
-    ];
-    (render(&fields), 0)
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![
+            field(
+                "created_sessions",
+                Value::Table {
+                    columns: vec![
+                        "id".into(),
+                        "role".into(),
+                        "provider".into(),
+                        "status".into(),
+                        "round".into(),
+                        "isolation".into(),
+                    ],
+                    rows: vec![vec![
+                        session_id[..std::cmp::min(8, session_id.len())].to_string(),
+                        role_id.to_string(),
+                        provider,
+                        "active".to_string(),
+                        snapshot.runtime.round.to_string(),
+                        isolation,
+                    ]],
+                },
+            ),
+            field("prompt", str_val(&truncate(&prompt, 500))),
+        ],
+        next_actions: vec![format!(
+            "wait for maker handoff, then run `planeai-cli axi loop tick {short_id}`"
+        )],
+    })
 }
 
 fn exec_session_prompt(
@@ -248,77 +243,54 @@ fn exec_session_prompt(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
     let role_id = step.role.as_deref().unwrap_or("default");
 
-    // Find the latest session for this role
-    let session_ids = snapshot
+    let session_id = snapshot
         .runtime
         .created_session_ids
         .get(role_id)
+        .and_then(|ids| ids.last())
         .cloned()
-        .unwrap_or_default();
-
-    let session_id = match session_ids.last() {
-        Some(id) => id.clone(),
-        None => {
-            return (
-                emit_error(&format!(
-                    "no session found for role '{}' — run session.create first",
-                    role_id
-                )),
-                1,
-            );
-        }
-    };
+        .ok_or_else(|| {
+            format!(
+                "no session found for role '{}' — run session.create first",
+                role_id
+            )
+        })?;
 
     let prompt = render_prompt(step.prompt.as_deref().unwrap_or(""), snapshot, loop_id);
 
-    // Append event
     let _ = LoopService::append_loop_event(
         conn,
         loop_id,
         "recipe_step_completed",
         &serde_json::json!({
-            "step_id": step.id,
-            "kind": step.kind,
-            "session_id": session_id,
-            "role": role_id,
+            "step_id": step.id, "kind": step.kind,
+            "session_id": session_id, "role": role_id,
         }),
     );
 
-    // Advance to next step
     advance_step(snapshot, step);
-    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-        return (emit_error(&e), 1);
-    }
+    save_snapshot(conn, loop_id, snapshot)?;
 
-    let fields = vec![
-        field(
-            "loop_tick",
-            Value::Object(vec![
-                field("loop_id", str_val(loop_id)),
-                field("recipe_id", str_val(&snapshot.recipe_id)),
-                field("step_id", str_val(&step.id)),
-                field("step_kind", str_val(&step.kind)),
-                field("status", str_val("observing")),
-                field(
-                    "session_id",
-                    str_val(&session_id[..std::cmp::min(8, session_id.len())]),
-                ),
-                field("role", str_val(role_id)),
-            ]),
-        ),
-        field("prompt", str_val(&truncate(&prompt, 500))),
-        field(
-            "next_actions",
-            Value::List(vec![format!(
-                "run `planeai-cli axi loop tick {short_id}` to continue"
-            )]),
-        ),
-    ];
-    (render(&fields), 0)
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![
+            field(
+                "session_id",
+                str_val(&session_id[..std::cmp::min(8, session_id.len())]),
+            ),
+            field("role", str_val(role_id)),
+            field("prompt", str_val(&truncate(&prompt, 500))),
+        ],
+        next_actions: vec![format!(
+            "run `planeai-cli axi loop tick {short_id}` to continue"
+        )],
+    })
 }
 
 fn exec_handoff_wait(
@@ -326,11 +298,10 @@ fn exec_handoff_wait(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
     let role_id = step.from.as_deref().unwrap_or("default");
 
-    // Check for handoff artifacts for this role's sessions
     let session_ids = snapshot
         .runtime
         .created_session_ids
@@ -338,94 +309,44 @@ fn exec_handoff_wait(
         .cloned()
         .unwrap_or_default();
 
-    // Query loop_artifacts for handoff kind matching any of this role's sessions
-    let mut found_handoff: Option<(String, String)> = None; // (session_id, status)
-    for sid in &session_ids {
-        let query = conn.prepare(
-            "SELECT content_json FROM loop_artifacts WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' ORDER BY created_at DESC LIMIT 1"
-        );
-        if let Ok(mut stmt) = query {
-            if let Ok(Some(json_str)) = stmt.query_row(rusqlite::params![loop_id, sid], |row| {
-                row.get::<_, Option<String>>(0)
-            }) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                    if let Some(status) = val.get("status").and_then(|v| v.as_str()) {
-                        found_handoff = Some((sid.clone(), status.to_string()));
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Use LoopService to find handoff (primary: artifact query)
+    let found_handoff = LoopService::find_handoff_for_sessions(conn, loop_id, &session_ids)
+        .map_err(|e| format!("handoff query failed: {e}"))?;
 
-    // Also check loop_events for handoff_recorded
-    if found_handoff.is_none() {
-        if let Ok(events) = LoopService::list_loop_events(conn, loop_id) {
-            for event in events.iter().rev() {
-                if event.kind == "handoff_recorded" {
-                    if let Some(sid) = event
-                        .payload_json
-                        .get("session_id")
-                        .and_then(|v| v.as_str())
-                    {
-                        if session_ids.iter().any(|s| s == sid) {
-                            let status = event
-                                .payload_json
-                                .get("handoff_status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("completed");
-                            found_handoff = Some((sid.to_string(), status.to_string()));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Fallback: check loop_events for handoff_recorded
+    let found_handoff = match found_handoff {
+        Some(h) => Some(h),
+        None => find_handoff_from_events(conn, loop_id, &session_ids),
+    };
 
     match found_handoff {
         None => {
-            // No handoff yet — stay on this step, return waiting
             let _ = LoopService::append_loop_event(
                 conn,
                 loop_id,
                 "recipe_step_waiting",
                 &serde_json::json!({"step_id": step.id, "waiting_for": "handoff", "role": role_id}),
             );
-            if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-                return (emit_error(&e), 1);
-            }
+            save_snapshot(conn, loop_id, snapshot)?;
 
-            let fields = vec![
-                field(
-                    "loop_tick",
-                    Value::Object(vec![
-                        field("loop_id", str_val(loop_id)),
-                        field("recipe_id", str_val(&snapshot.recipe_id)),
-                        field("step_id", str_val(&step.id)),
-                        field("step_kind", str_val(&step.kind)),
-                        field("status", str_val("observing")),
-                    ]),
-                ),
-                field(
+            Ok(TickResult {
+                step_id: step.id.clone(),
+                step_kind: step.kind.clone(),
+                status: "observing".into(),
+                extra: vec![field(
                     "waiting_for",
                     Value::Object(vec![
                         field("kind", str_val("handoff")),
                         field("role", str_val(role_id)),
                     ]),
-                ),
-                field(
-                    "next_actions",
-                    Value::List(vec![format!(
-                        "{} should record a planeai.handoff.v1 handoff",
-                        role_id
-                    )]),
-                ),
-            ];
-            (render(&fields), 0)
+                )],
+                next_actions: vec![format!(
+                    "{} should record a planeai.handoff.v1 handoff",
+                    role_id
+                )],
+            })
         }
         Some((session_id, handoff_status)) => {
-            // Handoff found — map status to next step via `on` mapping
             let next_step = step
                 .on
                 .as_ref()
@@ -437,56 +358,42 @@ fn exec_handoff_wait(
                 loop_id,
                 "recipe_step_completed",
                 &serde_json::json!({
-                    "step_id": step.id,
-                    "kind": step.kind,
+                    "step_id": step.id, "kind": step.kind,
                     "handoff_status": handoff_status,
-                    "session_id": session_id,
-                    "next_step": next_step,
+                    "session_id": session_id, "next_step": next_step,
                 }),
             );
 
-            // Advance to mapped next step
             if let Some(ref ns) = next_step {
                 snapshot.runtime.current_step = ns.clone();
             } else {
                 advance_step(snapshot, step);
             }
-            if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-                return (emit_error(&e), 1);
-            }
+            save_snapshot(conn, loop_id, snapshot)?;
 
             let next_step_display = next_step.as_deref().unwrap_or("(end)");
 
-            let fields = vec![
-                field(
-                    "loop_tick",
-                    Value::Object(vec![
-                        field("loop_id", str_val(loop_id)),
-                        field("recipe_id", str_val(&snapshot.recipe_id)),
-                        field("step_id", str_val(&step.id)),
-                        field("step_kind", str_val(&step.kind)),
-                        field("status", str_val("observing")),
-                    ]),
-                ),
-                field(
-                    "matched_handoff",
-                    Value::Object(vec![
-                        field(
-                            "session_id",
-                            str_val(&session_id[..std::cmp::min(8, session_id.len())]),
-                        ),
-                        field("status", str_val(&handoff_status)),
-                    ]),
-                ),
-                field("next_step", str_val(next_step_display)),
-                field(
-                    "next_actions",
-                    Value::List(vec![format!(
-                        "run `planeai-cli axi loop tick {short_id}` to apply next step"
-                    )]),
-                ),
-            ];
-            (render(&fields), 0)
+            Ok(TickResult {
+                step_id: step.id.clone(),
+                step_kind: step.kind.clone(),
+                status: "observing".into(),
+                extra: vec![
+                    field(
+                        "matched_handoff",
+                        Value::Object(vec![
+                            field(
+                                "session_id",
+                                str_val(&session_id[..std::cmp::min(8, session_id.len())]),
+                            ),
+                            field("status", str_val(&handoff_status)),
+                        ]),
+                    ),
+                    field("next_step", str_val(next_step_display)),
+                ],
+                next_actions: vec![format!(
+                    "run `planeai-cli axi loop tick {short_id}` to apply next step"
+                )],
+            })
         }
     }
 }
@@ -496,12 +403,11 @@ fn exec_loop_status(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
     let status_str = step.status.as_deref().unwrap_or("observing");
 
-    // Only allow recipe-safe statuses
-    let allowed = [
+    const ALLOWED: &[&str] = &[
         "observing",
         "completed_unreviewed",
         "blocked",
@@ -509,29 +415,18 @@ fn exec_loop_status(
         "failed",
         "cancelled",
     ];
-    if !allowed.contains(&status_str) {
-        return (
-            emit_error(&format!(
-                "recipe cannot set status '{}' — only {:?} are allowed",
-                status_str, allowed
-            )),
-            1,
-        );
+    if !ALLOWED.contains(&status_str) {
+        return Err(format!(
+            "recipe cannot set status '{}' — only {:?} are allowed",
+            status_str, ALLOWED
+        ));
     }
 
-    let new_status = match LoopStatus::parse(status_str) {
-        Some(s) => s,
-        None => {
-            return (
-                emit_error(&format!("unknown loop status: {}", status_str)),
-                1,
-            );
-        }
-    };
+    let new_status = LoopStatus::parse(status_str)
+        .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    if let Err(e) = LoopService::update_loop_status(conn, loop_id, new_status.clone()) {
-        return (emit_error(&format!("failed to update status: {e}")), 1);
-    }
+    LoopService::update_loop_status(conn, loop_id, new_status.clone())
+        .map_err(|e| format!("failed to update status: {e}"))?;
 
     let _ = LoopService::append_loop_event(
         conn,
@@ -540,13 +435,10 @@ fn exec_loop_status(
         &serde_json::json!({"step_id": step.id, "kind": step.kind, "status": status_str}),
     );
 
-    // Do not advance further for terminal statuses
     if !new_status.is_executor_terminal() && !new_status.is_intervention_required() {
         advance_step(snapshot, step);
     }
-    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-        return (emit_error(&e), 1);
-    }
+    save_snapshot(conn, loop_id, snapshot)?;
 
     let next_action = if new_status.is_executor_terminal() {
         "review the loop output before merging".to_string()
@@ -556,21 +448,13 @@ fn exec_loop_status(
         format!("run `planeai-cli axi loop tick {short_id}` to continue")
     };
 
-    let fields = vec![
-        field(
-            "loop_tick",
-            Value::Object(vec![
-                field("loop_id", str_val(loop_id)),
-                field("recipe_id", str_val(&snapshot.recipe_id)),
-                field("step_id", str_val(&step.id)),
-                field("step_kind", str_val(&step.kind)),
-                field("status", str_val(status_str)),
-            ]),
-        ),
-        field("state_changed", Value::Bool(true)),
-        field("next_actions", Value::List(vec![next_action])),
-    ];
-    (render(&fields), 0)
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: status_str.to_string(),
+        extra: vec![field("state_changed", Value::Bool(true))],
+        next_actions: vec![next_action],
+    })
 }
 
 fn exec_loop_event(
@@ -578,7 +462,7 @@ fn exec_loop_event(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let short_id = &loop_id[..std::cmp::min(8, loop_id.len())];
     let event_kind = step.event_kind.as_deref().unwrap_or("recipe_event");
 
@@ -590,29 +474,17 @@ fn exec_loop_event(
     );
 
     advance_step(snapshot, step);
-    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-        return (emit_error(&e), 1);
-    }
+    save_snapshot(conn, loop_id, snapshot)?;
 
-    let fields = vec![
-        field(
-            "loop_tick",
-            Value::Object(vec![
-                field("loop_id", str_val(loop_id)),
-                field("recipe_id", str_val(&snapshot.recipe_id)),
-                field("step_id", str_val(&step.id)),
-                field("step_kind", str_val(&step.kind)),
-                field("event_kind", str_val(event_kind)),
-            ]),
-        ),
-        field(
-            "next_actions",
-            Value::List(vec![format!(
-                "run `planeai-cli axi loop tick {short_id}` to continue"
-            )]),
-        ),
-    ];
-    (render(&fields), 0)
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field("event_kind", str_val(event_kind))],
+        next_actions: vec![format!(
+            "run `planeai-cli axi loop tick {short_id}` to continue"
+        )],
+    })
 }
 
 fn exec_human_wait(
@@ -620,7 +492,7 @@ fn exec_human_wait(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
-) -> (String, i32) {
+) -> Result<TickResult, String> {
     let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::NeedsHuman);
     let _ = LoopService::append_loop_event(
         conn,
@@ -629,30 +501,15 @@ fn exec_human_wait(
         &serde_json::json!({"step_id": step.id, "kind": step.kind}),
     );
 
-    // Do not advance — human must intervene
-    if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
-        return (emit_error(&e), 1);
-    }
+    save_snapshot(conn, loop_id, snapshot)?;
 
-    let fields = vec![
-        field(
-            "loop_tick",
-            Value::Object(vec![
-                field("loop_id", str_val(loop_id)),
-                field("recipe_id", str_val(&snapshot.recipe_id)),
-                field("step_id", str_val(&step.id)),
-                field("step_kind", str_val(&step.kind)),
-                field("status", str_val("needs_human")),
-            ]),
-        ),
-        field(
-            "next_actions",
-            Value::List(vec![
-                "human review required before the loop can proceed".to_string()
-            ]),
-        ),
-    ];
-    (render(&fields), 0)
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "needs_human".into(),
+        extra: vec![],
+        next_actions: vec!["human review required before the loop can proceed".to_string()],
+    })
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -661,91 +518,116 @@ fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep> {
     steps.iter().find(|s| s.id == id)
 }
 
-/// Advance to the next step (sequential ordering in steps vec).
+/// Advance to the next step (explicit `next` field, or sequential).
 fn advance_step(snapshot: &mut RecipeSnapshot, current: &RecipeStep) {
-    // If step has explicit `next`, use it
     if let Some(ref next) = current.next {
         snapshot.runtime.current_step = next.clone();
         return;
     }
-    // Otherwise advance sequentially
     let idx = snapshot.steps.iter().position(|s| s.id == current.id);
     if let Some(i) = idx {
         if i + 1 < snapshot.steps.len() {
             snapshot.runtime.current_step = snapshot.steps[i + 1].id.clone();
         }
-        // else: stay on current (terminal)
     }
 }
 
-/// Save the updated snapshot back to policy_json.
+/// Save the updated snapshot back to policy_json via LoopService.
 fn save_snapshot(
     conn: &rusqlite::Connection,
     loop_id: &str,
     snapshot: &RecipeSnapshot,
 ) -> Result<(), String> {
-    let json_str = serde_json::to_string(snapshot)
-        .map_err(|e| format!("failed to serialize snapshot: {e}"))?;
-    conn.execute(
-        "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
-        rusqlite::params![json_str, chrono::Utc::now().to_rfc3339(), loop_id],
-    )
-    .map_err(|e| format!("failed to persist snapshot: {e}"))?;
-    Ok(())
+    let json_val =
+        serde_json::to_value(snapshot).map_err(|e| format!("failed to serialize snapshot: {e}"))?;
+    LoopService::update_policy_json(conn, loop_id, &json_val)
+        .map_err(|e| format!("failed to persist snapshot: {e}"))
 }
 
-/// Simple template rendering for recipe prompts.
+/// Fallback handoff discovery from loop_events (for backward compat).
+fn find_handoff_from_events(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+    session_ids: &[String],
+) -> Option<(String, String)> {
+    let events = LoopService::list_loop_events(conn, loop_id).ok()?;
+    for event in events.iter().rev() {
+        if event.kind == "handoff_recorded" {
+            if let Some(sid) = event
+                .payload_json
+                .get("session_id")
+                .and_then(|v| v.as_str())
+            {
+                if session_ids.iter().any(|s| s == sid) {
+                    let status = event
+                        .payload_json
+                        .get("handoff_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("completed");
+                    return Some((sid.to_string(), status.to_string()));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Single-pass template rendering for recipe prompts.
+///
+/// Substitutes variables from a flat map, handles simple `{% if %}` conditionals
+/// for absent keys, and renders knowledge files.
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
+    // Build substitution map
+    let mut vars: Vec<(&str, String)> = Vec::new();
+    for (key, value) in &snapshot.inputs {
+        vars.push((key.as_str(), value.clone()));
+    }
+
     let mut result = template.to_string();
 
-    // Replace all input variables generically (support both "{{ var }}" and "{{var}}" syntax)
-    for (key, value) in &snapshot.inputs {
+    // 1. Remove conditional blocks for ABSENT inputs (before substitution)
+    let present_keys: std::collections::HashSet<&str> =
+        snapshot.inputs.keys().map(|k| k.as_str()).collect();
+    while let Some(start) = result.find("{% if inputs.") {
+        let after = start + "{% if inputs.".len();
+        let Some(key_end) = result[after..].find(" %}") else {
+            break;
+        };
+        let key = result[after..after + key_end].to_string();
+        let endif_tag = "{% endif %}";
+        let Some(endif_offset) = result[start..].find(endif_tag) else {
+            break;
+        };
+
+        if present_keys.contains(key.as_str()) {
+            // Key is present: strip the if/endif delimiters, keep content
+            let block_end = start + endif_offset + endif_tag.len();
+            let if_close = start + "{% if inputs.".len() + key_end + " %}".len();
+            let content = &result[if_close..start + endif_offset];
+            let content = content.to_string();
+            result = format!("{}{}{}", &result[..start], content, &result[block_end..]);
+        } else {
+            // Key is absent: remove the entire block
+            let block_end = start + endif_offset + endif_tag.len();
+            result = format!("{}{}", &result[..start], &result[block_end..]);
+        }
+    }
+
+    // 2. Substitute input variables
+    for (key, value) in &vars {
         let spaced = format!("{{{{ inputs.{} }}}}", key);
         let compact = format!("{{{{inputs.{}}}}}", key);
         result = result.replace(&spaced, value);
         result = result.replace(&compact, value);
-
-        // Handle conditional blocks for this input (remove delimiters since value is present)
-        let if_spaced = format!("{{% if inputs.{} %}}", key);
-        let if_compact = format!("{{%if inputs.{}%}}", key);
-        result = result.replace(&if_spaced, "");
-        result = result.replace(&if_compact, "");
-    }
-    // Remove conditional blocks for inputs that are NOT present
-    let all_input_keys: Vec<&str> = snapshot.inputs.keys().map(|k| k.as_str()).collect();
-    loop {
-        let if_prefix = "{% if inputs.";
-        let Some(start) = result.find(if_prefix) else {
-            break;
-        };
-        let after_prefix = start + if_prefix.len();
-        let Some(key_end) = result[after_prefix..].find(" %}") else {
-            break;
-        };
-        let key = &result[after_prefix..after_prefix + key_end];
-        if all_input_keys.contains(&key) {
-            break;
-        }
-        let block_start = start;
-        let endif_tag = "{% endif %}";
-        if let Some(endif_offset) = result[block_start..].find(endif_tag) {
-            let block_end = block_start + endif_offset + endif_tag.len();
-            result = format!("{}{}", &result[..block_start], &result[block_end..]);
-        } else {
-            break;
-        }
     }
 
-    // Remove endif tags left over from satisfied conditionals (must be after unsatisfied-block removal)
-    result = result.replace("{% endif %}", "");
-    result = result.replace("{%endif%}", "");
-
+    // 3. Substitute built-in variables
     result = result.replace("{{ loop.id }}", loop_id);
     result = result.replace("{{loop.id}}", loop_id);
     result = result.replace("{{ recipe.id }}", &snapshot.recipe_id);
     result = result.replace("{{recipe.id}}", &snapshot.recipe_id);
 
-    // Knowledge files
+    // 4. Knowledge files
     let knowledge_str = if snapshot.knowledge.files.is_empty() {
         "(none)".to_string()
     } else {
@@ -765,18 +647,13 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
 
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else {
-        let end = s
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= max)
-            .last()
-            .unwrap_or(0);
-        format!("{}...", &s[..end])
+        return s.to_string();
     }
-}
-
-fn emit_error(msg: &str) -> String {
-    render(&[field("error", str_val(msg))])
+    let end = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max)
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..end])
 }
