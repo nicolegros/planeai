@@ -15,12 +15,14 @@
   import TaskPanel from "./TaskPanel.svelte";
   import JiraSidebarSection from "./JiraSidebarSection.svelte";
   import AssignJiraDialog from "./AssignJiraDialog.svelte";
+  import LoopGroup from "./LoopGroup.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as jiraTaskStore from "../lib/jira-task-store.svelte";
+  import * as loopStore from "../lib/loop-store.svelte";
 
   interface Props {
     renamingSessionId: string | null;
@@ -37,9 +39,13 @@
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
     onAssignJiraTask?: (jiraTaskKey: string) => void;
+    onSelectLoop?: (loopId: string) => void;
+    onTickLoop?: (loopId: string) => void;
+    onStopLoop?: (loopId: string) => void;
+    selectedLoopId?: string | null;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onTickLoop, onStopLoop, selectedLoopId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -50,6 +56,9 @@
   const tasksByProject = $derived(taskStore.getTasksByProject());
   const jiraTasks = $derived(jiraTaskStore.getJiraTasks());
   const jiraChildCounts = $derived(jiraTaskStore.getChildCounts());
+
+  // Aggregate all loops across all projects
+  const allLoops = $derived(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)));
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -464,6 +473,15 @@
         <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
     {:else}
+      <!-- Loop runs section (above projects) -->
+      <LoopGroup
+        loops={allLoops}
+        {selectedLoopId}
+        onSelectLoop={(id) => onSelectLoop?.(id)}
+        onTick={(id) => onTickLoop?.(id)}
+        onStop={(id) => onStopLoop?.(id)}
+      />
+
       {#each visibleProjects as project (project.id)}
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {@const statusGroups = groupByStatus(projectTasks)}

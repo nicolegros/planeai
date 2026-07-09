@@ -302,6 +302,34 @@ Performance is critical — planeai is a real-time terminal multiplexer. The UI 
 
 See `docs/adr/` for recorded decisions.
 
+## Loop Runs UI
+
+The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding UI surface for human visibility and control.
+
+### Entry points
+
+- **Sidebar**: `LoopGroup` section renders above projects. Shows all loops across projects with status dots, round counters, and quick action buttons (tick, stop).
+- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal), verifier runs (pass/fail), artifacts (copyable path, open in editor), and recent events timeline.
+- **Create form**: `Cmd+N` → `l` opens `LoopForm` — goal, recipe picker, task link, max rounds, draft checkbox. Keyboard-driven (g=goal, d=toggle draft, Mod+Enter=submit, Esc=cancel).
+- **Actions**: Refresh, Tick (fire-and-forget), Stop from the dashboard. Quick tick/stop from sidebar hover.
+
+### State management
+
+- `src/lib/loop-store.svelte.ts` — reactive store with `refreshAllLoops()`, `setActiveLoopId()`, and `startLoopEventListener()`.
+- Backend emits `loop-state-changed` Tauri event on mutations (create, tick, stop). Frontend listens and auto-refreshes.
+
+### Backend commands
+
+Six async Tauri commands in `src-tauri/src/commands/loops.rs`:
+- `list_loop_runs(project_id)` → `Vec<LoopRunSummary>`
+- `get_loop_run_detail(loop_id)` → `LoopRunDetail` (sessions, events, artifacts, verifier runs)
+- `list_loop_recipes(project_id)` → `Vec<RecipeSummary>`
+- `create_loop_run(params)` → `LoopRunSummary`
+- `tick_loop(loop_id)` → fire-and-forget tick
+- `stop_loop(loop_id)` → transition to cancelled
+
+All commands use `blocking()` for DB access to avoid blocking the main thread.
+
 ## Adding a new ui/ primitive
 
 1. Create `src/components/ui/MyComponent.svelte`

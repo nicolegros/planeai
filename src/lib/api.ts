@@ -13,6 +13,9 @@ import type {
   JiraStatus,
   SyncResult,
   JiraTasksResponse,
+  LoopRunSummary,
+  LoopRunDetail,
+  RecipeSummary,
 } from "./types";
 import type { AppConfig } from "./settings.svelte";
 
@@ -267,4 +270,20 @@ export const sessionLogs = {
     invoke<number[]>("read_session_log_chunk", { path, offset, length }),
   openFolder: (path: string) => invoke("open_session_log_folder", { path }),
   delete: (sessionId: string) => invoke("delete_session_log", { sessionId }),
+};
+
+export const loops = {
+  list: (projectId: string) => invoke<LoopRunSummary[]>("list_loop_runs", { projectId }),
+  detail: (loopId: string) => invoke<LoopRunDetail>("get_loop_run_detail", { loopId }),
+  recipes: (projectId: string) => invoke<RecipeSummary[]>("list_loop_recipes", { projectId }),
+  create: (params: {
+    projectId: string;
+    goal: string;
+    recipeId: string;
+    taskKey?: string | null;
+    maxRounds?: number | null;
+    start: boolean;
+  }) => invoke<LoopRunSummary>("create_loop_run", params),
+  tick: (loopId: string) => invoke("tick_loop", { loopId }),
+  stop: (loopId: string) => invoke("stop_loop", { loopId }),
 };
