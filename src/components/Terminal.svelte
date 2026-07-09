@@ -33,6 +33,7 @@
   let fitAddon: FitAddon;
   let webglAddon: WebglAddon | null = null;
   let attached = $state(false);
+  let opened = $state(false);
   let lastSentDims: { cols: number; rows: number } | null = null;
 
   const SCROLLBACK_LINES = 20_000;
@@ -60,6 +61,22 @@
   }
 
   let termBg = $state("#000");
+
+  // ── Font-ready guard ────────────────────────────────────────────────────
+  // xterm.js measures character cells the moment term.open() is called and
+  // bakes those metrics into the WebGL texture atlas. If the configured font
+  // hasn't loaded yet, the atlas is built from a fallback font and glyphs
+  // appear garbled until a resize forces a re-measure. We wait for the font
+  // to be ready before opening the terminal to prevent this.
+  async function waitForFont(family: string, size: number): Promise<void> {
+    try {
+      // Try loading the specific font first — fast path for web fonts
+      await document.fonts.load(`${size}px "${family}"`);
+    } catch {
+      // Fallback: wait for all fonts to settle
+      await document.fonts.ready;
+    }
+  }
 
   onMount(() => {
     const s = getSettings();
@@ -99,9 +116,15 @@
       );
     }
 
-    term.open(containerEl);
-
-    fitAddon.fit();
+    // Wait for the terminal font to load before opening. This ensures xterm
+    // measures character cells with the correct font, preventing garbled glyphs
+    // in the WebGL texture atlas.
+    waitForFont(s.terminal.font_family, s.terminal.font_size).then(() => {
+      if (!containerEl) return; // guard against unmount during await
+      term.open(containerEl);
+      opened = true;
+      fitAddon.fit();
+    });
 
     // ── Paste via native event (avoids clipboard permission prompt) ──────
     containerEl.addEventListener("paste", (e: ClipboardEvent) => {
@@ -297,7 +320,7 @@
   });
 
   $effect(() => {
-    if (!term) return;
+    if (!term || !opened) return;
     if (visible) {
       if (!webglAddon) {
         try {
@@ -308,9 +331,18 @@
           });
           term.loadAddon(addon);
           webglAddon = addon;
+          // Force a fresh texture atlas after loading the WebGL addon so the
+          // glyph cache is built with the correct, fully-loaded font metrics.
+          webglAddon.clearTextureAtlas();
         } catch {
           // WebGL not available, use default canvas renderer
         }
+      } else {
+        // The WebGL addon's texture atlas can become stale while the terminal
+        // is hidden (browser may evict GPU textures for off-screen canvases,
+        // or font subsystem state may shift). Clear and rebuild the atlas on
+        // every visibility restore to prevent garbled glyphs.
+        webglAddon.clearTextureAtlas();
       }
       // Double-rAF ensures browser has fully reflowed after removing `hidden`.
       // Then unconditionally fit + send pty.resize so the PTY always has correct
@@ -354,6 +386,9 @@
     term.options.fontSize = font_size;
     term.options.fontFamily = terminalFontStack(font_family);
     term.options.macOptionIsMeta = option_as_meta;
+    // Rebuild the WebGL texture atlas after font/theme changes so glyphs
+    // are rendered with the new font metrics and colors.
+    if (webglAddon) webglAddon.clearTextureAtlas();
     if (fitAddon) fitAddon.fit();
   });
 
