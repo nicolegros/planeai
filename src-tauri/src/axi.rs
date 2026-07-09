@@ -2999,60 +2999,7 @@ mod tests {
         project_path: &str,
         worktree_path: Option<&str>,
     ) -> (String, String) {
-        use planeai_core::loop_run::LoopStatus;
-        use planeai_core::loop_service::{AddLoopSessionParams, CreateLoopParams, LoopService};
-
-        let project = crate::db::create_project(conn, "testapp", project_path).unwrap();
-
-        let loop_run = LoopService::create_loop(
-            conn,
-            CreateLoopParams {
-                project_id: project.id.clone(),
-                task_key: None,
-                created_by_session_id: None,
-                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
-                goal: "Test verify".into(),
-                max_rounds: 3,
-                policy_json: None,
-                budget_json: None,
-            },
-        )
-        .unwrap();
-
-        LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
-
-        let session_id = "aabbccdd-1111-2222-3333-444455556666".to_string();
-        crate::db::create_session_with_id(
-            conn,
-            &session_id,
-            &project.id,
-            "Maker",
-            None,
-            "main",
-            worktree_path,
-            Some("claude"),
-            "daemon",
-            true,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-
-        LoopService::add_loop_session(
-            conn,
-            AddLoopSessionParams {
-                loop_id: loop_run.id.clone(),
-                session_id: session_id.clone(),
-                role: "maker".to_string(),
-                round: 1,
-                provider: Some("claude".to_string()),
-                status: "running".to_string(),
-            },
-        )
-        .unwrap();
-
-        (loop_run.id, session_id)
+        planeai_core::test_fixtures::setup_loop_with_session(conn, project_path, worktree_path)
     }
 
     #[test]

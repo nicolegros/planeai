@@ -16,6 +16,9 @@ pub mod template;
 pub mod text;
 pub mod verifier;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_fixtures;
+
 use std::path::PathBuf;
 
 const APP_ID: &str = "ca.nicolegros.planeai";
