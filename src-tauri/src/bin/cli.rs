@@ -189,6 +189,28 @@ enum AxiLoopAction {
         #[command(subcommand)]
         action: AxiLoopHandoffAction,
     },
+    /// Run a verifier gate command and persist the result
+    Verify {
+        /// Loop ID (prefix match supported)
+        #[arg(long, alias = "loop")]
+        loop_id: String,
+        /// Session ID (prefix match supported)
+        #[arg(long)]
+        session: String,
+        /// Verifier name (e.g., "rust-tests", "eslint")
+        #[arg(long)]
+        name: String,
+        /// Command to execute (run in shell). This is a trusted human/recipe-authored
+        /// command — do not pass agent-generated strings.
+        #[arg(long)]
+        command: String,
+        /// Timeout in milliseconds (default: 600000 = 10 min). Use 0 for no timeout.
+        #[arg(long, default_value_t = 600_000)]
+        timeout_ms: u64,
+        /// Maximum output bytes to capture (default: 10MB). Larger output is truncated.
+        #[arg(long, default_value_t = 10_485_760)]
+        max_output_bytes: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1140,6 +1162,14 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
                 path,
             } => planeai::axi::loop_handoff_record(conn, &loop_id, &session, &path, cwd),
         },
+        AxiLoopAction::Verify {
+            loop_id,
+            session,
+            name,
+            command,
+            timeout_ms,
+            max_output_bytes,
+        } => planeai::axi::loop_verify(conn, &loop_id, &session, &name, &command, timeout_ms, max_output_bytes),
     };
     print!("{output}");
     code

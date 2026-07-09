@@ -14,6 +14,7 @@ pub mod session_launch;
 pub mod task;
 pub mod template;
 pub mod text;
+pub mod verifier;
 
 use std::path::PathBuf;
 

@@ -1552,6 +1552,155 @@ fn resolve_loop(
     }
 }
 
+// ─── Verify ──────────────────────────────────────────────────────────────────
+
+/// Run a verifier gate command and persist the result to the loop.
+///
+/// This is a thin AXI wrapper around `planeai_core::verifier::run_verifier_gate`.
+/// It resolves the loop/session, builds a VerifyGateRequest, calls the primitive,
+/// and renders the result as TOON.
+pub fn loop_verify(
+    conn: &rusqlite::Connection,
+    loop_id_arg: &str,
+    session_arg: &str,
+    name: &str,
+    command: &str,
+    timeout_ms: u64,
+    max_output_bytes: usize,
+) -> (String, i32) {
+    use planeai_core::loop_service::LoopService;
+    use planeai_core::verifier::{self, VerifyGateRequest};
+
+    // 1. Resolve loop
+    let loop_run = match resolve_loop(conn, loop_id_arg) {
+        Ok(r) => r,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // 2. Resolve session within the loop
+    let loop_sessions = match LoopService::list_loop_sessions(conn, &loop_run.id) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    let session = match resolve_loop_session(&loop_sessions, session_arg) {
+        Ok(s) => s,
+        Err(e) => return (emit_error(&e, &[]), 1),
+    };
+
+    // 3. Resolve project path for artifact root
+    let project_path = match db::get_project(conn, &loop_run.project_id) {
+        Ok(Some(p)) => p.path,
+        Ok(None) => {
+            return (
+                emit_error("project not found for this loop", &[]),
+                1,
+            )
+        }
+        Err(e) => return (emit_error(&e.to_string(), &[]), 1),
+    };
+
+    // 4. Resolve session worktree_path
+    let session_worktree_path = db::get_session(conn, &session.session_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.worktree_path)
+        .filter(|wt| !wt.is_empty());
+
+    // 5. Build request and call the structured primitive
+    let request = VerifyGateRequest {
+        loop_id: loop_run.id.clone(),
+        session_id: session.session_id.clone(),
+        name: name.to_string(),
+        command: command.to_string(),
+        project_path,
+        session_worktree_path,
+        timeout_ms,
+        max_output_bytes,
+    };
+
+    match verifier::run_verifier_gate(conn, request) {
+        Ok(result) => render_verify_result(&result),
+        Err(e) => render_verify_error(&e, &loop_run.id, &session.session_id),
+    }
+}
+
+fn render_verify_result(result: &planeai_core::verifier::VerifyGateResult) -> (String, i32) {
+    use planeai_core::verifier::VerifierStatus;
+
+    let short_loop = &result.loop_id[..std::cmp::min(8, result.loop_id.len())];
+    let short_session = &result.session_id[..std::cmp::min(8, result.session_id.len())];
+
+    let mut result_fields = vec![field(
+        "verifier",
+        Value::Object(vec![
+            field("id", str_val(&result.verifier_run_id)),
+            field("loop_id", str_val(&result.loop_id)),
+            field("session_id", str_val(&result.session_id)),
+            field("name", str_val(&result.name)),
+            field("status", str_val(result.status.as_str())),
+            field("exit_code", match result.exit_code {
+                Some(c) => int_val(c as i64),
+                None => Value::Null,
+            }),
+            field("output_path", match &result.output_path {
+                Some(p) => str_val(p),
+                None => Value::Null,
+            }),
+        ]),
+    )];
+
+    let next_actions = match result.status {
+        VerifierStatus::Pass => vec![
+            format!("run `planeai-cli axi loop observe {short_loop}` to check overall loop state"),
+            format!("run `planeai-cli axi loop tick {short_loop}` to advance the loop"),
+        ],
+        VerifierStatus::Fail => vec![
+            format!("inspect output at: {}", result.output_path.as_deref().unwrap_or("(not written)")),
+            format!("fix the issue and re-run `planeai-cli axi loop verify --loop-id {short_loop} --session {short_session} --name {} --command \"...\"`", result.name),
+        ],
+        VerifierStatus::Error => vec![
+            format!("check command syntax and working directory"),
+            format!("working directory was: {}", result.cwd),
+        ],
+    };
+    result_fields.push(field("next_actions", Value::List(next_actions)));
+
+    let exit = if result.status == VerifierStatus::Pass { 0 } else { 1 };
+    (render(&result_fields), exit)
+}
+
+fn render_verify_error(
+    err: &planeai_core::verifier::VerifyGateError,
+    _loop_id: &str,
+    _session_id: &str,
+) -> (String, i32) {
+    use planeai_core::verifier::VerifyGateError;
+
+    match err {
+        VerifyGateError::CwdUnavailable {
+            reason,
+            session_id: sid,
+            loop_id: lid,
+        } => {
+            let fields = vec![
+                field("error", str_val("verifier working directory unavailable")),
+                field("loop_id", str_val(lid)),
+                field("session_id", str_val(sid)),
+                field("details", Value::List(vec![reason.clone()])),
+                field(
+                    "help",
+                    Value::List(vec![
+                        "recreate the session worktree or run verification against a valid loop session".to_string(),
+                    ]),
+                ),
+            ];
+            (render(&fields), 1)
+        }
+        _ => (emit_error(&err.to_string(), &[]), 1),
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn task_detail_object(task: &Task) -> Value {
@@ -2841,5 +2990,184 @@ mod tests {
 
         std::mem::forget(dir);
         std::mem::forget(other_dir);
+    }
+
+    // ─── Verifier Gate Tests ─────────────────────────────────────────────────
+
+    fn create_test_loop_with_session_in_dir(
+        conn: &rusqlite::Connection,
+        project_path: &str,
+        worktree_path: Option<&str>,
+    ) -> (String, String) {
+        use planeai_core::loop_run::LoopStatus;
+        use planeai_core::loop_service::{AddLoopSessionParams, CreateLoopParams, LoopService};
+
+        let project = crate::db::create_project(conn, "testapp", project_path).unwrap();
+
+        let loop_run = LoopService::create_loop(
+            conn,
+            CreateLoopParams {
+                project_id: project.id.clone(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: planeai_core::loop_run::LoopStrategy::new("maker-verifier"),
+                goal: "Test verify".into(),
+                max_rounds: 3,
+                policy_json: None,
+                budget_json: None,
+            },
+        )
+        .unwrap();
+
+        LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+
+        let session_id = "aabbccdd-1111-2222-3333-444455556666".to_string();
+        crate::db::create_session_with_id(
+            conn,
+            &session_id,
+            &project.id,
+            "Maker",
+            None,
+            "main",
+            worktree_path,
+            Some("claude"),
+            "daemon",
+            true,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        LoopService::add_loop_session(
+            conn,
+            AddLoopSessionParams {
+                loop_id: loop_run.id.clone(),
+                session_id: session_id.clone(),
+                role: "maker".to_string(),
+                round: 1,
+                provider: Some("claude".to_string()),
+                status: "running".to_string(),
+            },
+        )
+        .unwrap();
+
+        (loop_run.id, session_id)
+    }
+
+    #[test]
+    fn verify_successful_command_renders_toon_pass() {
+        let conn = setup_loop_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let (loop_id, session_id) =
+            create_test_loop_with_session_in_dir(&conn, &project_path, None);
+
+        let (output, code) = loop_verify(
+            &conn,
+            &loop_id[..8],
+            &session_id[..8],
+            "echo-test",
+            "echo hello",
+            planeai_core::verifier::DEFAULT_TIMEOUT_MS,
+            planeai_core::verifier::DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(output.contains("verifier:"), "output:\n{output}");
+        assert!(output.contains("name: echo-test"), "output:\n{output}");
+        assert!(output.contains("status: pass"), "output:\n{output}");
+        assert!(output.contains("exit_code: 0"), "output:\n{output}");
+        assert!(output.contains("output_path:"), "output:\n{output}");
+        assert!(output.contains("next_actions[2]:"), "output:\n{output}");
+        assert!(output.contains("planeai-cli axi loop observe"), "output:\n{output}");
+    }
+
+    #[test]
+    fn verify_failing_command_renders_toon_fail() {
+        let conn = setup_loop_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let (loop_id, session_id) =
+            create_test_loop_with_session_in_dir(&conn, &project_path, None);
+
+        let (output, code) = loop_verify(
+            &conn,
+            &loop_id[..8],
+            &session_id[..8],
+            "failing-test",
+            "exit 42",
+            planeai_core::verifier::DEFAULT_TIMEOUT_MS,
+            planeai_core::verifier::DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        assert_eq!(code, 1, "output:\n{output}");
+        assert!(output.contains("status: fail"), "output:\n{output}");
+        assert!(output.contains("exit_code: 42"), "output:\n{output}");
+        assert!(output.contains("inspect output at:"), "output:\n{output}");
+    }
+
+    #[test]
+    fn verify_missing_loop_returns_error() {
+        let conn = setup_loop_db();
+        let (output, code) = loop_verify(
+            &conn,
+            "nonexistent",
+            "some-session",
+            "test",
+            "echo hi",
+            planeai_core::verifier::DEFAULT_TIMEOUT_MS,
+            planeai_core::verifier::DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        assert_eq!(code, 1);
+        assert!(output.contains("error:"), "output:\n{output}");
+        assert!(output.contains("loop not found"), "output:\n{output}");
+    }
+
+    #[test]
+    fn verify_missing_session_returns_error() {
+        let conn = setup_loop_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let (loop_id, _) = create_test_loop_with_session_in_dir(&conn, &project_path, None);
+
+        let (output, code) = loop_verify(
+            &conn,
+            &loop_id[..8],
+            "nonexistent",
+            "test",
+            "echo hi",
+            planeai_core::verifier::DEFAULT_TIMEOUT_MS,
+            planeai_core::verifier::DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        assert_eq!(code, 1);
+        assert!(output.contains("error:"), "output:\n{output}");
+        assert!(output.contains("session not found"), "output:\n{output}");
+    }
+
+    #[test]
+    fn verify_missing_worktree_returns_cwd_unavailable_error() {
+        let conn = setup_loop_db();
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_string_lossy().to_string();
+        let (loop_id, session_id) =
+            create_test_loop_with_session_in_dir(&conn, &project_path, Some("/nonexistent/wt"));
+
+        let (output, code) = loop_verify(
+            &conn,
+            &loop_id[..8],
+            &session_id[..8],
+            "test",
+            "echo hi",
+            planeai_core::verifier::DEFAULT_TIMEOUT_MS,
+            planeai_core::verifier::DEFAULT_MAX_OUTPUT_BYTES,
+        );
+        assert_eq!(code, 1);
+        assert!(
+            output.contains("verifier working directory unavailable"),
+            "output:\n{output}"
+        );
+        assert!(
+            output.contains("worktree_path does not exist"),
+            "output:\n{output}"
+        );
     }
 }

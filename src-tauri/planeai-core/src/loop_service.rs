@@ -696,6 +696,47 @@ impl LoopService {
         Ok(())
     }
 
+    /// Atomically complete a verifier run: update status/exit_code/output_path
+    /// AND append a verifier_completed event in one transaction.
+    ///
+    /// Fails if the verifier run or loop does not exist. On failure, no partial
+    /// state is written.
+    pub fn complete_verifier_run(
+        conn: &Connection,
+        id: &str,
+        status: &str,
+        exit_code: Option<i32>,
+        output_path: Option<&str>,
+        event_payload: &serde_json::Value,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let payload_str = event_payload.to_string();
+        let tx = conn.unchecked_transaction()?;
+
+        // Look up the loop_id
+        let loop_id: String = tx.query_row(
+            "SELECT loop_id FROM verifier_runs WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+
+        // Update verifier_run
+        tx.execute(
+            "UPDATE verifier_runs SET status = ?1, exit_code = ?2, output_path = ?3, finished_at = ?4 WHERE id = ?5",
+            params![status, exit_code, output_path, now, id],
+        )?;
+
+        // Append verifier_completed event
+        tx.execute(
+            "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'verifier_completed', ?3)",
+            params![loop_id, now, payload_str],
+        )?;
+
+        Self::touch_loop(&tx, &loop_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ─── Private helpers ─────────────────────────────────────────────────────
 
     fn row_to_loop_run(row: &rusqlite::Row) -> rusqlite::Result<Result<LoopRun, LoopServiceError>> {

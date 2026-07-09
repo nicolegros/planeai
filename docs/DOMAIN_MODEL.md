@@ -294,6 +294,20 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 
 **Module:** `planeai_core::loop_service::LoopService` — migrated via `LoopService::migrate(conn)` (called from each binary's DB migration chain).
 
+**Execution primitive:** `planeai_core::verifier::run_verifier_gate(conn, request)` — a structured, reusable operation that both the AXI CLI and the future recipe runtime consume. Returns `Result<VerifyGateResult, VerifyGateError>`.
+
+**AXI CLI:** `planeai-cli axi loop verify --loop-id <id> --session <id> --name <name> --command <cmd>` is a thin TOON-rendering wrapper around the primitive.
+
+**Design notes:**
+- Gates are local proof artifacts — they prove a command passed on a specific machine at a specific time. They are not production-level proof.
+- Output lives on disk under the project artifact root (`<project>/.planeai/loops/<loop_id>/verifiers/<run_id>.log`), not in the database.
+- Logs are stored under the project root (not the session worktree) so they survive worktree cleanup.
+- CWD resolution is strict: session worktree_path → project path → error. No fallback to caller CWD.
+- `LoopService::complete_verifier_run()` atomically updates the verifier row and appends the `verifier_completed` event in one transaction.
+- Multiple verifiers can run in parallel against the same loop (append-only, no coordination).
+- Default timeout: 10 minutes. Default output cap: 10 MB.
+- `--command` is trusted (human/recipe-authored). Agent-generated commands should not be passed directly.
+
 ## Running Tests
 
 ```bash
