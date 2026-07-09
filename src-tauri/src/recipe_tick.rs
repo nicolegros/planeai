@@ -303,7 +303,10 @@ fn exec_session_prompt(
                 field("step_id", str_val(&step.id)),
                 field("step_kind", str_val(&step.kind)),
                 field("status", str_val("observing")),
-                field("session_id", str_val(&session_id[..std::cmp::min(8, session_id.len())])),
+                field(
+                    "session_id",
+                    str_val(&session_id[..std::cmp::min(8, session_id.len())]),
+                ),
                 field("role", str_val(role_id)),
             ]),
         ),
@@ -468,7 +471,10 @@ fn exec_handoff_wait(
                 field(
                     "matched_handoff",
                     Value::Object(vec![
-                        field("session_id", str_val(&session_id[..std::cmp::min(8, session_id.len())])),
+                        field(
+                            "session_id",
+                            str_val(&session_id[..std::cmp::min(8, session_id.len())]),
+                        ),
                         field("status", str_val(&handoff_status)),
                     ]),
                 ),
