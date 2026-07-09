@@ -1,5 +1,7 @@
 # planeai
 
+[Documentation](https://nicolegros.github.io/planeai) · [Releases](https://github.com/nicolegros/planeai/releases/latest)
+
 A desktop app that lets you run multiple AI coding agents in parallel — each in its own persistent terminal session, orchestrated from a keyboard-first UI. Works with Kiro, Claude, Copilot, or any CLI-based agent.
 
 > **Status:** Early development. Expect breaking changes between releases.
