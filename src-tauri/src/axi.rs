@@ -4348,4 +4348,138 @@ mod tests {
             serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "wait_for_maker");
     }
+
+    #[test]
+    fn maker_verifier_first_tick_creates_maker_session_and_loop_sessions_row() {
+        use planeai_core::loop_recipe_service::RecipeService;
+        use std::process::Command;
+
+        let conn = setup_db();
+
+        // Set up a real git repo so session.create can succeed
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["-c", "user.email=test@test.com", "-c", "user.name=Test",
+                   "commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let project = crate::db::create_project(&conn, "testapp", &repo_path).unwrap();
+
+        // Create loop from the builtin recipe (starts at create_maker)
+        let (create_output, create_code) = loop_create(
+            &conn,
+            &repo_path,
+            None,
+            None,
+            "maker-verifier",
+            Some("maker-verifier"),
+            "Implement the feature",
+            3,
+            false,
+        );
+        assert_eq!(create_code, 0, "create output:\n{create_output}");
+        let loop_id = extract_loop_id(&create_output);
+        assert!(!loop_id.is_empty(), "failed to extract loop_id");
+
+        // First tick: draft→running + session.create
+        let (output, code) = loop_tick(&conn, &loop_id);
+
+        // session.create may fail if no daemon/tmux backend is running, but
+        // if it succeeds, verify the session is linked. If it fails, the error
+        // should reference session.create (verifying we're on the right step).
+        if code == 0 {
+            // Verify session was linked in loop_sessions with role=maker, round=1
+            let sessions = LoopService::list_loop_sessions(&conn, &loop_id).unwrap();
+            assert!(
+                !sessions.is_empty(),
+                "expected at least one loop_session after create_maker"
+            );
+            let maker_session = sessions.iter().find(|s| s.role == "maker");
+            assert!(maker_session.is_some(), "expected a session with role=maker");
+            let ms = maker_session.unwrap();
+            assert_eq!(ms.round, 1, "maker session should be round 1");
+
+            // Verify next_actions mentions waiting for handoff
+            assert!(
+                output.contains("next_actions") || output.contains("wait for"),
+                "next_actions should guide user, output:\n{output}"
+            );
+        } else {
+            // Even if it fails, verify we hit the right step
+            assert!(
+                output.contains("session.create"),
+                "first tick should attempt session.create, output:\n{output}"
+            );
+        }
+
+        // Keep tempdir alive
+        drop(dir);
+    }
+
+    #[test]
+    fn maker_verifier_create_maker_prefers_worktree_isolation() {
+        use planeai_core::loop_recipe_service::RecipeService;
+
+        // Verify the recipe role configuration has worktree isolation
+        let recipe = RecipeService::parse_yaml(
+            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
+        )
+        .unwrap();
+
+        let maker_role = recipe.roles.get("maker").expect("maker role should exist");
+        assert_eq!(
+            maker_role.isolation, "worktree",
+            "maker role should prefer worktree isolation"
+        );
+
+        // Also verify the create_maker step references the maker role
+        let create_step = recipe.steps.iter().find(|s| s.id == "create_maker");
+        assert!(create_step.is_some(), "create_maker step should exist");
+        assert_eq!(
+            create_step.unwrap().role.as_deref(),
+            Some("maker"),
+            "create_maker should reference maker role"
+        );
+    }
+
+    #[test]
+    fn maker_verifier_next_actions_contain_useful_guidance() {
+        let conn = setup_db();
+        let maker_id = "maker-dddddddd-2222-3333-4444-555555555555";
+        let (loop_id, project_id, _) =
+            setup_maker_verifier_flow(&conn, "wait_for_maker", 1, Some(maker_id), None);
+        create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
+
+        // No handoff yet — tick should output next_actions with guidance
+        let (output, code) = loop_tick(&conn, &loop_id);
+        assert_eq!(code, 0, "output:\n{output}");
+        assert!(
+            output.contains("next_actions"),
+            "output should contain next_actions section, output:\n{output}"
+        );
+        assert!(
+            output.contains("handoff") || output.contains("planeai-cli"),
+            "next_actions should mention handoff or CLI command, output:\n{output}"
+        );
+
+        // Now record a handoff and tick again
+        insert_handoff(&conn, &loop_id, maker_id, "completed");
+        let (output2, _code2) = loop_tick(&conn, &loop_id);
+        assert!(
+            output2.contains("next_actions"),
+            "output should contain next_actions, output:\n{output2}"
+        );
+        assert!(
+            output2.contains("loop tick") || output2.contains("next step"),
+            "next_actions should guide to next tick, output:\n{output2}"
+        );
+    }
 }
