@@ -288,12 +288,96 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 
 | Kind | Description |
 |------|-------------|
-| `session.create` | Spawn a new agent session (optionally in a worktree) |
-| `session.prompt` | Send a message to an existing session |
-| `handoff.wait` | Pause until the source role produces a handoff artifact |
-| `loop.status` | Set the loop run status (`observing`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`) |
+| `session.create` | Spawn a new agent session (in a worktree by default) and send initial prompt |
+| `session.prompt` | Send a message to an existing session (requires `select: latest`) |
+| `handoff.wait` | Pause until the source role produces an accepted handoff artifact |
+| `loop.status` | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`) |
 | `loop.event` | Emit a structured event into the loop's event log |
 | `human.wait` | Block until a human responds in the UI |
+| `round.next` | Increment the round counter (enforces `max_rounds`) |
+| `gates.run` | Run verifier gate commands and branch on pass/fail/error |
+
+## Runtime: Explicit Tick Model
+
+The recipe runtime executes **exactly one step per tick**. Each call to:
+
+```bash
+planeai-cli axi loop tick <LOOP_ID>
+```
+
+performs one deterministic transition. A tick may:
+- Execute a step and complete it (advance `current_step`)
+- Return "waiting" (keep `current_step` unchanged)
+- Fail a step and set the loop to `needs_human` or `failed`
+
+A tick will **never** execute an unbounded chain of steps.
+
+### Runtime State
+
+The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
+
+```json
+{
+  "recipe_schema": "planeai.loop.recipe.v1",
+  "recipe_id": "maker-verifier",
+  "recipe_source": "builtin",
+  "inputs": { "goal": "Fix the bug" },
+  "runtime": {
+    "current_step": "wait_for_maker_handoff",
+    "tick_count": 3,
+    "round": 1,
+    "created_session_ids": { "maker": ["session-abc123"] }
+  },
+  "policy": { "max_rounds": 3, "max_ticks": 50, "max_sessions": 5, "merge_policy": "human" }
+}
+```
+
+### Terminal Status Guards
+
+If the loop is in a terminal status (`completed_unreviewed`, `failed`, `cancelled`, `approved`, `merged`, `cleaned`), tick refuses to execute.
+
+If the loop requires intervention (`blocked`, `needs_human`, `stale`), tick returns a guarded response without advancing.
+
+### `round.next` Step
+
+Increments the round counter. Used for retry loops (verifier fails → increment round → re-prompt maker).
+
+```yaml
+- id: next_round
+  kind: round.next
+  next: prompt_maker_again
+```
+
+Enforces `policy.max_rounds`. When the limit is reached, the loop transitions to `needs_human`.
+
+### `gates.run` Step
+
+Runs verifier gate commands declared inline. Each gate has a `name` and `command`:
+
+```yaml
+- id: run_gates
+  kind: gates.run
+  gates:
+    - name: rust-tests
+      command: "cargo test"
+    - name: lint
+      command: "cargo clippy -- -D warnings"
+  on:
+    pass: completed_unreviewed
+    fail: prompt_maker_again
+    error: needs_human
+```
+
+Gates execute in order and stop on the first failure. Results are persisted to `verifier_runs`.
+
+### `handoff.wait` Acceptance Model
+
+A handoff is considered "accepted" only when:
+1. It was recorded through `LoopService::record_handoff` (not arbitrary `add_artifact`)
+2. Its `content_json.schema` equals `"planeai.handoff.v1"`
+3. Its `content_json.status` is one of: `completed`, `blocked`, `needs_human`, `failed`
+
+The runtime does **not** scan the filesystem for handoff files. Only database-recorded handoffs count.
 
 ## Future Step Kinds (Not Yet Supported)
 
@@ -301,7 +385,6 @@ These are reserved in the schema but not implemented:
 
 | Kind | Intent |
 |------|--------|
-| `gates.run` | Run a gate check (tests, lint, type-check) |
 | `pr.feedback.wait` | Wait for PR review comments |
 | `arbiter.rank` | Have a judge agent rank multiple outputs |
 | `task.create` | Create a task in the internal tracker |
@@ -309,7 +392,7 @@ These are reserved in the schema but not implemented:
 
 ## Supported Template Variables (v1)
 
-The following variables are available in step prompt templates:
+Prompt templates use [minijinja](https://github.com/mitsuhiko/minijinja) syntax (Jinja2-compatible, sandboxed — no file inclusion or shell execution).
 
 | Variable | Description |
 |----------|-------------|
@@ -319,6 +402,8 @@ The following variables are available in step prompt templates:
 | `{{ loop.id }}` | The loop run ID |
 | `{{ recipe.id }}` | The recipe ID |
 | `{{ knowledge.files }}` | Rendered list of knowledge file references |
+| `{{ runtime.round }}` | Current round number |
+| `{{ runtime.last_error }}` | Last error message (if any) |
 
 **Conditional blocks:**
 
@@ -329,12 +414,6 @@ Task: {{ inputs.task_key }}
 ```
 
 Blocks are removed entirely when the referenced input is absent.
-
-**Not yet supported (planned for future versions):**
-
-- `{{ role.id }}` — the current role identifier
-- `{{ role.instructions }}` — the role's instruction text
-- `{{ tools.required }}` — list of required tools
 
 ## Safety Rules
 
@@ -440,11 +519,24 @@ steps:
 
 `handoff.wait` steps bridge agent sessions. When a role finishes its work:
 
-1. The agent writes a handoff artifact to `loop_artifacts/` (e.g., `handoff.md`, `plan.md`).
-2. The loop runner detects the artifact and advances to the next step.
-3. The receiving role's session gets created (if not already running) and receives the artifact as context.
+1. The agent calls `planeai-cli axi loop handoff record` with a structured JSON file.
+2. `LoopService::record_handoff` atomically persists the artifact and event.
+3. On the next tick, `handoff.wait` detects the accepted handoff and advances.
 
-The runner checks both `loop_artifacts/` files and the loop's event log to determine when a handoff is satisfied. Agents can also emit `loop.event` steps to signal completion programmatically.
+The `on` mapping determines which step to advance to based on handoff status:
+
+```yaml
+- id: wait_for_maker
+  kind: handoff.wait
+  from: maker
+  on:
+    completed: run_gates
+    blocked: blocked_status
+    needs_human: needs_human_status
+    failed: failed_status
+```
+
+**Important:** The runtime does NOT scan the filesystem for handoff files. Only handoffs recorded through the `record_handoff` API and stored in `loop_artifacts` are considered.
 
 ## Domain Model Glossary
 

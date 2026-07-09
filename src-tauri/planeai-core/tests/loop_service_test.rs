@@ -993,3 +993,222 @@ fn complete_verifier_run_fails_for_nonexistent_id() {
 
     assert!(result.is_err(), "should fail for nonexistent verifier run");
 }
+
+// ─── Handoff strictness ──────────────────────────────────────────────────────
+
+#[test]
+fn find_handoff_rejects_artifact_missing_schema() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("maker-verifier"),
+            goal: "test".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let session_id = "sess-maker-1";
+    LoopService::add_loop_session(
+        &conn,
+        AddLoopSessionParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            role: "maker".into(),
+            round: 1,
+            provider: None,
+            status: "running".into(),
+        },
+    )
+    .unwrap();
+
+    // Record handoff with MISSING schema field — should be ignored
+    LoopService::record_handoff(
+        &conn,
+        RecordHandoffParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            artifact_path: None,
+            content_json: Some(serde_json::json!({
+                "status": "completed",
+                "summary": "Done"
+            })),
+            handoff_status: "completed".into(),
+            event_payload: serde_json::json!({}),
+            new_loop_status: None,
+        },
+    )
+    .unwrap();
+
+    let result =
+        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
+            .unwrap();
+
+    assert_eq!(
+        result, None,
+        "handoff without planeai.handoff.v1 schema should be ignored"
+    );
+}
+
+#[test]
+fn find_handoff_rejects_artifact_with_invalid_status() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("maker-verifier"),
+            goal: "test".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let session_id = "sess-maker-2";
+    LoopService::add_loop_session(
+        &conn,
+        AddLoopSessionParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            role: "maker".into(),
+            round: 1,
+            provider: None,
+            status: "running".into(),
+        },
+    )
+    .unwrap();
+
+    // Record handoff with valid schema but INVALID status
+    LoopService::record_handoff(
+        &conn,
+        RecordHandoffParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            artifact_path: None,
+            content_json: Some(serde_json::json!({
+                "schema": "planeai.handoff.v1",
+                "status": "in_progress",
+                "summary": "Still working"
+            })),
+            handoff_status: "in_progress".into(),
+            event_payload: serde_json::json!({}),
+            new_loop_status: None,
+        },
+    )
+    .unwrap();
+
+    let result =
+        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
+            .unwrap();
+
+    assert_eq!(
+        result, None,
+        "handoff with invalid status should be ignored"
+    );
+}
+
+#[test]
+fn find_handoff_accepts_valid_handoff_with_schema_and_status() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("maker-verifier"),
+            goal: "test".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let session_id = "sess-maker-3";
+    LoopService::add_loop_session(
+        &conn,
+        AddLoopSessionParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            role: "maker".into(),
+            round: 1,
+            provider: None,
+            status: "running".into(),
+        },
+    )
+    .unwrap();
+
+    // Record handoff with valid schema AND valid status
+    LoopService::record_handoff(
+        &conn,
+        RecordHandoffParams {
+            loop_id: loop_run.id.clone(),
+            session_id: session_id.into(),
+            artifact_path: None,
+            content_json: Some(serde_json::json!({
+                "schema": "planeai.handoff.v1",
+                "status": "completed",
+                "summary": "All done"
+            })),
+            handoff_status: "completed".into(),
+            event_payload: serde_json::json!({}),
+            new_loop_status: None,
+        },
+    )
+    .unwrap();
+
+    let result =
+        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
+            .unwrap();
+
+    assert_eq!(
+        result,
+        Some((session_id.to_string(), "completed".to_string()))
+    );
+}
+
+#[test]
+fn add_artifact_rejects_handoff_kind() {
+    let conn = test_db();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("maker-verifier"),
+            goal: "test".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    let result = LoopService::add_artifact(
+        &conn,
+        AddArtifactParams {
+            loop_id: loop_run.id.clone(),
+            session_id: Some("sess-1".into()),
+            kind: "handoff".into(),
+            path: None,
+            content_json: Some(serde_json::json!({"status": "completed"})),
+        },
+    );
+
+    assert!(
+        result.is_err(),
+        "add_artifact must reject kind='handoff' — use record_handoff instead"
+    );
+}
