@@ -228,13 +228,18 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
 
     // 5. Create the session via the standard path
     let use_worktree = isolation == "worktree";
+    let base_branch = if round > 1 {
+        Some(format!("loop/{}/{}-r{}", short_id(ctx.loop_id), role_id, round - 1))
+    } else {
+        None
+    };
     let opts = crate::cli::SessionCreateOpts {
         project: project.name.clone(),
         branch: branch_name.clone(),
         name: Some(format!("{} ({})", role_id, short_id(ctx.loop_id))),
         new_branch: true,
         worktree: use_worktree,
-        base_branch: None,
+        base_branch,
         yolo: false,
         provider: Some(provider.clone()),
         task_key: loop_run.task_key.clone(),
@@ -729,6 +734,8 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         ));
     }
 
+    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Verifying).ok();
+
     // Resolve a session to run gates in.
     // If step.role is specified, use that role's latest session; otherwise fall back to
     // the last session across all roles.
@@ -844,7 +851,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
-    // Set loop status to verifying during gate execution (already done by now)
     if let Some(ref ns) = next_step {
         ctx.snapshot.runtime.current_step = ns.clone();
     } else {
