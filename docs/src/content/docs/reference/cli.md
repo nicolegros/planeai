@@ -395,14 +395,17 @@ Create a new durable loop run. The loop starts in `draft` status by default. Use
 planeai-cli axi loop create --goal "<goal>" [options]
 ```
 
-| Flag           | Description                                               |
-| -------------- | --------------------------------------------------------- |
-| `--goal`       | Goal description for the loop (required)                  |
-| `--strategy`   | Strategy identifier (default: `maker-verifier`)           |
-| `--max-rounds` | Maximum rounds before the loop stops (default: 3)         |
-| `--task`       | Task key to associate with this loop (validated)          |
-| `--project`    | Project name (otherwise resolved from CWD)                |
-| `--start`      | Start immediately (status = `running` instead of `draft`) |
+| Flag           | Description                                                                       |
+| -------------- | --------------------------------------------------------------------------------- |
+| `--goal`       | Goal description for the loop (required)                                          |
+| `--recipe`     | Recipe ID or path (takes precedence over `--strategy`)                            |
+| `--strategy`   | Strategy identifier (default: `maker-verifier`). Alias for `--recipe`.            |
+| `--max-rounds` | Maximum rounds before the loop stops (default: 3; overridden by recipe policy)    |
+| `--task`       | Task key to associate with this loop (validated)                                  |
+| `--project`    | Project name (otherwise resolved from CWD)                                        |
+| `--start`      | Start immediately (status = `running` instead of `draft`)                         |
+
+If a recipe is resolved (via `--recipe` or `--strategy`), the loop stores a recipe snapshot in `policy_json` and uses the recipe's policy values (max_rounds, max_ticks, etc.) instead of CLI defaults. A `recipe_loaded` event is appended to the loop's event log.
 
 If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by_session_id`.
 
@@ -424,13 +427,15 @@ The `id` can be a prefix — it will match if unambiguous.
 
 ### `axi loop tick`
 
-Advance the loop by one tick. If the loop is in `draft` status, tick first transitions it to `running` and appends a `loop_started` event, then appends a `tick` event.
+Advance the loop by one tick. If the loop is in `draft` status, tick first transitions it to `running` and appends a `loop_started` event.
 
 ```bash
 planeai-cli axi loop tick <id>
 ```
 
-This command does not dispatch maker-verifier sessions yet — it will become the deterministic state-machine step in a future PR. Currently it transitions draft → running and records tick events for observability.
+If the loop has a recipe snapshot in `policy_json`, the tick executes the current recipe step (e.g., `session.create`, `session.prompt`, `handoff.wait`, `human.wait`, `loop.status`, `loop.event`). The runner advances one step per tick, persists the updated snapshot, and emits appropriate events.
+
+If the loop has no recipe (legacy mode), the tick appends a generic `tick` event for observability.
 
 ### `axi loop stop`
 
@@ -530,6 +535,36 @@ Record a structured handoff from a JSON file. Validates schema, IDs, and path se
 ```bash
 planeai-cli axi loop handoff record --loop-id <id> --session <id> --path <file>
 ```
+
+### `axi loop recipe ls`
+
+List all discovered recipes from all sources (project, user, builtin).
+
+```bash
+planeai-cli axi loop recipe ls
+```
+
+Shows a table with recipe ID, name, source, and path.
+
+### `axi loop recipe show`
+
+Show full details of a recipe by ID or file path.
+
+```bash
+planeai-cli axi loop recipe show <id-or-path>
+```
+
+Displays roles, steps, policy, knowledge, and tools. Also runs validation and reports the result.
+
+### `axi loop recipe validate`
+
+Validate a recipe for schema conformance, role/step consistency, and policy constraints.
+
+```bash
+planeai-cli axi loop recipe validate <id-or-path>
+```
+
+Exits non-zero on validation errors. Warnings (e.g., unreferenced roles, future step kinds) are reported but do not cause failure.
 
 ---
 
