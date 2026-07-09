@@ -166,7 +166,7 @@ steps:
 
   - id: done
     kind: loop.status
-    status: completed
+    status: completed_unreviewed
 ```
 
 Step fields reference:
@@ -247,7 +247,7 @@ steps:
     prompt: "Approve, request changes, or abort."
   - id: done
     kind: loop.status
-    status: completed
+    status: completed_unreviewed
 ```
 
 ## CLI Commands
@@ -291,7 +291,7 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 | `session.create` | Spawn a new agent session (optionally in a worktree) |
 | `session.prompt` | Send a message to an existing session |
 | `handoff.wait` | Pause until the source role produces a handoff artifact |
-| `loop.status` | Set the loop run status (running, paused, completed, failed) |
+| `loop.status` | Set the loop run status (`observing`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`) |
 | `loop.event` | Emit a structured event into the loop's event log |
 | `human.wait` | Block until a human responds in the UI |
 
@@ -404,7 +404,7 @@ steps:
     prompt: "Review complete. Approve, iterate, or abort."
   - id: done
     kind: loop.status
-    status: completed
+    status: completed_unreviewed
 ```
 
 ## Relationship to Handoffs

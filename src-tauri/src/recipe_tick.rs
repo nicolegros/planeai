@@ -692,26 +692,45 @@ fn save_snapshot(
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
     let mut result = template.to_string();
 
-    // Replace simple variables (support both "{{ var }}" and "{{var}}" syntax)
-    if let Some(goal) = snapshot.inputs.get("goal") {
-        result = result.replace("{{ inputs.goal }}", goal);
-        result = result.replace("{{inputs.goal}}", goal);
+    // Replace all input variables generically (support both "{{ var }}" and "{{var}}" syntax)
+    for (key, value) in &snapshot.inputs {
+        let spaced = format!("{{{{ inputs.{} }}}}", key);
+        let compact = format!("{{{{inputs.{}}}}}", key);
+        result = result.replace(&spaced, value);
+        result = result.replace(&compact, value);
+
+        // Handle conditional blocks for this input (remove delimiters since value is present)
+        let if_spaced = format!("{{% if inputs.{} %}}", key);
+        let if_compact = format!("{{%if inputs.{}%}}", key);
+        result = result.replace(&if_spaced, "");
+        result = result.replace(&if_compact, "");
     }
-    if let Some(task_key) = snapshot.inputs.get("task_key") {
-        result = result.replace("{{ inputs.task_key }}", task_key);
-        result = result.replace("{{inputs.task_key}}", task_key);
-        // Handle conditional
-        result = result.replace("{% if inputs.task_key %}", "");
-        result = result.replace("{% endif %}", "");
-    } else {
-        // Remove conditional block
-        while let Some(start) = result.find("{% if inputs.task_key %}") {
-            if let Some(end) = result[start..].find("{% endif %}") {
-                let remove_end = start + end + "{% endif %}".len();
-                result = format!("{}{}", &result[..start], &result[remove_end..]);
-            } else {
-                break;
-            }
+    // Remove endif tags left over from satisfied conditionals
+    result = result.replace("{% endif %}", "");
+    result = result.replace("{%endif%}", "");
+
+    // Remove conditional blocks for inputs that are NOT present
+    let all_input_keys: Vec<&str> = snapshot.inputs.keys().map(|k| k.as_str()).collect();
+    loop {
+        let if_prefix = "{% if inputs.";
+        let Some(start) = result.find(if_prefix) else {
+            break;
+        };
+        let after_prefix = start + if_prefix.len();
+        let Some(key_end) = result[after_prefix..].find(" %}") else {
+            break;
+        };
+        let key = &result[after_prefix..after_prefix + key_end];
+        if all_input_keys.contains(&key) {
+            break;
+        }
+        let block_start = start;
+        let endif_tag = "{% endif %}";
+        if let Some(endif_offset) = result[block_start..].find(endif_tag) {
+            let block_end = block_start + endif_offset + endif_tag.len();
+            result = format!("{}{}", &result[..block_start], &result[block_end..]);
+        } else {
+            break;
         }
     }
 
