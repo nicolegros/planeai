@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
@@ -8,7 +8,7 @@ use planeai_tasks::sqlite::SqliteRepository;
 
 use crate::commands::jira::JiraHandle;
 use crate::db;
-use crate::state::{ConfigState, DbState};
+use crate::state::{ConfigState, DbState, PtyState};
 
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
@@ -178,46 +178,95 @@ pub fn edit_task_item(
 }
 
 #[tauri::command]
-pub fn move_task_item(
-    db_state: State<DbState>,
-    config_state: State<ConfigState>,
-    jira: State<JiraHandle>,
+#[allow(clippy::too_many_arguments)]
+pub async fn move_task_item(
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+    pty_state: State<'_, PtyState>,
+    jira: State<'_, JiraHandle>,
+    app: AppHandle,
     key: String,
     status: String,
     repo_path: String,
 ) -> Result<(), String> {
     tracing::info!(key = %key, status = %status, "move_task_item");
     let s = Status::parse(&status).ok_or_else(|| format!("invalid status: {status}"))?;
-    let repo = resolve_repo(&db_state, &repo_path)?;
-    let task = repo
-        .update(
-            &key,
-            UpdateParams {
-                status: Some(s),
-                ..Default::default()
-            },
-        )
-        .map_err(|e| e.to_string())?;
 
-    let fire_writeback = |task_key: &str, st: Status| {
-        if let Ok(guard) = jira.0.try_lock() {
-            if let Some(state) = guard.as_ref() {
-                if let Ok(cfg) = config_state.0.lock() {
-                    state.try_writeback(task_key, st, &cfg);
+    let db = db_state.0.clone();
+    let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
+
+    // All I/O (DB writes, subprocess kills) runs off the main thread.
+    let (archived_session_ids, parent_key) = super::blocking({
+        let key = key.clone();
+        let cfg = cfg.clone();
+        move || {
+            let repo = {
+                let conn = db.lock().map_err(|e| e.to_string())?;
+                let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
+                let project = projects
+                    .iter()
+                    .find(|p| p.path == repo_path || repo_path.starts_with(&p.path))
+                    .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
+                let prefix = project.prefix.clone();
+                drop(conn);
+                let db_path = planeai_paths::db_path();
+                SqliteRepository::open(db_path.to_str().unwrap(), &prefix)
+                    .map_err(|e| e.to_string())?
+            };
+
+            let task = repo
+                .update(
+                    &key,
+                    UpdateParams {
+                        status: Some(s),
+                        ..Default::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+
+            let mut parent_key: Option<String> = None;
+            let mut session_ids: Vec<String> = Vec::new();
+
+            if s == Status::Done {
+                parent_key = planeai_tasks::try_auto_complete_parent(&repo, &task);
+                if let Some(ref pk) = parent_key {
+                    tracing::info!(parent_key = %pk, "auto-completed parent task");
                 }
+
+                // Archive sessions linked to this task
+                let conn = db.lock().map_err(|e| e.to_string())?;
+                session_ids = planeai_core::services::SessionService::list_by_task_key(&conn, &key)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| s.id.clone())
+                    .collect();
+                crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
             }
-        } else {
-            tracing::warn!(task_key = %task_key, "move_task_item: could not acquire jira lock, skipping writeback");
-        }
-    };
 
-    fire_writeback(&key, s);
-
-    if s == Status::Done {
-        if let Some(parent_key) = planeai_tasks::try_auto_complete_parent(&repo, &task) {
-            tracing::info!(parent_key = %parent_key, "auto-completed parent task");
-            fire_writeback(&parent_key, Status::Done);
+            Ok((session_ids, parent_key))
         }
+    })
+    .await?;
+
+    // Jira writeback (tokio Mutex — must stay on async thread)
+    if let Ok(guard) = jira.0.try_lock() {
+        if let Some(state) = guard.as_ref() {
+            state.try_writeback(&key, s, &cfg);
+            if let Some(ref pk) = parent_key {
+                state.try_writeback(pk, Status::Done, &cfg);
+            }
+        }
+    } else {
+        tracing::warn!(key = %key, "move_task_item: could not acquire jira lock, skipping writeback");
+    }
+
+    // Detach PTYs (PtyManager is !Send, must stay on main thread)
+    for id in &archived_session_ids {
+        pty_state.0.detach(id);
+    }
+
+    if !archived_session_ids.is_empty() {
+        let _ = app.emit("sessions-changed", ());
     }
 
     Ok(())

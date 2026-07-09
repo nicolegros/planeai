@@ -82,6 +82,49 @@ pub fn archive(
     Ok(session)
 }
 
+/// Archive all active/exited sessions linked to a task key.
+/// Returns the number of sessions archived.
+pub fn archive_sessions_for_task(
+    conn: &Connection,
+    task_key: &str,
+    config: &Option<Config>,
+) -> usize {
+    let sessions = match planeai_core::services::SessionService::list_by_task_key(conn, task_key) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(task_key = %task_key, error = %e, "failed to list sessions for task");
+            return 0;
+        }
+    };
+
+    if sessions.is_empty() {
+        return 0;
+    }
+
+    let kill_ops = crate::cleanup::real_kill_ops();
+    let mut count = 0;
+
+    for session in &sessions {
+        tracing::info!(
+            session_id = %&session.id[..8],
+            session_name = %session.name,
+            task_key = %task_key,
+            "archiving session — task moved to done"
+        );
+        if let Err(e) = archive(conn, &session.id, config, &kill_ops) {
+            tracing::warn!(
+                session_id = %&session.id[..8],
+                error = %e,
+                "failed to archive session for done task"
+            );
+        } else {
+            count += 1;
+        }
+    }
+
+    count
+}
+
 pub fn list(conn: &Connection, archived: bool) -> Result<Vec<Session>, String> {
     if archived {
         db::list_archived_sessions(conn).map_err(|e| e.to_string())

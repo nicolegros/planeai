@@ -1318,3 +1318,84 @@ fn tree_with_dangling_parent_treats_child_as_root() {
     assert_eq!(tree[0].id, orphan_id);
     assert_eq!(tree[1].id, orphan_child_id);
 }
+
+// ─── list_by_task_key ────────────────────────────────────────────────────────
+
+#[test]
+fn list_by_task_key_returns_active_and_exited_sessions() {
+    let conn = test_db();
+    let project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    // Active session with task
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s-active".to_string(),
+            project_id: project.id.clone(),
+            name: "active-session".to_string(),
+            backend: "daemon".to_string(),
+            task_key: Some("PLA-42".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Exited session with same task
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s-exited".to_string(),
+            project_id: project.id.clone(),
+            name: "exited-session".to_string(),
+            backend: "daemon".to_string(),
+            task_key: Some("PLA-42".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::mark_exited(&conn, "s-exited").unwrap();
+
+    // Archived session with same task (should NOT be returned)
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s-archived".to_string(),
+            project_id: project.id.clone(),
+            name: "archived-session".to_string(),
+            backend: "daemon".to_string(),
+            task_key: Some("PLA-42".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    SessionService::archive(&conn, "s-archived").unwrap();
+
+    // Session with different task (should NOT be returned)
+    SessionService::create(
+        &conn,
+        &CreateSessionParams {
+            id: "s-other".to_string(),
+            project_id: project.id.clone(),
+            name: "other-task-session".to_string(),
+            backend: "daemon".to_string(),
+            task_key: Some("PLA-99".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let sessions = SessionService::list_by_task_key(&conn, "PLA-42").unwrap();
+    assert_eq!(sessions.len(), 2);
+    let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+    assert!(ids.contains(&"s-active"));
+    assert!(ids.contains(&"s-exited"));
+}
+
+#[test]
+fn list_by_task_key_returns_empty_when_no_sessions_match() {
+    let conn = test_db();
+    let _project = ProjectService::ensure_project(&conn, "/tmp/project").unwrap();
+
+    let sessions = SessionService::list_by_task_key(&conn, "PLA-999").unwrap();
+    assert!(sessions.is_empty());
+}
