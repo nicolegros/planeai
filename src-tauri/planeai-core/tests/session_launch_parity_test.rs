@@ -164,7 +164,6 @@ fn config_default_agent_command_resolves() {
             command: "test-agent run".to_string(),
             yolo_flag: None,
             prompt_command: None,
-            autonomous_prompt_template: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -296,7 +295,6 @@ fn auto_approve_adds_yolo_flag() {
             command: "agent".to_string(),
             yolo_flag: Some("--yolo".to_string()),
             prompt_command: None,
-            autonomous_prompt_template: None,
         },
     );
     config.default_provider = "test".to_string();
@@ -441,7 +439,6 @@ fn kiro_provider() -> ProviderConfig {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         prompt_command: Some("{prompt}".to_string()),
-        autonomous_prompt_template: None,
     }
 }
 
@@ -450,7 +447,6 @@ fn claude_provider() -> ProviderConfig {
         command: "claude".to_string(),
         yolo_flag: Some("--dangerously-skip-permissions".to_string()),
         prompt_command: Some("-p {prompt}".to_string()),
-        autonomous_prompt_template: None,
     }
 }
 
@@ -459,13 +455,12 @@ fn copilot_provider() -> ProviderConfig {
         command: "gh copilot".to_string(),
         yolo_flag: Some("--allow-all-tools".to_string()),
         prompt_command: Some("{prompt}".to_string()),
-        autonomous_prompt_template: None,
     }
 }
 
 #[test]
 fn kiro_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&kiro_provider(), true, None, false);
+    let result = build_provider_launch_command(&kiro_provider(), true, None, false, None);
     assert_eq!(result.command, "kiro-cli chat --trust-all-tools");
     assert!(result.auto_approve_was_applied);
     assert!(!result.prompt_was_injected);
@@ -473,21 +468,21 @@ fn kiro_auto_approve_includes_yolo_flag() {
 
 #[test]
 fn claude_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&claude_provider(), true, None, false);
+    let result = build_provider_launch_command(&claude_provider(), true, None, false, None);
     assert_eq!(result.command, "claude --dangerously-skip-permissions");
     assert!(result.auto_approve_was_applied);
 }
 
 #[test]
 fn copilot_auto_approve_includes_yolo_flag() {
-    let result = build_provider_launch_command(&copilot_provider(), true, None, false);
+    let result = build_provider_launch_command(&copilot_provider(), true, None, false, None);
     assert_eq!(result.command, "gh copilot --allow-all-tools");
     assert!(result.auto_approve_was_applied);
 }
 
 #[test]
 fn no_auto_approve_omits_yolo_flag() {
-    let result = build_provider_launch_command(&kiro_provider(), false, None, false);
+    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.auto_approve_was_applied);
 }
@@ -498,9 +493,8 @@ fn missing_yolo_flag_does_not_fail() {
         command: "my-agent".to_string(),
         yolo_flag: None,
         prompt_command: None,
-        autonomous_prompt_template: None,
     };
-    let result = build_provider_launch_command(&provider, true, None, false);
+    let result = build_provider_launch_command(&provider, true, None, false, None);
     assert_eq!(result.command, "my-agent");
     assert!(!result.auto_approve_was_applied);
 }
@@ -512,6 +506,7 @@ fn kiro_task_prompt_injected() {
         false,
         Some("Implement PLA-89: fix daemon task launch"),
         false,
+        None,
     );
     assert!(result
         .command
@@ -521,16 +516,26 @@ fn kiro_task_prompt_injected() {
 
 #[test]
 fn claude_task_prompt_uses_dash_p() {
-    let result =
-        build_provider_launch_command(&claude_provider(), false, Some("Fix the login bug"), false);
+    let result = build_provider_launch_command(
+        &claude_provider(),
+        false,
+        Some("Fix the login bug"),
+        false,
+        None,
+    );
     assert!(result.command.contains("-p 'Fix the login bug'"));
     assert!(result.prompt_was_injected);
 }
 
 #[test]
 fn task_prompt_with_auto_approve_both_applied() {
-    let result =
-        build_provider_launch_command(&kiro_provider(), true, Some("Implement feature X"), false);
+    let result = build_provider_launch_command(
+        &kiro_provider(),
+        true,
+        Some("Implement feature X"),
+        false,
+        None,
+    );
     assert!(result.command.contains("--trust-all-tools"));
     assert!(result.command.contains("'Implement feature X'"));
     assert!(result.auto_approve_was_applied);
@@ -539,7 +544,7 @@ fn task_prompt_with_auto_approve_both_applied() {
 
 #[test]
 fn no_prompt_no_auto_approve_returns_base_command() {
-    let result = build_provider_launch_command(&kiro_provider(), false, None, false);
+    let result = build_provider_launch_command(&kiro_provider(), false, None, false, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.auto_approve_was_applied);
     assert!(!result.prompt_was_injected);
@@ -551,9 +556,8 @@ fn no_prompt_injection_without_prompt_command() {
         command: "my-agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: None,
-        autonomous_prompt_template: None,
     };
-    let result = build_provider_launch_command(&provider, false, Some("Hello world"), false);
+    let result = build_provider_launch_command(&provider, false, Some("Hello world"), false, None);
     // No prompt_command configured — prompt cannot be injected
     assert_eq!(result.command, "my-agent");
     assert!(!result.prompt_was_injected);
@@ -561,7 +565,7 @@ fn no_prompt_injection_without_prompt_command() {
 
 #[test]
 fn empty_prompt_is_not_injected() {
-    let result = build_provider_launch_command(&kiro_provider(), false, Some(""), false);
+    let result = build_provider_launch_command(&kiro_provider(), false, Some(""), false, None);
     assert_eq!(result.command, "kiro-cli chat");
     assert!(!result.prompt_was_injected);
 }
@@ -573,6 +577,7 @@ fn prompt_with_spaces_preserved_safely() {
         false,
         Some("Fix bug in the login handler for SSO users"),
         false,
+        None,
     );
     assert!(result
         .command
@@ -586,6 +591,7 @@ fn prompt_with_newlines_preserved_safely() {
         false,
         Some("Fix this:\n- item 1\n- item 2"),
         false,
+        None,
     );
     // Shell-escaped with single quotes
     assert!(result.command.contains("'Fix this:\n- item 1\n- item 2'"));
@@ -598,6 +604,7 @@ fn prompt_with_single_quotes_escaped() {
         false,
         Some("Fix the user's profile page"),
         false,
+        None,
     );
     // Single quotes in prompt should be escaped
     assert!(result.command.contains("user"));
@@ -611,11 +618,14 @@ fn autonomous_prompt_template_applied_when_autonomous_true() {
         command: "kiro-cli chat".to_string(),
         yolo_flag: Some("--trust-all-tools".to_string()),
         prompt_command: Some("{prompt}".to_string()),
-        autonomous_prompt_template: Some(
-            "You are autonomous. Complete this task:\n{prompt}".to_string(),
-        ),
     };
-    let result = build_provider_launch_command(&provider, true, Some("Fix the bug"), true);
+    let result = build_provider_launch_command(
+        &provider,
+        true,
+        Some("Fix the bug"),
+        true,
+        Some("You are autonomous. Complete this task:\n{prompt}"),
+    );
     assert!(result
         .command
         .contains("You are autonomous. Complete this task:"));
@@ -630,9 +640,14 @@ fn autonomous_prompt_template_not_applied_when_autonomous_false() {
         command: "agent".to_string(),
         yolo_flag: None,
         prompt_command: Some("-p {prompt}".to_string()),
-        autonomous_prompt_template: Some("AUTO: {prompt}".to_string()),
     };
-    let result = build_provider_launch_command(&provider, false, Some("fix bug"), false);
+    let result = build_provider_launch_command(
+        &provider,
+        false,
+        Some("fix bug"),
+        false,
+        Some("AUTO: {prompt}"),
+    );
     assert!(result.command.contains("fix bug"));
     assert!(result.command.contains("-p"));
     assert!(!result.command.contains("AUTO:"));
@@ -645,9 +660,14 @@ fn task_prompt_plus_auto_approve_autonomous_false() {
         command: "agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: Some("-p {prompt}".to_string()),
-        autonomous_prompt_template: Some("AUTO: {prompt}".to_string()),
     };
-    let result = build_provider_launch_command(&provider, true, Some("fix bug"), false);
+    let result = build_provider_launch_command(
+        &provider,
+        true,
+        Some("fix bug"),
+        false,
+        Some("AUTO: {prompt}"),
+    );
     assert!(result.command.contains("--yolo"));
     assert!(result.command.contains("fix bug"));
     assert!(!result.command.contains("AUTO:"));
@@ -661,9 +681,14 @@ fn task_prompt_plus_auto_approve_autonomous_true() {
         command: "agent".to_string(),
         yolo_flag: Some("--yolo".to_string()),
         prompt_command: Some("-p {prompt}".to_string()),
-        autonomous_prompt_template: Some("AUTO: {prompt}".to_string()),
     };
-    let result = build_provider_launch_command(&provider, true, Some("fix bug"), true);
+    let result = build_provider_launch_command(
+        &provider,
+        true,
+        Some("fix bug"),
+        true,
+        Some("AUTO: {prompt}"),
+    );
     assert!(result.command.contains("--yolo"));
     assert!(result.command.contains("AUTO: fix bug"));
     assert!(result.auto_approve_was_applied);
@@ -741,7 +766,8 @@ fn tauri_and_iced_produce_same_command_for_task_launch() {
     let task_prompt = "Implement PLA-89: fix daemon task launch";
 
     // Tauri style: uses build_provider_launch_command directly
-    let tauri_result = build_provider_launch_command(&provider, true, Some(task_prompt), false);
+    let tauri_result =
+        build_provider_launch_command(&provider, true, Some(task_prompt), false, None);
 
     // Iced style: uses resolve_from_config which calls build_provider_launch_command
     let config = LaunchConfig::default();
@@ -774,7 +800,8 @@ fn tauri_and_iced_produce_same_command_for_claude_task() {
     let provider = claude_provider();
     let task_prompt = "Fix the login bug";
 
-    let tauri_result = build_provider_launch_command(&provider, true, Some(task_prompt), false);
+    let tauri_result =
+        build_provider_launch_command(&provider, true, Some(task_prompt), false, None);
 
     let overrides = SessionLaunchOverrides {
         cwd: Some(std::env::temp_dir()),

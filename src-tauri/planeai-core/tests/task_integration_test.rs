@@ -65,7 +65,6 @@ fn resolve_task_launch_produces_worktree_mode() {
                     command: "agent".to_string(),
                     yolo_flag: Some("--yolo".to_string()),
                     prompt_command: Some("{prompt}".to_string()),
-                    autonomous_prompt_template: None,
                 },
             );
             m
@@ -123,7 +122,6 @@ fn resolve_task_launch_autonomous_false_no_wrapper() {
                     command: "agent".to_string(),
                     yolo_flag: None,
                     prompt_command: Some("-p {prompt}".to_string()),
-                    autonomous_prompt_template: Some("AUTO: {prompt}".to_string()),
                 },
             );
             m
@@ -149,13 +147,15 @@ fn resolve_task_launch_autonomous_false_no_wrapper() {
     };
 
     let (resolved, _) = TaskService::resolve_task_launch(&request, &config, None).unwrap();
-    // autonomous=false means no wrapper applied
+    // autonomous=false means no wrapper applied (even if one were provided at a higher level)
     assert!(!resolved.command_label.contains("AUTO:"));
     assert!(resolved.command_label.contains("Task"));
 }
 
 #[test]
-fn resolve_task_launch_autonomous_true_applies_wrapper() {
+fn resolve_task_launch_autonomous_true_no_wrapper_from_resolve() {
+    // resolve_task_launch no longer applies the autonomous wrapper —
+    // that's handled by SessionDispatcher. autonomous=true here just passes through.
     let config = planeai_core::session_launch::LaunchConfig {
         providers: {
             let mut m = std::collections::HashMap::new();
@@ -165,7 +165,6 @@ fn resolve_task_launch_autonomous_true_applies_wrapper() {
                     command: "agent".to_string(),
                     yolo_flag: None,
                     prompt_command: Some("-p {prompt}".to_string()),
-                    autonomous_prompt_template: Some("AUTO: {prompt}".to_string()),
                 },
             );
             m
@@ -191,8 +190,49 @@ fn resolve_task_launch_autonomous_true_applies_wrapper() {
     };
 
     let (resolved, _) = TaskService::resolve_task_launch(&request, &config, None).unwrap();
-    // autonomous=true applies the wrapper
-    assert!(resolved.command_label.contains("AUTO:"));
+    // No wrapper applied at this level — autonomous template is applied by SessionDispatcher
+    assert!(!resolved.command_label.contains("AUTO:"));
+    assert!(resolved.command_label.contains("Task"));
+}
+
+#[test]
+fn build_provider_launch_command_autonomous_applies_wrapper() {
+    let provider = planeai_core::session_launch::ProviderConfig {
+        command: "agent".to_string(),
+        yolo_flag: None,
+        prompt_command: Some("-p {prompt}".to_string()),
+    };
+
+    let result = planeai_core::session_launch::build_provider_launch_command(
+        &provider,
+        false,
+        Some("Task\n\nDesc"),
+        true,
+        Some("AUTO: {prompt}"),
+    );
+    assert!(result.command.contains("AUTO:"));
+    assert!(result.prompt_was_injected);
+}
+
+#[test]
+fn build_provider_launch_command_autonomous_false_no_wrapper() {
+    let provider = planeai_core::session_launch::ProviderConfig {
+        command: "agent".to_string(),
+        yolo_flag: None,
+        prompt_command: Some("-p {prompt}".to_string()),
+    };
+
+    let result = planeai_core::session_launch::build_provider_launch_command(
+        &provider,
+        false,
+        Some("Task\n\nDesc"),
+        false,
+        Some("AUTO: {prompt}"),
+    );
+    // autonomous=false means wrapper is NOT applied
+    assert!(!result.command.contains("AUTO:"));
+    assert!(result.command.contains("Task"));
+    assert!(result.prompt_was_injected);
 }
 
 // ─── Session record task linkage ─────────────────────────────────────────────

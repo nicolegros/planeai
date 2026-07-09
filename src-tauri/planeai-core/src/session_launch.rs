@@ -22,8 +22,6 @@ pub struct ProviderConfig {
     pub yolo_flag: Option<String>,
     #[serde(default)]
     pub prompt_command: Option<String>,
-    #[serde(default)]
-    pub autonomous_prompt_template: Option<String>,
 }
 
 /// Minimal app config subset needed for session launch resolution.
@@ -54,7 +52,6 @@ impl Default for LaunchConfig {
                 command: "kiro-cli chat".to_string(),
                 yolo_flag: Some("--trust-all-tools".to_string()),
                 prompt_command: Some("{prompt}".to_string()),
-                autonomous_prompt_template: None,
             },
         );
         providers.insert(
@@ -63,7 +60,6 @@ impl Default for LaunchConfig {
                 command: "claude".to_string(),
                 yolo_flag: Some("--dangerously-skip-permissions".to_string()),
                 prompt_command: Some("-p {prompt}".to_string()),
-                autonomous_prompt_template: None,
             },
         );
         Self {
@@ -196,6 +192,7 @@ pub fn build_provider_launch_command(
     auto_approve: bool,
     task_prompt: Option<&str>,
     autonomous: bool,
+    autonomous_prompt_template: Option<&str>,
 ) -> ProviderLaunchCommand {
     let mut cmd = provider.command.clone();
     let mut auto_approve_was_applied = false;
@@ -214,7 +211,7 @@ pub fn build_provider_launch_command(
         if !prompt.is_empty() {
             // Apply autonomous_prompt_template only for autonomous launches
             let final_prompt = if autonomous {
-                if let Some(ref wrapper) = provider.autonomous_prompt_template {
+                if let Some(wrapper) = autonomous_prompt_template {
                     let mut vars = std::collections::HashMap::new();
                     vars.insert("prompt", prompt);
                     crate::template::render(wrapper, &vars)
@@ -261,6 +258,7 @@ pub fn resolve_from_config(
                 overrides.auto_approve,
                 overrides.task_prompt.as_deref(),
                 overrides.autonomous,
+                None, // autonomous_prompt_template not available in CLI context
             );
             (
                 result.command,

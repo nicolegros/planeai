@@ -9,7 +9,6 @@ export interface Provider {
   yolo_flag: string | null;
   resume_command?: string | null;
   prompt_command?: string | null;
-  autonomous_prompt_template?: string | null;
 }
 
 export interface LifecycleHook {
@@ -27,6 +26,7 @@ export interface AutoDispatchConfig {
   max_concurrent?: number;
   provider?: string;
   terminal_states?: string[];
+  autonomous_prompt_template?: string | null;
 }
 
 export interface TaskManager {
