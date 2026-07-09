@@ -178,6 +178,17 @@ fn write_log(path: &Path, content: &[u8]) -> Result<String, String> {
 /// Run a verifier gate command and persist results.
 ///
 /// This is the structured primitive that both AXI and the recipe runtime use.
+///
+/// # Blocking
+///
+/// This function blocks the calling thread for the duration of command execution
+/// (up to `limits.timeout_ms`). It spawns child threads to drain pipes and uses
+/// a polling loop with `thread::sleep`.
+///
+/// **Do not call from a Tauri IPC handler or any async context on the main thread.**
+/// From the Tauri app, wrap in `commands::blocking(|| { ... }).await` or
+/// `tokio::task::spawn_blocking`. From the CLI binary (no async runtime), direct
+/// calls are safe.
 pub fn run_verifier_gate(
     conn: &Connection,
     request: VerifyGateRequest,
