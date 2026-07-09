@@ -229,7 +229,12 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     // 5. Create the session via the standard path
     let use_worktree = isolation == "worktree";
     let base_branch = if round > 1 {
-        Some(format!("loop/{}/{}-r{}", short_id(ctx.loop_id), role_id, round - 1))
+        Some(format!(
+            "loop/{}/{}-r{}",
+            short_id(ctx.loop_id),
+            role_id,
+            round - 1
+        ))
     } else {
         None
     };
@@ -746,12 +751,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             .get(role)
             .and_then(|ids| ids.last())
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "step '{}': no sessions found for role '{}'",
-                    step.id, role
-                )
-            })?
+            .ok_or_else(|| format!("step '{}': no sessions found for role '{}'", step.id, role))?
     } else {
         ctx.snapshot
             .runtime
