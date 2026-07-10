@@ -7,6 +7,7 @@ import { pty } from "./api";
 import type { Tab } from "./session-tabs.svelte";
 import { getTabs, addTab, removeTab, setActiveTab, getActiveTabIndex } from "./session-tabs.svelte";
 import { getActiveSessionId } from "./session-orchestrator.svelte";
+import { refocusTerminal } from "./focus.svelte";
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ export async function handleNewTab(): Promise<void> {
   setActiveTab(id, tabIndex);
   diffTabActive = { ...diffTabActive, [id]: false };
   editorTabActive = { ...editorTabActive, [id]: false };
+  refocusTerminal();
   pty.incrementTabCount(id);
 }
 

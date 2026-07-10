@@ -15,7 +15,12 @@ vi.mock("../session-orchestrator.svelte", () => ({
   getActiveSessionId: vi.fn(() => "s1"),
 }));
 
+vi.mock("../focus.svelte", () => ({
+  refocusTerminal: vi.fn(),
+}));
+
 import { pty } from "../api";
+import { refocusTerminal } from "../focus.svelte";
 import { initSession, getTabs, destroySession, setActiveTab } from "../session-tabs.svelte";
 import { handleCloseTab, closeShellTab, handleNewTab } from "../tab-layout.svelte";
 
@@ -80,5 +85,10 @@ describe("handleNewTab", () => {
   it("increments tab count in db", async () => {
     await handleNewTab();
     expect(pty.incrementTabCount).toHaveBeenCalledWith("s1");
+  });
+
+  it("calls refocusTerminal so the new tab receives focus (PLA-235)", async () => {
+    await handleNewTab();
+    expect(refocusTerminal).toHaveBeenCalled();
   });
 });

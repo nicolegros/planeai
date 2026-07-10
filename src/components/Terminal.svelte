@@ -363,7 +363,7 @@
   });
 
   $effect(() => {
-    if (!term) return;
+    if (!term || !opened) return;
     if (focused) {
       term.focus();
       // Re-fit on focus: another window (or dev instance) may have resized the
