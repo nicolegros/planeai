@@ -225,10 +225,12 @@ The builtin recipe implements the full maker-verifier state machine: maker imple
 ```
 
 **Terminal states:**
+
 - `completed_unreviewed` — verifier approved; human should review/merge.
 - `blocked` / `needs_human` / `failed` — maker declared a non-completable outcome.
 
 **Safety:**
+
 - `max_rounds` (default: 3) limits retry cycles. When reached at any `round.next` step, the loop transitions to `blocked`.
 - `merge_policy: human` ensures no auto-merge. `completed_unreviewed` is the furthest automated state; a human must promote it to `approved` → `merged`.
 
@@ -453,6 +455,7 @@ This is the safe terminal state for the maker-verifier strategy. It means:
 3. **No merge has happened** — a human must still review the PR/branch and merge
 
 The human can then:
+
 - Approve and merge manually
 - Request another round by updating the loop status
 - Close the loop if the work is no longer needed

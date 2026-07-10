@@ -25,3 +25,4 @@ bench/fixtures/
 bench/captures/
 bench/results/
 src-tauri/planeai-iced-spike/:memory-shared:
+.planeai/
