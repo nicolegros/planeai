@@ -57,7 +57,7 @@ describe("LoopForm", () => {
 
     const submitBtn = target.querySelector<HTMLButtonElement>("button[type='submit']");
     expect(submitBtn).not.toBeNull();
-    expect(submitBtn!.textContent).toContain("Start Loop");
+    expect(submitBtn!.textContent).toContain("Start loop");
   });
 
   it("submits with correct params when start is checked", async () => {

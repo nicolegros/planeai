@@ -443,8 +443,8 @@
         {#if poolIsMounted(session.id)}
         <Terminal
           sessionId={ptyKey}
-          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
+          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
@@ -480,7 +480,7 @@
     {/each}
 
     {#if activeLoopId}
-      <div class="absolute inset-0 z-[1]">
+      <div class="w-full h-full bg-main">
         <LoopDashboard
           loopId={activeLoopId}
           onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}

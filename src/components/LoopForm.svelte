@@ -1,7 +1,7 @@
 <script lang="ts">
   import { loops as loopsApi, tasks as tasksApi } from "../lib/api";
   import type { LoopRunSummary, RecipeSummary, TaskItem } from "../lib/types";
-  import { Button, Label, Select, Checkbox } from "./ui";
+  import { Button, Input, Label, Select } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
@@ -61,8 +61,7 @@
 
   const canSubmit = $derived(goal.trim().length > 0 && recipeId.length > 0 && !submitting);
 
-  async function handleSubmit(e: Event) {
-    e.preventDefault();
+  async function submit() {
     if (!canSubmit) return;
     submitting = true;
 
@@ -83,118 +82,105 @@
   }
 
   // Form keyboard controller
-  let formRef: HTMLDivElement | undefined = $state();
+  let wrapperEl: HTMLDivElement | undefined = $state();
   let goalRef: HTMLTextAreaElement | undefined = $state();
 
-  const formKb = createFormKeyboardController(
+  const badge = "bg-panel-hi text-t3";
+
+  const fk = createFormKeyboardController(
     () => [
       { key: "g", ref: () => goalRef ?? null },
       { key: "d", toggle: () => (draft = !draft) },
     ],
-    { wrapper: () => formRef ?? null, onDismiss: () => onCancel() },
+    { wrapper: () => wrapperEl ?? null, onDismiss: () => onCancel() },
   );
 
-  function handleFormKeydown(e: KeyboardEvent) {
-    // Mod+Enter submits
-    if (e.key === "Enter" && isPlatformMod(e)) {
-      e.preventDefault();
-      if (canSubmit) handleSubmit(e);
-      return;
-    }
-    formKb.handleKeydown(e);
+  function metaEnter(e: KeyboardEvent) {
+    if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
   }
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div
-  bind:this={formRef}
-  class="w-[500px] p-5 space-y-4"
-  tabindex="0"
-  role="dialog"
-  aria-label="Create Loop"
-  onkeydown={handleFormKeydown}
-  onfocusin={formKb.handleFocusin}
->
-  <h2 class="text-lg font-semibold text-t1">Start Loop</h2>
+<div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
+<form class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
 
-  <form onsubmit={handleSubmit} class="space-y-4">
-    <!-- Goal -->
-    <div>
-      <Label for="loop-goal">Goal <kbd class="text-t3 text-xs ml-1">g</kbd></Label>
-      <textarea
-        bind:this={goalRef}
-        bind:value={goal}
-        data-field="goal"
-        id="loop-goal"
-        class="mt-1 w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent resize-y min-h-[60px]"
-        placeholder="What should this loop accomplish?"
-        rows="3"
-      ></textarea>
-    </div>
+  <div class="space-y-1" data-field="goal">
+    <Label>Goal <span class="font-mono text-[10px] px-1 rounded {badge}">G</span></Label>
+    <textarea
+      bind:this={goalRef}
+      bind:value={goal}
+      data-field="goal"
+      onkeydown={metaEnter}
+      class="w-full rounded-md border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent resize-y min-h-[60px]"
+      placeholder="What should this loop accomplish?"
+      rows="3"
+    ></textarea>
+  </div>
 
-    <!-- Recipe -->
-    <div>
-      <Label for="loop-recipe">Recipe</Label>
-      {#if recipeItems.length > 0}
-        <Select
-          items={recipeItems}
-          bind:value={recipeId}
-          placeholder="Select recipe…"
-        />
+  <div class="space-y-1" data-field="recipe">
+    <Label>Recipe</Label>
+    {#if recipeItems.length > 0}
+      <Select
+        items={recipeItems}
+        bind:value={recipeId}
+        onkeydown={metaEnter}
+        placeholder="Select recipe…"
+      />
+    {:else}
+      <p class="text-t3 text-sm">Loading recipes…</p>
+    {/if}
+  </div>
+
+  <div class="space-y-1" data-field="task">
+    <Label>Task (optional)</Label>
+    <Select
+      items={taskSelectItems}
+      bind:value={selectedTaskKey}
+      onkeydown={metaEnter}
+      placeholder="Link to task…"
+    />
+  </div>
+
+  <div class="space-y-1" data-field="max-rounds">
+    <Label>Max rounds</Label>
+    <Input
+      type="number"
+      bind:value={maxRounds}
+      onkeydown={metaEnter}
+      min="1"
+      max="20"
+      class="w-20"
+    />
+  </div>
+
+  <div class="flex items-center gap-2" data-field="draft">
+    <input
+      type="checkbox"
+      id="loop-draft"
+      data-field="draft"
+      bind:checked={draft}
+      class="rounded border-border"
+    />
+    <Label for="loop-draft">Start as draft <span class="font-mono text-[10px] px-1 rounded {badge}">D</span></Label>
+  </div>
+
+  <div class="flex items-center justify-between pt-2 pb-4 border-t border-border mt-3">
+    <div class="flex items-center gap-2">
+      {#if fk.mode === "insert"}
+        <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
+        <span class="text-[10px] text-t3">esc → normal mode</span>
       {:else}
-        <p class="text-t3 text-sm mt-1">Loading recipes…</p>
+        <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-panel-hi text-t2 font-medium">NORMAL</span>
+        <span class="text-[10px] text-t3">press a key to focus field</span>
       {/if}
     </div>
-
-    <!-- Task -->
-    <div>
-      <Label for="loop-task">Task (optional)</Label>
-      <Select
-        items={taskSelectItems}
-        bind:value={selectedTaskKey}
-        placeholder="Link to task…"
-      />
+    <div class="flex gap-2">
+      <Button type="button" onclick={() => onCancel()}>Cancel</Button>
+      <Button type="submit" variant="primary" disabled={!canSubmit}>
+        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}Start loop <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
+      </Button>
     </div>
-
-    <!-- Max Rounds -->
-    <div>
-      <Label for="loop-max-rounds">Max rounds</Label>
-      <input
-        type="number"
-        id="loop-max-rounds"
-        data-field="max-rounds"
-        bind:value={maxRounds}
-        min="1"
-        max="20"
-        class="mt-1 w-20 rounded border border-border bg-panel px-3 py-1.5 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent"
-      />
-    </div>
-
-    <!-- Draft checkbox -->
-    <div class="flex items-center gap-2">
-      <input
-        type="checkbox"
-        id="loop-draft"
-        data-field="draft"
-        bind:checked={draft}
-        class="rounded border-border"
-      />
-      <Label for="loop-draft">Start as draft (don't run immediately)</Label>
-    </div>
-
-    <!-- Actions -->
-    <div class="flex items-center justify-between pt-2">
-      <span class="text-t3 text-xs">{MOD_ENTER_HINT} to submit</span>
-      <div class="flex gap-2">
-        <Button variant="ghost" onclick={onCancel}>Cancel</Button>
-        <Button type="submit" variant="primary" disabled={!canSubmit}>
-          {#if submitting}
-            <LoaderCircle class="w-4 h-4 animate-spin" />
-          {:else}
-            Start Loop
-          {/if}
-        </Button>
-      </div>
-    </div>
-  </form>
+  </div>
+</form>
 </div>
