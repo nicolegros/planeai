@@ -118,21 +118,21 @@ archived → active (restore)
 
 ## What Iced Reuses
 
-| Concern                                  | Source                                            |
-| ---------------------------------------- | ------------------------------------------------- |
-| Config/provider resolution               | `planeai_core::session_launch`                    |
-| Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()` |
-| Project persistence                      | `planeai_core::services::ProjectService`          |
-| Session persistence                      | `planeai_core::services::SessionService`          |
-| Worktree logic                           | `planeai_core::services::WorktreeService`         |
-| Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`             |
-| Prompt locking (cross-process)           | `planeai_core::prompt_lock`                       |
-| Loop run persistence                     | `planeai_core::loop_service::LoopService`         |
+| Concern                                  | Source                                             |
+| ---------------------------------------- | -------------------------------------------------- |
+| Config/provider resolution               | `planeai_core::session_launch`                     |
+| Session preparation (command, env, PATH) | `planeai_core::session_launch::prepare_session()`  |
+| Project persistence                      | `planeai_core::services::ProjectService`           |
+| Session persistence                      | `planeai_core::services::SessionService`           |
+| Worktree logic                           | `planeai_core::services::WorktreeService`          |
+| Task listing/prompt/lifecycle            | `planeai_core::services::TaskService`              |
+| Prompt locking (cross-process)           | `planeai_core::prompt_lock`                        |
+| Loop run persistence                     | `planeai_core::loop_service::LoopService`          |
 | Loop recipe discovery and validation     | `planeai_core::loop_recipe_service::RecipeService` |
-| Task-driven launch resolution            | `TaskService::resolve_task_launch()`              |
-| Daemon protocol                          | `planeai_daemon::protocol`                        |
-| IPC transport                            | `planeai_ipc`                                     |
-| Durable logging                          | Daemon-side (transparent)                         |
+| Task-driven launch resolution            | `TaskService::resolve_task_launch()`               |
+| Daemon protocol                          | `planeai_daemon::protocol`                         |
+| IPC transport                            | `planeai_ipc`                                      |
+| Durable logging                          | Daemon-side (transparent)                          |
 
 ## How Tauri Uses Shared Services
 
@@ -319,11 +319,11 @@ Declarative YAML definitions that describe reusable loop workflows. A recipe spe
 
 **Key types:**
 
-| Type | Description |
-| --- | --- |
-| `LoopRecipe` | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools) |
+| Type             | Description                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `LoopRecipe`     | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools)                            |
 | `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions |
-| `RecipeService` | Discovery, loading, validation, and snapshot creation (file-based, no DB) |
+| `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                          |
 
 **Discovery precedence:** project (`.planeai/loops/*.yaml`) > user (`~/.config/planeai/loops/*.yaml`) > builtin (embedded in binary).
 

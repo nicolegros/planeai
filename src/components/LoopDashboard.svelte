@@ -1,0 +1,281 @@
+<script lang="ts">
+  import type { LoopRunDetail } from "../lib/types";
+  import { loops as loopsApi } from "../lib/api";
+  import { Button } from "./ui";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock } from "@lucide/svelte";
+
+  interface Props {
+    loopId: string;
+    onSelectSession: (sessionId: string) => void;
+    onOpenArtifact?: (path: string) => void;
+  }
+
+  let { loopId, onSelectSession, onOpenArtifact }: Props = $props();
+
+  let detail = $state<LoopRunDetail | null>(null);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+
+  async function refresh() {
+    loading = true;
+    error = null;
+    try {
+      detail = await loopsApi.detail(loopId);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  // Load on mount and when loopId changes
+  $effect(() => {
+    refresh();
+  });
+
+  async function handleTick() {
+    try {
+      await loopsApi.tick(loopId);
+      refresh();
+    } catch (e) {
+      showSnackbar(`Tick failed: ${e}`);
+    }
+  }
+
+  async function handleStop() {
+    try {
+      await loopsApi.stop(loopId);
+      refresh();
+    } catch (e) {
+      showSnackbar(`Stop failed: ${e}`);
+    }
+  }
+
+  async function handleStart() {
+    try {
+      await loopsApi.start(loopId);
+      refresh();
+    } catch (e) {
+      showSnackbar(`Start failed: ${e}`);
+    }
+  }
+
+  function copyPath(path: string) {
+    navigator.clipboard.writeText(path);
+  }
+
+  function isActive(status: string): boolean {
+    return ["running", "observing", "verifying"].includes(status);
+  }
+
+  function shortId(id: string): string {
+    return id.slice(0, 8);
+  }
+
+  const statusBadgeColors: Record<string, string> = {
+    draft: "bg-t3/20 text-t2",
+    running: "bg-status-running/20 text-status-running",
+    observing: "bg-status-running/20 text-status-running",
+    verifying: "bg-status-running/20 text-status-running",
+    completed_unreviewed: "bg-status-review/20 text-status-review",
+    blocked: "bg-status-exited/20 text-status-exited",
+    needs_human: "bg-status-review/20 text-status-review",
+    stale: "bg-status-exited/20 text-status-exited",
+    failed: "bg-status-exited/20 text-status-exited",
+    cancelled: "bg-status-exited/20 text-status-exited",
+    approved: "bg-status-running/20 text-status-running",
+    merged: "bg-status-idle/20 text-status-idle",
+    cleaned: "bg-status-idle/20 text-status-idle",
+  };
+
+  function verifierIcon(status: string) {
+    if (status === "passed") return CheckCircle2;
+    if (status === "failed") return XCircle;
+    return Clock;
+  }
+
+  function verifierColor(status: string): string {
+    if (status === "passed") return "text-status-running";
+    if (status === "failed") return "text-status-exited";
+    return "text-t3";
+  }
+</script>
+
+<div class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl mx-auto">
+  {#if loading && !detail}
+    <div class="flex items-center justify-center py-12">
+      <RefreshCw class="size-5 text-t3 animate-spin" />
+    </div>
+  {:else if error}
+    <div class="text-status-exited text-sm p-4 rounded-md bg-status-exited/10">
+      {error}
+    </div>
+  {:else if detail}
+    <!-- Header -->
+    <div class="space-y-2">
+      <div class="flex items-center gap-3">
+        <h1 class="text-xl font-semibold text-t1">
+          {#if detail.run.task_key}
+            {detail.run.task_key}
+          {:else}
+            Loop {shortId(detail.run.id)}
+          {/if}
+        </h1>
+        <span class="px-2 py-0.5 rounded-full text-xs font-medium {statusBadgeColors[detail.run.status] ?? 'bg-t3/20 text-t2'}">
+          {detail.run.status}
+        </span>
+        <span class="text-t3 text-sm">
+          Round {detail.run.current_round}/{detail.run.max_rounds}
+        </span>
+        <span class="text-t3 text-xs font-mono">{detail.run.strategy}</span>
+      </div>
+
+      <p class="text-t2 text-sm">{detail.run.goal}</p>
+
+      <!-- Actions -->
+      <div class="flex gap-2 pt-1">
+        <Button variant="ghost" size="sm" onclick={refresh} disabled={loading}>
+          <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
+          Refresh
+        </Button>
+        {#if detail.run.status === "draft"}
+          <Button variant="primary" size="sm" onclick={handleStart}>
+            <Play class="size-3.5" />
+            Start
+          </Button>
+        {/if}
+        {#if isActive(detail.run.status)}
+          <Button variant="ghost" size="sm" onclick={handleTick}>
+            <Play class="size-3.5" />
+            Tick
+          </Button>
+          <Button variant="ghost" size="sm" onclick={handleStop}>
+            <Square class="size-3.5" />
+            Stop
+          </Button>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Sessions table -->
+    {#if detail.sessions.length > 0}
+      <section>
+        <h2 class="text-sm font-semibold text-t2 mb-2">Sessions</h2>
+        <div class="border border-border rounded-md overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-panel-hi text-t3 text-xs">
+              <tr>
+                <th class="text-left px-3 py-1.5">Role</th>
+                <th class="text-left px-3 py-1.5">Session</th>
+                <th class="text-left px-3 py-1.5">Round</th>
+                <th class="text-left px-3 py-1.5">Provider</th>
+                <th class="text-left px-3 py-1.5">Status</th>
+                <th class="px-3 py-1.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each detail.sessions as session (session.session_id)}
+                <tr class="border-t border-border hover:bg-panel-hi/50">
+                  <td class="px-3 py-2 text-t2 font-medium">{session.role}</td>
+                  <td class="px-3 py-2 font-mono text-xs text-t3">{shortId(session.session_id)}</td>
+                  <td class="px-3 py-2 text-t3">{session.round}</td>
+                  <td class="px-3 py-2 text-t3">{session.provider ?? "—"}</td>
+                  <td class="px-3 py-2 text-t2">{session.status}</td>
+                  <td class="px-3 py-2">
+                    <button
+                      class="text-accent hover:underline text-xs"
+                      onclick={() => onSelectSession(session.session_id)}
+                    >
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {/if}
+
+    <!-- Verifier runs -->
+    {#if detail.verifier_runs.length > 0}
+      <section>
+        <h2 class="text-sm font-semibold text-t2 mb-2">Verifier Runs</h2>
+        <ul class="space-y-1">
+          {#each detail.verifier_runs as vr (vr.id)}
+            {@const Icon = verifierIcon(vr.status)}
+            <li class="flex items-center gap-2 px-3 py-2 rounded-md border border-border">
+              <Icon class="size-4 {verifierColor(vr.status)}" />
+              <span class="text-t1 text-sm font-medium flex-1">{vr.name}</span>
+              <code class="text-t3 text-xs font-mono truncate max-w-[200px]">{vr.command}</code>
+              {#if vr.exit_code != null}
+                <span class="text-xs {vr.exit_code === 0 ? 'text-status-running' : 'text-status-exited'}">
+                  exit {vr.exit_code}
+                </span>
+              {/if}
+              {#if vr.output_path}
+                <button
+                  class="text-accent text-xs hover:underline"
+                  onclick={() => { if (onOpenArtifact) onOpenArtifact(vr.output_path!); else copyPath(vr.output_path!); }}
+                >
+                  output
+                </button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    <!-- Artifacts -->
+    {#if detail.artifacts.length > 0}
+      <section>
+        <h2 class="text-sm font-semibold text-t2 mb-2">Artifacts</h2>
+        <ul class="space-y-1">
+          {#each detail.artifacts as artifact (artifact.id)}
+            <li class="flex items-center gap-2 px-3 py-2 rounded-md border border-border">
+              <span class="text-t2 text-sm font-medium">{artifact.kind}</span>
+              {#if artifact.path}
+                <code class="text-t3 text-xs font-mono flex-1 truncate">{artifact.path}</code>
+                <button
+                  class="text-t3 hover:text-t1 p-0.5"
+                  onclick={() => copyPath(artifact.path!)}
+                  title="Copy path"
+                  aria-label="Copy artifact path"
+                >
+                  <Copy class="size-3" />
+                </button>
+                {#if onOpenArtifact}
+                  <button
+                    class="text-accent text-xs hover:underline"
+                    onclick={() => onOpenArtifact!(artifact.path!)}
+                  >
+                    Open
+                  </button>
+                {/if}
+              {:else}
+                <span class="text-t3 text-xs">(inline)</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    <!-- Recent events -->
+    {#if detail.events.length > 0}
+      <section>
+        <h2 class="text-sm font-semibold text-t2 mb-2">Events</h2>
+        <ul class="space-y-0.5 text-xs">
+          {#each detail.events.slice(-20) as event (event.id)}
+            <li class="flex items-center gap-2 px-2 py-1 rounded hover:bg-panel-hi/50">
+              <span class="text-t3 font-mono w-[140px] shrink-0">{event.ts.slice(0, 19).replace("T", " ")}</span>
+              <span class="text-t2 font-medium">{event.kind}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+  {/if}
+</div>

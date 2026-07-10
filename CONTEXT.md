@@ -31,7 +31,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Loop event**       | An ordered, append-only log entry for a loop run (e.g., "round_started", "session_spawned"). Stored in `loop_events`.                                                                                                                                                                                 |
 | **Loop artifact**    | A piece of evidence produced during a loop (diff, patch, test output). Stored in `loop_artifacts`.                                                                                                                                                                                                    |
 | **Verifier run**     | A verification step within a loop — either a shell command (`verifier_type = "command"`) or an agent session (`verifier_type = "agent"`). Tracks exit code and output path. Stored in `verifier_runs`.                                                                                                |
-| **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                                |
+| **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                               |
 | **Loop recipe**      | A declarative YAML definition (`planeai.loop.recipe.v1`) describing a reusable loop workflow — roles, steps, knowledge, tools, and policy. Discovered from project (`.planeai/loops/`), user (`~/.config/planeai/loops/`), or builtin sources. See `docs/LOOP_RECIPES.md`.                            |
 | **Recipe snapshot**  | A runtime copy of a resolved recipe plus inputs, tick counter, and created session IDs. Stored in `policy_json` on the loop run. The recipe tick runner reads and updates it on each tick.                                                                                                            |
 
@@ -301,6 +301,35 @@ Performance is critical — planeai is a real-time terminal multiplexer. The UI 
 ## Architecture decisions
 
 See `docs/adr/` for recorded decisions.
+
+## Loop Runs UI
+
+The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding UI surface for human visibility and control.
+
+### Entry points
+
+- **Sidebar**: `LoopGroup` section renders above projects. Shows all loops across projects with status dots, round counters, and quick action buttons (tick, stop).
+- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal), verifier runs (pass/fail), artifacts (copyable path, open in editor), and recent events timeline.
+- **Create form**: `Cmd+N` → `l` opens `LoopForm` — goal, recipe picker, task link, max rounds, draft checkbox. Keyboard-driven (g=goal, d=toggle draft, Mod+Enter=submit, Esc=cancel).
+- **Actions**: Refresh, Tick (fire-and-forget), Stop from the dashboard. Quick tick/stop from sidebar hover.
+
+### State management
+
+- `src/lib/loop-store.svelte.ts` — reactive store with `refreshAllLoops()`, `setActiveLoopId()`, and `startLoopEventListener()`.
+- Backend emits `loop-state-changed` Tauri event on mutations (create, tick, stop). Frontend listens and auto-refreshes.
+
+### Backend commands
+
+Six async Tauri commands in `src-tauri/src/commands/loops.rs`:
+
+- `list_loop_runs(project_id)` → `Vec<LoopRunSummary>`
+- `get_loop_run_detail(loop_id)` → `LoopRunDetail` (sessions, events, artifacts, verifier runs)
+- `list_loop_recipes(project_id)` → `Vec<RecipeSummary>`
+- `create_loop_run(params)` → `LoopRunSummary`
+- `tick_loop(loop_id)` → fire-and-forget tick
+- `stop_loop(loop_id)` → transition to cancelled
+
+All commands use `blocking()` for DB access to avoid blocking the main thread.
 
 ## Adding a new ui/ primitive
 

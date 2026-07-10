@@ -58,9 +58,19 @@ pub fn tick_recipe(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
 ) -> (String, i32) {
+    tracing::info!(
+        loop_id = %short_id(loop_id),
+        recipe_id = %snapshot.recipe_id,
+        tick_count = snapshot.runtime.tick_count,
+        current_step = %snapshot.runtime.current_step,
+        round = snapshot.runtime.round,
+        "tick_recipe: starting tick"
+    );
+
     // Top-level terminal guard: do not execute any step if the loop is terminal.
     if let Ok(Some(run)) = LoopService::get_loop(conn, loop_id) {
         if run.status.is_executor_terminal() {
+            tracing::warn!(loop_id = %short_id(loop_id), status = %run.status.as_str(), "tick_recipe: loop is terminal, cannot tick");
             return (
                 render(&[field(
                     "error",
@@ -75,6 +85,7 @@ pub fn tick_recipe(
         }
         // Also guard intervention-required statuses (blocked, needs_human, stale)
         if run.status.is_intervention_required() {
+            tracing::warn!(loop_id = %short_id(loop_id), status = %run.status.as_str(), "tick_recipe: loop requires intervention, cannot tick");
             return render_tick_result(
                 loop_id,
                 &snapshot.recipe_id,
@@ -93,6 +104,7 @@ pub fn tick_recipe(
 
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
+        tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
         let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Failed);
         let _ = LoopService::append_loop_event(
             conn,
@@ -150,6 +162,14 @@ pub fn tick_recipe(
     // Increment tick
     snapshot.runtime.tick_count += 1;
 
+    tracing::info!(
+        loop_id = %short_id(loop_id),
+        step_id = %step.id,
+        step_kind = %step.kind,
+        tick_count = snapshot.runtime.tick_count,
+        "tick_recipe: executing step"
+    );
+
     // Dispatch by step kind
     let mut ctx = TickContext {
         conn,
@@ -170,8 +190,26 @@ pub fn tick_recipe(
     };
 
     match result {
-        Ok(tr) => render_tick_result(loop_id, &ctx.snapshot.recipe_id, tr),
-        Err(msg) => render_error(&msg),
+        Ok(ref tr) => {
+            tracing::info!(
+                loop_id = %short_id(loop_id),
+                step_id = %tr.step_id,
+                step_kind = %tr.step_kind,
+                status = %tr.status,
+                "tick_recipe: step completed"
+            );
+            render_tick_result(loop_id, &ctx.snapshot.recipe_id, result.unwrap())
+        }
+        Err(ref msg) => {
+            tracing::error!(
+                loop_id = %short_id(loop_id),
+                step_id = %step.id,
+                step_kind = %step.kind,
+                error = %msg,
+                "tick_recipe: step failed"
+            );
+            render_error(msg)
+        }
     }
 }
 
@@ -238,6 +276,14 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     } else {
         None
     };
+
+    // Render prompt before session creation so it's baked into the launch command
+    let rendered_prompt = step
+        .prompt
+        .as_ref()
+        .map(|tpl| render_prompt(tpl, ctx.snapshot, ctx.loop_id));
+    let has_prompt = rendered_prompt.is_some();
+
     let opts = crate::cli::SessionCreateOpts {
         project: project.name.clone(),
         branch: branch_name.clone(),
@@ -248,13 +294,31 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         yolo: false,
         provider: Some(provider.clone()),
         task_key: loop_run.task_key.clone(),
-        prompt: None, // We send prompt separately after creation
+        prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };
 
     let session = match crate::cli::create_session(ctx.conn, opts) {
-        Ok(s) => s,
+        Ok(s) => {
+            tracing::info!(
+                loop_id = %short_id(ctx.loop_id),
+                session_id = %s.id,
+                role = %role_id,
+                branch = %branch_name,
+                provider = %provider,
+                prompt_provided = has_prompt,
+                "exec_session_create: session created successfully"
+            );
+            s
+        }
         Err(e) => {
+            tracing::error!(
+                loop_id = %short_id(ctx.loop_id),
+                role = %role_id,
+                branch = %branch_name,
+                error = %e,
+                "exec_session_create: session creation failed"
+            );
             // Rollback: on failure, append error event and return
             LoopService::append_loop_event(
                 ctx.conn,
@@ -301,28 +365,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .or_default()
         .push(session.id.clone());
 
-    // 8. Render and send prompt (if step has a prompt template)
-    if let Some(ref prompt_template) = step.prompt {
-        let rendered = render_prompt(prompt_template, ctx.snapshot, ctx.loop_id);
-        let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
-        match crate::session_ops::send_prompt(ctx.conn, &session.id, &rendered, &ops) {
-            Ok(_) => {}
-            Err(e) => {
-                // Session was created but prompt failed — log but don't fail the step
-                LoopService::append_loop_event(
-                    ctx.conn,
-                    ctx.loop_id,
-                    "recipe_step_warning",
-                    &serde_json::json!({
-                        "step_id": step.id,
-                        "warning": format!("prompt delivery failed: {e}"),
-                        "session_id": session.id,
-                    }),
-                )
-                .ok();
-            }
-        }
-    }
+    // 8. (Prompt is now baked into the launch command via opts.prompt — no separate send needed)
 
     // 9. Set loop status to observing
     LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing).ok();

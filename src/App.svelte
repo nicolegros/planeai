@@ -39,6 +39,10 @@
   import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
   import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
+  import LoopForm from "./components/LoopForm.svelte";
+  import LoopDashboard from "./components/LoopDashboard.svelte";
+  import * as loopStore from "./lib/loop-store.svelte";
+  import { loops as loopsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
@@ -56,6 +60,7 @@
   let showShortcuts = $state(false);
   let showHookPrompt = $state(false);
   let showQuitConfirm = $state(false);
+  let showLoopForm = $state(false);
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
@@ -144,6 +149,7 @@
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
   const ciStatus = $derived.by(() => {
@@ -191,6 +197,7 @@
   onMount(() => {
     projectStore.loadProjects().then(() => {
       taskStore.loadTasks(projectStore.getProjects().map((p) => p.path));
+      loopStore.refreshAllLoops(projectStore.getProjects().map((p) => p.id));
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
@@ -199,6 +206,7 @@
     const cleanupSymphony = orchestrator.startSymphonyPolling();
     const cleanupCi = startCiPolling(orchestrator.getSessions());
     const cleanupPrComments = startPrCommentPolling(orchestrator.getSessions());
+    const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
@@ -226,7 +234,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -251,7 +259,7 @@
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
         else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
     );
@@ -264,6 +272,7 @@
         if (e.key === 'Escape') { showNewItemModal = false; }
         else if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }
         else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
+        else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -293,7 +302,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -329,7 +338,7 @@
   {#if sidebarVisible}
       <UnifiedSidebar
         {renamingSessionId}
-        onSelectSession={(id) => orchestrator.selectSession(id)}
+        onSelectSession={(id) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(id); }}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
         onRestartSession={(s) => orchestrator.restartSession(s)}
@@ -341,6 +350,12 @@
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showNewItemModal = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
+        onSelectLoop={(id) => { loopStore.setActiveLoopId(id); }}
+        onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
+        onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
+        onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
+        onDeleteLoop={(id) => { loopsApi.delete(id).then(() => { if (loopStore.getActiveLoopId() === id) loopStore.setActiveLoopId(null); loopStore.refreshAllLoops(projects.map(p => p.id)); }); }}
+        selectedLoopId={activeLoopId}
       />
   {/if}
 
@@ -373,6 +388,17 @@
         tasks={taskStore.getAllTasks()}
         onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
+      />
+    </FormDialog>
+    {/if}
+
+    {#if showLoopForm}
+    <FormDialog title="Start Loop" onClose={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}>
+      <LoopForm
+        projectId={projects[0]?.id ?? ""}
+        projectPath={projects[0]?.path ?? ""}
+        onCreated={(loop) => { showLoopForm = false; loopStore.setActiveLoopId(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
+        onCancel={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
     {/if}
@@ -419,8 +445,8 @@
         {#if poolIsMounted(session.id)}
         <Terminal
           sessionId={ptyKey}
-          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
+          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
@@ -455,7 +481,17 @@
       {/if}
     {/each}
 
-    {#if sessions.length === 0 && !showProjectForm && !showSessionForm}
+    {#if activeLoopId}
+      <div class="w-full h-full bg-main">
+        <LoopDashboard
+          loopId={activeLoopId}
+          onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}
+          onOpenArtifact={(path) => { if (activeSession) orchestrator.openFile(path); }}
+        />
+      </div>
+    {/if}
+
+    {#if sessions.length === 0 && !showProjectForm && !showSessionForm && !activeLoopId}
       <div class="flex items-center justify-center h-full">
         <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>
@@ -556,6 +592,11 @@
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
               <span class="flex-1 text-[13.5px] text-t1">Task</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showLoopForm = true; }}>
+              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">⟳</span>
+              <span class="flex-1 text-[13.5px] text-t1">Loop (experimental)</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">l</span>
             </button>
           </div>
         </div>

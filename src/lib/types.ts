@@ -89,3 +89,72 @@ export interface JiraTasksResponse {
   tasks: TaskItem[];
   child_counts: Record<string, number>;
 }
+
+// ─── Loop types ──────────────────────────────────────────────────────────────
+
+export interface LoopRunSummary {
+  id: string;
+  project_id: string;
+  task_key: string | null;
+  strategy: string;
+  goal: string;
+  status: string;
+  current_round: number;
+  max_rounds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoopSessionItem {
+  session_id: string;
+  role: string;
+  round: number;
+  provider: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface LoopEventItem {
+  id: number;
+  ts: string;
+  kind: string;
+  payload_json: unknown;
+}
+
+export interface LoopArtifactItem {
+  id: string;
+  session_id: string | null;
+  kind: string;
+  path: string | null;
+  content_json: unknown | null;
+  created_at: string;
+}
+
+export interface VerifierRunItem {
+  id: string;
+  session_id: string | null;
+  verifier_type: string;
+  name: string;
+  command: string;
+  status: string;
+  exit_code: number | null;
+  output_path: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface LoopRunDetail {
+  run: LoopRunSummary;
+  sessions: LoopSessionItem[];
+  events: LoopEventItem[];
+  artifacts: LoopArtifactItem[];
+  verifier_runs: VerifierRunItem[];
+}
+
+export interface RecipeSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  source: string;
+}

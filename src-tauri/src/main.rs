@@ -368,6 +368,14 @@ fn main() {
             jira_status,
             assign_jira_task,
             mark_jira_task_done,
+            list_loop_runs,
+            get_loop_run_detail,
+            list_loop_recipes,
+            create_loop_run,
+            start_loop,
+            tick_loop,
+            stop_loop,
+            delete_loop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -367,10 +367,7 @@ describe("unified sidebar logic", () => {
   describe("session indicator (task key tint)", () => {
     // The sidebar tints the task key with accent color when a session is linked.
     // This tests the sessionForTask lookup logic used to determine the tint.
-    function sessionForTask(
-      key: string,
-      sessions: Session[],
-    ): Session | undefined {
+    function sessionForTask(key: string, sessions: Session[]): Session | undefined {
       return sessions.find((s) => s.task_key === key);
     }
 
@@ -390,10 +387,7 @@ describe("unified sidebar logic", () => {
     });
 
     it("returns first matching session when multiple match", () => {
-      const sessions = [
-        makeSession("s1", "p1", "PLA-1"),
-        makeSession("s2", "p1", "PLA-1"),
-      ];
+      const sessions = [makeSession("s1", "p1", "PLA-1"), makeSession("s2", "p1", "PLA-1")];
       expect(sessionForTask("PLA-1", sessions)!.id).toBe("s1");
     });
 

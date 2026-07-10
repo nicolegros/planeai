@@ -1,20 +1,20 @@
 # Loop Recipes
 
-Loop recipes are declarative YAML definitions that describe AI engineering loops — repeatable, multi-agent workflows with durable state, human review gates, and worktree isolation. A recipe tells planeai *what* agents to spin up, *how* they hand off work, and *when* a human must intervene.
+Loop recipes are declarative YAML definitions that describe AI engineering loops — repeatable, multi-agent workflows with durable state, human review gates, and worktree isolation. A recipe tells planeai _what_ agents to spin up, _how_ they hand off work, and _when_ a human must intervene.
 
 ## Loop-Engineering Principles
 
 Recipes encode the core loop-engineering model:
 
-| Principle | Recipe mapping |
-|-----------|---------------|
-| Heartbeat/tick model | Each `step` is a tick; the loop runner advances one step at a time |
-| Worktree isolation | `session.create` steps spawn agents in isolated git worktrees |
-| Project knowledge | `knowledge` field injects docs, context files, and ADRs into agent prompts |
-| Tools/connectors | `tools` field declares which MCP servers or CLI tools are available |
+| Principle             | Recipe mapping                                                                  |
+| --------------------- | ------------------------------------------------------------------------------- |
+| Heartbeat/tick model  | Each `step` is a tick; the loop runner advances one step at a time              |
+| Worktree isolation    | `session.create` steps spawn agents in isolated git worktrees                   |
+| Project knowledge     | `knowledge` field injects docs, context files, and ADRs into agent prompts      |
+| Tools/connectors      | `tools` field declares which MCP servers or CLI tools are available             |
 | Role-based sub-agents | `roles` field defines named agents with distinct system prompts and tool access |
-| Durable state | Loop state persists in SQLite; resumes after app restart or crash |
-| Human review | `human.wait` steps and `merge_policy: human` enforce manual approval |
+| Durable state         | Loop state persists in SQLite; resumes after app restart or crash               |
+| Human review          | `human.wait` steps and `merge_policy: human` enforce manual approval            |
 
 ## Recipe Locations and Precedence
 
@@ -128,13 +128,13 @@ policy:
   merge_policy: human
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_rounds` | integer | 3 | Maximum iteration rounds |
-| `max_ticks` | integer | 50 | Hard cap on total steps executed |
-| `max_sessions` | integer | 5 | Maximum concurrent agent sessions |
-| `stale_after_ms` | integer | null | Wall-clock staleness timeout in milliseconds |
-| `merge_policy` | string | `human` | Only `human` is supported in v1 |
+| Field            | Type    | Default | Description                                  |
+| ---------------- | ------- | ------- | -------------------------------------------- |
+| `max_rounds`     | integer | 3       | Maximum iteration rounds                     |
+| `max_ticks`      | integer | 50      | Hard cap on total steps executed             |
+| `max_sessions`   | integer | 5       | Maximum concurrent agent sessions            |
+| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds |
+| `merge_policy`   | string  | `human` | Only `human` is supported in v1              |
 
 ### steps
 
@@ -171,19 +171,19 @@ steps:
 
 Step fields reference:
 
-| Field | Description |
-|-------|-------------|
-| `id` | Unique step identifier (required) |
-| `kind` | Step kind — see supported kinds below (required) |
-| `role` | Target role for session steps |
-| `prompt` | Message/instruction text |
-| `from` | Source role for handoff.wait |
-| `on` | Condition map for conditional steps |
-| `status` | Target status for loop.status |
-| `next` | Explicit next step ID (overrides sequential order) |
-| `select` | Selection criteria |
-| `event_kind` | Event kind for loop.event |
-| `gates` | List of gate declarations for gates.run steps |
+| Field        | Description                                        |
+| ------------ | -------------------------------------------------- |
+| `id`         | Unique step identifier (required)                  |
+| `kind`       | Step kind — see supported kinds below (required)   |
+| `role`       | Target role for session steps                      |
+| `prompt`     | Message/instruction text                           |
+| `from`       | Source role for handoff.wait                       |
+| `on`         | Condition map for conditional steps                |
+| `status`     | Target status for loop.status                      |
+| `next`       | Explicit next step ID (overrides sequential order) |
+| `select`     | Selection criteria                                 |
+| `event_kind` | Event kind for loop.event                          |
+| `gates`      | List of gate declarations for gates.run steps      |
 
 ## Built-in Maker-Verifier Recipe
 
@@ -323,16 +323,16 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 
 ## Supported Step Kinds (v1)
 
-| Kind | Description |
-|------|-------------|
-| `session.create` | Spawn a new agent session (in a worktree by default) and send initial prompt |
-| `session.prompt` | Send a message to an existing session (requires `select: latest`) |
-| `handoff.wait` | Pause until the source role produces an accepted handoff artifact |
-| `loop.status` | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`) |
-| `loop.event` | Emit a structured event into the loop's event log |
-| `human.wait` | Block until a human responds in the UI |
-| `round.next` | Increment the round counter (enforces `max_rounds`) |
-| `gates.run` | Run verifier gate commands and branch on pass/fail/error |
+| Kind             | Description                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `session.create` | Spawn a new agent session (in a worktree by default) and send initial prompt                                                |
+| `session.prompt` | Send a message to an existing session (requires `select: latest`)                                                           |
+| `handoff.wait`   | Pause until the source role produces an accepted handoff artifact                                                           |
+| `loop.status`    | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`) |
+| `loop.event`     | Emit a structured event into the loop's event log                                                                           |
+| `human.wait`     | Block until a human responds in the UI                                                                                      |
+| `round.next`     | Increment the round counter (enforces `max_rounds`)                                                                         |
+| `gates.run`      | Run verifier gate commands and branch on pass/fail/error                                                                    |
 
 ## Runtime: Explicit Tick Model
 
@@ -343,6 +343,7 @@ planeai-cli axi loop tick <LOOP_ID>
 ```
 
 performs one deterministic transition. A tick may:
+
 - Execute a step and complete it (advance `current_step`)
 - Return "waiting" (keep `current_step` unchanged)
 - Fail a step and set the loop to `needs_human` or `failed`
@@ -411,6 +412,7 @@ Gates execute in order and stop on the first failure. Results are persisted to `
 ### `handoff.wait` Acceptance Model
 
 A handoff is considered "accepted" only when:
+
 1. It was recorded through `LoopService::record_handoff` (not arbitrary `add_artifact`)
 2. Its `content_json.schema` equals `"planeai.handoff.v1"`
 3. Its `content_json.status` is one of: `completed`, `blocked`, `needs_human`, `failed`
@@ -421,27 +423,27 @@ The runtime does **not** scan the filesystem for handoff files. Only database-re
 
 These are reserved in the schema but not implemented:
 
-| Kind | Intent |
-|------|--------|
-| `pr.feedback.wait` | Wait for PR review comments |
-| `arbiter.rank` | Have a judge agent rank multiple outputs |
-| `task.create` | Create a task in the internal tracker |
-| `connector.call` | Call an external connector (Jira, Slack, etc.) |
+| Kind               | Intent                                         |
+| ------------------ | ---------------------------------------------- |
+| `pr.feedback.wait` | Wait for PR review comments                    |
+| `arbiter.rank`     | Have a judge agent rank multiple outputs       |
+| `task.create`      | Create a task in the internal tracker          |
+| `connector.call`   | Call an external connector (Jira, Slack, etc.) |
 
 ## Supported Template Variables (v1)
 
 Prompt templates use [minijinja](https://github.com/mitsuhiko/minijinja) syntax (Jinja2-compatible, sandboxed — no file inclusion or shell execution).
 
-| Variable | Description |
-|----------|-------------|
-| `{{ inputs.goal }}` | The goal passed at loop creation |
-| `{{ inputs.task_key }}` | The task key (if provided) |
-| `{{ inputs.<key> }}` | Any custom input defined in the recipe |
-| `{{ loop_run.id }}` | The loop run ID |
-| `{{ recipe.id }}` | The recipe ID |
-| `{{ knowledge.files }}` | Rendered list of knowledge file references |
-| `{{ runtime.round }}` | Current round number |
-| `{{ runtime.last_error }}` | Last error message (if any) |
+| Variable                   | Description                                |
+| -------------------------- | ------------------------------------------ |
+| `{{ inputs.goal }}`        | The goal passed at loop creation           |
+| `{{ inputs.task_key }}`    | The task key (if provided)                 |
+| `{{ inputs.<key> }}`       | Any custom input defined in the recipe     |
+| `{{ loop_run.id }}`        | The loop run ID                            |
+| `{{ recipe.id }}`          | The recipe ID                              |
+| `{{ knowledge.files }}`    | Rendered list of knowledge file references |
+| `{{ runtime.round }}`      | Current round number                       |
+| `{{ runtime.last_error }}` | Last error message (if any)                |
 
 **Conditional blocks:**
 
@@ -578,12 +580,12 @@ The `on` mapping determines which step to advance to based on handoff status:
 
 ## Domain Model Glossary
 
-| Term | Description |
-|------|-------------|
-| **LoopRecipe** | A YAML definition describing a reusable loop template |
-| **LoopRun** | A single execution instance of a recipe, with its own state and history |
-| **LoopStep** | One tick in a run — the atomic unit of execution |
-| **LoopRole** | A named agent persona with specific prompt, tools, and constraints |
-| **LoopPolicy** | Constraints governing a run (max ticks, duration, merge policy) |
-| **LoopSignal** | An event or condition that causes the runner to advance or pause |
+| Term           | Description                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| **LoopRecipe** | A YAML definition describing a reusable loop template                                     |
+| **LoopRun**    | A single execution instance of a recipe, with its own state and history                   |
+| **LoopStep**   | One tick in a run — the atomic unit of execution                                          |
+| **LoopRole**   | A named agent persona with specific prompt, tools, and constraints                        |
+| **LoopPolicy** | Constraints governing a run (max ticks, duration, merge policy)                           |
+| **LoopSignal** | An event or condition that causes the runner to advance or pause                          |
 | **LoopMemory** | Durable state attached to a run — artifacts, events, and step outputs persisted in SQLite |
