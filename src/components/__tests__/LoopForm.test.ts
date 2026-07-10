@@ -50,6 +50,9 @@ vi.mock("../../lib/api", () => ({
       ]),
     ),
   },
+  projects: {
+    listBranches: vi.fn(() => Promise.resolve([])),
+  },
 }));
 
 import LoopForm from "../LoopForm.svelte";

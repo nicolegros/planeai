@@ -397,28 +397,22 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     WindowsPromptOps
 }
 
-/// Send a prompt to a daemon-backend session via the daemon data connection.
+#[cfg(unix)]
 fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
-    use std::io::{Read, Write};
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
 
     let socket_path = planeai_ipc::daemon_socket_path();
     let stream = UnixStream::connect(&socket_path)
         .map_err(|e| format!("daemon connect failed: {e}"))?;
 
-    // Clone the stream: writer sends frames, reader drains output replay
-    // (the daemon replays the full session buffer on attach — if we don't
-    // drain it, the socket buffer fills and the daemon blocks before
-    // reaching the forward_input loop)
     let mut writer = stream;
     let reader = writer.try_clone().map_err(|e| format!("clone failed: {e}"))?;
 
-    // Set a read timeout so the drain thread exits after we're done sending
     reader
         .set_read_timeout(Some(std::time::Duration::from_millis(500)))
         .map_err(|e| format!("set_read_timeout failed: {e}"))?;
 
-    // Spawn a thread to continuously drain output from the daemon
     let drain_handle = std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 8192];
@@ -426,12 +420,49 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(_) => continue,
-                Err(_) => break, // timeout or connection closed
+                Err(_) => break,
             }
         }
     });
 
-    // Connection type byte: data connection
+    daemon_send_frames(&mut writer, session_id, text)?;
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    drop(writer);
+    let _ = drain_handle.join();
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+
+    let socket_path = planeai_ipc::daemon_socket_path();
+    let mut stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&socket_path)
+        .map_err(|e| format!("daemon connect failed: {e}"))?;
+
+    daemon_send_frames(&mut stream, session_id, text)?;
+
+    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let mut buf = [0u8; 8192];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+
+    Ok(())
+}
+
+fn daemon_send_frames(writer: &mut impl std::io::Write, session_id: &str, text: &str) -> Result<(), String> {
     writer
         .write_all(&[0x01]) // CONN_DATA
         .map_err(|e| format!("handshake failed: {e}"))?;
@@ -445,7 +476,7 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     // FRAME_ATTACH: [type=0x07][4-byte len][session_id bytes]
     let sid_bytes = session_id.as_bytes();
     let mut attach_frame = Vec::with_capacity(5 + sid_bytes.len());
-    attach_frame.push(0x07); // FRAME_ATTACH
+    attach_frame.push(0x07);
     attach_frame.extend_from_slice(&(sid_bytes.len() as u32).to_be_bytes());
     attach_frame.extend_from_slice(sid_bytes);
     writer
@@ -453,11 +484,10 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
         .map_err(|e| format!("attach frame failed: {e}"))?;
 
     // FRAME_INPUT: [type=0x02][4-byte len][payload + \r]
-    // Combine text and Enter into a single frame to prevent split delivery
     let mut input_payload = text.as_bytes().to_vec();
     input_payload.push(b'\r');
     let mut frame = Vec::with_capacity(5 + input_payload.len());
-    frame.push(0x02); // FRAME_INPUT
+    frame.push(0x02);
     frame.extend_from_slice(&(input_payload.len() as u32).to_be_bytes());
     frame.extend_from_slice(&input_payload);
     writer
@@ -465,11 +495,6 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
         .map_err(|e| format!("frame write failed: {e}"))?;
 
     writer.flush().map_err(|e| format!("flush failed: {e}"))?;
-
-    // Give daemon time to process the input frames before closing
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    drop(writer);
-    let _ = drain_handle.join();
 
     Ok(())
 }

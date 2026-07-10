@@ -1207,6 +1207,7 @@ mod tests {
                 max_ticks: 50,
                 max_sessions: 5,
                 merge_policy: "human".into(),
+                auto_approve: true,
             },
             roles: BTreeMap::new(),
             steps,
@@ -1441,6 +1442,10 @@ pub fn auto_advance(
             break;
         }
 
+        if is_gates_step(snapshot) {
+            break;
+        }
+
         let (_output, code) = tick_recipe(conn, loop_id, snapshot);
 
         let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
@@ -1472,5 +1477,15 @@ fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
         .iter()
         .find(|s| &s.id == current)
         .map(|s| s.kind == "human.wait")
+        .unwrap_or(false)
+}
+
+fn is_gates_step(snapshot: &RecipeSnapshot) -> bool {
+    let current = &snapshot.runtime.current_step;
+    snapshot
+        .steps
+        .iter()
+        .find(|s| &s.id == current)
+        .map(|s| s.kind == planeai_core::loop_recipe::STEP_GATES_RUN)
         .unwrap_or(false)
 }
