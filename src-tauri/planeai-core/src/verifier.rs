@@ -281,15 +281,16 @@ fn execute_command(
 ) -> (VerifierStatus, Option<i32>, Vec<u8>, bool) {
     use std::process::{Command, Stdio};
 
-    let shell = if cfg!(windows) { "cmd" } else { "sh" };
-    let shell_flag = if cfg!(windows) { "/C" } else { "-c" };
-
-    let mut cmd = Command::new(shell);
-    cmd.arg(shell_flag)
-        .arg(command)
+    // Gate commands are POSIX shell scripts defined in recipes — always use sh -c.
+    // On Windows, Git for Windows (expected on PATH) provides sh.
+    // We use augmented_path to ensure sh and tools like cargo/npm are discoverable
+    // even when launched from a GUI app with a minimal inherited PATH.
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", command])
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env("PATH", crate::command::augmented_path(&[]));
     crate::command::no_window(&mut cmd);
 
     let mut child = match cmd.spawn() {

@@ -251,6 +251,14 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .map(|r| r.isolation.clone())
         .unwrap_or_else(|| "worktree".to_string());
 
+    // "default" means "use the user's configured default provider" — pass None
+    // so build_session_plan falls through to env.config.default_provider.
+    let provider_opt = if provider == "default" {
+        None
+    } else {
+        Some(provider.clone())
+    };
+
     // 3. Resolve project from loop
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
         .map_err(|e| format!("failed to load loop: {e}"))?
@@ -292,7 +300,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         worktree: use_worktree,
         base_branch,
         yolo: false,
-        provider: Some(provider.clone()),
+        provider: provider_opt,
         task_key: loop_run.task_key.clone(),
         prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
@@ -543,6 +551,15 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
                 .and_then(|m| m.get(&handoff_status))
                 .cloned();
 
+            // If the handoff routes to a retry/rejection path, extract the
+            // summary and store it in runtime.last_error so the next prompt
+            // can inject structured feedback via {{ runtime.last_error }}.
+            if handoff_status != "completed" {
+                if let Ok(summary) = extract_handoff_summary(ctx.conn, ctx.loop_id, &session_id) {
+                    ctx.snapshot.runtime.last_error = Some(summary);
+                }
+            }
+
             LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
@@ -697,9 +714,9 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    // Enforce max_rounds: if we're already at the limit, set needs_human
+    // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
+        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Blocked)
             .map_err(|e| format!("failed to update loop status: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
@@ -718,7 +735,7 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
         return Ok(TickResult {
             step_id: step.id.clone(),
             step_kind: step.kind.clone(),
-            status: "needs_human".into(),
+            status: "blocked".into(),
             extra: vec![
                 field("limit", str_val("max_rounds")),
                 field(
@@ -827,6 +844,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
 
     // Run all gates — stop on first failure
     let mut overall_status = "pass";
+    let mut failed_gate_name = String::new();
     for gate in &step.gates {
         let request = VerifyGateRequest {
             loop_id: ctx.loop_id.to_string(),
@@ -847,6 +865,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                     } else {
                         "fail"
                     };
+                    failed_gate_name = gate.name.clone();
                     break;
                 }
             }
@@ -863,6 +882,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                 )
                 .ok();
                 overall_status = "error";
+                failed_gate_name = gate.name.clone();
                 break;
             }
         }
@@ -878,6 +898,11 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let event_kind = if overall_status == "pass" {
         "recipe_step_completed"
     } else {
+        // Store gate failure in last_error for the retry prompt template
+        ctx.snapshot.runtime.last_error = Some(format!(
+            "Gate '{}' returned '{}'",
+            failed_gate_name, overall_status
+        ));
         "recipe_step_failed"
     };
 
@@ -952,6 +977,36 @@ fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep> {
 /// Extract the first 8 characters of an ID for display.
 fn short_id(id: &str) -> &str {
     &id[..std::cmp::min(8, id.len())]
+}
+
+/// Extract the summary field from the most recent handoff artifact for a session.
+/// Used to populate `runtime.last_error` so retry prompts can include structured feedback.
+fn extract_handoff_summary(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    let content: Option<String> = conn
+        .query_row(
+            "SELECT content_json FROM loop_artifacts \
+             WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            rusqlite::params![loop_id, session_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to query handoff: {e}"))?;
+
+    let json_str = content.ok_or_else(|| "no content in handoff".to_string())?;
+    let val: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(|e| format!("invalid json: {e}"))?;
+
+    let summary = val
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no summary provided)")
+        .to_string();
+
+    Ok(summary)
 }
 
 /// Advance to the next step (explicit `next` field, or sequential).

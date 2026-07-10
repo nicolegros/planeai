@@ -1,7 +1,9 @@
 schema: planeai.loop.recipe.v1
 id: maker-verifier
 name: Maker + Verifier
-description: Minimal loop-engineering recipe. Maker writes, handoff records state, human reviews.
+description: >
+  Full maker-verifier loop. Maker implements, gates verify automatically,
+  a verifier agent reviews, and rounds cycle on rejection until max_rounds.
 
 trigger:
   kind: manual
@@ -47,8 +49,9 @@ roles:
     isolation: readonly
     instructions: |
       You are the verifier agent.
-      This role is declared now so the recipe can evolve into full maker-verifier later.
-      Do not edit files.
+      Review the maker's changes. Do not edit files.
+      If the changes satisfy the goal and pass your review, record a handoff with status: completed.
+      If the changes need work, record a handoff with status: needs_human and describe what must change.
 
 policy:
   max_rounds: 3
@@ -58,7 +61,8 @@ policy:
   merge_policy: human
 
 steps:
-  - id: start
+  # ─── Round start: create maker session ───────────────────────────────────────
+  - id: create_maker
     kind: session.create
     role: maker
     prompt: |
@@ -75,6 +79,13 @@ steps:
       {{ inputs.task_key }}
       {% endif %}
 
+      Round: {{ runtime.round }}
+
+      {% if runtime.last_error %}
+      Previous round feedback:
+      {{ runtime.last_error }}
+      {% endif %}
+
       Project knowledge:
       {{ knowledge.files }}
 
@@ -85,15 +96,104 @@ steps:
       - When done, write and record a planeai.handoff.v1 handoff.
       - Your handoff status must be one of: completed, blocked, needs_human, failed.
 
-  - id: wait_for_maker_handoff
+  # ─── Wait for maker to hand off ─────────────────────────────────────────────
+  - id: wait_for_maker
     kind: handoff.wait
     from: maker
     on:
-      completed: completed_unreviewed
+      completed: run_gates
       blocked: blocked
       needs_human: needs_human
       failed: failed
 
+  # ─── Run verification gates (tests, lint, typecheck) ─────────────────────────
+  - id: run_gates
+    kind: gates.run
+    role: maker
+    gates:
+      - name: build
+        command: "if [ -f Cargo.toml ]; then cargo build 2>&1; elif [ -f package.json ]; then npm run build 2>&1; else echo 'no build system detected'; fi"
+      - name: test
+        command: "if [ -f Cargo.toml ]; then cargo test 2>&1; elif [ -f package.json ]; then npm test 2>&1; else echo 'no test runner detected'; fi"
+    on:
+      pass: create_verifier
+      fail: gates_failed_retry
+      error: gates_failed_retry
+
+  # ─── Gates failed: prompt maker with feedback and retry ──────────────────────
+  - id: gates_failed_retry
+    kind: session.prompt
+    role: maker
+    select: latest
+    prompt: |
+      Round {{ runtime.round }} — verification gates failed.
+
+      {% if runtime.last_error %}
+      Failure details:
+      {{ runtime.last_error }}
+      {% endif %}
+
+      Review the gate output and fix the issues. Then record a new handoff.
+      Do NOT skip tests or suppress errors. Fix the root cause.
+    next: increment_round_after_gates
+
+  - id: increment_round_after_gates
+    kind: round.next
+    next: wait_for_maker
+
+  # ─── Gates passed: create verifier session ───────────────────────────────────
+  - id: create_verifier
+    kind: session.create
+    role: verifier
+    prompt: |
+      You are the verifier agent in a PlaneAI maker-verifier loop.
+
+      Loop: {{ loop_run.id }}
+      Goal: {{ inputs.goal }}
+      Round: {{ runtime.round }}
+
+      The maker has completed their implementation and gates have passed.
+
+      Your job:
+      1. Review the diff and changed files.
+      2. Check that the implementation satisfies the stated goal.
+      3. Look for correctness issues, edge cases, and missing tests.
+      4. Do NOT make changes yourself.
+
+      When done, record a planeai.handoff.v1 handoff:
+      - status: completed — if the changes are good and ready for human review.
+      - status: needs_human — if the changes need work. Describe what must change in the summary.
+
+  # ─── Wait for verifier to hand off ──────────────────────────────────────────
+  - id: wait_for_verifier
+    kind: handoff.wait
+    from: verifier
+    on:
+      completed: completed_unreviewed
+      needs_human: verifier_rejected_retry
+      blocked: blocked
+      failed: failed
+
+  # ─── Verifier rejected: send feedback to maker and retry ─────────────────────
+  - id: verifier_rejected_retry
+    kind: session.prompt
+    role: maker
+    select: latest
+    prompt: |
+      Round {{ runtime.round }} — the verifier has requested changes.
+
+      Verifier feedback:
+      {{ runtime.last_error }}
+
+      Address the issues raised above, then record a new handoff.
+      Focus on the specific concerns raised. Do not introduce unrelated changes.
+    next: increment_round_after_review
+
+  - id: increment_round_after_review
+    kind: round.next
+    next: wait_for_maker
+
+  # ─── Terminal states ─────────────────────────────────────────────────────────
   - id: completed_unreviewed
     kind: loop.status
     status: completed_unreviewed
