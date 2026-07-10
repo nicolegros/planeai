@@ -114,6 +114,7 @@ pub async fn list_loop_runs(
     db_state: State<'_, DbState>,
     project_id: String,
 ) -> Result<Vec<LoopRunSummary>, String> {
+    tracing::info!(project_id = %project_id, "list_loop_runs");
     let conn = db_state.0.clone();
     blocking(move || {
         let conn = conn.lock().map_err(|e| e.to_string())?;
@@ -129,6 +130,7 @@ pub async fn get_loop_run_detail(
     db_state: State<'_, DbState>,
     loop_id: String,
 ) -> Result<LoopRunDetail, String> {
+    tracing::info!(loop_id = %loop_id, "get_loop_run_detail");
     let conn = db_state.0.clone();
     blocking(move || {
         let conn = conn.lock().map_err(|e| e.to_string())?;
@@ -215,6 +217,7 @@ pub async fn create_loop_run(
     max_rounds: Option<i64>,
     start: bool,
 ) -> Result<LoopRunSummary, String> {
+    tracing::info!(project_id = %project_id, recipe_id = %recipe_id, start, "create_loop_run");
     let conn_arc = db_state.0.clone();
     let result = blocking(move || {
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
@@ -295,6 +298,7 @@ pub async fn tick_loop(
     app_handle: AppHandle,
     loop_id: String,
 ) -> Result<(), String> {
+    tracing::info!(loop_id = %loop_id, "tick_loop");
     let conn_arc = db_state.0.clone();
     blocking(move || {
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
@@ -361,6 +365,7 @@ pub async fn start_loop(
     app_handle: AppHandle,
     loop_id: String,
 ) -> Result<(), String> {
+    tracing::info!(loop_id = %loop_id, "start_loop");
     let conn_arc = db_state.0.clone();
     blocking(move || {
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
@@ -402,6 +407,7 @@ pub async fn stop_loop(
     app_handle: AppHandle,
     loop_id: String,
 ) -> Result<(), String> {
+    tracing::info!(loop_id = %loop_id, "stop_loop");
     let conn_arc = db_state.0.clone();
     blocking(move || {
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
