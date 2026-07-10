@@ -6,7 +6,7 @@
 
 use planeai_core::loop_recipe::*;
 use planeai_core::loop_recipe_service::RecipeSnapshot;
-use planeai_core::loop_run::LoopStatus;
+use planeai_core::loop_run::{LoopStatus, LoopTrigger};
 use planeai_core::loop_service::LoopService;
 use planeai_toon::{field, render, str_val, Field, Value};
 
@@ -105,7 +105,7 @@ pub fn tick_recipe(
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
-        let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Failed);
+        let _ = LoopService::transition_loop(conn, loop_id, LoopTrigger::MaxTicksExceeded);
         let _ = LoopService::append_loop_event(
             conn,
             loop_id,
@@ -222,7 +222,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
     if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman).ok();
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::SessionLimitReached).ok();
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -540,8 +540,8 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     match found_handoff {
         None => {
-            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing)
-                .map_err(|e| format!("failed to update loop status: {e}"))?;
+            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffWaiting)
+                .map_err(|e| format!("failed to transition loop: {e}"))?;
             LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
@@ -570,8 +570,8 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         }
         Some((session_id, handoff_status)) => {
             // Handoff found — set loop back to Running so auto-tick continues
-            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Running)
-                .map_err(|e| format!("failed to update loop status: {e}"))?;
+            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffConsumed)
+                .map_err(|e| format!("failed to transition loop: {e}"))?;
 
             // Record consumption timestamp so we don't re-consume this handoff in future rounds
             ctx.snapshot.runtime.last_handoff_consumed_at = Some(chrono::Utc::now().to_rfc3339());
@@ -657,8 +657,8 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     let new_status = LoopStatus::parse(status_str)
         .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, new_status.clone())
-        .map_err(|e| format!("failed to update status: {e}"))?;
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::RecipeSetStatus(new_status.clone()))
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
 
     LoopService::append_loop_event(
         ctx.conn,
@@ -720,8 +720,8 @@ fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
-        .map_err(|e| format!("failed to update loop status: {e}"))?;
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -747,8 +747,8 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Blocked)
-            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::RoundBlocked)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -830,7 +830,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         ));
     }
 
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Verifying).ok();
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted).ok();
 
     // Resolve a session to run gates in.
     // If step.role is specified, use that role's latest session; otherwise fall back to
@@ -987,8 +987,8 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
             overall_status,
         );
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
-            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
         return Ok(TickResult {

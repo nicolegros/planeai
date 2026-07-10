@@ -14,7 +14,7 @@ pub fn setup_loop_with_session(
     project_path: &str,
     worktree_path: Option<&str>,
 ) -> (String, String) {
-    use crate::loop_run::LoopStatus;
+    use crate::loop_run::LoopTrigger;
 
     let project = ProjectService::create(conn, "testapp", project_path).unwrap();
 
@@ -33,7 +33,7 @@ pub fn setup_loop_with_session(
     )
     .unwrap();
 
-    LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start).unwrap();
 
     let session_id = uuid::Uuid::new_v4().to_string();
 

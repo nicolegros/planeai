@@ -139,7 +139,7 @@ fn list_loops_filters_by_project() {
 // ─── 4. Update status updates status and updated_at ──────────────────────────
 
 #[test]
-fn update_loop_status_changes_status_and_updated_at() {
+fn transition_loop_changes_status_and_updated_at() {
     let conn = test_db();
     let created = LoopService::create_loop(
         &conn,
@@ -158,7 +158,7 @@ fn update_loop_status_changes_status_and_updated_at() {
 
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    LoopService::update_loop_status(&conn, &created.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(&conn, &created.id, LoopTrigger::Start).unwrap();
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
     assert_eq!(fetched.status, LoopStatus::Running);
@@ -173,7 +173,7 @@ fn update_loop_status_changes_status_and_updated_at() {
 }
 
 #[test]
-fn update_loop_status_to_completed_unreviewed_sets_executor_finished_at() {
+fn transition_to_completed_unreviewed_sets_executor_finished_at() {
     let conn = test_db();
     let created = LoopService::create_loop(
         &conn,
@@ -190,7 +190,14 @@ fn update_loop_status_to_completed_unreviewed_sets_executor_finished_at() {
     )
     .unwrap();
 
-    LoopService::update_loop_status(&conn, &created.id, LoopStatus::CompletedUnreviewed).unwrap();
+    // Draft → Running → CompletedUnreviewed via RecipeSetStatus
+    LoopService::transition_loop(&conn, &created.id, LoopTrigger::Start).unwrap();
+    LoopService::transition_loop(
+        &conn,
+        &created.id,
+        LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed),
+    )
+    .unwrap();
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
     assert_eq!(fetched.status, LoopStatus::CompletedUnreviewed);
@@ -201,7 +208,7 @@ fn update_loop_status_to_completed_unreviewed_sets_executor_finished_at() {
 }
 
 #[test]
-fn update_loop_status_to_approved_does_not_set_executor_finished_at() {
+fn transition_to_approved_does_not_set_executor_finished_at() {
     let conn = test_db();
     let created = LoopService::create_loop(
         &conn,
@@ -218,14 +225,22 @@ fn update_loop_status_to_approved_does_not_set_executor_finished_at() {
     )
     .unwrap();
 
-    // approved is a lifecycle status, not an executor-done status
-    LoopService::update_loop_status(&conn, &created.id, LoopStatus::Approved).unwrap();
+    // Draft → Running → CompletedUnreviewed → Approved
+    LoopService::transition_loop(&conn, &created.id, LoopTrigger::Start).unwrap();
+    LoopService::transition_loop(
+        &conn,
+        &created.id,
+        LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed),
+    )
+    .unwrap();
+    LoopService::transition_loop(&conn, &created.id, LoopTrigger::Approve).unwrap();
 
     let fetched = LoopService::get_loop(&conn, &created.id).unwrap().unwrap();
     assert_eq!(fetched.status, LoopStatus::Approved);
-    assert_eq!(
-        fetched.executor_finished_at, None,
-        "approved is lifecycle, not executor — should not set executor_finished_at"
+    // executor_finished_at was set when moving to CompletedUnreviewed, not Approved
+    assert!(
+        fetched.executor_finished_at.is_some(),
+        "executor_finished_at should have been set at CompletedUnreviewed"
     );
 }
 
@@ -1041,7 +1056,7 @@ fn find_handoff_rejects_artifact_missing_schema() {
             })),
             handoff_status: "completed".into(),
             event_payload: serde_json::json!({}),
-            new_loop_status: None,
+            trigger: None,
         },
     )
     .unwrap();
@@ -1106,7 +1121,7 @@ fn find_handoff_rejects_artifact_with_invalid_status() {
             })),
             handoff_status: "in_progress".into(),
             event_payload: serde_json::json!({}),
-            new_loop_status: None,
+            trigger: None,
         },
     )
     .unwrap();
@@ -1171,7 +1186,7 @@ fn find_handoff_accepts_valid_handoff_with_schema_and_status() {
             })),
             handoff_status: "completed".into(),
             event_payload: serde_json::json!({}),
-            new_loop_status: None,
+            trigger: None,
         },
     )
     .unwrap();

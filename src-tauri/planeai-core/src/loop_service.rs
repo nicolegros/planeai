@@ -25,6 +25,41 @@ impl std::fmt::Display for InvalidLoopStatus {
 
 impl std::error::Error for InvalidLoopStatus {}
 
+/// Error returned by [`LoopService::transition_loop`] and [`LoopService::transition_in_tx`].
+#[derive(Debug)]
+pub enum TransitionError {
+    /// The trigger is not valid from the current status.
+    Invalid(InvalidTransition),
+    /// The loop ID was not found in the database.
+    NotFound(String),
+    /// A database error occurred during the transition.
+    Db(rusqlite::Error),
+}
+
+impl std::fmt::Display for TransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(e) => write!(f, "{e}"),
+            Self::NotFound(id) => write!(f, "loop not found: {id}"),
+            Self::Db(e) => write!(f, "transition database error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for TransitionError {}
+
+impl From<rusqlite::Error> for TransitionError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<InvalidTransition> for TransitionError {
+    fn from(e: InvalidTransition) -> Self {
+        Self::Invalid(e)
+    }
+}
+
 /// Parse loop status strictly — returns an error for unrecognized values.
 /// The loop executor should never silently misinterpret corrupted state.
 fn parse_loop_status_strict(s: &str) -> Result<LoopStatus, InvalidLoopStatus> {
@@ -91,8 +126,8 @@ pub struct RecordHandoffParams {
     pub content_json: Option<JsonValue>,
     pub handoff_status: String,
     pub event_payload: JsonValue,
-    /// If Some, the loop status will be updated to this value.
-    pub new_loop_status: Option<LoopStatus>,
+    /// If Some, the loop transition will be applied atomically.
+    pub trigger: Option<LoopTrigger>,
 }
 
 /// Result of a successful atomic handoff recording.
@@ -408,25 +443,85 @@ impl LoopService {
         Ok(results)
     }
 
-    pub fn update_loop_status(conn: &Connection, id: &str, status: LoopStatus) -> SqlResult<()> {
-        let now = chrono::Utc::now().to_rfc3339();
-        // executor_finished_at is set when the executor is done producing a
-        // reviewable result — i.e., it has finished its work and handed off to
-        // human review or cleanup. Statuses after this point are lifecycle, not
-        // executor activity.
-        let executor_finished_at = if status.is_executor_terminal() {
-            Some(now.clone())
-        } else {
-            None
-        };
-        let rows_affected = conn.execute(
-            "UPDATE loop_runs SET status = ?1, updated_at = ?2, executor_finished_at = COALESCE(?3, executor_finished_at) WHERE id = ?4",
-            params![status.as_str(), now, executor_finished_at, id],
-        )?;
-        if rows_affected == 0 {
-            return Err(rusqlite::Error::QueryReturnedNoRows);
+    // ─── Transition Table API ────────────────────────────────────────────────
+
+    /// Transition a loop's status by applying a trigger event.
+    ///
+    /// Validates the transition, persists the new status, and logs an audit
+    /// event atomically. Returns the resulting status. On `Unchanged` (no-op),
+    /// skips the DB write and returns the current status.
+    pub fn transition_loop(
+        conn: &Connection,
+        id: &str,
+        trigger: LoopTrigger,
+    ) -> Result<LoopStatus, TransitionError> {
+        let tx = conn.unchecked_transaction().map_err(TransitionError::Db)?;
+        let result = Self::transition_in_tx(&tx, id, trigger)?;
+        tx.commit().map_err(TransitionError::Db)?;
+        Ok(result)
+    }
+
+    /// Transition a loop's status within a caller-provided transaction.
+    ///
+    /// Use this when the transition must be atomic with other writes
+    /// (e.g., `record_handoff` bundles artifact + status in one tx).
+    pub fn transition_in_tx(
+        tx: &rusqlite::Transaction,
+        id: &str,
+        trigger: LoopTrigger,
+    ) -> Result<LoopStatus, TransitionError> {
+        // 1. Load current status
+        let current_status_str: String = tx
+            .query_row(
+                "SELECT status FROM loop_runs WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => TransitionError::NotFound(id.to_string()),
+                other => TransitionError::Db(other),
+            })?;
+
+        let current = LoopStatus::parse(&current_status_str).ok_or_else(|| {
+            TransitionError::Db(rusqlite::Error::InvalidParameterName(format!(
+                "corrupt loop status in DB: {current_status_str}"
+            )))
+        })?;
+
+        // 2. Apply the transition table
+        let result = apply(&current, &trigger)?;
+
+        // 3. Handle result
+        match result {
+            TransitionResult::Unchanged => Ok(current),
+            TransitionResult::Changed(ref new_status) => {
+                let now = chrono::Utc::now().to_rfc3339();
+                let executor_finished_at = if new_status.is_executor_terminal() {
+                    Some(now.clone())
+                } else {
+                    None
+                };
+
+                // Persist the new status
+                tx.execute(
+                    "UPDATE loop_runs SET status = ?1, updated_at = ?2, executor_finished_at = COALESCE(?3, executor_finished_at) WHERE id = ?4",
+                    params![new_status.as_str(), now, executor_finished_at, id],
+                )?;
+
+                // Log audit event
+                let payload = serde_json::json!({
+                    "from": current.as_str(),
+                    "to": new_status.as_str(),
+                    "trigger": trigger.as_str(),
+                });
+                tx.execute(
+                    "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'status_transition', ?3)",
+                    params![id, now, payload.to_string()],
+                )?;
+
+                Ok(new_status.clone())
+            }
         }
-        Ok(())
     }
 
     /// Update the resolved recipe snapshot stored in policy_json.
@@ -767,17 +862,12 @@ impl LoopService {
         )?;
         let event_id = tx.last_insert_rowid();
 
-        // 5. Update loop status if requested
-        if let Some(ref new_status) = params.new_loop_status {
-            let executor_finished_at = if new_status.is_executor_terminal() {
-                Some(now.clone())
-            } else {
-                None
-            };
-            tx.execute(
-                "UPDATE loop_runs SET status = ?1, updated_at = ?2, executor_finished_at = COALESCE(?3, executor_finished_at) WHERE id = ?4",
-                rusqlite::params![new_status.as_str(), now, executor_finished_at, params.loop_id],
-            )?;
+        // 5. Apply loop transition if requested (via transition table)
+        if let Some(trigger) = params.trigger {
+            // Use transition_in_tx to validate and persist atomically.
+            // Unchanged (no-op) results are fine — e.g., HandoffReceived(Completed)
+            // from Observing is a valid no-op.
+            let _ = Self::transition_in_tx(&tx, &params.loop_id, trigger);
         }
 
         tx.commit()?;

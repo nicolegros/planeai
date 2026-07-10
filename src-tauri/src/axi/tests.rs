@@ -805,9 +805,9 @@ fn loop_stop_treats_completed_unreviewed_as_terminal() {
     let loop_id = extract_loop_id(&create_output);
 
     // Manually transition to completed_unreviewed
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
     use planeai_core::loop_service::LoopService;
-    LoopService::update_loop_status(&conn, &loop_id, LoopStatus::CompletedUnreviewed).unwrap();
+    LoopService::transition_loop(&conn, &loop_id, LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed)).unwrap();
 
     // Stop should be a no-op
     let (output, code) = loop_stop(&conn, &loop_id);
@@ -992,7 +992,7 @@ fn setup_loop_db() -> rusqlite::Connection {
 }
 
 fn create_test_loop_with_session(conn: &rusqlite::Connection) -> (String, String) {
-    use planeai_core::loop_run::{LoopStatus, LoopStrategy};
+    use planeai_core::loop_run::{LoopStrategy, LoopTrigger};
     use planeai_core::loop_service::{AddLoopSessionParams, CreateLoopParams, LoopService};
 
     let loop_run = LoopService::create_loop(
@@ -1010,7 +1010,7 @@ fn create_test_loop_with_session(conn: &rusqlite::Connection) -> (String, String
     )
     .unwrap();
 
-    LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start).unwrap();
 
     let session_id = "aaaabbbb-1111-2222-3333-444455556666".to_string();
     LoopService::add_loop_session(
@@ -1538,7 +1538,7 @@ fn recipe_tick_session_create_fails_gracefully_when_backend_unavailable() {
 fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
     use planeai_core::loop_recipe::*;
     use planeai_core::loop_recipe_service::*;
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::LoopTrigger;
     use planeai_core::loop_service::LoopService;
     use std::collections::BTreeMap;
 
@@ -1604,7 +1604,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
     )
     .unwrap();
 
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
 
     // Tick — session.prompt should fail because no sessions for role
     let (output, code) = loop_tick(&conn, &loop_run.id);
@@ -1637,9 +1637,9 @@ fn recipe_tick_max_ticks_prevents_runaway() {
     assert!(!loop_id.is_empty(), "failed to extract loop_id");
 
     // Transition to running so tick_recipe is invoked
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::LoopTrigger;
     use planeai_core::loop_service::LoopService;
-    LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Start).unwrap();
 
     // Set tick_count = max_ticks so next tick is blocked
     conn.execute(
@@ -1661,7 +1661,7 @@ fn recipe_tick_max_ticks_prevents_runaway() {
 fn recipe_tick_round_next_increments_round() {
     use planeai_core::loop_recipe::*;
     use planeai_core::loop_recipe_service::*;
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::LoopTrigger;
     use planeai_core::loop_service::LoopService;
     use std::collections::BTreeMap;
 
@@ -1744,7 +1744,7 @@ fn recipe_tick_round_next_increments_round() {
     .unwrap();
 
     // Move to running
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
 
     // Tick — should execute round.next
     let (output, code) = loop_tick(&conn, &loop_run.id);
@@ -1765,7 +1765,7 @@ fn recipe_tick_round_next_increments_round() {
 fn recipe_tick_round_next_enforces_max_rounds() {
     use planeai_core::loop_recipe::*;
     use planeai_core::loop_recipe_service::*;
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
     use planeai_core::loop_service::LoopService;
     use std::collections::BTreeMap;
 
@@ -1830,7 +1830,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
     )
     .unwrap();
 
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
 
     // Tick — should fail because we're at max_rounds
     let (output, code) = loop_tick(&conn, &loop_run.id);
@@ -1851,7 +1851,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
 // ─── Maker-Verifier Full Flow Integration Tests ──────────────────────────
 
 use planeai_core::loop_recipe_service::RecipeSnapshot;
-use planeai_core::loop_run::LoopStatus;
+use planeai_core::loop_run::{LoopStatus, LoopTrigger};
 use planeai_core::loop_service::LoopService;
 
 /// Helper: create a loop with a custom RecipeSnapshot, pre-populated with
@@ -1940,7 +1940,7 @@ fn setup_maker_verifier_flow(
     )
     .unwrap();
 
-    LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start).unwrap();
     (loop_run.id, project.id, snapshot)
 }
 
@@ -2134,7 +2134,7 @@ fn setup_maker_verifier_flow_with_path(
     .unwrap();
     let loop_id = loop_run.id;
 
-    LoopService::update_loop_status(conn, &loop_id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(conn, &loop_id, LoopTrigger::Start).unwrap();
 
     crate::db::create_session_with_id(
         conn,
