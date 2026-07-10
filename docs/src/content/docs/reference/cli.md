@@ -395,15 +395,15 @@ Create a new durable loop run. The loop starts in `draft` status by default. Use
 planeai-cli axi loop create --goal "<goal>" [options]
 ```
 
-| Flag           | Description                                                                       |
-| -------------- | --------------------------------------------------------------------------------- |
-| `--goal`       | Goal description for the loop (required)                                          |
-| `--recipe`     | Recipe ID or path (takes precedence over `--strategy`)                            |
-| `--strategy`   | Strategy identifier (default: `maker-verifier`). Alias for `--recipe`.            |
-| `--max-rounds` | Maximum rounds before the loop stops (default: 3; overridden by recipe policy)    |
-| `--task`       | Task key to associate with this loop (validated)                                  |
-| `--project`    | Project name (otherwise resolved from CWD)                                        |
-| `--start`      | Start immediately (status = `running` instead of `draft`)                         |
+| Flag           | Description                                                                    |
+| -------------- | ------------------------------------------------------------------------------ |
+| `--goal`       | Goal description for the loop (required)                                       |
+| `--recipe`     | Recipe ID or path (takes precedence over `--strategy`)                         |
+| `--strategy`   | Strategy identifier (default: `maker-verifier`). Alias for `--recipe`.         |
+| `--max-rounds` | Maximum rounds before the loop stops (default: 3; overridden by recipe policy) |
+| `--task`       | Task key to associate with this loop (validated)                               |
+| `--project`    | Project name (otherwise resolved from CWD)                                     |
+| `--start`      | Start immediately (status = `running` instead of `draft`)                      |
 
 If a recipe is resolved (via `--recipe` or `--strategy`), the loop stores a recipe snapshot in `policy_json` and uses the recipe's policy values (max_rounds, max_ticks, etc.) instead of CLI defaults. A `recipe_loaded` event is appended to the loop's event log.
 

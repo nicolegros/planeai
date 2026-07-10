@@ -1,7 +1,7 @@
 <script lang="ts">
   import { loops as loopsApi, tasks as tasksApi } from "../lib/api";
   import type { LoopRunSummary, RecipeSummary, TaskItem } from "../lib/types";
-  import { Button, Input, Label, Select } from "./ui";
+  import { Button, Label, Select } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
@@ -85,8 +85,6 @@
   let wrapperEl: HTMLDivElement | undefined = $state();
   let goalRef: HTMLTextAreaElement | undefined = $state();
 
-  const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
-
   const fk = createFormKeyboardController(
     () => [
       { key: "g", ref: () => goalRef ?? null },
@@ -97,6 +95,8 @@
     ],
     { wrapper: () => wrapperEl ?? null, onDismiss: () => onCancel() },
   );
+
+  const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
 
   function metaEnter(e: KeyboardEvent) {
     if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
@@ -147,13 +147,13 @@
 
   <div class="space-y-1" data-field="max-rounds">
     <Label>Max rounds <span class="font-mono text-[10px] px-1 rounded {badge}">M</span></Label>
-    <Input
+    <input
       type="number"
       bind:value={maxRounds}
       onkeydown={metaEnter}
       min="1"
       max="20"
-      class="w-20"
+      class="w-20 rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent"
     />
   </div>
 

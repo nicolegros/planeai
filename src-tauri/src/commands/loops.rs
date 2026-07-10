@@ -207,6 +207,7 @@ pub async fn list_loop_recipes(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_loop_run(
     db_state: State<'_, DbState>,
     app_handle: AppHandle,
@@ -326,10 +327,9 @@ pub async fn tick_loop(
 
         // If there's a recipe snapshot, execute a tick
         if let Some(ref policy_json) = run.policy_json {
-            if let Ok(mut snapshot) =
-                serde_json::from_value::<planeai_core::loop_recipe_service::RecipeSnapshot>(
-                    policy_json.clone(),
-                )
+            if let Ok(mut snapshot) = serde_json::from_value::<
+                planeai_core::loop_recipe_service::RecipeSnapshot,
+            >(policy_json.clone())
             {
                 let (_output, _code) =
                     planeai::recipe_tick::tick_recipe(&conn, &loop_id, &mut snapshot);
@@ -342,11 +342,7 @@ pub async fn tick_loop(
             let new_round = run.current_round + 1;
             conn.execute(
                 "UPDATE loop_runs SET current_round = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![
-                    new_round,
-                    chrono::Utc::now().to_rfc3339(),
-                    loop_id
-                ],
+                rusqlite::params![new_round, chrono::Utc::now().to_rfc3339(), loop_id],
             )
             .map_err(|e| e.to_string())?;
         }

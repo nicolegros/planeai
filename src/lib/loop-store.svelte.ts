@@ -41,9 +41,7 @@ export async function refreshLoopsForProject(projectId: string): Promise<void> {
 }
 
 export async function refreshAllLoops(projectIds: string[]): Promise<void> {
-  const results = await Promise.allSettled(
-    projectIds.map((id) => loopsApi.list(id)),
-  );
+  const results = await Promise.allSettled(projectIds.map((id) => loopsApi.list(id)));
   const updated: Record<string, LoopRunSummary[]> = {};
   projectIds.forEach((id, i) => {
     const result = results[i];

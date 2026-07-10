@@ -31,7 +31,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Loop event**       | An ordered, append-only log entry for a loop run (e.g., "round_started", "session_spawned"). Stored in `loop_events`.                                                                                                                                                                                 |
 | **Loop artifact**    | A piece of evidence produced during a loop (diff, patch, test output). Stored in `loop_artifacts`.                                                                                                                                                                                                    |
 | **Verifier run**     | A verification step within a loop — either a shell command (`verifier_type = "command"`) or an agent session (`verifier_type = "agent"`). Tracks exit code and output path. Stored in `verifier_runs`.                                                                                                |
-| **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                                |
+| **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                               |
 | **Loop recipe**      | A declarative YAML definition (`planeai.loop.recipe.v1`) describing a reusable loop workflow — roles, steps, knowledge, tools, and policy. Discovered from project (`.planeai/loops/`), user (`~/.config/planeai/loops/`), or builtin sources. See `docs/LOOP_RECIPES.md`.                            |
 | **Recipe snapshot**  | A runtime copy of a resolved recipe plus inputs, tick counter, and created session IDs. Stored in `policy_json` on the loop run. The recipe tick runner reads and updates it on each tick.                                                                                                            |
 
@@ -321,6 +321,7 @@ The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding U
 ### Backend commands
 
 Six async Tauri commands in `src-tauri/src/commands/loops.rs`:
+
 - `list_loop_runs(project_id)` → `Vec<LoopRunSummary>`
 - `get_loop_run_detail(loop_id)` → `LoopRunDetail` (sessions, events, artifacts, verifier runs)
 - `list_loop_recipes(project_id)` → `Vec<RecipeSummary>`

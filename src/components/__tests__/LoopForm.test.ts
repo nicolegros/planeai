@@ -5,8 +5,18 @@ vi.mock("../../lib/api", () => ({
   loops: {
     recipes: vi.fn(() =>
       Promise.resolve([
-        { id: "maker-verifier", name: "Maker-Verifier", description: "Two-agent loop", source: "builtin" },
-        { id: "plan-implement-review", name: "Plan-Implement-Review", description: "Three-stage loop", source: "builtin" },
+        {
+          id: "maker-verifier",
+          name: "Maker-Verifier",
+          description: "Two-agent loop",
+          source: "builtin",
+        },
+        {
+          id: "plan-implement-review",
+          name: "Plan-Implement-Review",
+          description: "Three-stage loop",
+          source: "builtin",
+        },
       ]),
     ),
     create: vi.fn(() =>
@@ -25,9 +35,20 @@ vi.mock("../../lib/api", () => ({
     ),
   },
   tasks: {
-    list: vi.fn(() => Promise.resolve([
-      { key: "PLA-1", title: "Fix auth", status: "todo", description: "", priority: 0, blocked_by: [], tags: [], base_branch: "main" },
-    ])),
+    list: vi.fn(() =>
+      Promise.resolve([
+        {
+          key: "PLA-1",
+          title: "Fix auth",
+          status: "todo",
+          description: "",
+          priority: 0,
+          blocked_by: [],
+          tags: [],
+          base_branch: "main",
+        },
+      ]),
+    ),
   },
 }));
 
@@ -137,9 +158,7 @@ describe("LoopForm", () => {
     await tick();
     flushSync();
 
-    expect(baseProps.onCreated).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "loop-123" }),
-    );
+    expect(baseProps.onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "loop-123" }));
   });
 
   it("disables submit when goal is empty", async () => {
