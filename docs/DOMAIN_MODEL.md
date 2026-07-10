@@ -242,6 +242,49 @@ A durable loop is an orchestration layer above sessions. It tracks rounds of age
 
 **executor_finished_at semantics:** Set only when the executor finishes producing a reviewable result — specifically when status transitions to `completed_unreviewed`, `failed`, or `cancelled`. Post-executor lifecycle states (`approved`, `merged`, `cleaned`) do NOT set this field because they represent human/CI actions after the executor is done.
 
+**Status categories:**
+
+- **Executor-terminal** — `completed_unreviewed`, `failed`, `cancelled`. The executor has finished; no further automated work occurs.
+- **Lifecycle-terminal** — `approved`, `merged`, `cleaned`. Past executor-terminal; human/CI actions only.
+- **Intervention-required** — `blocked`, `needs_human`, `stale`. A human must unblock before ticking resumes.
+- **Tickable** — `running`, `observing`, `verifying`. The loop runner may execute recipe steps.
+
+### Transition Table
+
+Loop status changes are governed by a **declared state machine** (`planeai_core::loop_run::apply`). Callers do not set status directly — they declare what happened via a `LoopTrigger`, and the transition function decides the resulting state.
+
+**API:** `LoopService::transition_loop(conn, id, trigger)` validates the transition, persists the new status, and logs an audit event (`status_transition`) atomically. On no-op transitions (from == to), the DB write is skipped.
+
+**Triggers and their valid transitions:**
+
+| Trigger              | Valid From             | Target Status          |
+| -------------------- | ---------------------- | ---------------------- |
+| `Start`              | `draft`                | `running`              |
+| `Cancel`             | any non-terminal       | `cancelled`            |
+| `HandoffWaiting`     | `running`              | `observing`            |
+| `HandoffConsumed`    | `observing`            | `running`              |
+| `HandoffReceived(s)` | any active¹            | depends on `s`²        |
+| `GatesStarted`       | `running`              | `verifying`            |
+| `RoundBlocked`       | `running`              | `blocked`              |
+| `SessionLimitReached`| `running`              | `needs_human`          |
+| `MaxTicksExceeded`   | `running`              | `failed`               |
+| `HumanWaitReached`   | `running`              | `needs_human`          |
+| `RecipeSetStatus(t)` | `running`              | `t` (allow-listed³)    |
+| `Approve`            | `completed_unreviewed` | `approved`             |
+| `MarkMerged`         | `approved`             | `merged`               |
+| `MarkCleaned`        | `merged`               | `cleaned`              |
+
+¹ Active = `running`, `observing`, `verifying`, `needs_human`, `blocked`, `stale`.
+² `Completed` → `observing`, `Blocked` → `blocked`, `NeedsHuman` → `needs_human`, `Failed` → `failed`.
+³ Allow-listed targets: `observing`, `verifying`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`.
+
+**Design rules:**
+
+- Invalid transitions return an error (`InvalidTransition`) — the caller is notified but state is not corrupted.
+- Idempotent triggers (from == to) return `Unchanged` without a DB write.
+- Every successful state change logs an audit event with `from`, `to`, and `trigger` fields.
+- `record_handoff` uses `transition_in_tx` to bundle the artifact write and status change in one transaction. Rejected transitions during handoff recording are logged but tolerated (race between handoff and cancel).
+
 ### Loop Session
 
 | Field      | Type    | Description                                        |
