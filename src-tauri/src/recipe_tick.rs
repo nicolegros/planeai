@@ -213,6 +213,14 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .map(|r| r.isolation.clone())
         .unwrap_or_else(|| "worktree".to_string());
 
+    // "default" means "use the user's configured default provider" — pass None
+    // so build_session_plan falls through to env.config.default_provider.
+    let provider_opt = if provider == "default" {
+        None
+    } else {
+        Some(provider.clone())
+    };
+
     // 3. Resolve project from loop
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
         .map_err(|e| format!("failed to load loop: {e}"))?
@@ -246,7 +254,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         worktree: use_worktree,
         base_branch,
         yolo: false,
-        provider: Some(provider.clone()),
+        provider: provider_opt,
         task_key: loop_run.task_key.clone(),
         prompt: None, // We send prompt separately after creation
         parent_session_id: loop_run.created_by_session_id.clone(),
