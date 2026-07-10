@@ -940,11 +940,16 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             const MAX_GATE_OUTPUT: usize = 10_000;
             let truncated = if output.len() > MAX_GATE_OUTPUT {
                 let suffix = "\n\n… [output truncated]";
+                let safe_end = output[..MAX_GATE_OUTPUT]
+                    .char_indices()
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
                 format!(
                     "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
                     failed_gate_name,
                     overall_status,
-                    &output[..MAX_GATE_OUTPUT],
+                    &output[..safe_end],
                     suffix
                 )
             } else {
@@ -1390,6 +1395,10 @@ pub fn auto_advance_with_arc(
 
     for _ in 0..MAX_AUTO_TICKS {
         if check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+
+        if is_gates_step(snapshot) {
             break;
         }
 

@@ -437,6 +437,7 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
 #[cfg(windows)]
 fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     use std::io::{Read, Write};
+    use std::sync::mpsc;
 
     let socket_path = planeai_ipc::daemon_socket_path();
     let mut stream = std::fs::OpenOptions::new()
@@ -450,14 +451,20 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     stream.flush().map_err(|e| format!("flush failed: {e}"))?;
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    let mut buf = [0u8; 8192];
-    loop {
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Ok(_) => continue,
-            Err(_) => break,
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
         }
-    }
+        let _ = tx.send(());
+    });
+
+    let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
 
     Ok(())
 }
