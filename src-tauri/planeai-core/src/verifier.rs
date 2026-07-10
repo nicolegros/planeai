@@ -281,8 +281,10 @@ fn execute_command(
 ) -> (VerifierStatus, Option<i32>, Vec<u8>, bool) {
     use std::process::{Command, Stdio};
 
-    let shell = if cfg!(windows) { "cmd" } else { "sh" };
-    let shell_flag = if cfg!(windows) { "/C" } else { "-c" };
+    // Gate commands are POSIX shell scripts defined in recipes — always use sh -c.
+    // On Windows, Git for Windows (expected on PATH) provides sh.
+    let shell = "sh";
+    let shell_flag = "-c";
 
     let mut cmd = Command::new(shell);
     cmd.arg(shell_flag)
