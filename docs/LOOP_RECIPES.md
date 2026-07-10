@@ -229,7 +229,7 @@ The builtin recipe implements the full maker-verifier state machine: maker imple
 - `blocked` / `needs_human` / `failed` — maker declared a non-completable outcome.
 
 **Safety:**
-- `max_rounds` (default: 3) limits retry cycles. When reached at any `round.next` step, the loop transitions to `needs_human`.
+- `max_rounds` (default: 3) limits retry cycles. When reached at any `round.next` step, the loop transitions to `blocked`.
 - `merge_policy: human` ensures no auto-merge. `completed_unreviewed` is the furthest automated state; a human must promote it to `approved` → `merged`.
 
 ### Full Recipe YAML
@@ -515,7 +515,7 @@ planeai-cli axi loop tick <LOOP_ID>
 performs one deterministic transition. A tick may:
 - Execute a step and complete it (advance `current_step`)
 - Return "waiting" (keep `current_step` unchanged)
-- Fail a step and set the loop to `needs_human` or `failed`
+- Fail a step and set the loop to `blocked`, `needs_human`, or `failed`
 
 A tick will **never** execute an unbounded chain of steps.
 
@@ -556,7 +556,7 @@ Increments the round counter. Used for retry loops (verifier fails → increment
   next: prompt_maker_again
 ```
 
-Enforces `policy.max_rounds`. When the limit is reached, the loop transitions to `needs_human`.
+Enforces `policy.max_rounds`. When the limit is reached, the loop transitions to `blocked`.
 
 ### `gates.run` Step
 
