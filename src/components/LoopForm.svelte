@@ -85,11 +85,14 @@
   let wrapperEl: HTMLDivElement | undefined = $state();
   let goalRef: HTMLTextAreaElement | undefined = $state();
 
-  const badge = "bg-panel-hi text-t3";
+  const badge = $derived(fk.mode === "normal" ? "bg-accent-bg text-accent" : "bg-panel-hi text-t3");
 
   const fk = createFormKeyboardController(
     () => [
       { key: "g", ref: () => goalRef ?? null },
+      { key: "r", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='recipe'] input") ?? null },
+      { key: "t", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='task'] input") ?? null },
+      { key: "m", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='max-rounds'] input") ?? null },
       { key: "d", toggle: () => (draft = !draft) },
     ],
     { wrapper: () => wrapperEl ?? null, onDismiss: () => onCancel() },
@@ -119,7 +122,7 @@
   </div>
 
   <div class="space-y-1" data-field="recipe">
-    <Label>Recipe</Label>
+    <Label>Recipe <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
     {#if recipeItems.length > 0}
       <Select
         items={recipeItems}
@@ -133,7 +136,7 @@
   </div>
 
   <div class="space-y-1" data-field="task">
-    <Label>Task (optional)</Label>
+    <Label>Task <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
     <Select
       items={taskSelectItems}
       bind:value={selectedTaskKey}
@@ -143,7 +146,7 @@
   </div>
 
   <div class="space-y-1" data-field="max-rounds">
-    <Label>Max rounds</Label>
+    <Label>Max rounds <span class="font-mono text-[10px] px-1 rounded {badge}">M</span></Label>
     <Input
       type="number"
       bind:value={maxRounds}
