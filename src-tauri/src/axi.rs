@@ -3742,8 +3742,7 @@ mod tests {
 
     // ─── Maker-Verifier Full Flow Integration Tests ──────────────────────────
 
-    use planeai_core::loop_recipe::RECIPE_SCHEMA_V1;
-    use planeai_core::loop_recipe_service::{RecipeRuntime, RecipeSnapshot, SnapshotPolicy};
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
     use planeai_core::loop_run::LoopStatus;
     use planeai_core::loop_service::LoopService;
 
@@ -3764,9 +3763,9 @@ mod tests {
         let project = crate::db::create_project(conn, "testapp", "/tmp/testapp").unwrap();
 
         // Parse the actual built-in recipe to get the real steps
-        let recipe = RecipeService::parse_yaml(
-            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
-        )
+        let recipe = RecipeService::parse_yaml(include_str!(
+            "../planeai-core/resources/recipes/maker-verifier.yaml"
+        ))
         .expect("built-in maker-verifier should parse");
 
         let steps: Vec<RecipeStep> = recipe.steps;
@@ -3836,12 +3835,7 @@ mod tests {
     }
 
     /// Helper: insert a handoff artifact for a session.
-    fn insert_handoff(
-        conn: &rusqlite::Connection,
-        loop_id: &str,
-        session_id: &str,
-        status: &str,
-    ) {
+    fn insert_handoff(conn: &rusqlite::Connection, loop_id: &str, session_id: &str, status: &str) {
         let content = serde_json::json!({
             "schema": "planeai.handoff.v1",
             "loop_id": loop_id,
@@ -3927,8 +3921,7 @@ mod tests {
 
         // Verify snapshot advanced to run_gates
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "run_gates");
     }
 
@@ -3950,8 +3943,7 @@ mod tests {
 
         // Verify snapshot advanced to blocked step
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "blocked");
     }
 
@@ -3970,9 +3962,9 @@ mod tests {
         let project_path = dir.path().to_string_lossy().to_string();
         let project = crate::db::create_project(conn, "testapp", &project_path).unwrap();
 
-        let recipe = RecipeService::parse_yaml(
-            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
-        )
+        let recipe = RecipeService::parse_yaml(include_str!(
+            "../planeai-core/resources/recipes/maker-verifier.yaml"
+        ))
         .unwrap();
 
         let steps: Vec<RecipeStep> = recipe.steps;
@@ -4069,8 +4061,7 @@ mod tests {
     fn maker_verifier_gates_pass_routes_to_create_verifier() {
         let conn = setup_db();
         let maker_id = "maker-33333333-2222-3333-4444-555555555555";
-        let (loop_id, _project_path, _dir) =
-            setup_maker_verifier_flow_with_path(&conn, maker_id);
+        let (loop_id, _project_path, _dir) = setup_maker_verifier_flow_with_path(&conn, maker_id);
 
         // No Cargo.toml or package.json → gates echo "no build system detected" → exit 0 = pass
         let (output, code) = loop_tick(&conn, &loop_id);
@@ -4082,8 +4073,7 @@ mod tests {
         );
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "create_verifier");
     }
 
@@ -4091,8 +4081,7 @@ mod tests {
     fn maker_verifier_gates_fail_routes_to_retry() {
         let conn = setup_db();
         let maker_id = "maker-44444444-2222-3333-4444-555555555555";
-        let (loop_id, _project_path, dir) =
-            setup_maker_verifier_flow_with_path(&conn, maker_id);
+        let (loop_id, _project_path, dir) = setup_maker_verifier_flow_with_path(&conn, maker_id);
 
         // Create a Cargo.toml so the gate tries `cargo build` — fails (no src/)
         std::fs::write(
@@ -4102,15 +4091,17 @@ mod tests {
         .unwrap();
 
         let (output, code) = loop_tick(&conn, &loop_id);
-        assert_eq!(code, 0, "gates.run returns 0 (routes through on.fail), output:\n{output}");
+        assert_eq!(
+            code, 0,
+            "gates.run returns 0 (routes through on.fail), output:\n{output}"
+        );
         assert!(
             output.contains("fail") || output.contains("gates_failed_retry"),
             "should route to gates_failed_retry on fail, output:\n{output}"
         );
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "gates_failed_retry");
     }
 
@@ -4176,8 +4167,7 @@ mod tests {
         );
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "verifier_rejected_retry");
     }
 
@@ -4202,8 +4192,7 @@ mod tests {
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
         assert_eq!(updated.current_round, 2);
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.round, 2);
         assert_eq!(snap.runtime.current_step, "wait_for_maker");
     }
@@ -4230,8 +4219,7 @@ mod tests {
 
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
         assert_eq!(updated.current_round, 2);
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.round, 2);
         assert_eq!(snap.runtime.current_step, "wait_for_maker");
     }
@@ -4319,11 +4307,11 @@ mod tests {
 
         // Trying to tick a terminal loop should fail
         let (output3, code3) = loop_tick(&conn, &loop_id);
-        assert_eq!(code3, 1, "terminal loop should not tick, output:\n{output3}");
-        assert!(
-            output3.contains("terminal"),
-            "output:\n{output3}"
+        assert_eq!(
+            code3, 1,
+            "terminal loop should not tick, output:\n{output3}"
         );
+        assert!(output3.contains("terminal"), "output:\n{output3}");
     }
 
     #[test]
@@ -4344,14 +4332,12 @@ mod tests {
 
         // Step should NOT advance
         let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let snap: RecipeSnapshot =
-            serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+        let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
         assert_eq!(snap.runtime.current_step, "wait_for_maker");
     }
 
     #[test]
     fn maker_verifier_first_tick_creates_maker_session_and_loop_sessions_row() {
-        use planeai_core::loop_recipe_service::RecipeService;
         use std::process::Command;
 
         let conn = setup_db();
@@ -4365,13 +4351,21 @@ mod tests {
             .output()
             .unwrap();
         Command::new("git")
-            .args(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-                   "commit", "--allow-empty", "-m", "init"])
+            .args([
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
             .current_dir(dir.path())
             .output()
             .unwrap();
 
-        let project = crate::db::create_project(&conn, "testapp", &repo_path).unwrap();
+        let _project = crate::db::create_project(&conn, "testapp", &repo_path).unwrap();
 
         // Create loop from the builtin recipe (starts at create_maker)
         let (create_output, create_code) = loop_create(
@@ -4403,7 +4397,10 @@ mod tests {
                 "expected at least one loop_session after create_maker"
             );
             let maker_session = sessions.iter().find(|s| s.role == "maker");
-            assert!(maker_session.is_some(), "expected a session with role=maker");
+            assert!(
+                maker_session.is_some(),
+                "expected a session with role=maker"
+            );
             let ms = maker_session.unwrap();
             assert_eq!(ms.round, 1, "maker session should be round 1");
 
@@ -4429,9 +4426,9 @@ mod tests {
         use planeai_core::loop_recipe_service::RecipeService;
 
         // Verify the recipe role configuration has worktree isolation
-        let recipe = RecipeService::parse_yaml(
-            include_str!("../planeai-core/resources/recipes/maker-verifier.yaml"),
-        )
+        let recipe = RecipeService::parse_yaml(include_str!(
+            "../planeai-core/resources/recipes/maker-verifier.yaml"
+        ))
         .unwrap();
 
         let maker_role = recipe.roles.get("maker").expect("maker role should exist");

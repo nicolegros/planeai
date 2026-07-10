@@ -848,8 +848,10 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         "recipe_step_completed"
     } else {
         // Store gate failure in last_error for the retry prompt template
-        ctx.snapshot.runtime.last_error =
-            Some(format!("Gate '{}' returned '{}'", failed_gate_name, overall_status));
+        ctx.snapshot.runtime.last_error = Some(format!(
+            "Gate '{}' returned '{}'",
+            failed_gate_name, overall_status
+        ));
         "recipe_step_failed"
     };
 
