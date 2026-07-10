@@ -37,7 +37,6 @@
   async function handleTick() {
     try {
       await loopsApi.tick(loopId);
-      showSnackbar("Loop ticked");
       refresh();
     } catch (e) {
       showSnackbar(`Tick failed: ${e}`);
@@ -47,7 +46,6 @@
   async function handleStop() {
     try {
       await loopsApi.stop(loopId);
-      showSnackbar("Loop stopped");
       refresh();
     } catch (e) {
       showSnackbar(`Stop failed: ${e}`);
@@ -57,7 +55,6 @@
   async function handleStart() {
     try {
       await loopsApi.start(loopId);
-      showSnackbar("Loop started");
       refresh();
     } catch (e) {
       showSnackbar(`Start failed: ${e}`);
@@ -66,7 +63,6 @@
 
   function copyPath(path: string) {
     navigator.clipboard.writeText(path);
-    showSnackbar("Path copied");
   }
 
   function isActive(status: string): boolean {
