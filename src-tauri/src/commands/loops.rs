@@ -356,6 +356,47 @@ pub async fn tick_loop(
 }
 
 #[tauri::command]
+pub async fn start_loop(
+    db_state: State<'_, DbState>,
+    app_handle: AppHandle,
+    loop_id: String,
+) -> Result<(), String> {
+    let conn_arc = db_state.0.clone();
+    blocking(move || {
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+
+        let run = LoopService::get_loop(&conn, &loop_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("loop not found: {loop_id}"))?;
+
+        if run.status != LoopStatus::Draft {
+            return Err(format!(
+                "loop {} is not in draft status (current: '{}')",
+                &loop_id[..8.min(loop_id.len())],
+                run.status.as_str()
+            ));
+        }
+
+        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running)
+            .map_err(|e| e.to_string())?;
+
+        LoopService::append_loop_event(
+            &conn,
+            &loop_id,
+            "loop_started",
+            &serde_json::json!({"source": "ui"}),
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    })
+    .await?;
+
+    let _ = app_handle.emit("loop-state-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn stop_loop(
     db_state: State<'_, DbState>,
     app_handle: AppHandle,

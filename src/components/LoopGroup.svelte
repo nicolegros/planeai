@@ -6,11 +6,12 @@
     loops: LoopRunSummary[];
     selectedLoopId: string | null;
     onSelectLoop: (id: string) => void;
+    onStartLoop: (id: string) => void;
     onTick: (id: string) => void;
     onStop: (id: string) => void;
   }
 
-  let { loops, selectedLoopId, onSelectLoop, onTick, onStop }: Props = $props();
+  let { loops, selectedLoopId, onSelectLoop, onStartLoop, onTick, onStop }: Props = $props();
 
   let collapsed = $state(false);
 
@@ -84,7 +85,16 @@
 
               <!-- Quick actions (show on hover) -->
               <span class="hidden group-hover:flex items-center gap-0.5">
-                {#if isActive(loop.status)}
+                {#if loop.status === "draft"}
+                  <button
+                    class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1"
+                    onclick={(e) => { e.stopPropagation(); onStartLoop(loop.id); }}
+                    title="Start"
+                    aria-label="Start loop"
+                  >
+                    <Play class="size-3" />
+                  </button>
+                {:else if isActive(loop.status)}
                   <button
                     class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1"
                     onclick={(e) => { e.stopPropagation(); onTick(loop.id); }}

@@ -54,6 +54,16 @@
     }
   }
 
+  async function handleStart() {
+    try {
+      await loopsApi.start(loopId);
+      showSnackbar("Loop started");
+      refresh();
+    } catch (e) {
+      showSnackbar(`Start failed: ${e}`);
+    }
+  }
+
   function copyPath(path: string) {
     navigator.clipboard.writeText(path);
     showSnackbar("Path copied");
@@ -133,6 +143,12 @@
           <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
           Refresh
         </Button>
+        {#if detail.run.status === "draft"}
+          <Button variant="primary" size="sm" onclick={handleStart}>
+            <Play class="size-3.5" />
+            Start
+          </Button>
+        {/if}
         {#if isActive(detail.run.status)}
           <Button variant="ghost" size="sm" onclick={handleTick}>
             <Play class="size-3.5" />

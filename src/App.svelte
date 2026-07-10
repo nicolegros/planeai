@@ -351,6 +351,7 @@
         onCreateSession={() => { showNewItemModal = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
         onSelectLoop={(id) => { loopStore.setActiveLoopId(id); }}
+        onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         selectedLoopId={activeLoopId}

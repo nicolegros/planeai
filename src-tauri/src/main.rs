@@ -372,6 +372,7 @@ fn main() {
             get_loop_run_detail,
             list_loop_recipes,
             create_loop_run,
+            start_loop,
             tick_loop,
             stop_loop,
         ])

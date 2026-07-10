@@ -286,4 +286,5 @@ export const loops = {
   }) => invoke<LoopRunSummary>("create_loop_run", params),
   tick: (loopId: string) => invoke("tick_loop", { loopId }),
   stop: (loopId: string) => invoke("stop_loop", { loopId }),
+  start: (loopId: string) => invoke("start_loop", { loopId }),
 };
