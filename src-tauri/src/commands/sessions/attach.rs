@@ -147,7 +147,10 @@ pub fn write_to_pty(
     data: Vec<u8>,
     state: State<PtyState>,
 ) -> Result<(), String> {
-    state.0.write(&session_id, &data)
+    match state.0.write(&session_id, &data) {
+        Err(e) if e == "session not attached" => Ok(()),
+        other => other,
+    }
 }
 
 #[tauri::command]
@@ -157,17 +160,26 @@ pub fn resize_pty(
     cols: u16,
     state: State<PtyState>,
 ) -> Result<(), String> {
-    state.0.resize(&session_id, rows, cols)
+    match state.0.resize(&session_id, rows, cols) {
+        Err(e) if e == "session not attached" => Ok(()),
+        other => other,
+    }
 }
 
 #[tauri::command]
 pub fn pause_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
-    state.0.pause(&session_id)
+    match state.0.pause(&session_id) {
+        Err(e) if e == "session not attached" => Ok(()),
+        other => other,
+    }
 }
 
 #[tauri::command]
 pub fn resume_pty(session_id: String, state: State<PtyState>) -> Result<(), String> {
-    state.0.resume(&session_id)
+    match state.0.resume(&session_id) {
+        Err(e) if e == "session not attached" => Ok(()),
+        other => other,
+    }
 }
 
 #[tauri::command]

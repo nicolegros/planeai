@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { loops as loopsApi, tasks as tasksApi } from "../lib/api";
+  import { loops as loopsApi, tasks as tasksApi, projects as projectsApi } from "../lib/api";
   import type { LoopRunSummary, RecipeSummary, TaskItem } from "../lib/types";
   import { Button, Label, Select } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -8,29 +8,34 @@
   import { LoaderCircle } from "@lucide/svelte";
 
   interface Props {
-    projectId: string;
-    projectPath: string;
+    projects: { id: string; name: string; path: string }[];
     onCreated: (loop: LoopRunSummary) => void;
     onCancel: () => void;
     taskKey?: string | null;
   }
 
-  let { projectId, projectPath, onCreated, onCancel, taskKey = null }: Props = $props();
+  let { projects, onCreated, onCancel, taskKey = null }: Props = $props();
+
+  let selectedProjectId = $state(projects[0]?.id ?? "");
+  const selectedProject = $derived(projects.find(p => p.id === selectedProjectId));
 
   let goal = $state("");
   let recipeId = $state("");
   // svelte-ignore state_referenced_locally
   let selectedTaskKey = $state(taskKey ?? "");
   let maxRounds = $state(3);
+  let baseBranch = $state("");
   let draft = $state(false);
   let submitting = $state(false);
 
   let recipes = $state<RecipeSummary[]>([]);
   let taskItems = $state<TaskItem[]>([]);
+  let branches = $state<{ value: string; label: string }[]>([]);
 
-  // Load recipes on mount
+  // Load recipes when project changes
   $effect(() => {
-    loopsApi.recipes(projectId).then(
+    if (!selectedProjectId) return;
+    loopsApi.recipes(selectedProjectId).then(
       (r) => {
         recipes = r;
         if (r.length > 0 && !recipeId) recipeId = r[0].id;
@@ -39,11 +44,27 @@
     );
   });
 
-  // Load tasks for task key selector
+  // Load tasks when project changes
   $effect(() => {
-    tasksApi.list(projectPath).then(
+    const path = selectedProject?.path;
+    if (!path) return;
+    tasksApi.list(path).then(
       (items) => (taskItems = items),
       () => (taskItems = []),
+    );
+  });
+
+  // Load branches when project changes
+  $effect(() => {
+    const path = selectedProject?.path;
+    if (!path) return;
+    projectsApi.listBranches(path).then(
+      (b) => {
+        branches = b
+          .filter((s) => !s.startsWith("remote:"))
+          .map((s) => ({ value: s, label: s }));
+      },
+      () => (branches = []),
     );
   });
 
@@ -67,11 +88,12 @@
 
     try {
       const result = await loopsApi.create({
-        projectId,
+        projectId: selectedProjectId,
         goal: goal.trim(),
         recipeId,
         taskKey: selectedTaskKey || null,
         maxRounds,
+        baseBranch: baseBranch || null,
         start: !draft,
       });
       onCreated(result);
@@ -87,9 +109,11 @@
 
   const fk = createFormKeyboardController(
     () => [
+      ...(projects.length > 1 ? [{ key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='project'] input") ?? null }] : []),
       { key: "g", ref: () => goalRef ?? null },
       { key: "r", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='recipe'] input") ?? null },
       { key: "t", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='task'] input") ?? null },
+      { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "m", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='max-rounds'] input") ?? null },
       { key: "d", toggle: () => (draft = !draft) },
     ],
@@ -107,6 +131,18 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form class="px-5 pb-0 space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
+
+  {#if projects.length > 1}
+    <div class="space-y-1" data-field="project">
+      <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></Label>
+      <Select
+        items={projects.map(p => ({ value: p.id, label: p.name }))}
+        bind:value={selectedProjectId}
+        onkeydown={metaEnter}
+        placeholder="Select project…"
+      />
+    </div>
+  {/if}
 
   <div class="space-y-1" data-field="goal">
     <Label>Goal <span class="font-mono text-[10px] px-1 rounded {badge}">G</span></Label>
@@ -142,6 +178,17 @@
       bind:value={selectedTaskKey}
       onkeydown={metaEnter}
       placeholder="Link to task…"
+    />
+  </div>
+
+  <div class="space-y-1" data-field="base">
+    <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
+    <Select
+      items={branches}
+      bind:value={baseBranch}
+      onkeydown={metaEnter}
+      placeholder="main"
+      emptyText="No branches found"
     />
   </div>
 

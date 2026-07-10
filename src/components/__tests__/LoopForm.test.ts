@@ -55,8 +55,7 @@ vi.mock("../../lib/api", () => ({
 import LoopForm from "../LoopForm.svelte";
 
 const baseProps = {
-  projectId: "p1",
-  projectPath: "/tmp/proj",
+  projects: [{ id: "p1", name: "myproject", path: "/tmp/proj" }],
   onCreated: vi.fn(),
   onCancel: vi.fn(),
 };

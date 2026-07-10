@@ -1572,6 +1572,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             round: 1,
             created_session_ids: BTreeMap::new(), // No sessions!
             last_error: None,
+                last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1708,6 +1709,7 @@ fn recipe_tick_round_next_increments_round() {
             round: 1,
             created_session_ids: BTreeMap::new(),
             last_error: None,
+                last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1794,6 +1796,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             round: 3, // Already at max_rounds
             created_session_ids: BTreeMap::new(),
             last_error: None,
+                last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1902,6 +1905,7 @@ fn setup_maker_verifier_flow(
             round,
             created_session_ids,
             last_error: None,
+                last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2093,6 +2097,7 @@ fn setup_maker_verifier_flow_with_path(
             round: 1,
             created_session_ids,
             last_error: None,
+                last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,

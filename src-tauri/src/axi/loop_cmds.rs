@@ -833,16 +833,23 @@ pub fn loop_handoff_record(
     // Determine loop status transition
     let is_active = matches!(
         loop_run.status,
-        LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
+        LoopStatus::Running
+            | LoopStatus::Observing
+            | LoopStatus::Verifying
+            | LoopStatus::NeedsHuman
+            | LoopStatus::Blocked
+            | LoopStatus::Stale
     );
 
     let (new_loop_status, state_changed) = if is_active {
         match handoff.status {
             HandoffStatus::Completed => {
-                if loop_run.status == LoopStatus::Running {
-                    (Some(LoopStatus::Observing), true)
-                } else {
+                if loop_run.status == LoopStatus::Observing {
+                    // Already observing — no transition needed
                     (None, false)
+                } else {
+                    // Running, NeedsHuman, Blocked, Stale, Verifying → Observing
+                    (Some(LoopStatus::Observing), true)
                 }
             }
             HandoffStatus::Blocked => (Some(LoopStatus::Blocked), true),
@@ -921,6 +928,49 @@ pub fn loop_handoff_record(
         }
     };
     result_fields.push(field("next_actions", Value::List(next_actions)));
+
+    // Auto-tick: when a completed handoff arrives on a non-terminal loop,
+    // immediately tick the recipe so it advances through wait_for_maker → gates → prompt
+    // without requiring a manual tick from the user.
+    if handoff.status == HandoffStatus::Completed && !final_loop_status.is_executor_terminal() {
+        if let Ok(Some(updated_run)) = LoopService::get_loop(conn, &loop_run.id) {
+            if let Some(ref policy_json) = updated_run.policy_json {
+                if let Ok(mut snapshot) = serde_json::from_value::<
+                    planeai_core::loop_recipe_service::RecipeSnapshot,
+                >(policy_json.clone()) {
+                    let max_auto_ticks = 10;
+                    for _ in 0..max_auto_ticks {
+                        let current = &snapshot.runtime.current_step;
+                        let is_blocking_step = snapshot
+                            .steps
+                            .iter()
+                            .find(|s| &s.id == current)
+                            .map(|s| s.kind == "human.wait")
+                            .unwrap_or(false);
+                        if is_blocking_step {
+                            break;
+                        }
+
+                        let (_output, code) =
+                            crate::recipe_tick::tick_recipe(conn, &loop_run.id, &mut snapshot);
+                        let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                        let _ = LoopService::update_policy_json(conn, &loop_run.id, &updated_json);
+                        if code != 0 {
+                            break;
+                        }
+                        if let Ok(Some(r)) = LoopService::get_loop(conn, &loop_run.id) {
+                            if r.status.is_executor_terminal()
+                                || r.status.is_intervention_required()
+                                || r.status == LoopStatus::Observing
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     (render(&result_fields), 0)
 }

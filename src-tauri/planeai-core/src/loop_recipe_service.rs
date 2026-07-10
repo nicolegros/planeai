@@ -82,6 +82,10 @@ pub struct RecipeRuntime {
     pub created_session_ids: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Timestamp of the last consumed handoff — used to ignore stale handoffs
+    /// from previous rounds when checking handoff.wait.
+    #[serde(default)]
+    pub last_handoff_consumed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -389,6 +393,7 @@ impl RecipeService {
                 round: 1,
                 created_session_ids: BTreeMap::new(),
                 last_error: None,
+                last_handoff_consumed_at: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,

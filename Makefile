@@ -1,6 +1,9 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint docs
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs install
 
-ci: lint test ## Run lint + tests
+ci: install lint test ## Run lint + tests
+
+install:
+	pnpm install
 
 fmt:
 	pnpm fmt

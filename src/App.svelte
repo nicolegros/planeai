@@ -395,8 +395,7 @@
     {#if showLoopForm}
     <FormDialog title="Start Loop" onClose={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}>
       <LoopForm
-        projectId={projects[0]?.id ?? ""}
-        projectPath={projects[0]?.path ?? ""}
+        projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
         onCreated={(loop) => { showLoopForm = false; loopStore.setActiveLoopId(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
         onCancel={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}
       />

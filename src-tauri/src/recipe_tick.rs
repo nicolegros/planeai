@@ -274,15 +274,33 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
 
     // 5. Create the session via the standard path
     let use_worktree = isolation == "worktree";
-    let base_branch = if round > 1 {
+    let base_branch = if round > 1 && use_worktree {
+        // Worktree-isolated roles (maker) base on their own previous round
         Some(format!(
             "loop/{}/{}-r{}",
             short_id(ctx.loop_id),
             role_id,
             round - 1
         ))
+    } else if !use_worktree {
+        // Non-worktree roles (verifier/readonly) base on the maker's current branch
+        // so they can review the maker's latest work
+        let maker_branch = ctx
+            .snapshot
+            .runtime
+            .created_session_ids
+            .get("maker")
+            .and_then(|ids| ids.last())
+            .and_then(|sid| {
+                crate::db::get_session(ctx.conn, sid)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.branch)
+            });
+        maker_branch
     } else {
-        None
+        // Round 1 worktree role: use configured base_branch from inputs, or None (defaults to main)
+        ctx.snapshot.inputs.get("base_branch").cloned()
     };
 
     // Render prompt before session creation so it's baked into the launch command
@@ -299,7 +317,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         new_branch: true,
         worktree: use_worktree,
         base_branch,
-        yolo: false,
+        yolo: true,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
         prompt: rendered_prompt,
@@ -375,8 +393,9 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
 
     // 8. (Prompt is now baked into the launch command via opts.prompt — no separate send needed)
 
-    // 9. Set loop status to observing
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing).ok();
+    // 9. Keep loop status as Running — the subsequent handoff.wait step will
+    //    park it at Observing if needed. This allows auto-tick to continue
+    //    through to the wait step without stopping prematurely.
 
     // 10. Append events and advance
     LoopService::append_loop_event(
@@ -513,11 +532,15 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         .unwrap_or_default();
 
     // Use LoopService to find handoff (strict: requires schema + valid status)
-    let found_handoff = LoopService::find_handoff_for_sessions(ctx.conn, ctx.loop_id, &session_ids)
+    // Only look for handoffs recorded after the last one we consumed (prevents re-consuming stale ones)
+    let after_ts = ctx.snapshot.runtime.last_handoff_consumed_at.as_deref();
+    let found_handoff = LoopService::find_handoff_for_sessions(ctx.conn, ctx.loop_id, &session_ids, after_ts)
         .map_err(|e| format!("handoff query failed: {e}"))?;
 
     match found_handoff {
         None => {
+            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing)
+                .map_err(|e| format!("failed to update loop status: {e}"))?;
             LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
@@ -545,6 +568,14 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
             })
         }
         Some((session_id, handoff_status)) => {
+            // Handoff found — set loop back to Running so auto-tick continues
+            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Running)
+                .map_err(|e| format!("failed to update loop status: {e}"))?;
+
+            // Record consumption timestamp so we don't re-consume this handoff in future rounds
+            ctx.snapshot.runtime.last_handoff_consumed_at =
+                Some(chrono::Utc::now().to_rfc3339());
+
             let next_step = step
                 .on
                 .as_ref()
@@ -845,6 +876,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     // Run all gates — stop on first failure
     let mut overall_status = "pass";
     let mut failed_gate_name = String::new();
+    let mut failed_gate_output: Option<String> = None;
     for gate in &step.gates {
         let request = VerifyGateRequest {
             loop_id: ctx.loop_id.to_string(),
@@ -866,6 +898,10 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                         "fail"
                     };
                     failed_gate_name = gate.name.clone();
+                    // Read the gate output so we can feed it to the retry prompt
+                    if let Some(ref path) = result.output_path {
+                        failed_gate_output = std::fs::read_to_string(path).ok();
+                    }
                     break;
                 }
             }
@@ -899,10 +935,14 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         "recipe_step_completed"
     } else {
         // Store gate failure in last_error for the retry prompt template
-        ctx.snapshot.runtime.last_error = Some(format!(
-            "Gate '{}' returned '{}'",
-            failed_gate_name, overall_status
-        ));
+        ctx.snapshot.runtime.last_error = Some(if let Some(ref output) = failed_gate_output {
+            format!(
+                "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}",
+                failed_gate_name, overall_status, output
+            )
+        } else {
+            format!("Gate '{}' returned '{}'", failed_gate_name, overall_status)
+        });
         "recipe_step_failed"
     };
 
@@ -1146,6 +1186,7 @@ mod tests {
                 round: 1,
                 created_session_ids: BTreeMap::new(),
                 last_error: None,
+                last_handoff_consumed_at: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,

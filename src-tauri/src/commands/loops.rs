@@ -216,6 +216,7 @@ pub async fn create_loop_run(
     recipe_id: String,
     task_key: Option<String>,
     max_rounds: Option<i64>,
+    base_branch: Option<String>,
     start: bool,
 ) -> Result<LoopRunSummary, String> {
     tracing::info!(project_id = %project_id, recipe_id = %recipe_id, start, "create_loop_run");
@@ -250,9 +251,15 @@ pub async fn create_loop_run(
         if let Some(ref key) = task_key {
             inputs.insert("task_key".to_string(), key.clone());
         }
+        if let Some(ref branch) = base_branch {
+            if !branch.is_empty() {
+                inputs.insert("base_branch".to_string(), branch.clone());
+            }
+        }
         let snapshot = RecipeService::create_snapshot(&discovered, inputs);
         let resolved_max_rounds = max_rounds.unwrap_or(snapshot.policy.max_rounds as i64);
         let policy_json = serde_json::to_value(&snapshot).ok();
+        let policy_json_for_tick = policy_json.clone();
 
         // Create the loop run
         let params = CreateLoopParams {
@@ -278,6 +285,44 @@ pub async fn create_loop_run(
                 &serde_json::json!({"source": "ui"}),
             )
             .map_err(|e| e.to_string())?;
+
+            // Auto-tick immediately so the recipe begins executing
+            if let Some(ref pj) = policy_json_for_tick {
+                if let Ok(mut snapshot) = serde_json::from_value::<
+                    planeai_core::loop_recipe_service::RecipeSnapshot,
+                >(pj.clone())
+                {
+                    let max_auto_ticks = 10;
+                    for _ in 0..max_auto_ticks {
+                        let (_output, code) =
+                            planeai::recipe_tick::tick_recipe(&conn, &run.id, &mut snapshot);
+                        let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                        let _ = LoopService::update_policy_json(&conn, &run.id, &updated_json);
+                        if code != 0 {
+                            break;
+                        }
+                        if let Ok(Some(r)) = LoopService::get_loop(&conn, &run.id) {
+                            if r.status.is_executor_terminal()
+                                || r.status.is_intervention_required()
+                                || r.status == LoopStatus::Observing
+                            {
+                                break;
+                            }
+                        }
+                        let current = &snapshot.runtime.current_step;
+                        let is_human_wait = snapshot
+                            .steps
+                            .iter()
+                            .find(|s| &s.id == current)
+                            .map(|s| s.kind == "human.wait")
+                            .unwrap_or(false);
+                        if is_human_wait {
+                            break;
+                        }
+                    }
+                }
+            }
+
             // Return with updated status
             let updated = LoopService::get_loop(&conn, &run.id)
                 .map_err(|e| e.to_string())?
@@ -325,17 +370,51 @@ pub async fn tick_loop(
             ));
         }
 
-        // If there's a recipe snapshot, execute a tick
+        // If there's a recipe snapshot, execute ticks until a waiting/terminal state
         if let Some(ref policy_json) = run.policy_json {
             if let Ok(mut snapshot) = serde_json::from_value::<
                 planeai_core::loop_recipe_service::RecipeSnapshot,
             >(policy_json.clone())
             {
-                let (_output, _code) =
-                    planeai::recipe_tick::tick_recipe(&conn, &loop_id, &mut snapshot);
-                // Persist updated snapshot
-                let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
-                let _ = LoopService::update_policy_json(&conn, &loop_id, &updated_json);
+                // Auto-advance: keep ticking while the step is immediately executable
+                // (not a handoff.wait, human.wait, or terminal state). Cap at 10
+                // iterations to prevent runaway in case of misconfigured recipes.
+                let max_auto_ticks = 10;
+                for _ in 0..max_auto_ticks {
+                    let (_output, code) =
+                        planeai::recipe_tick::tick_recipe(&conn, &loop_id, &mut snapshot);
+
+                    // Persist updated snapshot after each tick
+                    let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                    let _ = LoopService::update_policy_json(&conn, &loop_id, &updated_json);
+
+                    // Stop if tick errored
+                    if code != 0 {
+                        break;
+                    }
+
+                    // Stop if the loop reached a waiting or terminal state
+                    if let Ok(Some(updated_run)) = LoopService::get_loop(&conn, &loop_id) {
+                        if updated_run.status.is_executor_terminal()
+                            || updated_run.status.is_intervention_required()
+                            || updated_run.status == planeai_core::loop_run::LoopStatus::Observing
+                        {
+                            break;
+                        }
+                    }
+
+                    // Stop if the current step is a human.wait (requires explicit intervention)
+                    let current = &snapshot.runtime.current_step;
+                    let is_human_wait = snapshot
+                        .steps
+                        .iter()
+                        .find(|s| &s.id == current)
+                        .map(|s| s.kind == "human.wait")
+                        .unwrap_or(false);
+                    if is_human_wait {
+                        break;
+                    }
+                }
             }
         } else {
             // Non-recipe loop: just increment round
@@ -388,6 +467,43 @@ pub async fn start_loop(
             &serde_json::json!({"source": "ui"}),
         )
         .map_err(|e| e.to_string())?;
+
+        // Auto-tick immediately after starting so the recipe begins executing
+        if let Some(ref policy_json) = run.policy_json {
+            if let Ok(mut snapshot) = serde_json::from_value::<
+                planeai_core::loop_recipe_service::RecipeSnapshot,
+            >(policy_json.clone())
+            {
+                let max_auto_ticks = 10;
+                for _ in 0..max_auto_ticks {
+                    let (_output, code) =
+                        planeai::recipe_tick::tick_recipe(&conn, &loop_id, &mut snapshot);
+                    let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                    let _ = LoopService::update_policy_json(&conn, &loop_id, &updated_json);
+                    if code != 0 {
+                        break;
+                    }
+                    if let Ok(Some(r)) = LoopService::get_loop(&conn, &loop_id) {
+                        if r.status.is_executor_terminal()
+                            || r.status.is_intervention_required()
+                            || r.status == LoopStatus::Observing
+                        {
+                            break;
+                        }
+                    }
+                    let current = &snapshot.runtime.current_step;
+                    let is_human_wait = snapshot
+                        .steps
+                        .iter()
+                        .find(|s| &s.id == current)
+                        .map(|s| s.kind == "human.wait")
+                        .unwrap_or(false);
+                    if is_human_wait {
+                        break;
+                    }
+                }
+            }
+        }
 
         Ok(())
     })

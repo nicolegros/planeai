@@ -96,6 +96,25 @@ steps:
       - When done, write and record a planeai.handoff.v1 handoff.
       - Your handoff status must be one of: completed, blocked, needs_human, failed.
 
+      Handoff protocol:
+      1. Your session id is available as:
+         $PLANEAI_SESSION_ID
+
+      2. Get your expected handoff path:
+         planeai-cli axi loop handoff path \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID"
+
+      3. Write a JSON file with schema planeai.handoff.v1.
+
+      4. Record it:
+         planeai-cli axi loop handoff record \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID" \
+           --path <handoff-path>
+
+      5. After recording the handoff, stop and wait. Do not keep changing files unless prompted again.
+
   # ─── Wait for maker to hand off ─────────────────────────────────────────────
   - id: wait_for_maker
     kind: handoff.wait
@@ -111,10 +130,8 @@ steps:
     kind: gates.run
     role: maker
     gates:
-      - name: build
-        command: "if [ -f Cargo.toml ]; then cargo build 2>&1; elif [ -f package.json ]; then npm run build 2>&1; else echo 'no build system detected'; fi"
-      - name: test
-        command: "if [ -f Cargo.toml ]; then cargo test 2>&1; elif [ -f package.json ]; then npm test 2>&1; else echo 'no test runner detected'; fi"
+      - name: ci
+        command: "make ci"
     on:
       pass: create_verifier
       fail: gates_failed_retry
@@ -163,6 +180,23 @@ steps:
       When done, record a planeai.handoff.v1 handoff:
       - status: completed — if the changes are good and ready for human review.
       - status: needs_human — if the changes need work. Describe what must change in the summary.
+
+      Handoff protocol:
+      1. Your session id is available as:
+         $PLANEAI_SESSION_ID
+
+      2. Get your expected handoff path:
+         planeai-cli axi loop handoff path \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID"
+
+      3. Write a JSON file with schema planeai.handoff.v1.
+
+      4. Record it:
+         planeai-cli axi loop handoff record \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID" \
+           --path <handoff-path>
 
   # ─── Wait for verifier to hand off ──────────────────────────────────────────
   - id: wait_for_verifier

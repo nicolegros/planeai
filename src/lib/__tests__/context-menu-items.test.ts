@@ -93,6 +93,16 @@ function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[
     ...(linkedSession ? [{ label: "Review diff", onSelect: () => {} } as MenuItem] : []),
     { label: "Edit task", onSelect: () => {} },
     { label: "Change status", children: statusChildren },
+    ...(linkedSession
+      ? [
+          ...(linkedSession.status === "exited"
+            ? [{ label: "Restart session", onSelect: () => {} } as MenuItem]
+            : []),
+          { label: "Rename session", onSelect: () => {} } as MenuItem,
+          { label: "Archive session", onSelect: () => {} } as MenuItem,
+          { label: "Delete session", danger: true, onSelect: () => {} } as MenuItem,
+        ]
+      : []),
   ];
 }
 
@@ -224,7 +234,48 @@ describe("context menu item construction", () => {
       const linked = makeSession({ task_key: "T-1" });
       const items = buildTaskMenu(task, linked);
       const labels = items.map((i) => i.label);
-      expect(labels).toEqual(["Review diff", "Edit task", "Change status"]);
+      expect(labels).toEqual([
+        "Review diff",
+        "Edit task",
+        "Change status",
+        "Rename session",
+        "Archive session",
+        "Delete session",
+      ]);
+    });
+
+    it("shows all menu items in correct order with exited linked session", () => {
+      const task = makeTask({ status: "in_progress" });
+      const linked = makeSession({ task_key: "T-1", status: "exited" });
+      const items = buildTaskMenu(task, linked);
+      const labels = items.map((i) => i.label);
+      expect(labels).toEqual([
+        "Review diff",
+        "Edit task",
+        "Change status",
+        "Restart session",
+        "Rename session",
+        "Archive session",
+        "Delete session",
+      ]);
+    });
+
+    it("marks 'Delete session' as danger in task menu", () => {
+      const task = makeTask({ status: "in_progress" });
+      const linked = makeSession({ task_key: "T-1" });
+      const items = buildTaskMenu(task, linked);
+      const del = items.find((i) => i.label === "Delete session");
+      expect(del && !isParent(del) && del.danger).toBe(true);
+    });
+
+    it("does not show session actions when no linked session", () => {
+      const task = makeTask({ status: "todo" });
+      const items = buildTaskMenu(task, null);
+      const labels = items.map((i) => i.label);
+      expect(labels).not.toContain("Delete session");
+      expect(labels).not.toContain("Archive session");
+      expect(labels).not.toContain("Rename session");
+      expect(labels).not.toContain("Restart session");
     });
 
     it("shows all menu items in correct order without linked session", () => {

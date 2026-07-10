@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { LoopRunDetail } from "../lib/types";
-  import { loops as loopsApi } from "../lib/api";
+  import { loops as loopsApi, git } from "../lib/api";
   import { Button } from "./ui";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock } from "@lucide/svelte";
+  import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock, ChevronRight, ChevronDown } from "@lucide/svelte";
 
   interface Props {
     loopId: string;
@@ -16,6 +16,38 @@
   let detail = $state<LoopRunDetail | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+
+  // Verifier output expansion state
+  let expandedVerifiers = $state<Set<string>>(new Set());
+  let verifierOutputs = $state<Record<string, { content: string | null; loading: boolean; error: string | null }>>({});
+
+  const ANSI_REGEX = /\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g;
+
+  function stripAnsi(text: string): string {
+    return text.replace(ANSI_REGEX, "");
+  }
+
+  async function toggleVerifierOutput(vrId: string, outputPath: string | null) {
+    if (expandedVerifiers.has(vrId)) {
+      expandedVerifiers = new Set([...expandedVerifiers].filter(id => id !== vrId));
+      return;
+    }
+    expandedVerifiers = new Set([...expandedVerifiers, vrId]);
+
+    if (verifierOutputs[vrId]?.content != null) return; // already loaded
+    if (!outputPath) {
+      verifierOutputs = { ...verifierOutputs, [vrId]: { content: null, loading: false, error: "No output file" } };
+      return;
+    }
+
+    verifierOutputs = { ...verifierOutputs, [vrId]: { content: null, loading: true, error: null } };
+    try {
+      const raw = await git.readFile(outputPath);
+      verifierOutputs = { ...verifierOutputs, [vrId]: { content: stripAnsi(raw), loading: false, error: null } };
+    } catch (e) {
+      verifierOutputs = { ...verifierOutputs, [vrId]: { content: null, loading: false, error: String(e) } };
+    }
+  }
 
   async function refresh() {
     loading = true;
@@ -205,22 +237,35 @@
         <ul class="space-y-1">
           {#each detail.verifier_runs as vr (vr.id)}
             {@const Icon = verifierIcon(vr.status)}
-            <li class="flex items-center gap-2 px-3 py-2 rounded-md border border-border">
-              <Icon class="size-4 {verifierColor(vr.status)}" />
-              <span class="text-t1 text-sm font-medium flex-1">{vr.name}</span>
-              <code class="text-t3 text-xs font-mono truncate max-w-[200px]">{vr.command}</code>
-              {#if vr.exit_code != null}
-                <span class="text-xs {vr.exit_code === 0 ? 'text-status-running' : 'text-status-exited'}">
-                  exit {vr.exit_code}
-                </span>
-              {/if}
-              {#if vr.output_path}
-                <button
-                  class="text-accent text-xs hover:underline"
-                  onclick={() => { if (onOpenArtifact) onOpenArtifact(vr.output_path!); else copyPath(vr.output_path!); }}
-                >
-                  output
-                </button>
+            {@const isExpanded = expandedVerifiers.has(vr.id)}
+            {@const output = verifierOutputs[vr.id]}
+            <li class="rounded-md border border-border overflow-hidden">
+              <button
+                class="w-full flex items-center gap-2 px-3 py-2 hover:bg-panel-hi/50 transition-colors"
+                onclick={() => toggleVerifierOutput(vr.id, vr.output_path)}
+              >
+                {#if isExpanded}<ChevronDown class="size-3 text-t3 shrink-0" />{:else}<ChevronRight class="size-3 text-t3 shrink-0" />{/if}
+                <Icon class="size-4 {verifierColor(vr.status)}" />
+                <span class="text-t1 text-sm font-medium flex-1 text-left">{vr.name}</span>
+                <code class="text-t3 text-xs font-mono truncate max-w-[200px]">{vr.command}</code>
+                {#if vr.exit_code != null}
+                  <span class="text-xs {vr.exit_code === 0 ? 'text-status-running' : 'text-status-exited'}">
+                    exit {vr.exit_code}
+                  </span>
+                {/if}
+              </button>
+              {#if isExpanded}
+                <div class="border-t border-border bg-panel">
+                  {#if output?.loading}
+                    <div class="px-3 py-2 text-xs text-t3">Loading…</div>
+                  {:else if output?.error}
+                    <div class="px-3 py-2 text-xs text-status-exited">{output.error}</div>
+                  {:else if output?.content != null}
+                    <pre class="px-3 py-2 text-xs font-mono text-t2 overflow-auto max-h-[400px] whitespace-pre-wrap break-words">{output.content}</pre>
+                  {:else}
+                    <div class="px-3 py-2 text-xs text-t3">No output available</div>
+                  {/if}
+                </div>
               {/if}
             </li>
           {/each}
@@ -269,9 +314,14 @@
         <h2 class="text-sm font-semibold text-t2 mb-2">Events</h2>
         <ul class="space-y-0.5 text-xs">
           {#each detail.events.slice(-20) as event (event.id)}
+            {@const payload = event.payload_json as Record<string, unknown> | null}
+            {@const stepId = payload?.step_id as string | undefined}
             <li class="flex items-center gap-2 px-2 py-1 rounded hover:bg-panel-hi/50">
-              <span class="text-t3 font-mono w-[140px] shrink-0">{event.ts.slice(0, 19).replace("T", " ")}</span>
-              <span class="text-t2 font-medium">{event.kind}</span>
+              <span class="text-t2 font-medium min-w-[160px]">{event.kind}</span>
+              {#if stepId}
+                <code class="text-t3 font-mono">{stepId}</code>
+              {/if}
+              <span class="ml-auto text-t3 font-mono shrink-0">{event.ts.slice(11, 19)}</span>
             </li>
           {/each}
         </ul>
