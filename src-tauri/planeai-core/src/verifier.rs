@@ -281,17 +281,14 @@ fn execute_command(
 ) -> (VerifierStatus, Option<i32>, Vec<u8>, bool) {
     use std::process::{Command, Stdio};
 
-    // Gate commands are POSIX shell scripts defined in recipes — always use sh -c.
-    // On Windows, Git for Windows (expected on PATH) provides sh.
-    let shell = "sh";
-    let shell_flag = "-c";
+    let (shell, args) = crate::command::shell_args(command);
 
     let mut cmd = Command::new(shell);
-    cmd.arg(shell_flag)
-        .arg(command)
+    cmd.args(&args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env("PATH", crate::command::augmented_path(&[]));
     crate::command::no_window(&mut cmd);
 
     let mut child = match cmd.spawn() {
