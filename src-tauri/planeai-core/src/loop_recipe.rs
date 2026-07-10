@@ -113,6 +113,8 @@ pub struct RecipePolicy {
     pub stale_after_ms: Option<u64>,
     #[serde(default = "default_merge_policy")]
     pub merge_policy: String,
+    #[serde(default = "default_auto_approve")]
+    pub auto_approve: bool,
 }
 
 fn default_max_rounds() -> u32 {
@@ -126,6 +128,10 @@ fn default_max_sessions() -> u32 {
 }
 fn default_merge_policy() -> String {
     "human".to_string()
+}
+
+fn default_auto_approve() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

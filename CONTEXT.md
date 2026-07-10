@@ -309,8 +309,8 @@ The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding U
 ### Entry points
 
 - **Sidebar**: `LoopGroup` section renders above projects. Shows all loops across projects with status dots, round counters, and quick action buttons (tick, stop).
-- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal), verifier runs (pass/fail), artifacts (copyable path, open in editor), and recent events timeline.
-- **Create form**: `Cmd+N` → `l` opens `LoopForm` — goal, recipe picker, task link, max rounds, draft checkbox. Keyboard-driven (g=goal, d=toggle draft, Mod+Enter=submit, Esc=cancel).
+- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal), verifier runs (pass/fail with expandable inline output), artifacts (copyable path, open in editor), and recent events timeline.
+- **Create form**: `Cmd+N` → `l` opens `LoopForm` — project picker (when multiple projects), goal, recipe picker, task link, base branch, max rounds, draft checkbox. Keyboard-driven (p=project, g=goal, r=recipe, t=task, b=base branch, m=max rounds, d=toggle draft, Mod+Enter=submit, Esc=cancel).
 - **Actions**: Refresh, Tick (fire-and-forget), Stop from the dashboard. Quick tick/stop from sidebar hover.
 
 ### State management
@@ -320,14 +320,15 @@ The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding U
 
 ### Backend commands
 
-Six async Tauri commands in `src-tauri/src/commands/loops.rs`:
+Seven async Tauri commands in `src-tauri/src/commands/loops.rs`:
 
 - `list_loop_runs(project_id)` → `Vec<LoopRunSummary>`
 - `get_loop_run_detail(loop_id)` → `LoopRunDetail` (sessions, events, artifacts, verifier runs)
 - `list_loop_recipes(project_id)` → `Vec<RecipeSummary>`
-- `create_loop_run(params)` → `LoopRunSummary`
-- `tick_loop(loop_id)` → fire-and-forget tick
+- `create_loop_run(project_id, goal, recipe_id, task_key, max_rounds, base_branch, start)` → `LoopRunSummary` — creates a loop and auto-ticks immediately when `start` is true
+- `tick_loop(loop_id)` → auto-advances through immediately-executable steps until a wait/terminal state
 - `stop_loop(loop_id)` → transition to cancelled
+- `start_loop(loop_id)` → transition to running and auto-tick
 
 All commands use `blocking()` for DB access to avoid blocking the main thread.
 

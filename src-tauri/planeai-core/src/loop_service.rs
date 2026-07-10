@@ -644,6 +644,7 @@ impl LoopService {
         conn: &Connection,
         loop_id: &str,
         session_ids: &[String],
+        after_ts: Option<&str>,
     ) -> SqlResult<Option<(String, String)>> {
         if session_ids.is_empty() {
             return Ok(None);
@@ -657,19 +658,28 @@ impl LoopService {
             .collect();
         // Fetch recent handoff artifacts (newest first) — we validate in Rust
         // because SQLite JSON functions aren't guaranteed available.
+        let after_clause = if after_ts.is_some() {
+            format!("AND created_at > ?{}", session_ids.len() + 2)
+        } else {
+            String::new()
+        };
         let sql = format!(
             "SELECT session_id, content_json FROM loop_artifacts \
              WHERE loop_id = ?1 AND kind = 'handoff' \
-             AND session_id IN ({}) \
+             AND session_id IN ({}) {} \
              ORDER BY created_at DESC, id DESC",
-            placeholders.join(", ")
+            placeholders.join(", "),
+            after_clause
         );
         let mut stmt = conn.prepare(&sql)?;
-        // Bind params: ?1 = loop_id, ?2..N = session_ids
+        // Bind params: ?1 = loop_id, ?2..N = session_ids, ?N+1 = after_ts
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         params_vec.push(Box::new(loop_id.to_string()));
         for sid in session_ids {
             params_vec.push(Box::new(sid.clone()));
+        }
+        if let Some(ts) = after_ts {
+            params_vec.push(Box::new(ts.to_string()));
         }
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();

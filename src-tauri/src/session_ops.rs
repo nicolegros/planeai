@@ -397,43 +397,117 @@ pub fn real_prompt_ops(_socket_path: std::path::PathBuf) -> impl PromptOps {
     WindowsPromptOps
 }
 
-/// Send a prompt to a daemon-backend session via the daemon data connection.
+#[cfg(unix)]
 fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
-    use std::io::Write;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
 
-    let app_dir = planeai_paths::app_data_dir();
-    let mut stream = planeai_ipc::connect(planeai_ipc::Channel::Daemon, &app_dir)
+    let socket_path = planeai_ipc::daemon_socket_path();
+    let stream =
+        UnixStream::connect(&socket_path).map_err(|e| format!("daemon connect failed: {e}"))?;
+
+    let mut writer = stream;
+    let reader = writer
+        .try_clone()
+        .map_err(|e| format!("clone failed: {e}"))?;
+
+    reader
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+
+    let drain_handle = std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+    });
+
+    daemon_send_frames(&mut writer, session_id, text)?;
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    drop(writer);
+    let _ = drain_handle.join();
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+
+    let socket_path = planeai_ipc::daemon_socket_path();
+    let mut stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&socket_path)
         .map_err(|e| format!("daemon connect failed: {e}"))?;
 
-    // Data connection type byte
-    stream
-        .write_all(&[0x01])
+    daemon_send_frames(&mut stream, session_id, text)?;
+
+    stream.flush().map_err(|e| format!("flush failed: {e}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(());
+    });
+
+    let _ = rx.recv_timeout(std::time::Duration::from_millis(500));
+
+    Ok(())
+}
+
+fn daemon_send_frames(
+    writer: &mut impl std::io::Write,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    writer
+        .write_all(&[0x01]) // CONN_DATA
         .map_err(|e| format!("handshake failed: {e}"))?;
 
-    // Session ID as 36-byte UTF-8
-    stream
-        .write_all(session_id.as_bytes())
-        .map_err(|e| format!("session id send failed: {e}"))?;
+    // FRAME_HELLO: [type=0x06][4-byte len=1][version=2]
+    let hello_frame: &[u8] = &[0x06, 0x00, 0x00, 0x00, 0x01, 0x02];
+    writer
+        .write_all(hello_frame)
+        .map_err(|e| format!("hello frame failed: {e}"))?;
 
-    // Send FRAME_INPUT: [type=0x02][4-byte big-endian len][payload]
-    let payload = text.as_bytes();
-    let mut frame = Vec::with_capacity(5 + payload.len());
-    frame.push(0x02); // FRAME_INPUT
-    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    frame.extend_from_slice(payload);
-    stream
+    // FRAME_ATTACH: [type=0x07][4-byte len][session_id bytes]
+    let sid_bytes = session_id.as_bytes();
+    let mut attach_frame = Vec::with_capacity(5 + sid_bytes.len());
+    attach_frame.push(0x07);
+    attach_frame.extend_from_slice(&(sid_bytes.len() as u32).to_be_bytes());
+    attach_frame.extend_from_slice(sid_bytes);
+    writer
+        .write_all(&attach_frame)
+        .map_err(|e| format!("attach frame failed: {e}"))?;
+
+    // FRAME_INPUT: [type=0x02][4-byte len][payload + \r]
+    let mut input_payload = text.as_bytes().to_vec();
+    input_payload.push(b'\r');
+    let mut frame = Vec::with_capacity(5 + input_payload.len());
+    frame.push(0x02);
+    frame.extend_from_slice(&(input_payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&input_payload);
+    writer
         .write_all(&frame)
         .map_err(|e| format!("frame write failed: {e}"))?;
 
-    // Send Enter key
-    let enter = b"\n";
-    let mut enter_frame = Vec::with_capacity(6);
-    enter_frame.push(0x02);
-    enter_frame.extend_from_slice(&(enter.len() as u32).to_be_bytes());
-    enter_frame.extend_from_slice(enter);
-    stream
-        .write_all(&enter_frame)
-        .map_err(|e| format!("enter frame write failed: {e}"))?;
+    writer.flush().map_err(|e| format!("flush failed: {e}"))?;
 
     Ok(())
 }

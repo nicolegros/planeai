@@ -82,6 +82,10 @@ pub struct RecipeRuntime {
     pub created_session_ids: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Timestamp of the last consumed handoff — used to ignore stale handoffs
+    /// from previous rounds when checking handoff.wait.
+    #[serde(default)]
+    pub last_handoff_consumed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +94,12 @@ pub struct SnapshotPolicy {
     pub max_ticks: u32,
     pub max_sessions: u32,
     pub merge_policy: String,
+    #[serde(default = "default_auto_approve")]
+    pub auto_approve: bool,
+}
+
+fn default_auto_approve() -> bool {
+    true
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -389,12 +399,14 @@ impl RecipeService {
                 round: 1,
                 created_session_ids: BTreeMap::new(),
                 last_error: None,
+                last_handoff_consumed_at: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,
                 max_ticks: recipe.policy.max_ticks,
                 max_sessions: recipe.policy.max_sessions,
                 merge_policy: recipe.policy.merge_policy.clone(),
+                auto_approve: recipe.policy.auto_approve,
             },
             roles: recipe.roles.clone(),
             steps: recipe.steps.clone(),

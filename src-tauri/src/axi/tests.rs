@@ -1572,12 +1572,14 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             round: 1,
             created_session_ids: BTreeMap::new(), // No sessions!
             last_error: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
             merge_policy: "human".into(),
+            auto_approve: true,
         },
         roles: BTreeMap::new(),
         steps,
@@ -1708,12 +1710,14 @@ fn recipe_tick_round_next_increments_round() {
             round: 1,
             created_session_ids: BTreeMap::new(),
             last_error: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
             merge_policy: "human".into(),
+            auto_approve: true,
         },
         roles: BTreeMap::new(),
         steps,
@@ -1794,12 +1798,14 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             round: 3, // Already at max_rounds
             created_session_ids: BTreeMap::new(),
             last_error: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
             merge_policy: "human".into(),
+            auto_approve: true,
         },
         roles: BTreeMap::new(),
         steps,
@@ -1902,12 +1908,14 @@ fn setup_maker_verifier_flow(
             round,
             created_session_ids,
             last_error: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
             merge_policy: "human".into(),
+            auto_approve: true,
         },
         roles,
         steps,
@@ -2093,12 +2101,14 @@ fn setup_maker_verifier_flow_with_path(
             round: 1,
             created_session_ids,
             last_error: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
             merge_policy: "human".into(),
+            auto_approve: true,
         },
         roles,
         steps,
@@ -2165,7 +2175,16 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
     let maker_id = "maker-33333333-2222-3333-4444-555555555555";
     let (loop_id, _project_path, _dir) = setup_maker_verifier_flow_with_path(&conn, maker_id);
 
-    // No Cargo.toml or package.json → gates echo "no build system detected" → exit 0 = pass
+    // Override gate_command to a command that always succeeds (recipe defaults to `make ci`)
+    {
+        let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+        let mut snap: RecipeSnapshot = serde_json::from_value(run.policy_json.unwrap()).unwrap();
+        snap.inputs
+            .insert("gate_command".to_string(), "true".to_string());
+        let updated_json = serde_json::to_value(&snap).unwrap();
+        LoopService::update_policy_json(&conn, &loop_id, &updated_json).unwrap();
+    }
+
     let (output, code) = loop_tick(&conn, &loop_id);
     assert_eq!(code, 0, "gates.run should succeed, output:\n{output}");
     assert!(output.contains("gates.run"), "output:\n{output}");
@@ -2183,15 +2202,9 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
 fn maker_verifier_gates_fail_routes_to_retry() {
     let conn = setup_db();
     let maker_id = "maker-44444444-2222-3333-4444-555555555555";
-    let (loop_id, _project_path, dir) = setup_maker_verifier_flow_with_path(&conn, maker_id);
+    let (loop_id, _project_path, _dir) = setup_maker_verifier_flow_with_path(&conn, maker_id);
 
-    // Create a Cargo.toml so the gate tries `cargo build` — fails (no src/)
-    std::fs::write(
-        dir.path().join("Cargo.toml"),
-        "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-    )
-    .unwrap();
-
+    // Default gate_command is `make ci` which fails in a bare tempdir (no Makefile)
     let (output, code) = loop_tick(&conn, &loop_id);
     assert_eq!(
         code, 0,

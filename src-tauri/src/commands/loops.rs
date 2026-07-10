@@ -216,6 +216,7 @@ pub async fn create_loop_run(
     recipe_id: String,
     task_key: Option<String>,
     max_rounds: Option<i64>,
+    base_branch: Option<String>,
     start: bool,
 ) -> Result<LoopRunSummary, String> {
     tracing::info!(project_id = %project_id, recipe_id = %recipe_id, start, "create_loop_run");
@@ -250,9 +251,15 @@ pub async fn create_loop_run(
         if let Some(ref key) = task_key {
             inputs.insert("task_key".to_string(), key.clone());
         }
+        if let Some(ref branch) = base_branch {
+            if !branch.is_empty() {
+                inputs.insert("base_branch".to_string(), branch.clone());
+            }
+        }
         let snapshot = RecipeService::create_snapshot(&discovered, inputs);
         let resolved_max_rounds = max_rounds.unwrap_or(snapshot.policy.max_rounds as i64);
         let policy_json = serde_json::to_value(&snapshot).ok();
+        let policy_json_for_tick = policy_json.clone();
 
         // Create the loop run
         let params = CreateLoopParams {
@@ -278,6 +285,28 @@ pub async fn create_loop_run(
                 &serde_json::json!({"source": "ui"}),
             )
             .map_err(|e| e.to_string())?;
+
+            // Auto-tick immediately so the recipe begins executing
+            if let Some(ref pj) = policy_json_for_tick {
+                if let Ok(mut snapshot) = serde_json::from_value::<
+                    planeai_core::loop_recipe_service::RecipeSnapshot,
+                >(pj.clone())
+                {
+                    drop(conn);
+                    planeai::recipe_tick::auto_advance_with_arc(
+                        &conn_arc,
+                        &run.id,
+                        &mut snapshot,
+                        false,
+                    );
+                    let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+                    let updated = LoopService::get_loop(&conn, &run.id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| "loop disappeared after creation".to_string())?;
+                    return Ok(LoopRunSummary::from(updated));
+                }
+            }
+
             // Return with updated status
             let updated = LoopService::get_loop(&conn, &run.id)
                 .map_err(|e| e.to_string())?
@@ -325,17 +354,19 @@ pub async fn tick_loop(
             ));
         }
 
-        // If there's a recipe snapshot, execute a tick
-        if let Some(ref policy_json) = run.policy_json {
+        // If there's a recipe snapshot, execute ticks until a waiting/terminal state
+        if let Some(policy_json) = run.policy_json {
             if let Ok(mut snapshot) = serde_json::from_value::<
                 planeai_core::loop_recipe_service::RecipeSnapshot,
             >(policy_json.clone())
             {
-                let (_output, _code) =
-                    planeai::recipe_tick::tick_recipe(&conn, &loop_id, &mut snapshot);
-                // Persist updated snapshot
-                let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
-                let _ = LoopService::update_policy_json(&conn, &loop_id, &updated_json);
+                drop(conn);
+                planeai::recipe_tick::auto_advance_with_arc(
+                    &conn_arc,
+                    &loop_id,
+                    &mut snapshot,
+                    false,
+                );
             }
         } else {
             // Non-recipe loop: just increment round
@@ -388,6 +419,22 @@ pub async fn start_loop(
             &serde_json::json!({"source": "ui"}),
         )
         .map_err(|e| e.to_string())?;
+
+        // Auto-tick immediately after starting so the recipe begins executing
+        if let Some(ref policy_json) = run.policy_json {
+            if let Ok(mut snapshot) = serde_json::from_value::<
+                planeai_core::loop_recipe_service::RecipeSnapshot,
+            >(policy_json.clone())
+            {
+                drop(conn);
+                planeai::recipe_tick::auto_advance_with_arc(
+                    &conn_arc,
+                    &loop_id,
+                    &mut snapshot,
+                    false,
+                );
+            }
+        }
 
         Ok(())
     })

@@ -413,6 +413,10 @@
       else if (action.type === "status") moveTask(task.key, action.status);
       else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
       else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); orchestrator.toggleDiff(); } }
+      else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
+      else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
+      else if (action.type === "rename") { const linked = sessionForTask(task.key); if (linked) startRename(linked); }
+      else if (action.type === "restart") { const linked = sessionForTask(task.key); if (linked) onRestartSession(linked); }
     }
   }
 
@@ -671,22 +675,23 @@
 
 <!-- Session context menu -->
 {#if contextMenu}
+  {@const menuSession = contextMenu.session}
   <ContextMenu
     x={contextMenu.x}
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
-    items={contextMenu.session.status === 'exited'
+    items={menuSession.status === 'exited'
       ? [
-          { label: "Restart", onSelect: () => onRestartSession(contextMenu!.session) },
-          { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
-          { label: "Archive", onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onArchiveSession(contextMenu!.session)) },
-          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onDeleteSession(contextMenu!.session)) },
+          { label: "Restart", onSelect: () => onRestartSession(menuSession) },
+          { label: "Rename", onSelect: () => startRename(menuSession) },
+          { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
+          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
         ]
       : [
-          { label: "Review", onSelect: () => { onSelectSession(contextMenu!.session.id); orchestrator.toggleDiff(); } },
-          { label: "Rename", onSelect: () => startRename(contextMenu!.session) },
-          { label: "Archive", onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onArchiveSession(contextMenu!.session)) },
-          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(contextMenu!.session.id, () => onDeleteSession(contextMenu!.session)) },
+          { label: "Review", onSelect: () => { onSelectSession(menuSession.id); orchestrator.toggleDiff(); } },
+          { label: "Rename", onSelect: () => startRename(menuSession) },
+          { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
+          { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
         ]}
   />
 {/if}
@@ -707,10 +712,11 @@
 
 <!-- Task context menu -->
 {#if taskContextMenu}
-  {@const linkedSession = sessionForTask(taskContextMenu.task.key)}
+  {@const menuTask = taskContextMenu.task}
+  {@const linkedSession = sessionForTask(menuTask.key)}
   {@const statusChildren = STATUS_OPTIONS
-    .filter(s => s.value !== taskContextMenu!.task.status)
-    .map(s => ({ label: s.label, onSelect: () => moveTask(taskContextMenu!.task.key, s.value) }))}
+    .filter(s => s.value !== menuTask.status)
+    .map(s => ({ label: s.label, onSelect: () => moveTask(menuTask.key, s.value) }))}
   <ContextMenu
     x={taskContextMenu.x}
     y={taskContextMenu.y}
@@ -719,8 +725,16 @@
       ...(linkedSession
         ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); orchestrator.toggleDiff(); } }]
         : []),
-      { label: "Edit task", onSelect: () => taskPanelRef?.openEdit(taskContextMenu!.task) },
+      { label: "Edit task", onSelect: () => taskPanelRef?.openEdit(menuTask) },
       { label: "Change status", children: statusChildren },
+      ...(linkedSession
+        ? [
+            ...(linkedSession.status === 'exited' ? [{ label: "Restart session", onSelect: () => onRestartSession(linkedSession) }] : []),
+            { label: "Rename session", onSelect: () => startRename(linkedSession) },
+            { label: "Archive session", onSelect: () => fadeOutThenAct(linkedSession.id, () => onArchiveSession(linkedSession)) },
+            { label: "Delete session", danger: true, onSelect: () => onDeleteSession(linkedSession) },
+          ]
+        : []),
     ]}
   />
 {/if}

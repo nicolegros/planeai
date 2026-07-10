@@ -282,6 +282,7 @@ export const loops = {
     recipeId: string;
     taskKey?: string | null;
     maxRounds?: number | null;
+    baseBranch?: string | null;
     start: boolean;
   }) => invoke<LoopRunSummary>("create_loop_run", params),
   tick: (loopId: string) => invoke("tick_loop", { loopId }),

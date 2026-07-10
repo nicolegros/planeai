@@ -60,7 +60,11 @@ inputs:
     required: true
   branch_prefix:
     required: false
+  gate_command:
+    required: false
 ```
+
+The builtin `maker-verifier` recipe accepts a `gate_command` input that overrides the default CI command used in the `gates.run` step. If omitted, it defaults to `make ci`.
 
 ### knowledge
 
@@ -128,13 +132,14 @@ policy:
   merge_policy: human
 ```
 
-| Field            | Type    | Default | Description                                  |
-| ---------------- | ------- | ------- | -------------------------------------------- |
-| `max_rounds`     | integer | 3       | Maximum iteration rounds                     |
-| `max_ticks`      | integer | 50      | Hard cap on total steps executed             |
-| `max_sessions`   | integer | 5       | Maximum concurrent agent sessions            |
-| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds |
-| `merge_policy`   | string  | `human` | Only `human` is supported in v1              |
+| Field            | Type    | Default | Description                                    |
+| ---------------- | ------- | ------- | ---------------------------------------------- |
+| `max_rounds`     | integer | 3       | Maximum iteration rounds                       |
+| `max_ticks`      | integer | 50      | Hard cap on total steps executed               |
+| `max_sessions`   | integer | 5       | Maximum concurrent agent sessions              |
+| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds   |
+| `merge_policy`   | string  | `human` | Only `human` is supported in v1               |
+| `auto_approve`   | bool    | `true`  | Launch sessions in auto-approve (yolo) mode    |
 
 ### steps
 
@@ -252,6 +257,8 @@ inputs:
     required: true
   task_key:
     required: false
+  gate_command:
+    required: false
 
 knowledge:
   files:
@@ -330,10 +337,8 @@ steps:
     kind: gates.run
     role: maker
     gates:
-      - name: build
-        command: "if [ -f Cargo.toml ]; then cargo build 2>&1; elif [ -f package.json ]; then npm run build 2>&1; else echo 'no build system detected'; fi"
-      - name: test
-        command: "if [ -f Cargo.toml ]; then cargo test 2>&1; elif [ -f package.json ]; then npm test 2>&1; else echo 'no test runner detected'; fi"
+      - name: ci
+        command: "{{ inputs.gate_command | default('make ci') }}"
     on:
       pass: create_verifier
       fail: gates_failed_retry
@@ -409,40 +414,21 @@ steps:
 
 ### Typical Tick Sequence
 
-A successful run with no rejections:
+A successful run with no rejections (auto-advance reduces manual tick count):
 
 ```bash
-# Create the loop
-planeai-cli axi loop create --strategy maker-verifier --goal "Implement pagination"
-# → loop created, status: draft
-
-# Tick 1: create_maker → spawns maker session in worktree
-planeai-cli axi loop tick <LOOP_ID>
-# → session created, status: observing
-
-# Tick 2+: wait_for_maker → no handoff yet
-planeai-cli axi loop tick <LOOP_ID>
-# → waiting for handoff from maker
+# Create the loop (auto-advances through create_maker → wait_for_maker → parks at observing)
+planeai-cli axi loop create --recipe maker-verifier --goal "Implement pagination" --start
+# → session created, status: observing (waiting for maker handoff)
 
 # After maker runs `planeai-cli axi loop handoff record ...`
-# Tick N: wait_for_maker → detects completed handoff → advances to run_gates
+# The handoff record auto-advances through wait_for_maker → run_gates (stops before gates)
+# Manual tick to execute gates:
 planeai-cli axi loop tick <LOOP_ID>
-# → handoff detected, next: run_gates
+# → gates: pass, auto-advances through create_verifier → wait_for_verifier → parks at observing
 
-# Tick N+1: run_gates → builds and tests pass
-planeai-cli axi loop tick <LOOP_ID>
-# → gates: pass, next: create_verifier
-
-# Tick N+2: create_verifier → spawns verifier session
-planeai-cli axi loop tick <LOOP_ID>
-# → verifier session created, status: observing
-
-# Tick N+3+: wait_for_verifier → verifier approves
-planeai-cli axi loop tick <LOOP_ID>
-# → handoff detected (completed), next: completed_unreviewed
-
-# Tick final: completed_unreviewed → terminal
-planeai-cli axi loop tick <LOOP_ID>
+# After verifier runs `planeai-cli axi loop handoff record ...`
+# Auto-advance: wait_for_verifier → completed_unreviewed (terminal)
 # → status: completed_unreviewed — human should review and merge
 ```
 
@@ -450,7 +436,7 @@ planeai-cli axi loop tick <LOOP_ID>
 
 This is the safe terminal state for the maker-verifier strategy. It means:
 
-1. The maker's implementation passed automated gates (build + test)
+1. The maker's implementation passed automated gates (CI checks)
 2. The verifier agent reviewed and approved the changes
 3. **No merge has happened** — a human must still review the PR/branch and merge
 
@@ -507,21 +493,34 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 | `round.next`     | Increment the round counter (enforces `max_rounds`)                                                                         |
 | `gates.run`      | Run verifier gate commands and branch on pass/fail/error                                                                    |
 
-## Runtime: Explicit Tick Model
+## Runtime: Auto-Advance Tick Model
 
-The recipe runtime executes **exactly one step per tick**. Each call to:
+The recipe runtime executes **one step per tick**, but multiple ticks are chained automatically via **auto-advance**. When a loop is created, started, or receives a completed handoff, the runtime auto-advances through immediately-executable steps (up to 10 ticks) without requiring manual intervention.
+
+Auto-advance stops when:
+
+- A tick returns an error (non-zero code).
+- The loop reaches a terminal, intervention-required, or observing state.
+- The current step is a `human.wait` (requires explicit user action).
+- The current step is a `gates.run` (requires explicit tick to execute).
+
+This means that in practice, creating or starting a loop run will automatically execute through `session.create` → `handoff.wait` (which parks in `observing`), and a completed handoff will trigger advancement through `handoff.wait` → `gates.run` (stopping before gate execution).
+
+### Manual Tick
+
+A manual tick via `planeai-cli axi loop tick <LOOP_ID>` also auto-advances: it executes the current step and continues until a stopping condition is reached.
+
+Each call to:
 
 ```bash
 planeai-cli axi loop tick <LOOP_ID>
 ```
 
-performs one deterministic transition. A tick may:
+performs one or more deterministic transitions. A tick sequence may:
 
-- Execute a step and complete it (advance `current_step`)
-- Return "waiting" (keep `current_step` unchanged)
-- Fail a step and set the loop to `blocked`, `needs_human`, or `failed`
-
-A tick will **never** execute an unbounded chain of steps.
+- Execute steps and advance through them (update `current_step`)
+- Return "waiting" when `handoff.wait` has no handoff ready
+- Fail and set the loop to `blocked`, `needs_human`, or `failed`
 
 ### Runtime State
 
@@ -538,9 +537,10 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
     "tick_count": 3,
     "round": 1,
     "created_session_ids": { "maker": ["session-abc123"] },
-    "last_error": null
+    "last_error": null,
+    "last_handoff_consumed_at": null
   },
-  "policy": { "max_rounds": 3, "max_ticks": 50, "max_sessions": 5, "merge_policy": "human" }
+  "policy": { "max_rounds": 3, "max_ticks": 50, "max_sessions": 5, "merge_policy": "human", "auto_approve": true }
 }
 ```
 
@@ -564,23 +564,21 @@ Enforces `policy.max_rounds`. When the limit is reached, the loop transitions to
 
 ### `gates.run` Step
 
-Runs verifier gate commands declared inline. Each gate has a `name` and `command`:
+Runs verifier gate commands declared inline. Each gate has a `name` and `command`. Gate commands support the same [minijinja template variables](#supported-template-variables-v1) as prompt fields (e.g., `{{ inputs.gate_command | default('make ci') }}`):
 
 ```yaml
 - id: run_gates
   kind: gates.run
   gates:
-    - name: rust-tests
-      command: "cargo test"
-    - name: lint
-      command: "cargo clippy -- -D warnings"
+    - name: ci
+      command: "{{ inputs.gate_command | default('make ci') }}"
   on:
     pass: completed_unreviewed
     fail: prompt_maker_again
     error: needs_human
 ```
 
-Gates execute in order and stop on the first failure. Results are persisted to `verifier_runs`.
+Gates execute in order and stop on the first failure. Results are persisted to `verifier_runs`. On failure, the gate's captured output (truncated to 10 KB) is stored in `runtime.last_error` so the retry prompt can include the failure details.
 
 ### `handoff.wait` Acceptance Model
 
@@ -589,6 +587,9 @@ A handoff is considered "accepted" only when:
 1. It was recorded through `LoopService::record_handoff` (not arbitrary `add_artifact`)
 2. Its `content_json.schema` equals `"planeai.handoff.v1"`
 3. Its `content_json.status` is one of: `completed`, `blocked`, `needs_human`, `failed`
+4. It was recorded **after** the last consumed handoff timestamp (`last_handoff_consumed_at`)
+
+The `last_handoff_consumed_at` field prevents re-consuming stale handoffs from previous rounds. When a handoff is consumed, the runtime records the current timestamp; subsequent `handoff.wait` steps only consider handoffs newer than that timestamp.
 
 The runtime does **not** scan the filesystem for handoff files. Only database-recorded handoffs count.
 
@@ -631,9 +632,10 @@ Blocks are removed entirely when the referenced input is absent.
 ## Safety Rules
 
 1. **Bounded execution** — Every recipe must declare `max_ticks` in `policy`. The runner refuses to start unbounded loops.
-2. **Human merge only** — `merge_policy` only accepts `human` in v1. No auto-merge.
-3. **No auto-merge** — Even if all agents agree, a human must approve before changes land on the target branch.
-4. **No arbitrary shell** — Steps cannot execute arbitrary shell commands. The `gates.run` step kind executes only recipe-authored gate commands declared in the YAML — agents cannot inject commands at runtime.
+2. **Bounded auto-advance** — Auto-advance executes at most 10 ticks per trigger and stops at `gates.run`, `human.wait`, terminal, or observing states. This prevents runaway execution chains.
+3. **Human merge only** — `merge_policy` only accepts `human` in v1. No auto-merge.
+4. **No auto-merge** — Even if all agents agree, a human must approve before changes land on the target branch.
+5. **No arbitrary shell** — Steps cannot execute arbitrary shell commands. The `gates.run` step kind executes only recipe-authored gate commands declared in the YAML — agents cannot inject commands at runtime.
 
 ## Example: Planner → Implementer → Reviewer
 
@@ -734,7 +736,7 @@ steps:
 
 1. The agent calls `planeai-cli axi loop handoff record` with a structured JSON file.
 2. `LoopService::record_handoff` atomically persists the artifact and event.
-3. On the next tick, `handoff.wait` detects the accepted handoff and advances.
+3. Auto-advance triggers immediately: `handoff.wait` detects the accepted handoff and advances through subsequent steps (stopping at `gates.run`, `human.wait`, terminal, or observing states).
 
 The `on` mapping determines which step to advance to based on handoff status:
 

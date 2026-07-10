@@ -325,6 +325,16 @@ Declarative YAML definitions that describe reusable loop workflows. A recipe spe
 | `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions |
 | `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                          |
 
+**`RecipeSnapshot` sub-types:**
+
+| Type             | Key Fields                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| `RecipeRuntime`  | `current_step`, `tick_count`, `round`, `created_session_ids`, `last_error`, `last_handoff_consumed_at`          |
+| `SnapshotPolicy` | `max_rounds`, `max_ticks`, `max_sessions`, `merge_policy`, `auto_approve`                                       |
+
+- `last_handoff_consumed_at` (string, nullable) — RFC 3339 timestamp of the last consumed handoff. Used to ignore stale handoffs from previous rounds when checking `handoff.wait` steps.
+- `auto_approve` (bool, default `true`) — when true, sessions created by the recipe are launched in auto-approve (yolo) mode, enabling autonomous tool use without confirmation prompts.
+
 **Discovery precedence:** project (`.planeai/loops/*.yaml`) > user (`~/.config/planeai/loops/*.yaml`) > builtin (embedded in binary).
 
 **Module:** `planeai_core::loop_recipe` (data model), `planeai_core::loop_recipe_service` (service), `planeai::recipe_tick` (runtime executor).

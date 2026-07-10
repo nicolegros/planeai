@@ -1046,9 +1046,13 @@ fn find_handoff_rejects_artifact_missing_schema() {
     )
     .unwrap();
 
-    let result =
-        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
-            .unwrap();
+    let result = LoopService::find_handoff_for_sessions(
+        &conn,
+        &loop_run.id,
+        &[session_id.to_string()],
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         result, None,
@@ -1107,9 +1111,13 @@ fn find_handoff_rejects_artifact_with_invalid_status() {
     )
     .unwrap();
 
-    let result =
-        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
-            .unwrap();
+    let result = LoopService::find_handoff_for_sessions(
+        &conn,
+        &loop_run.id,
+        &[session_id.to_string()],
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         result, None,
@@ -1168,9 +1176,13 @@ fn find_handoff_accepts_valid_handoff_with_schema_and_status() {
     )
     .unwrap();
 
-    let result =
-        LoopService::find_handoff_for_sessions(&conn, &loop_run.id, &[session_id.to_string()])
-            .unwrap();
+    let result = LoopService::find_handoff_for_sessions(
+        &conn,
+        &loop_run.id,
+        &[session_id.to_string()],
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         result,
