@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { LoopRunSummary } from "../lib/types";
   import { ChevronDown, ChevronRight, Square, Play } from "@lucide/svelte";
+  import { ContextMenu } from "./ui";
 
   interface Props {
     loops: LoopRunSummary[];
@@ -9,11 +10,13 @@
     onStartLoop: (id: string) => void;
     onTick: (id: string) => void;
     onStop: (id: string) => void;
+    onDelete: (id: string) => void;
   }
 
-  let { loops, selectedLoopId, onSelectLoop, onStartLoop, onTick, onStop }: Props = $props();
+  let { loops, selectedLoopId, onSelectLoop, onStartLoop, onTick, onStop, onDelete }: Props = $props();
 
   let collapsed = $state(false);
+  let contextMenu = $state<{ x: number; y: number; loop: LoopRunSummary } | null>(null);
 
   const statusColors: Record<string, string> = {
     draft: "bg-t3",
@@ -65,6 +68,7 @@
               class="group w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left transition-colors
                 {selected ? 'bg-accent/10 text-accent' : 'text-t1 hover:bg-panel-hi'}"
               onclick={() => onSelectLoop(loop.id)}
+              oncontextmenu={(e) => { e.preventDefault(); contextMenu = { x: e.clientX, y: e.clientY, loop }; }}
               title={loop.goal}
             >
               <!-- Status dot -->
@@ -119,4 +123,17 @@
       </ul>
     {/if}
   </div>
+{/if}
+
+{#if contextMenu}
+  <ContextMenu
+    x={contextMenu.x}
+    y={contextMenu.y}
+    onClose={() => (contextMenu = null)}
+    items={[
+      ...(contextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop(contextMenu!.loop.id) }] : []),
+      ...(isActive(contextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStop(contextMenu!.loop.id) }] : []),
+      { label: "Delete loop", danger: true, onSelect: () => onDelete(contextMenu!.loop.id) },
+    ]}
+  />
 {/if}

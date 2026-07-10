@@ -451,6 +451,27 @@ impl LoopService {
         Ok(())
     }
 
+    /// Delete a loop run and all its child data (sessions link, events, artifacts, verifier_runs).
+    /// Does NOT delete or archive the actual sessions — caller handles that separately if desired.
+    /// Returns the list of session_ids that were linked to this loop (for optional cleanup).
+    pub fn delete_loop(conn: &Connection, id: &str) -> SqlResult<Vec<String>> {
+        // Collect linked session IDs before deleting
+        let session_ids = Self::list_loop_sessions(conn, id)?
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect::<Vec<_>>();
+
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM verifier_runs WHERE loop_id = ?1", params![id])?;
+        tx.execute("DELETE FROM loop_artifacts WHERE loop_id = ?1", params![id])?;
+        tx.execute("DELETE FROM loop_events WHERE loop_id = ?1", params![id])?;
+        tx.execute("DELETE FROM loop_sessions WHERE loop_id = ?1", params![id])?;
+        tx.execute("DELETE FROM loop_runs WHERE id = ?1", params![id])?;
+        tx.commit()?;
+
+        Ok(session_ids)
+    }
+
     // ─── Loop Sessions ───────────────────────────────────────────────────────
 
     pub fn add_loop_session(

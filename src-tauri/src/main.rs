@@ -375,6 +375,7 @@ fn main() {
             start_loop,
             tick_loop,
             stop_loop,
+            delete_loop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

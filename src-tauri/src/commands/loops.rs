@@ -443,6 +443,24 @@ pub async fn stop_loop(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_loop(
+    db_state: State<'_, DbState>,
+    app_handle: AppHandle,
+    loop_id: String,
+) -> Result<Vec<String>, String> {
+    tracing::info!(loop_id = %loop_id, "delete_loop");
+    let conn_arc = db_state.0.clone();
+    let session_ids = blocking(move || {
+        let conn = conn_arc.lock().map_err(|e| e.to_string())?;
+        LoopService::delete_loop(&conn, &loop_id).map_err(|e| e.to_string())
+    })
+    .await?;
+
+    let _ = app_handle.emit("loop-state-changed", ());
+    Ok(session_ids)
+}
+
 // ─── Query helpers (not exposed as commands) ─────────────────────────────────
 
 fn list_loop_artifacts_query(

@@ -43,10 +43,11 @@
     onStartLoop?: (loopId: string) => void;
     onTickLoop?: (loopId: string) => void;
     onStopLoop?: (loopId: string) => void;
+    onDeleteLoop?: (loopId: string) => void;
     selectedLoopId?: string | null;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, selectedLoopId = null }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, selectedLoopId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -482,6 +483,7 @@
         onStartLoop={(id) => onStartLoop?.(id)}
         onTick={(id) => onTickLoop?.(id)}
         onStop={(id) => onStopLoop?.(id)}
+        onDelete={(id) => onDeleteLoop?.(id)}
       />
 
       {#each visibleProjects as project (project.id)}

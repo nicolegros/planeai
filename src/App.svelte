@@ -354,6 +354,7 @@
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
+        onDeleteLoop={(id) => { loopsApi.delete(id).then(() => { if (loopStore.getActiveLoopId() === id) loopStore.setActiveLoopId(null); loopStore.refreshAllLoops(projects.map(p => p.id)); }); }}
         selectedLoopId={activeLoopId}
       />
   {/if}
