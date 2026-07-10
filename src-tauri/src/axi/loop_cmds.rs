@@ -724,7 +724,7 @@ pub fn loop_handoff_record(
     cwd: &str,
 ) -> (String, i32) {
     use planeai_core::handoff::{parse_handoff, validate_ids, HandoffStatus};
-    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
+    use planeai_core::loop_run::LoopTrigger;
     use planeai_core::loop_service::LoopService;
 
     let loop_run = match resolve_loop(conn, loop_id_arg) {
@@ -828,24 +828,9 @@ pub fn loop_handoff_record(
         return (render(&fields), 1);
     }
 
-    // Determine loop status transition
-    let is_active = matches!(
-        loop_run.status,
-        LoopStatus::Running
-            | LoopStatus::Observing
-            | LoopStatus::Verifying
-            | LoopStatus::NeedsHuman
-            | LoopStatus::Blocked
-            | LoopStatus::Stale
-    );
-
-    // Build the trigger for the transition table — it handles all the routing
-    // (active state checks, no-op detection, etc.)
-    let trigger = if is_active {
-        Some(LoopTrigger::HandoffReceived(handoff.status.clone()))
-    } else {
-        None
-    };
+    // Always pass the trigger — the transition table handles state validation
+    // (rejects from Draft/terminal states, no-ops from matching states).
+    let trigger = Some(LoopTrigger::HandoffReceived(handoff.status.clone()));
 
     // Atomically record: artifact + event + session status + loop transition
     let handoff_json: serde_json::Value = serde_json::to_value(&handoff).unwrap_or_default();

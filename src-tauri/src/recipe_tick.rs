@@ -105,7 +105,8 @@ pub fn tick_recipe(
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
-        let _ = LoopService::transition_loop(conn, loop_id, LoopTrigger::MaxTicksExceeded);
+        let _ = LoopService::transition_loop(conn, loop_id, LoopTrigger::MaxTicksExceeded)
+            .map_err(|e| tracing::error!(loop_id = %short_id(loop_id), error = %e, "failed to transition loop to Failed on max_ticks"));
         let _ = LoopService::append_loop_event(
             conn,
             loop_id,
@@ -222,7 +223,8 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
     if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
-        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::SessionLimitReached).ok();
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::SessionLimitReached)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -830,7 +832,8 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         ));
     }
 
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted).ok();
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
 
     // Resolve a session to run gates in.
     // If step.role is specified, use that role's latest session; otherwise fall back to

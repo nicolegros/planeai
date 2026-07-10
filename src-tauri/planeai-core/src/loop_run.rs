@@ -186,7 +186,7 @@ pub struct VerifierRun {
 
 /// Events that trigger loop status transitions. Callers declare what happened;
 /// the transition table ([`apply`]) decides the resulting state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum LoopTrigger {
     /// Draft → Running (user starts the loop)
     Start,
@@ -219,7 +219,9 @@ pub enum LoopTrigger {
 }
 
 impl LoopTrigger {
-    pub fn as_str(&self) -> &'static str {
+    /// Short string name for Display impls and error messages.
+    /// For structured logging/audit, use serde serialization which preserves payloads.
+    pub fn name(&self) -> &'static str {
         match self {
             Self::Start => "Start",
             Self::Cancel => "Cancel",

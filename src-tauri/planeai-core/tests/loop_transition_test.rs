@@ -131,9 +131,9 @@ fn gates_started_from_draft_is_invalid() {
 }
 
 #[test]
-fn handoff_consumed_from_running_is_invalid() {
+fn handoff_consumed_from_running_is_unchanged() {
     let result = apply(&LoopStatus::Running, &LoopTrigger::HandoffConsumed);
-    assert!(result.is_err());
+    assert_eq!(result, Ok(TransitionResult::Unchanged));
 }
 
 #[test]

@@ -32,6 +32,8 @@ pub enum TransitionError {
     Invalid(InvalidTransition),
     /// The loop ID was not found in the database.
     NotFound(String),
+    /// The database contains an unrecognized loop status value.
+    CorruptStatus(String),
     /// A database error occurred during the transition.
     Db(rusqlite::Error),
 }
@@ -41,6 +43,7 @@ impl std::fmt::Display for TransitionError {
         match self {
             Self::Invalid(e) => write!(f, "{e}"),
             Self::NotFound(id) => write!(f, "loop not found: {id}"),
+            Self::CorruptStatus(s) => write!(f, "corrupt loop status in database: {s:?}"),
             Self::Db(e) => write!(f, "transition database error: {e}"),
         }
     }
@@ -483,9 +486,7 @@ impl LoopService {
             })?;
 
         let current = LoopStatus::parse(&current_status_str).ok_or_else(|| {
-            TransitionError::Db(rusqlite::Error::InvalidParameterName(format!(
-                "corrupt loop status in DB: {current_status_str}"
-            )))
+            TransitionError::CorruptStatus(current_status_str.clone())
         })?;
 
         // 2. Apply the transition table
@@ -512,7 +513,7 @@ impl LoopService {
                 let payload = serde_json::json!({
                     "from": current.as_str(),
                     "to": new_status.as_str(),
-                    "trigger": trigger.as_str(),
+                    "trigger": &trigger,
                 });
                 tx.execute(
                     "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'status_transition', ?3)",
@@ -864,10 +865,29 @@ impl LoopService {
 
         // 5. Apply loop transition if requested (via transition table)
         if let Some(trigger) = params.trigger {
-            // Use transition_in_tx to validate and persist atomically.
-            // Unchanged (no-op) results are fine — e.g., HandoffReceived(Completed)
-            // from Observing is a valid no-op.
-            let _ = Self::transition_in_tx(&tx, &params.loop_id, trigger);
+            // Unchanged (no-op) is fine — e.g., HandoffReceived(Completed) from Observing.
+            // Invalid transitions are logged but tolerated (race between handoff and cancel).
+            // DB errors propagate — they indicate real infrastructure failure.
+            match Self::transition_in_tx(&tx, &params.loop_id, trigger) {
+                Ok(_) => {}
+                Err(TransitionError::Invalid(inv)) => {
+                    tracing::warn!(
+                        loop_id = %params.loop_id,
+                        from = %inv.from.as_str(),
+                        trigger = ?inv.trigger,
+                        "record_handoff: transition rejected (loop may have been cancelled concurrently)"
+                    );
+                }
+                Err(TransitionError::Db(e)) => return Err(e),
+                Err(TransitionError::NotFound(_)) => {
+                    // Should not happen — we already validated the loop exists above.
+                    // But if it does, propagate as DB error.
+                    return Err(rusqlite::Error::QueryReturnedNoRows);
+                }
+                Err(TransitionError::CorruptStatus(_)) => {
+                    return Err(rusqlite::Error::QueryReturnedNoRows);
+                }
+            }
         }
 
         tx.commit()?;
