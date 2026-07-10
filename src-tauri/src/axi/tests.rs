@@ -807,7 +807,12 @@ fn loop_stop_treats_completed_unreviewed_as_terminal() {
     // Manually transition to completed_unreviewed
     use planeai_core::loop_run::{LoopStatus, LoopTrigger};
     use planeai_core::loop_service::LoopService;
-    LoopService::transition_loop(&conn, &loop_id, LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed)).unwrap();
+    LoopService::transition_loop(
+        &conn,
+        &loop_id,
+        LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed),
+    )
+    .unwrap();
 
     // Stop should be a no-op
     let (output, code) = loop_stop(&conn, &loop_id);

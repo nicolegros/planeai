@@ -485,9 +485,8 @@ impl LoopService {
                 other => TransitionError::Db(other),
             })?;
 
-        let current = LoopStatus::parse(&current_status_str).ok_or_else(|| {
-            TransitionError::CorruptStatus(current_status_str.clone())
-        })?;
+        let current = LoopStatus::parse(&current_status_str)
+            .ok_or_else(|| TransitionError::CorruptStatus(current_status_str.clone()))?;
 
         // 2. Apply the transition table
         let result = apply(&current, &trigger)?;

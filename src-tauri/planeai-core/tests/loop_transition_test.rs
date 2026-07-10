@@ -164,7 +164,9 @@ fn terminal_states_reject_all_non_lifecycle_triggers() {
             assert!(
                 result.is_err(),
                 "terminal state {:?} should reject {:?}, but got {:?}",
-                status, trigger, result
+                status,
+                trigger,
+                result
             );
         }
     }
@@ -190,7 +192,8 @@ fn completed_unreviewed_only_allows_approve() {
         assert!(
             result.is_err(),
             "CompletedUnreviewed should reject {:?}, but got {:?}",
-            trigger, result
+            trigger,
+            result
         );
     }
 }
@@ -218,12 +221,19 @@ fn cancel_valid_from_all_non_terminal_states() {
 
 #[test]
 fn can_tick_only_for_active_execution_states() {
-    let tickable = [LoopStatus::Running, LoopStatus::Observing, LoopStatus::Verifying];
+    let tickable = [
+        LoopStatus::Running,
+        LoopStatus::Observing,
+        LoopStatus::Verifying,
+    ];
     for status in ALL_STATUSES {
         let expected = tickable.contains(status);
         assert_eq!(
-            can_tick(status), expected,
-            "can_tick({:?}) should be {}", status, expected
+            can_tick(status),
+            expected,
+            "can_tick({:?}) should be {}",
+            status,
+            expected
         );
     }
 }
@@ -283,7 +293,10 @@ fn transition_loop_persists_status_and_logs_audit_event() {
     assert_eq!(run.status, LoopStatus::Running);
 
     let events = LoopService::list_loop_events(&conn, &loop_id).unwrap();
-    let audit = events.iter().find(|e| e.kind == "status_transition").unwrap();
+    let audit = events
+        .iter()
+        .find(|e| e.kind == "status_transition")
+        .unwrap();
     assert_eq!(audit.payload_json["from"], "draft");
     assert_eq!(audit.payload_json["to"], "running");
 }
@@ -296,13 +309,18 @@ fn transition_loop_unchanged_skips_db_write() {
     LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Start).unwrap();
     LoopService::transition_loop(&conn, &loop_id, LoopTrigger::HandoffWaiting).unwrap();
 
-    let events_before = LoopService::list_loop_events(&conn, &loop_id).unwrap().len();
+    let events_before = LoopService::list_loop_events(&conn, &loop_id)
+        .unwrap()
+        .len();
 
     // No-op: already Observing
-    let status = LoopService::transition_loop(&conn, &loop_id, LoopTrigger::HandoffWaiting).unwrap();
+    let status =
+        LoopService::transition_loop(&conn, &loop_id, LoopTrigger::HandoffWaiting).unwrap();
     assert_eq!(status, LoopStatus::Observing);
 
-    let events_after = LoopService::list_loop_events(&conn, &loop_id).unwrap().len();
+    let events_after = LoopService::list_loop_events(&conn, &loop_id)
+        .unwrap()
+        .len();
     assert_eq!(events_before, events_after, "no new event on unchanged");
 }
 

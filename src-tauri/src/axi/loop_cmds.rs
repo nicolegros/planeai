@@ -219,9 +219,7 @@ pub fn loop_create(
 
     // If --start, transition to running and append loop_started event
     if start {
-        if let Err(e) =
-            LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start)
-        {
+        if let Err(e) = LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start) {
             return (emit_error(&e.to_string(), &[]), 1);
         }
         if let Err(e) = LoopService::append_loop_event(

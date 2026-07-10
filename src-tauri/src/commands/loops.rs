@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use planeai_core::loop_recipe_service::RecipeService;
-use planeai_core::loop_run::{LoopRun, LoopStrategy, LoopTrigger};
 #[cfg(test)]
 use planeai_core::loop_run::LoopStatus;
+use planeai_core::loop_run::{LoopRun, LoopStrategy, LoopTrigger};
 use planeai_core::loop_service::{CreateLoopParams, LoopService};
 
 use crate::state::DbState;

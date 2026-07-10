@@ -275,8 +275,16 @@ impl std::error::Error for InvalidTransition {}
 /// Given the current status and a trigger event, returns the new status
 /// (`Changed`), confirms a no-op (`Unchanged`), or rejects the transition
 /// (`InvalidTransition`).
-pub fn apply(from: &LoopStatus, trigger: &LoopTrigger) -> Result<TransitionResult, InvalidTransition> {
-    let reject = || Err(InvalidTransition { from: from.clone(), trigger: trigger.clone() });
+pub fn apply(
+    from: &LoopStatus,
+    trigger: &LoopTrigger,
+) -> Result<TransitionResult, InvalidTransition> {
+    let reject = || {
+        Err(InvalidTransition {
+            from: from.clone(),
+            trigger: trigger.clone(),
+        })
+    };
 
     match trigger {
         LoopTrigger::Start => match from {
@@ -397,5 +405,8 @@ pub fn apply(from: &LoopStatus, trigger: &LoopTrigger) -> Result<TransitionResul
 
 /// Returns true if the loop is in a state where ticking (executing a recipe step) is valid.
 pub fn can_tick(status: &LoopStatus) -> bool {
-    matches!(status, LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying)
+    matches!(
+        status,
+        LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
+    )
 }

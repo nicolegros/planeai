@@ -659,8 +659,12 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     let new_status = LoopStatus::parse(status_str)
         .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::RecipeSetStatus(new_status.clone()))
-        .map_err(|e| format!("failed to transition loop: {e}"))?;
+    LoopService::transition_loop(
+        ctx.conn,
+        ctx.loop_id,
+        LoopTrigger::RecipeSetStatus(new_status.clone()),
+    )
+    .map_err(|e| format!("failed to transition loop: {e}"))?;
 
     LoopService::append_loop_event(
         ctx.conn,
