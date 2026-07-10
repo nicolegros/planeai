@@ -409,7 +409,7 @@ If a recipe is resolved (via `--recipe` or `--strategy`), the loop stores a reci
 
 If `$PLANEAI_SESSION_ID` is set, the creating session is recorded as `created_by_session_id`.
 
-> **Note:** There is no background scheduler. Loops advance only via explicit `tick` commands.
+> **Note:** There is no background scheduler. Loops advance via explicit `tick` commands or automatically when a handoff is recorded (auto-advance through immediately-executable steps).
 
 ### `axi loop observe`
 
