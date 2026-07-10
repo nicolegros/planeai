@@ -21,6 +21,7 @@
   let expandedVerifiers = $state<Set<string>>(new Set());
   let verifierOutputs = $state<Record<string, { content: string | null; loading: boolean; error: string | null }>>({});
 
+  // eslint-disable-next-line no-control-regex -- intentional: stripping ANSI escape sequences
   const ANSI_REGEX = /\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g;
 
   function stripAnsi(text: string): string {
