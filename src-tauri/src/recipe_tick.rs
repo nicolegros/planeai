@@ -238,6 +238,13 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     } else {
         None
     };
+
+    // Render prompt before session creation so it's baked into the launch command
+    let rendered_prompt = step
+        .prompt
+        .as_ref()
+        .map(|tpl| render_prompt(tpl, ctx.snapshot, ctx.loop_id));
+
     let opts = crate::cli::SessionCreateOpts {
         project: project.name.clone(),
         branch: branch_name.clone(),
@@ -248,7 +255,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         yolo: false,
         provider: Some(provider.clone()),
         task_key: loop_run.task_key.clone(),
-        prompt: None, // We send prompt separately after creation
+        prompt: rendered_prompt,
         parent_session_id: loop_run.created_by_session_id.clone(),
     };
 
@@ -301,28 +308,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .or_default()
         .push(session.id.clone());
 
-    // 8. Render and send prompt (if step has a prompt template)
-    if let Some(ref prompt_template) = step.prompt {
-        let rendered = render_prompt(prompt_template, ctx.snapshot, ctx.loop_id);
-        let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
-        match crate::session_ops::send_prompt(ctx.conn, &session.id, &rendered, &ops) {
-            Ok(_) => {}
-            Err(e) => {
-                // Session was created but prompt failed — log but don't fail the step
-                LoopService::append_loop_event(
-                    ctx.conn,
-                    ctx.loop_id,
-                    "recipe_step_warning",
-                    &serde_json::json!({
-                        "step_id": step.id,
-                        "warning": format!("prompt delivery failed: {e}"),
-                        "session_id": session.id,
-                    }),
-                )
-                .ok();
-            }
-        }
-    }
+    // 8. (Prompt is now baked into the launch command via opts.prompt — no separate send needed)
 
     // 9. Set loop status to observing
     LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing).ok();
