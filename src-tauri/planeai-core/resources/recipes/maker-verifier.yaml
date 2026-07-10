@@ -13,6 +13,8 @@ inputs:
     required: true
   task_key:
     required: false
+  gate_command:
+    required: false
 
 knowledge:
   files:
@@ -131,7 +133,7 @@ steps:
     role: maker
     gates:
       - name: ci
-        command: "make ci"
+        command: "{{ inputs.gate_command | default('make ci') }}"
     on:
       pass: create_verifier
       fail: gates_failed_retry

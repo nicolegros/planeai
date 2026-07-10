@@ -94,6 +94,12 @@ pub struct SnapshotPolicy {
     pub max_ticks: u32,
     pub max_sessions: u32,
     pub merge_policy: String,
+    #[serde(default = "default_auto_approve")]
+    pub auto_approve: bool,
+}
+
+fn default_auto_approve() -> bool {
+    true
 }
 
 // ─── Service ─────────────────────────────────────────────────────────────────
@@ -400,6 +406,7 @@ impl RecipeService {
                 max_ticks: recipe.policy.max_ticks,
                 max_sessions: recipe.policy.max_sessions,
                 merge_policy: recipe.policy.merge_policy.clone(),
+                auto_approve: recipe.policy.auto_approve,
             },
             roles: recipe.roles.clone(),
             steps: recipe.steps.clone(),

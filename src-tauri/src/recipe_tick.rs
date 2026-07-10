@@ -317,7 +317,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         new_branch: true,
         worktree: use_worktree,
         base_branch,
-        yolo: true,
+        yolo: ctx.snapshot.policy.auto_approve,
         provider: provider_opt,
         task_key: loop_run.task_key.clone(),
         prompt: rendered_prompt,
@@ -878,11 +878,12 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
     for gate in &step.gates {
+        let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
         let request = VerifyGateRequest {
             loop_id: ctx.loop_id.to_string(),
             session_id: session_id.clone(),
             name: gate.name.clone(),
-            command: gate.command.clone(),
+            command: rendered_command,
             project_path: project.path.clone(),
             session_worktree_path: session.worktree_path.clone(),
             limits: VerifierLimits::default(),
@@ -936,10 +937,23 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     } else {
         // Store gate failure in last_error for the retry prompt template
         ctx.snapshot.runtime.last_error = Some(if let Some(ref output) = failed_gate_output {
-            format!(
-                "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}",
-                failed_gate_name, overall_status, output
-            )
+            const MAX_GATE_OUTPUT: usize = 10_000;
+            let truncated = if output.len() > MAX_GATE_OUTPUT {
+                let suffix = "\n\n… [output truncated]";
+                format!(
+                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
+                    failed_gate_name,
+                    overall_status,
+                    &output[..MAX_GATE_OUTPUT],
+                    suffix
+                )
+            } else {
+                format!(
+                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}",
+                    failed_gate_name, overall_status, output
+                )
+            };
+            truncated
         } else {
             format!("Gate '{}' returned '{}'", failed_gate_name, overall_status)
         });
@@ -1348,4 +1362,115 @@ mod tests {
     fn short_id_exact_eight() {
         assert_eq!(short_id("12345678"), "12345678");
     }
+}
+
+// ─── Auto-advance helper ─────────────────────────────────────────────────────
+
+/// Auto-advance a loop's recipe through immediately-executable steps.
+///
+/// Ticks the recipe up to `MAX_AUTO_TICKS` times, stopping early when:
+/// - A tick returns a non-zero code (error).
+/// - The loop reaches a terminal, intervention-required, or observing state.
+/// - The current step is a `human.wait` (requires explicit user action).
+///
+/// When `check_human_wait_before_tick` is true, the human.wait check happens
+/// before each tick (used by the handoff-complete path where the snapshot may
+/// already be on a human.wait step). Otherwise it's checked after each tick.
+///
+/// Accepts an `Arc<Mutex<Connection>>` and re-acquires the lock for each tick,
+/// releasing it between iterations so other commands can access the database.
+pub fn auto_advance_with_arc(
+    conn_arc: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    loop_id: &str,
+    snapshot: &mut RecipeSnapshot,
+    check_human_wait_before_tick: bool,
+) {
+    const MAX_AUTO_TICKS: usize = 10;
+
+    for _ in 0..MAX_AUTO_TICKS {
+        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+
+        let conn = match conn_arc.lock() {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+
+        let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
+
+        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
+        let _ = LoopService::update_policy_json(&conn, loop_id, &updated_json);
+
+        if code != 0 {
+            break;
+        }
+
+        let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
+            r.status.is_executor_terminal()
+                || r.status.is_intervention_required()
+                || r.status == LoopStatus::Observing
+        } else {
+            false
+        };
+
+        drop(conn);
+
+        if should_stop {
+            break;
+        }
+
+        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+    }
+}
+
+/// Simpler variant that takes a `&Connection` directly (used by AXI commands
+/// that already manage their own connection lifetime).
+pub fn auto_advance(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+    snapshot: &mut RecipeSnapshot,
+    check_human_wait_before_tick: bool,
+) {
+    const MAX_AUTO_TICKS: usize = 10;
+
+    for _ in 0..MAX_AUTO_TICKS {
+        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+
+        let (_output, code) = tick_recipe(conn, loop_id, snapshot);
+
+        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
+        let _ = LoopService::update_policy_json(conn, loop_id, &updated_json);
+
+        if code != 0 {
+            break;
+        }
+
+        if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
+            if r.status.is_executor_terminal()
+                || r.status.is_intervention_required()
+                || r.status == LoopStatus::Observing
+            {
+                break;
+            }
+        }
+
+        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+    }
+}
+
+fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
+    let current = &snapshot.runtime.current_step;
+    snapshot
+        .steps
+        .iter()
+        .find(|s| &s.id == current)
+        .map(|s| s.kind == "human.wait")
+        .unwrap_or(false)
 }

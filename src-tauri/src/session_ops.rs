@@ -469,8 +469,7 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     // Give daemon time to process the input frames before closing
     std::thread::sleep(std::time::Duration::from_millis(50));
     drop(writer);
-    // Don't join drain_handle — it will exit on its own when the read timeout fires
-    drop(drain_handle);
+    let _ = drain_handle.join();
 
     Ok(())
 }

@@ -938,35 +938,7 @@ pub fn loop_handoff_record(
                 if let Ok(mut snapshot) = serde_json::from_value::<
                     planeai_core::loop_recipe_service::RecipeSnapshot,
                 >(policy_json.clone()) {
-                    let max_auto_ticks = 10;
-                    for _ in 0..max_auto_ticks {
-                        let current = &snapshot.runtime.current_step;
-                        let is_blocking_step = snapshot
-                            .steps
-                            .iter()
-                            .find(|s| &s.id == current)
-                            .map(|s| s.kind == "human.wait")
-                            .unwrap_or(false);
-                        if is_blocking_step {
-                            break;
-                        }
-
-                        let (_output, code) =
-                            crate::recipe_tick::tick_recipe(conn, &loop_run.id, &mut snapshot);
-                        let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
-                        let _ = LoopService::update_policy_json(conn, &loop_run.id, &updated_json);
-                        if code != 0 {
-                            break;
-                        }
-                        if let Ok(Some(r)) = LoopService::get_loop(conn, &loop_run.id) {
-                            if r.status.is_executor_terminal()
-                                || r.status.is_intervention_required()
-                                || r.status == LoopStatus::Observing
-                            {
-                                break;
-                            }
-                        }
-                    }
+                    crate::recipe_tick::auto_advance(conn, &loop_run.id, &mut snapshot, true);
                 }
             }
         }
