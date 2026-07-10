@@ -595,7 +595,7 @@
             </button>
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showLoopForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">⟳</span>
-              <span class="flex-1 text-[13.5px] text-t1">Loop</span>
+              <span class="flex-1 text-[13.5px] text-t1">Loop (experimental)</span>
               <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">l</span>
             </button>
           </div>
