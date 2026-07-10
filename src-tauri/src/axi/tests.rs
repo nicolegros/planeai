@@ -1572,7 +1572,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             round: 1,
             created_session_ids: BTreeMap::new(), // No sessions!
             last_error: None,
-                last_handoff_consumed_at: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1710,7 +1710,7 @@ fn recipe_tick_round_next_increments_round() {
             round: 1,
             created_session_ids: BTreeMap::new(),
             last_error: None,
-                last_handoff_consumed_at: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1798,7 +1798,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             round: 3, // Already at max_rounds
             created_session_ids: BTreeMap::new(),
             last_error: None,
-                last_handoff_consumed_at: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1908,7 +1908,7 @@ fn setup_maker_verifier_flow(
             round,
             created_session_ids,
             last_error: None,
-                last_handoff_consumed_at: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2101,7 +2101,7 @@ fn setup_maker_verifier_flow_with_path(
             round: 1,
             created_session_ids,
             last_error: None,
-                last_handoff_consumed_at: None,
+            last_handoff_consumed_at: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2178,8 +2178,7 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
     // Override gate_command to a command that always succeeds (recipe defaults to `make ci`)
     {
         let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-        let mut snap: RecipeSnapshot =
-            serde_json::from_value(run.policy_json.unwrap()).unwrap();
+        let mut snap: RecipeSnapshot = serde_json::from_value(run.policy_json.unwrap()).unwrap();
         snap.inputs
             .insert("gate_command".to_string(), "true".to_string());
         let updated_json = serde_json::to_value(&snap).unwrap();

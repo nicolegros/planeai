@@ -937,7 +937,8 @@ pub fn loop_handoff_record(
             if let Some(ref policy_json) = updated_run.policy_json {
                 if let Ok(mut snapshot) = serde_json::from_value::<
                     planeai_core::loop_recipe_service::RecipeSnapshot,
-                >(policy_json.clone()) {
+                >(policy_json.clone())
+                {
                     crate::recipe_tick::auto_advance(conn, &loop_run.id, &mut snapshot, true);
                 }
             }

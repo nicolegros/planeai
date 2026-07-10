@@ -403,11 +403,13 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     use std::os::unix::net::UnixStream;
 
     let socket_path = planeai_ipc::daemon_socket_path();
-    let stream = UnixStream::connect(&socket_path)
-        .map_err(|e| format!("daemon connect failed: {e}"))?;
+    let stream =
+        UnixStream::connect(&socket_path).map_err(|e| format!("daemon connect failed: {e}"))?;
 
     let mut writer = stream;
-    let reader = writer.try_clone().map_err(|e| format!("clone failed: {e}"))?;
+    let reader = writer
+        .try_clone()
+        .map_err(|e| format!("clone failed: {e}"))?;
 
     reader
         .set_read_timeout(Some(std::time::Duration::from_millis(500)))
@@ -469,7 +471,11 @@ fn daemon_send_prompt(session_id: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn daemon_send_frames(writer: &mut impl std::io::Write, session_id: &str, text: &str) -> Result<(), String> {
+fn daemon_send_frames(
+    writer: &mut impl std::io::Write,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
     writer
         .write_all(&[0x01]) // CONN_DATA
         .map_err(|e| format!("handshake failed: {e}"))?;

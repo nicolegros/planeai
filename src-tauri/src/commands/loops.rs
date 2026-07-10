@@ -294,7 +294,10 @@ pub async fn create_loop_run(
                 {
                     drop(conn);
                     planeai::recipe_tick::auto_advance_with_arc(
-                        &conn_arc, &run.id, &mut snapshot, false,
+                        &conn_arc,
+                        &run.id,
+                        &mut snapshot,
+                        false,
                     );
                     let conn = conn_arc.lock().map_err(|e| e.to_string())?;
                     let updated = LoopService::get_loop(&conn, &run.id)
@@ -352,15 +355,17 @@ pub async fn tick_loop(
         }
 
         // If there's a recipe snapshot, execute ticks until a waiting/terminal state
-        if run.policy_json.is_some() {
-            let policy_json = run.policy_json.unwrap();
+        if let Some(policy_json) = run.policy_json {
             if let Ok(mut snapshot) = serde_json::from_value::<
                 planeai_core::loop_recipe_service::RecipeSnapshot,
             >(policy_json.clone())
             {
                 drop(conn);
                 planeai::recipe_tick::auto_advance_with_arc(
-                    &conn_arc, &loop_id, &mut snapshot, false,
+                    &conn_arc,
+                    &loop_id,
+                    &mut snapshot,
+                    false,
                 );
             }
         } else {
@@ -423,7 +428,10 @@ pub async fn start_loop(
             {
                 drop(conn);
                 planeai::recipe_tick::auto_advance_with_arc(
-                    &conn_arc, &loop_id, &mut snapshot, false,
+                    &conn_arc,
+                    &loop_id,
+                    &mut snapshot,
+                    false,
                 );
             }
         }

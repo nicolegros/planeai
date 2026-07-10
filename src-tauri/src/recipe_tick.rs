@@ -534,8 +534,9 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     // Use LoopService to find handoff (strict: requires schema + valid status)
     // Only look for handoffs recorded after the last one we consumed (prevents re-consuming stale ones)
     let after_ts = ctx.snapshot.runtime.last_handoff_consumed_at.as_deref();
-    let found_handoff = LoopService::find_handoff_for_sessions(ctx.conn, ctx.loop_id, &session_ids, after_ts)
-        .map_err(|e| format!("handoff query failed: {e}"))?;
+    let found_handoff =
+        LoopService::find_handoff_for_sessions(ctx.conn, ctx.loop_id, &session_ids, after_ts)
+            .map_err(|e| format!("handoff query failed: {e}"))?;
 
     match found_handoff {
         None => {
@@ -573,8 +574,7 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
                 .map_err(|e| format!("failed to update loop status: {e}"))?;
 
             // Record consumption timestamp so we don't re-consume this handoff in future rounds
-            ctx.snapshot.runtime.last_handoff_consumed_at =
-                Some(chrono::Utc::now().to_rfc3339());
+            ctx.snapshot.runtime.last_handoff_consumed_at = Some(chrono::Utc::now().to_rfc3339());
 
             let next_step = step
                 .on
@@ -1180,6 +1180,135 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}...", &s[..end])
 }
 
+// ─── Auto-advance helper ─────────────────────────────────────────────────────
+
+/// Auto-advance a loop's recipe through immediately-executable steps.
+///
+/// Ticks the recipe up to `MAX_AUTO_TICKS` times, stopping early when:
+/// - A tick returns a non-zero code (error).
+/// - The loop reaches a terminal, intervention-required, or observing state.
+/// - The current step is a `human.wait` (requires explicit user action).
+///
+/// When `check_human_wait_before_tick` is true, the human.wait check happens
+/// before each tick (used by the handoff-complete path where the snapshot may
+/// already be on a human.wait step). Otherwise it's checked after each tick.
+///
+/// Accepts an `Arc<Mutex<Connection>>` and re-acquires the lock for each tick,
+/// releasing it between iterations so other commands can access the database.
+pub fn auto_advance_with_arc(
+    conn_arc: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    loop_id: &str,
+    snapshot: &mut RecipeSnapshot,
+    check_human_wait_before_tick: bool,
+) {
+    const MAX_AUTO_TICKS: usize = 10;
+
+    for _ in 0..MAX_AUTO_TICKS {
+        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+
+        if is_gates_step(snapshot) {
+            break;
+        }
+
+        let conn = match conn_arc.lock() {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+
+        let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
+
+        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
+        let _ = LoopService::update_policy_json(&conn, loop_id, &updated_json);
+
+        if code != 0 {
+            break;
+        }
+
+        let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
+            r.status.is_executor_terminal()
+                || r.status.is_intervention_required()
+                || r.status == LoopStatus::Observing
+        } else {
+            false
+        };
+
+        drop(conn);
+
+        if should_stop {
+            break;
+        }
+
+        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+    }
+}
+
+/// Simpler variant that takes a `&Connection` directly (used by AXI commands
+/// that already manage their own connection lifetime).
+pub fn auto_advance(
+    conn: &rusqlite::Connection,
+    loop_id: &str,
+    snapshot: &mut RecipeSnapshot,
+    check_human_wait_before_tick: bool,
+) {
+    const MAX_AUTO_TICKS: usize = 10;
+
+    for _ in 0..MAX_AUTO_TICKS {
+        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+
+        if is_gates_step(snapshot) {
+            break;
+        }
+
+        let (_output, code) = tick_recipe(conn, loop_id, snapshot);
+
+        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
+        let _ = LoopService::update_policy_json(conn, loop_id, &updated_json);
+
+        if code != 0 {
+            break;
+        }
+
+        if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
+            if r.status.is_executor_terminal()
+                || r.status.is_intervention_required()
+                || r.status == LoopStatus::Observing
+            {
+                break;
+            }
+        }
+
+        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
+            break;
+        }
+    }
+}
+
+fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
+    let current = &snapshot.runtime.current_step;
+    snapshot
+        .steps
+        .iter()
+        .find(|s| &s.id == current)
+        .map(|s| s.kind == "human.wait")
+        .unwrap_or(false)
+}
+
+fn is_gates_step(snapshot: &RecipeSnapshot) -> bool {
+    let current = &snapshot.runtime.current_step;
+    snapshot
+        .steps
+        .iter()
+        .find(|s| &s.id == current)
+        .map(|s| s.kind == planeai_core::loop_recipe::STEP_GATES_RUN)
+        .unwrap_or(false)
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1368,133 +1497,4 @@ mod tests {
     fn short_id_exact_eight() {
         assert_eq!(short_id("12345678"), "12345678");
     }
-}
-
-// ─── Auto-advance helper ─────────────────────────────────────────────────────
-
-/// Auto-advance a loop's recipe through immediately-executable steps.
-///
-/// Ticks the recipe up to `MAX_AUTO_TICKS` times, stopping early when:
-/// - A tick returns a non-zero code (error).
-/// - The loop reaches a terminal, intervention-required, or observing state.
-/// - The current step is a `human.wait` (requires explicit user action).
-///
-/// When `check_human_wait_before_tick` is true, the human.wait check happens
-/// before each tick (used by the handoff-complete path where the snapshot may
-/// already be on a human.wait step). Otherwise it's checked after each tick.
-///
-/// Accepts an `Arc<Mutex<Connection>>` and re-acquires the lock for each tick,
-/// releasing it between iterations so other commands can access the database.
-pub fn auto_advance_with_arc(
-    conn_arc: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
-    loop_id: &str,
-    snapshot: &mut RecipeSnapshot,
-    check_human_wait_before_tick: bool,
-) {
-    const MAX_AUTO_TICKS: usize = 10;
-
-    for _ in 0..MAX_AUTO_TICKS {
-        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
-            break;
-        }
-
-        if is_gates_step(snapshot) {
-            break;
-        }
-
-        let conn = match conn_arc.lock() {
-            Ok(c) => c,
-            Err(_) => break,
-        };
-
-        let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
-
-        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
-        let _ = LoopService::update_policy_json(&conn, loop_id, &updated_json);
-
-        if code != 0 {
-            break;
-        }
-
-        let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
-            r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
-        } else {
-            false
-        };
-
-        drop(conn);
-
-        if should_stop {
-            break;
-        }
-
-        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
-            break;
-        }
-    }
-}
-
-/// Simpler variant that takes a `&Connection` directly (used by AXI commands
-/// that already manage their own connection lifetime).
-pub fn auto_advance(
-    conn: &rusqlite::Connection,
-    loop_id: &str,
-    snapshot: &mut RecipeSnapshot,
-    check_human_wait_before_tick: bool,
-) {
-    const MAX_AUTO_TICKS: usize = 10;
-
-    for _ in 0..MAX_AUTO_TICKS {
-        if check_human_wait_before_tick && is_human_wait_step(snapshot) {
-            break;
-        }
-
-        if is_gates_step(snapshot) {
-            break;
-        }
-
-        let (_output, code) = tick_recipe(conn, loop_id, snapshot);
-
-        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
-        let _ = LoopService::update_policy_json(conn, loop_id, &updated_json);
-
-        if code != 0 {
-            break;
-        }
-
-        if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
-            if r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
-            {
-                break;
-            }
-        }
-
-        if !check_human_wait_before_tick && is_human_wait_step(snapshot) {
-            break;
-        }
-    }
-}
-
-fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
-    let current = &snapshot.runtime.current_step;
-    snapshot
-        .steps
-        .iter()
-        .find(|s| &s.id == current)
-        .map(|s| s.kind == "human.wait")
-        .unwrap_or(false)
-}
-
-fn is_gates_step(snapshot: &RecipeSnapshot) -> bool {
-    let current = &snapshot.runtime.current_step;
-    snapshot
-        .steps
-        .iter()
-        .find(|s| &s.id == current)
-        .map(|s| s.kind == planeai_core::loop_recipe::STEP_GATES_RUN)
-        .unwrap_or(false)
 }
