@@ -826,22 +826,12 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
     })
 }
 
-fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+fn exec_gates_run_body(
+    ctx: &mut TickContext,
+    step: &RecipeStep,
+) -> Result<(&'static str, Option<String>), String> {
     use planeai_core::verifier::{VerifierLimits, VerifyGateRequest};
 
-    if step.gates.is_empty() {
-        return Err(format!(
-            "step '{}': gates.run requires at least one gate declaration",
-            step.id
-        ));
-    }
-
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)
-        .map_err(|e| format!("failed to transition loop: {e}"))?;
-
-    // Resolve a session to run gates in.
-    // If step.role is specified, use that role's latest session; otherwise fall back to
-    // the last session across all roles.
     let session_id = if let Some(ref role) = step.role {
         ctx.snapshot
             .runtime
@@ -866,7 +856,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             })?
     };
 
-    // Resolve project path for CWD
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
         .map_err(|e| format!("failed to load loop: {e}"))?
         .ok_or_else(|| "loop not found".to_string())?;
@@ -875,13 +864,11 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         .map_err(|e| format!("failed to resolve project: {e}"))?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
 
-    // Resolve session worktree path
     let session = crate::db::get_session(ctx.conn, &session_id)
         .map_err(|e| format!("failed to get session: {e}"))?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
 
-    // Run all gates — stop on first failure
-    let mut overall_status = "pass";
+    let mut overall_status: &str = "pass";
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
     let mut failed_gate_output_path: Option<String> = None;
@@ -907,7 +894,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                         "fail"
                     };
                     failed_gate_name = gate.name.clone();
-                    // Read the gate output so we can feed it to the retry prompt
                     if let Some(ref path) = result.output_path {
                         failed_gate_output = std::fs::read_to_string(path).ok();
                         failed_gate_output_path = result.output_path.clone();
@@ -934,7 +920,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         }
     }
 
-    // Map result through on.pass / on.fail / on.error
     let next_step = step
         .on
         .as_ref()
@@ -944,8 +929,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let event_kind = if overall_status == "pass" {
         "recipe_step_completed"
     } else {
-        // Store gate failure in last_error for the retry prompt template.
-        // Include the full log path so the agent can read the complete output.
         ctx.snapshot.runtime.last_error = Some(if let Some(ref output) = failed_gate_output {
             let path_note = if let Some(ref path) = failed_gate_output_path {
                 format!("\n\nFull output log: {path}\nRead this file for complete details.")
@@ -986,8 +969,26 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
+    Ok((overall_status, next_step))
+}
+
+fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    if step.gates.is_empty() {
+        return Err(format!(
+            "step '{}': gates.run requires at least one gate declaration",
+            step.id
+        ));
+    }
+
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
+
+    let gates_body_result = exec_gates_run_body(ctx, step);
+
     LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesCompleted)
         .map_err(|e| format!("failed to transition loop: {e}"))?;
+
+    let (overall_status, next_step) = gates_body_result?;
 
     if let Some(ref ns) = next_step {
         ctx.snapshot.runtime.current_step = ns.clone();
