@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { LoopRunDetail } from "../lib/types";
-  import { isActive, canStart, canTick, canStop, statusBadgeColor } from "../lib/loop-status";
   import { loops as loopsApi, git } from "../lib/api";
   import { Button } from "./ui";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -99,9 +98,59 @@
     navigator.clipboard.writeText(path);
   }
 
+  function isActive(status: string): boolean {
+    return ["running", "observing", "verifying"].includes(status);
+  }
+
   function shortId(id: string): string {
     return id.slice(0, 8);
   }
+
+  // ─── Keyboard shortcuts ──────────────────────────────────────────────────────
+
+  function handleKeydown(e: KeyboardEvent) {
+    // Don't intercept when focus is in an input or when modifier keys are held
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+
+    if (e.key === "r") {
+      e.preventDefault();
+      refresh();
+    } else if (e.key === "s" && detail?.run.status === "draft") {
+      e.preventDefault();
+      handleStart();
+    } else if (e.key === "t" && detail && isActive(detail.run.status)) {
+      e.preventDefault();
+      handleTick();
+    } else if (e.key === "x" && detail && isActive(detail.run.status)) {
+      e.preventDefault();
+      handleStop();
+    } else if (e.key >= "1" && e.key <= "9" && detail) {
+      // Number keys open sessions (1-indexed)
+      const idx = parseInt(e.key) - 1;
+      if (idx < detail.sessions.length) {
+        e.preventDefault();
+        onSelectSession(detail.sessions[idx].session_id);
+      }
+    }
+  }
+
+  const statusBadgeColors: Record<string, string> = {
+    draft: "bg-t3/20 text-t2",
+    running: "bg-status-running/20 text-status-running",
+    observing: "bg-status-running/20 text-status-running",
+    verifying: "bg-status-running/20 text-status-running",
+    completed_unreviewed: "bg-status-review/20 text-status-review",
+    blocked: "bg-status-exited/20 text-status-exited",
+    needs_human: "bg-status-review/20 text-status-review",
+    stale: "bg-status-exited/20 text-status-exited",
+    failed: "bg-status-exited/20 text-status-exited",
+    cancelled: "bg-status-exited/20 text-status-exited",
+    approved: "bg-status-running/20 text-status-running",
+    merged: "bg-status-idle/20 text-status-idle",
+    cleaned: "bg-status-idle/20 text-status-idle",
+  };
 
   function verifierIcon(status: string) {
     if (status === "passed") return CheckCircle2;
@@ -114,7 +163,11 @@
     if (status === "failed") return "text-status-exited";
     return "text-t3";
   }
+
+  const hintBadge = "font-mono text-[10px] px-1 rounded bg-panel-hi text-t3";
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl mx-auto">
   {#if loading && !detail}
@@ -136,7 +189,7 @@
             Loop {shortId(detail.run.id)}
           {/if}
         </h1>
-        <span class="px-2 py-0.5 rounded-full text-xs font-medium {statusBadgeColor(detail.run.status)}">
+        <span class="px-2 py-0.5 rounded-full text-xs font-medium {statusBadgeColors[detail.run.status] ?? 'bg-t3/20 text-t2'}">
           {detail.run.status}
         </span>
         <span class="text-t3 text-sm">
@@ -149,26 +202,28 @@
 
       <!-- Actions -->
       <div class="flex gap-2 pt-1">
-        <Button variant="ghost" size="sm" onclick={refresh} disabled={loading}>
+        <Button variant="ghost" size="sm" class="gap-1.5" onclick={refresh} disabled={loading}>
           <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
           Refresh
+          <span class={hintBadge}>R</span>
         </Button>
-        {#if canStart(detail.run.status)}
-          <Button variant="primary" size="sm" onclick={handleStart}>
+        {#if detail.run.status === "draft"}
+          <Button variant="primary" size="sm" class="gap-1.5" onclick={handleStart}>
             <Play class="size-3.5" />
             Start
+            <span class={hintBadge}>S</span>
           </Button>
         {/if}
-        {#if canTick(detail.run.status)}
-          <Button variant="ghost" size="sm" onclick={handleTick}>
+        {#if isActive(detail.run.status)}
+          <Button variant="ghost" size="sm" class="gap-1.5" onclick={handleTick}>
             <Play class="size-3.5" />
             Tick
+            <span class={hintBadge}>T</span>
           </Button>
-        {/if}
-        {#if canStop(detail.run.status)}
-          <Button variant="ghost" size="sm" onclick={handleStop}>
+          <Button variant="ghost" size="sm" class="gap-1.5" onclick={handleStop}>
             <Square class="size-3.5" />
             Stop
+            <span class={hintBadge}>X</span>
           </Button>
         {/if}
       </div>
@@ -182,6 +237,7 @@
           <table class="w-full text-sm">
             <thead class="bg-panel-hi text-t3 text-xs">
               <tr>
+                <th class="text-left px-3 py-1.5">#</th>
                 <th class="text-left px-3 py-1.5">Role</th>
                 <th class="text-left px-3 py-1.5">Session</th>
                 <th class="text-left px-3 py-1.5">Round</th>
@@ -191,8 +247,9 @@
               </tr>
             </thead>
             <tbody>
-              {#each detail.sessions as session (session.session_id)}
+              {#each detail.sessions as session, i (session.session_id)}
                 <tr class="border-t border-border hover:bg-panel-hi/50">
+                  <td class="px-3 py-2 font-mono text-xs text-t3">{i + 1}</td>
                   <td class="px-3 py-2 text-t2 font-medium">{session.role}</td>
                   <td class="px-3 py-2 font-mono text-xs text-t3">{shortId(session.session_id)}</td>
                   <td class="px-3 py-2 text-t3">{session.round}</td>
@@ -203,7 +260,7 @@
                       class="text-accent hover:underline text-xs"
                       onclick={() => onSelectSession(session.session_id)}
                     >
-                      Open
+                      Open <span class={hintBadge}>{i + 1}</span>
                     </button>
                   </td>
                 </tr>

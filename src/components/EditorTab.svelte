@@ -134,7 +134,7 @@
       return;
     }
 
-    const fullPath = `${repoPath}/${filePath}`;
+    const fullPath = filePath.startsWith("/") ? filePath : `${repoPath}/${filePath}`;
     try {
       const content = await git.readFile(fullPath);
       const state = createEditorState(content, filePath);

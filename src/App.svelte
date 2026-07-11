@@ -11,7 +11,7 @@
   import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
-  import { computeSidebarSessionOrder } from "./lib/sidebar-session-order";
+  import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
@@ -46,7 +46,7 @@
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
-  import { isMounted as poolIsMounted } from "./lib/mru.svelte";
+  import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
@@ -161,8 +161,16 @@
     return "pending" as const;
   });
 
-  // Session IDs in sidebar display order
-  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(projects, sessions, taskStore.getTasksByProject(), !!getSettings().hide_done_tasks));
+  // Session IDs in sidebar display order (includes loop:<id> entries)
+  const sidebarSessionOrder = $derived(computeSidebarSessionOrder(
+    projects,
+    sessions,
+    taskStore.getTasksByProject(),
+    !!getSettings().hide_done_tasks,
+    Object.fromEntries(projects.map((p) => [p.id, loopStore.getLoopsForProject(p.id)])),
+    Object.fromEntries(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).map((l) => [l.id, loopStore.getSessionsForLoop(l.id)])),
+    new Set(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)).flatMap((l) => loopStore.getSessionsForLoop(l.id).map((s) => s.session_id))),
+  ));
 
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
@@ -194,6 +202,19 @@
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
+
+  /** Valid IDs for MRU cycling — includes session IDs + loop:<id> entries. */
+  function getSwitchableIds(): Set<string> {
+    const ids = orchestrator.getSwitchableSessionIds();
+    // Add all non-draft loop IDs
+    for (const p of projects) {
+      for (const loop of loopStore.getLoopsForProject(p.id)) {
+        ids.add(`loop:${loop.id}`);
+      }
+    }
+    return ids;
+  }
+
   onMount(() => {
     projectStore.loadProjects().then(() => {
       taskStore.loadTasks(projectStore.getProjects().map((p) => p.path));
@@ -225,11 +246,13 @@
         else if (action.type === "jump_to_session") { loopStore.setActiveLoopId(null); orchestrator.jumpToSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
-          if (!sw.isCycling) startCycle(activeSessionId ?? undefined, orchestrator.getSwitchableSessionIds());
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          if (!sw.isCycling) startCycle(currentId, getSwitchableIds());
           else advance(1);
         } else if (action.type === "tab_switch_reverse") {
           const sw = getCycleState();
-          if (!sw.isCycling) { startCycle(activeSessionId ?? undefined, orchestrator.getSwitchableSessionIds()); advance(-1); }
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          if (!sw.isCycling) { startCycle(currentId, getSwitchableIds()); advance(-1); }
           else advance(-1);
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
@@ -243,10 +266,12 @@
         else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
         else if (action.type === "next_session") {
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, 1);
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
           else navCycle.advance(1);
         } else if (action.type === "prev_session") {
-          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, activeSessionId ?? undefined, -1);
+          const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
+          if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
@@ -292,11 +317,22 @@
     }
     window.addEventListener("keydown", onModalKeydown, true);
 
+    /** Route a navigation target (may be a session ID or a loop:<id> prefixed string). */
+    function routeNavTarget(target: string): void {
+      if (isLoopId(target)) {
+        loopStore.setActiveLoopId(parseLoopId(target));
+        touchMru(target);
+      } else {
+        loopStore.setActiveLoopId(null);
+        orchestrator.selectSession(target);
+      }
+    }
+
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
       if (!isModRelease) return;
-      if (getCycleState().isCycling) { const target = commit(); if (target) { loopStore.setActiveLoopId(null); orchestrator.selectSession(target); } focusTerminal(); }
-      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) { loopStore.setActiveLoopId(null); orchestrator.selectSession(target); } focusTerminal(); }
+      if (getCycleState().isCycling) { const target = commit(); if (target) routeNavTarget(target); focusTerminal(); }
+      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) routeNavTarget(target); focusTerminal(); }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
@@ -350,7 +386,7 @@
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showNewItemModal = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        onSelectLoop={(id) => { loopStore.setActiveLoopId(id); }}
+        onSelectLoop={(id) => { loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -485,7 +521,17 @@
         <LoopDashboard
           loopId={activeLoopId}
           onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}
-          onOpenArtifact={(path) => { if (activeSession) orchestrator.openFile(path); }}
+          onOpenArtifact={(path) => {
+            // If no active session, select the first session from this loop
+            if (!activeSession) {
+              const loopSessions = loopStore.getSessionsForLoop(activeLoopId);
+              if (loopSessions.length > 0) {
+                orchestrator.selectSession(loopSessions[0].session_id);
+              } else return;
+            }
+            loopStore.setActiveLoopId(null);
+            orchestrator.openFile(path);
+          }}
         />
       </div>
     {/if}
