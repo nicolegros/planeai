@@ -60,6 +60,7 @@
 
   // CodeView + Worker Pool
   let viewerRoot: HTMLElement;
+  let sidebarListRef: HTMLElement;
   let viewer: CodeView<ReviewComment> | null = null;
   let mounted = false;
 
@@ -498,7 +499,15 @@
       if (!inRange) cursorLine = ranges[0].start;
     }
     viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "nearest", offset: 40 });
+    scrollSelectedLineIntoView();
+  }
+
+  /** Find the highlighted line in the active file's shadow DOM and scroll it into view. */
+  function scrollSelectedLineIntoView() {
+    const id = currentFileId();
+    const item = viewer?.getRenderedItems().find((r) => r.item.id === id);
+    const el = item?.element?.shadowRoot?.querySelector("[data-selected-line]");
+    if (el) (el as HTMLElement).scrollIntoView({ block: "nearest" });
   }
 
   function moveCursor(delta: number) {
@@ -689,6 +698,9 @@
       disableFileHeader: false,
       expandUnchanged: true,
       expansionLineCount: 20,
+      // Render all lines in each file (disable line-level virtualization)
+      // so keyboard navigation can always find and scroll to the selected line.
+      itemMetrics: { hunkLineCount: 100000 },
       collapsedContextThreshold: 5,
       renderHeaderMetadata(fileDiff) {
         const path = fileDiff.name;
@@ -793,6 +805,13 @@
     if (viewer && mounted) {
       viewer.setOptions({ themeType: dark ? "dark" : "light" });
     }
+  });
+
+  // Scroll the selected sidebar item into view on keyboard navigation
+  $effect(() => {
+    const idx = selectedIndex;
+    if (!sidebarListRef) return;
+    sidebarListRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
   function statusColor(status: string): string {
@@ -925,12 +944,12 @@
       <span class="text-status-running">+{files.reduce((a, f) => a + f.additions, 0)}</span>
       <span class="text-status-exited">−{files.reduce((a, f) => a + f.deletions, 0)}</span>
     </div>
-    <ul class="py-1" role="listbox">
+    <ul bind:this={sidebarListRef} class="py-1" role="listbox">
       {#each files as file, i (file.path)}
         {@const fileCount = getFileCommentCount(sessionId, file.path)}
         {@const viewed = viewedFiles.has(file.path)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <li role="option" aria-selected={i === selectedIndex} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
+        <li role="option" aria-selected={i === selectedIndex} data-nav-index={i} class="flex items-center gap-1 mx-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(i)}>
           <span class="w-0.5 self-stretch rounded-full transition-opacity {i === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
           <div class="flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-[12px] rounded-lg {i === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
           {#if viewed}
