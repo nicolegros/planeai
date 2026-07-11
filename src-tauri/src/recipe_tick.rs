@@ -1243,8 +1243,7 @@ pub fn auto_advance_with_arc(
         }
 
         let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
-            r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
+            r.status.is_executor_terminal() || r.status.is_intervention_required()
         } else {
             false
         };
@@ -1295,9 +1294,7 @@ pub fn auto_advance(
         }
 
         if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
-            if r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
-            {
+            if r.status.is_executor_terminal() || r.status.is_intervention_required() {
                 break;
             }
         }
@@ -1444,7 +1441,10 @@ mod tests {
         let snapshot = minimal_snapshot(vec![], BTreeMap::new());
         let template = "{{ inputs.gate_command | default('make ci') }}";
         let result = render_prompt(template, &snapshot, "loop-1");
-        assert_eq!(result, "make ci", "default filter should produce 'make ci' when input is absent");
+        assert_eq!(
+            result, "make ci",
+            "default filter should produce 'make ci' when input is absent"
+        );
     }
 
     #[test]

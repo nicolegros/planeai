@@ -2601,7 +2601,6 @@ fn maker_verifier_next_actions_contain_useful_guidance() {
     );
 }
 
-
 #[test]
 fn auto_advance_does_not_break_on_gates_or_observing() {
     // Verify that auto_advance only breaks on terminal/intervention states,
@@ -2610,19 +2609,13 @@ fn auto_advance_does_not_break_on_gates_or_observing() {
     let maker_id = "maker-eeeeeeee-2222-3333-4444-555555555555";
 
     // Set up at wait_for_maker with a handoff ready
-    let (loop_id, project_id, _) = setup_maker_verifier_flow(
-        &conn,
-        "wait_for_maker",
-        1,
-        Some(maker_id),
-        None,
-    );
+    let (loop_id, project_id, _) =
+        setup_maker_verifier_flow(&conn, "wait_for_maker", 1, Some(maker_id), None);
     create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
     insert_handoff(&conn, &loop_id, maker_id, "completed");
 
     let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-    let mut snapshot: RecipeSnapshot =
-        serde_json::from_value(run.policy_json.unwrap()).unwrap();
+    let mut snapshot: RecipeSnapshot = serde_json::from_value(run.policy_json.unwrap()).unwrap();
 
     crate::recipe_tick::auto_advance(&conn, &loop_id, &mut snapshot, false);
 
