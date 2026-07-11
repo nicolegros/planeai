@@ -66,7 +66,6 @@ fn create_loop_and_get_returns_it() {
     .unwrap();
 
     assert_eq!(created.status, LoopStatus::Draft);
-    assert_eq!(created.current_round, 0);
     assert_eq!(created.max_rounds, 5);
     assert_eq!(created.goal, "Fix the bug");
 

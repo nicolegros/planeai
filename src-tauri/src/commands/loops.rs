@@ -27,7 +27,6 @@ pub struct LoopRunSummary {
     pub strategy: String,
     pub goal: String,
     pub status: String,
-    pub current_round: i64,
     pub max_rounds: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -42,7 +41,6 @@ impl From<LoopRun> for LoopRunSummary {
             strategy: r.strategy.as_str().to_string(),
             goal: r.goal,
             status: r.status.as_str().to_string(),
-            current_round: r.current_round,
             max_rounds: r.max_rounds,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -383,13 +381,7 @@ pub async fn tick_loop(
                 );
             }
         } else {
-            // Non-recipe loop: just increment round
-            let new_round = run.current_round + 1;
-            conn.execute(
-                "UPDATE loop_runs SET current_round = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![new_round, chrono::Utc::now().to_rfc3339(), loop_id],
-            )
-            .map_err(|e| e.to_string())?;
+            // Non-recipe loop: no-op (round lives only in snapshot.runtime.round)
         }
 
         Ok(())

@@ -86,6 +86,11 @@ pub struct RecipeRuntime {
     /// from previous rounds when checking handoff.wait.
     #[serde(default)]
     pub last_handoff_consumed_at: Option<String>,
+    /// When set, overrides the step-kind derivation for LoopStatus.
+    /// Used by steps that block execution conditionally (e.g., `human.wait` → NeedsHuman,
+    /// `round.next` at max_rounds → Blocked). Cleared when the loop resumes.
+    #[serde(default)]
+    pub status_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,6 +405,7 @@ impl RecipeService {
                 created_session_ids: BTreeMap::new(),
                 last_error: None,
                 last_handoff_consumed_at: None,
+                status_override: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,

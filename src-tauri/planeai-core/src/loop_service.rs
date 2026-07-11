@@ -405,7 +405,6 @@ impl LoopService {
             strategy: params.strategy,
             goal: params.goal,
             status: LoopStatus::Draft,
-            current_round: 0,
             max_rounds: params.max_rounds,
             created_at: now.clone(),
             updated_at: now,
@@ -418,7 +417,7 @@ impl LoopService {
     pub fn get_loop(conn: &Connection, id: &str) -> Result<Option<LoopRun>, LoopServiceError> {
         let row = conn
             .prepare(
-                "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, current_round, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
+                "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
                  FROM loop_runs WHERE id = ?1",
             )?
             .query_row(params![id], Self::row_to_loop_run);
@@ -435,7 +434,7 @@ impl LoopService {
         project_id: &str,
     ) -> Result<Vec<LoopRun>, LoopServiceError> {
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, current_round, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
+            "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
              FROM loop_runs WHERE project_id = ?1 ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map(params![project_id], Self::row_to_loop_run)?;
@@ -542,6 +541,57 @@ impl LoopService {
         if rows == 0 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Persist the updated recipe snapshot AND atomically derive + set the status
+    /// column from the current step pointer.
+    ///
+    /// This is the single choke point for snapshot persistence — by co-locating
+    /// the status derivation here, the status column can never desync from the
+    /// step pointer.
+    ///
+    /// `step_kind` and `step_status` are extracted from the current recipe step.
+    /// `status_override` is from `snapshot.runtime.status_override` (set by
+    /// blocking executors like human.wait or round.next at max_rounds).
+    pub fn update_snapshot_and_derive_status(
+        conn: &Connection,
+        id: &str,
+        policy_json: &serde_json::Value,
+        step_kind: &str,
+        step_status: Option<&str>,
+        status_override: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let json_str = policy_json.to_string();
+        let tx = conn.unchecked_transaction()?;
+
+        // Derive the status from the step pointer + override
+        if let Some(derived) = derive_status_from_step(step_kind, step_status, status_override) {
+            let executor_finished_at = if derived.is_executor_terminal() {
+                Some(now.clone())
+            } else {
+                None
+            };
+            let rows = tx.execute(
+                "UPDATE loop_runs SET policy_json = ?1, status = ?2, updated_at = ?3, executor_finished_at = COALESCE(?4, executor_finished_at) WHERE id = ?5",
+                params![json_str, derived.as_str(), now, executor_finished_at, id],
+            )?;
+            if rows == 0 {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        } else {
+            // Unrecognized step kind — update snapshot only, leave status unchanged
+            let rows = tx.execute(
+                "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
+                params![json_str, now, id],
+            )?;
+            if rows == 0 {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
+
         tx.commit()?;
         Ok(())
     }
@@ -1028,16 +1078,15 @@ impl LoopService {
             strategy: LoopStrategy::new(row.get::<_, String>(4)?),
             goal: row.get(5)?,
             status,
-            current_round: row.get(7)?,
-            max_rounds: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-            executor_finished_at: row.get(11)?,
+            max_rounds: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            executor_finished_at: row.get(10)?,
             policy_json: row
-                .get::<_, Option<String>>(12)?
+                .get::<_, Option<String>>(11)?
                 .and_then(|s| serde_json::from_str(&s).ok()),
             budget_json: row
-                .get::<_, Option<String>>(13)?
+                .get::<_, Option<String>>(12)?
                 .and_then(|s| serde_json::from_str(&s).ok()),
         }))
     }

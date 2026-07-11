@@ -259,7 +259,6 @@ pub fn loop_create(
         field("recipe_source", str_val(resolved.source)),
         field("trigger", str_val("manual")),
         field("goal", str_val(goal)),
-        field("current_round", int_val(0)),
         field("max_rounds", int_val(resolved.max_rounds)),
     ];
     if let Some(key) = task_key {
@@ -305,7 +304,6 @@ pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (Str
         field("status", str_val(loop_run.status.as_str())),
         field("strategy", str_val(loop_run.strategy.as_str())),
         field("goal", str_val(&loop_run.goal)),
-        field("current_round", int_val(loop_run.current_round)),
         field("max_rounds", int_val(loop_run.max_rounds)),
     ];
     if let Some(ref key) = loop_run.task_key {
@@ -489,7 +487,6 @@ pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
             Value::Object(vec![
                 field("id", str_val(&loop_run.id)),
                 field("status", str_val(loop_run.status.as_str())),
-                field("current_round", int_val(loop_run.current_round)),
                 field("max_rounds", int_val(loop_run.max_rounds)),
             ]),
         ),
@@ -935,10 +932,7 @@ pub fn loop_handoff_record(
                 >(policy_json.clone())
                 {
                     crate::recipe_tick::auto_advance(conn, &loop_run.id, &mut snapshot, true);
-
-                    // Save final snapshot state
-                    let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
-                    let _ = LoopService::update_policy_json(conn, &loop_run.id, &updated_json);
+                    // tick_recipe → save_snapshot already persisted the snapshot with derived status
                 }
             }
         }

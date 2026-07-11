@@ -118,7 +118,6 @@ pub struct LoopRun {
     pub strategy: LoopStrategy,
     pub goal: String,
     pub status: LoopStatus,
-    pub current_round: i64,
     pub max_rounds: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -418,4 +417,272 @@ pub fn can_tick(status: &LoopStatus) -> bool {
         status,
         LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
     )
+}
+
+// ─── Status Derivation from Step Pointer ─────────────────────────────────────
+
+/// Derive the expected `LoopStatus` from the current recipe step and runtime state.
+///
+/// The recipe step pointer + optional status_override form the single source of
+/// truth for loop progression. This function:
+/// 1. Checks `status_override` first — if set, it takes precedence (used by
+///    steps that block conditionally, like `human.wait` or `round.next` at max).
+/// 2. Otherwise derives from `step.kind` (and for `loop.status` steps, the
+///    declared target status).
+///
+/// Returns `None` only if both override is absent AND step kind is unrecognized.
+pub fn derive_status_from_step(
+    step_kind: &str,
+    step_status: Option<&str>,
+    status_override: Option<&str>,
+) -> Option<LoopStatus> {
+    use crate::loop_recipe::{
+        STEP_GATES_RUN, STEP_HANDOFF_WAIT, STEP_HUMAN_WAIT, STEP_LOOP_EVENT, STEP_LOOP_STATUS,
+        STEP_ROUND_NEXT, STEP_SESSION_CREATE, STEP_SESSION_PROMPT,
+    };
+
+    // 1. Check explicit override (set by blocking executors)
+    if let Some(ov) = status_override {
+        return LoopStatus::parse(ov);
+    }
+
+    // 2. Derive from step kind
+    match step_kind {
+        // Steps that imply the loop is actively executing
+        STEP_SESSION_CREATE | STEP_SESSION_PROMPT | STEP_LOOP_EVENT | STEP_ROUND_NEXT => {
+            Some(LoopStatus::Running)
+        }
+
+        // Waiting for external handoff — loop is observing
+        STEP_HANDOFF_WAIT => Some(LoopStatus::Observing),
+
+        // Running verification gates
+        STEP_GATES_RUN => Some(LoopStatus::Verifying),
+
+        // Waiting for human intervention
+        STEP_HUMAN_WAIT => Some(LoopStatus::NeedsHuman),
+
+        // Explicit status declaration — the step says what status to adopt
+        STEP_LOOP_STATUS => {
+            let target = step_status.unwrap_or("observing");
+            LoopStatus::parse(target)
+        }
+
+        // Unrecognized step kind
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── derive_status_from_step: step kind → status mapping ─────────────────
+
+    #[test]
+    fn derive_running_from_session_create() {
+        assert_eq!(
+            derive_status_from_step("session.create", None, None),
+            Some(LoopStatus::Running)
+        );
+    }
+
+    #[test]
+    fn derive_running_from_session_prompt() {
+        assert_eq!(
+            derive_status_from_step("session.prompt", None, None),
+            Some(LoopStatus::Running)
+        );
+    }
+
+    #[test]
+    fn derive_running_from_loop_event() {
+        assert_eq!(
+            derive_status_from_step("loop.event", None, None),
+            Some(LoopStatus::Running)
+        );
+    }
+
+    #[test]
+    fn derive_running_from_round_next() {
+        assert_eq!(
+            derive_status_from_step("round.next", None, None),
+            Some(LoopStatus::Running)
+        );
+    }
+
+    #[test]
+    fn derive_observing_from_handoff_wait() {
+        assert_eq!(
+            derive_status_from_step("handoff.wait", None, None),
+            Some(LoopStatus::Observing)
+        );
+    }
+
+    #[test]
+    fn derive_verifying_from_gates_run() {
+        assert_eq!(
+            derive_status_from_step("gates.run", None, None),
+            Some(LoopStatus::Verifying)
+        );
+    }
+
+    #[test]
+    fn derive_needs_human_from_human_wait() {
+        assert_eq!(
+            derive_status_from_step("human.wait", None, None),
+            Some(LoopStatus::NeedsHuman)
+        );
+    }
+
+    #[test]
+    fn derive_from_loop_status_step_uses_step_status_field() {
+        assert_eq!(
+            derive_status_from_step("loop.status", Some("completed_unreviewed"), None),
+            Some(LoopStatus::CompletedUnreviewed)
+        );
+        assert_eq!(
+            derive_status_from_step("loop.status", Some("failed"), None),
+            Some(LoopStatus::Failed)
+        );
+        assert_eq!(
+            derive_status_from_step("loop.status", Some("blocked"), None),
+            Some(LoopStatus::Blocked)
+        );
+    }
+
+    #[test]
+    fn derive_from_loop_status_step_defaults_to_observing() {
+        assert_eq!(
+            derive_status_from_step("loop.status", None, None),
+            Some(LoopStatus::Observing)
+        );
+    }
+
+    #[test]
+    fn derive_returns_none_for_unknown_step_kind() {
+        assert_eq!(derive_status_from_step("unknown.step", None, None), None);
+        assert_eq!(derive_status_from_step("", None, None), None);
+    }
+
+    // ─── derive_status_from_step: status_override takes precedence ───────────
+
+    #[test]
+    fn override_takes_precedence_over_step_kind() {
+        // Even though session.create normally derives Running, override wins
+        assert_eq!(
+            derive_status_from_step("session.create", None, Some("needs_human")),
+            Some(LoopStatus::NeedsHuman)
+        );
+    }
+
+    #[test]
+    fn override_blocked_overrides_round_next_running() {
+        // round.next at max_rounds: step kind is round.next (→ Running) but override says Blocked
+        assert_eq!(
+            derive_status_from_step("round.next", None, Some("blocked")),
+            Some(LoopStatus::Blocked)
+        );
+    }
+
+    #[test]
+    fn override_failed_overrides_any_step() {
+        assert_eq!(
+            derive_status_from_step("handoff.wait", None, Some("failed")),
+            Some(LoopStatus::Failed)
+        );
+    }
+
+    #[test]
+    fn override_cancelled_overrides_any_step() {
+        assert_eq!(
+            derive_status_from_step("gates.run", None, Some("cancelled")),
+            Some(LoopStatus::Cancelled)
+        );
+    }
+
+    #[test]
+    fn none_override_falls_through_to_step_kind() {
+        assert_eq!(
+            derive_status_from_step("handoff.wait", None, None),
+            Some(LoopStatus::Observing)
+        );
+    }
+
+    #[test]
+    fn invalid_override_value_returns_none() {
+        // If someone puts garbage in status_override, parse returns None
+        assert_eq!(
+            derive_status_from_step("session.create", None, Some("invalid_status")),
+            None
+        );
+    }
+
+    // ─── Status derivation guarantees no desync ──────────────────────────────
+
+    /// The critical invariant: for every V1-executable step kind, derivation
+    /// ALWAYS produces a status. There is no path where a V1 step kind returns
+    /// None (which would skip the status write and allow desync).
+    #[test]
+    fn all_v1_step_kinds_produce_a_status() {
+        let v1_kinds = [
+            "session.create",
+            "session.prompt",
+            "handoff.wait",
+            "loop.status",
+            "loop.event",
+            "human.wait",
+            "round.next",
+            "gates.run",
+        ];
+        for kind in &v1_kinds {
+            let result = derive_status_from_step(kind, None, None);
+            assert!(
+                result.is_some(),
+                "step kind '{}' must produce a status but returned None",
+                kind
+            );
+        }
+    }
+
+    /// The derivation is deterministic: same inputs always produce same output.
+    /// This guarantees that repeated saves don't flip-flop the status.
+    #[test]
+    fn derivation_is_deterministic() {
+        for _ in 0..100 {
+            assert_eq!(
+                derive_status_from_step("handoff.wait", None, None),
+                Some(LoopStatus::Observing)
+            );
+            assert_eq!(
+                derive_status_from_step("round.next", None, Some("blocked")),
+                Some(LoopStatus::Blocked)
+            );
+        }
+    }
+
+    /// Override always wins, regardless of step kind. This ensures that when
+    /// an executor sets status_override, the derivation cannot produce a
+    /// different status than what was explicitly declared.
+    #[test]
+    fn override_always_wins_regardless_of_step_kind() {
+        let all_v1_kinds = [
+            "session.create",
+            "session.prompt",
+            "handoff.wait",
+            "loop.status",
+            "loop.event",
+            "human.wait",
+            "round.next",
+            "gates.run",
+        ];
+        for kind in &all_v1_kinds {
+            assert_eq!(
+                derive_status_from_step(kind, None, Some("needs_human")),
+                Some(LoopStatus::NeedsHuman),
+                "override must win for step kind '{}'",
+                kind
+            );
+        }
+    }
 }
