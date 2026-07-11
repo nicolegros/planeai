@@ -62,6 +62,21 @@
   // Aggregate all loops across all projects
   const allLoops = $derived(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)));
 
+  // Loop session data for nesting under parent loops
+  const loopSessionsMap = $derived.by(() => {
+    const map: Record<string, import("../lib/types").LoopSessionItem[]> = {};
+    for (const loop of allLoops) {
+      const items = loopStore.getSessionsForLoop(loop.id);
+      if (items.length > 0) map[loop.id] = items;
+    }
+    return map;
+  });
+
+  // Set of session IDs that belong to a loop (used to exclude from orphan list)
+  const loopSessionIds = $derived(new Set(
+    Object.values(loopSessionsMap).flatMap((items) => items.map((i) => i.session_id))
+  ));
+
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
   let collapsedSections = $state<Record<string, boolean>>({ done: true });
@@ -168,9 +183,9 @@
   // External triggers
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
 
-  // Derive orphan sessions (no task_key or task_key not in loaded tasks)
+  // Derive orphan sessions (no task_key or task_key not in loaded tasks, and not in a loop)
   const allTaskKeys = $derived(new Set(Object.values(tasksByProject).flat().map(t => t.key)));
-  const orphanSessions = $derived(sessions.filter(s => !s.task_key || !allTaskKeys.has(s.task_key)));
+  const orphanSessions = $derived(sessions.filter(s => (!s.task_key || !allTaskKeys.has(s.task_key)) && !loopSessionIds.has(s.id)));
   const orphansByProject = $derived(
     projects.map(p => ({ project: p, sessions: orphanSessions.filter(s => s.project_id === p.id) })).filter(g => g.sessions.length > 0)
   );
@@ -483,7 +498,12 @@
       <LoopGroup
         loops={allLoops}
         {selectedLoopId}
+        loopSessions={loopSessionsMap}
+        {sessions}
+        {activeSessionId}
+        {agentStates}
         onSelectLoop={(id) => onSelectLoop?.(id)}
+        onSelectSession={(id) => { onSelectSession(id); }}
         onStartLoop={(id) => onStartLoop?.(id)}
         onTick={(id) => onTickLoop?.(id)}
         onStop={(id) => onStopLoop?.(id)}

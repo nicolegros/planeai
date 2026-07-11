@@ -222,7 +222,7 @@
           showNewItemModal = true;
         } else if (action.type === "new_project") { showProjectForm = true; }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; }
-        else if (action.type === "jump_to_session") { orchestrator.jumpToSession(action.index); }
+        else if (action.type === "jump_to_session") { loopStore.setActiveLoopId(null); orchestrator.jumpToSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
           if (!sw.isCycling) startCycle(activeSessionId ?? undefined, orchestrator.getSwitchableSessionIds());
@@ -295,8 +295,8 @@
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
       if (!isModRelease) return;
-      if (getCycleState().isCycling) { const target = commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
-      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) orchestrator.selectSession(target); focusTerminal(); }
+      if (getCycleState().isCycling) { const target = commit(); if (target) { loopStore.setActiveLoopId(null); orchestrator.selectSession(target); } focusTerminal(); }
+      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) { loopStore.setActiveLoopId(null); orchestrator.selectSession(target); } focusTerminal(); }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
