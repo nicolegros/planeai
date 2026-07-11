@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { LoopRunDetail } from "../lib/types";
+  import { isActive, canStart, canTick, canStop, statusBadgeColor } from "../lib/loop-status";
   import { loops as loopsApi, git } from "../lib/api";
   import { Button } from "./ui";
   import { showSnackbar } from "../lib/snackbar.svelte";
@@ -98,29 +99,9 @@
     navigator.clipboard.writeText(path);
   }
 
-  function isActive(status: string): boolean {
-    return ["running", "observing", "verifying"].includes(status);
-  }
-
   function shortId(id: string): string {
     return id.slice(0, 8);
   }
-
-  const statusBadgeColors: Record<string, string> = {
-    draft: "bg-t3/20 text-t2",
-    running: "bg-status-running/20 text-status-running",
-    observing: "bg-status-running/20 text-status-running",
-    verifying: "bg-status-running/20 text-status-running",
-    completed_unreviewed: "bg-status-review/20 text-status-review",
-    blocked: "bg-status-exited/20 text-status-exited",
-    needs_human: "bg-status-review/20 text-status-review",
-    stale: "bg-status-exited/20 text-status-exited",
-    failed: "bg-status-exited/20 text-status-exited",
-    cancelled: "bg-status-exited/20 text-status-exited",
-    approved: "bg-status-running/20 text-status-running",
-    merged: "bg-status-idle/20 text-status-idle",
-    cleaned: "bg-status-idle/20 text-status-idle",
-  };
 
   function verifierIcon(status: string) {
     if (status === "passed") return CheckCircle2;
@@ -155,7 +136,7 @@
             Loop {shortId(detail.run.id)}
           {/if}
         </h1>
-        <span class="px-2 py-0.5 rounded-full text-xs font-medium {statusBadgeColors[detail.run.status] ?? 'bg-t3/20 text-t2'}">
+        <span class="px-2 py-0.5 rounded-full text-xs font-medium {statusBadgeColor(detail.run.status)}">
           {detail.run.status}
         </span>
         <span class="text-t3 text-sm">
@@ -172,17 +153,19 @@
           <RefreshCw class="size-3.5 {loading ? 'animate-spin' : ''}" />
           Refresh
         </Button>
-        {#if detail.run.status === "draft"}
+        {#if canStart(detail.run.status)}
           <Button variant="primary" size="sm" onclick={handleStart}>
             <Play class="size-3.5" />
             Start
           </Button>
         {/if}
-        {#if isActive(detail.run.status)}
+        {#if canTick(detail.run.status)}
           <Button variant="ghost" size="sm" onclick={handleTick}>
             <Play class="size-3.5" />
             Tick
           </Button>
+        {/if}
+        {#if canStop(detail.run.status)}
           <Button variant="ghost" size="sm" onclick={handleStop}>
             <Square class="size-3.5" />
             Stop
