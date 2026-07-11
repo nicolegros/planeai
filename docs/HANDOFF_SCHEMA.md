@@ -86,7 +86,7 @@ planeai-cli axi loop handoff path --loop <LOOP_ID> --session <SESSION_ID>
 
 "Active" means the loop is currently in `running`, `observing`, `verifying`, `needs_human`, `blocked`, or `stale` status.
 
-When a `completed` handoff is recorded on a non-terminal loop, the system automatically triggers auto-advance (up to 10 ticks) so the recipe progresses through `handoff.wait` → subsequent steps without requiring a manual tick. Auto-advance stops at `gates.run`, `human.wait`, terminal, or observing states.
+When a `completed` handoff is recorded on a non-terminal loop, the system automatically triggers auto-advance (up to 10 ticks) so the recipe progresses through `handoff.wait` → subsequent steps without requiring a manual tick. Auto-advance stops at `human.wait`, terminal, intervention-required states, or when the current step does not advance (waiting for external input).
 
 For loops in `draft` or terminal states (`completed_unreviewed`, `cancelled`, `approved`,
 `merged`, `cleaned`), the handoff artifact and event are recorded but no loop status
@@ -222,7 +222,6 @@ help[1]:
 ## Scope & Non-Goals (v1)
 
 - No polling or background scheduler (handoffs are push-only, but recording a completed handoff triggers auto-advance through immediately-executable recipe steps)
-- No verifier gate execution triggered by handoffs (auto-advance stops before `gates.run` steps)
 - No retry policy
 - No auto-merge
 - No session kill/stop

@@ -21,7 +21,7 @@ pub fn loop_create(
     start: bool,
 ) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeService;
-    use planeai_core::loop_run::LoopStrategy;
+    use planeai_core::loop_run::{LoopStrategy, LoopTrigger};
     use planeai_core::loop_service::{CreateLoopParams, LoopService};
     use std::collections::BTreeMap;
 
@@ -219,11 +219,7 @@ pub fn loop_create(
 
     // If --start, transition to running and append loop_started event
     if start {
-        if let Err(e) = LoopService::update_loop_status(
-            conn,
-            &loop_run.id,
-            planeai_core::loop_run::LoopStatus::Running,
-        ) {
+        if let Err(e) = LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start) {
             return (emit_error(&e.to_string(), &[]), 1);
         }
         if let Err(e) = LoopService::append_loop_event(
@@ -405,7 +401,7 @@ pub fn loop_observe(conn: &rusqlite::Connection, id: &str, limit: usize) -> (Str
 
 pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeSnapshot;
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
     use planeai_core::loop_service::LoopService;
 
     let mut loop_run = match resolve_loop(conn, id) {
@@ -439,7 +435,7 @@ pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
 
     // If draft, transition to running and append loop_started event
     if loop_run.status == LoopStatus::Draft {
-        if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Running) {
+        if let Err(e) = LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start) {
             return (emit_error(&e.to_string(), &[]), 1);
         }
         if let Err(e) = LoopService::append_loop_event(
@@ -502,7 +498,7 @@ pub fn loop_tick(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
 // ─── Loop Stop ───────────────────────────────────────────────────────────────
 
 pub fn loop_stop(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
     use planeai_core::loop_service::LoopService;
 
     let loop_run = match resolve_loop(conn, id) {
@@ -538,7 +534,7 @@ pub fn loop_stop(conn: &rusqlite::Connection, id: &str) -> (String, i32) {
     }
 
     // Transition to cancelled and append event atomically
-    if let Err(e) = LoopService::update_loop_status(conn, &loop_run.id, LoopStatus::Cancelled) {
+    if let Err(e) = LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Cancel) {
         return (emit_error(&e.to_string(), &[]), 1);
     }
     if let Err(e) =
@@ -726,7 +722,7 @@ pub fn loop_handoff_record(
     cwd: &str,
 ) -> (String, i32) {
     use planeai_core::handoff::{parse_handoff, validate_ids, HandoffStatus};
-    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_run::LoopTrigger;
     use planeai_core::loop_service::LoopService;
 
     let loop_run = match resolve_loop(conn, loop_id_arg) {
@@ -830,37 +826,11 @@ pub fn loop_handoff_record(
         return (render(&fields), 1);
     }
 
-    // Determine loop status transition
-    let is_active = matches!(
-        loop_run.status,
-        LoopStatus::Running
-            | LoopStatus::Observing
-            | LoopStatus::Verifying
-            | LoopStatus::NeedsHuman
-            | LoopStatus::Blocked
-            | LoopStatus::Stale
-    );
+    // Always pass the trigger — the transition table handles state validation
+    // (rejects from Draft/terminal states, no-ops from matching states).
+    let trigger = Some(LoopTrigger::HandoffReceived(handoff.status.clone()));
 
-    let (new_loop_status, state_changed) = if is_active {
-        match handoff.status {
-            HandoffStatus::Completed => {
-                if loop_run.status == LoopStatus::Observing {
-                    // Already observing — no transition needed
-                    (None, false)
-                } else {
-                    // Running, NeedsHuman, Blocked, Stale, Verifying → Observing
-                    (Some(LoopStatus::Observing), true)
-                }
-            }
-            HandoffStatus::Blocked => (Some(LoopStatus::Blocked), true),
-            HandoffStatus::NeedsHuman => (Some(LoopStatus::NeedsHuman), true),
-            HandoffStatus::Failed => (Some(LoopStatus::Failed), true),
-        }
-    } else {
-        (None, false)
-    };
-
-    // Atomically record: artifact + event + session status + loop status
+    // Atomically record: artifact + event + session status + loop transition
     let handoff_json: serde_json::Value = serde_json::to_value(&handoff).unwrap_or_default();
     let session_status = handoff.status.as_str();
 
@@ -879,14 +849,20 @@ pub fn loop_handoff_record(
             content_json: Some(handoff_json),
             handoff_status: session_status.to_string(),
             event_payload,
-            new_loop_status: new_loop_status.clone(),
+            trigger: trigger.clone(),
         },
     ) {
         Ok(r) => r,
         Err(e) => return (emit_error(&e.to_string(), &[]), 1),
     };
 
-    let final_loop_status = new_loop_status.unwrap_or(loop_run.status.clone());
+    // Determine final status for output — re-read from DB since transition_in_tx may have changed it
+    let final_loop_status = LoopService::get_loop(conn, &loop_run.id)
+        .ok()
+        .flatten()
+        .map(|r| r.status)
+        .unwrap_or(loop_run.status.clone());
+    let state_changed = trigger.is_some() && final_loop_status != loop_run.status;
 
     // Build TOON output
     let short_loop = &loop_run.id[..std::cmp::min(8, loop_run.id.len())];
@@ -929,9 +905,11 @@ pub fn loop_handoff_record(
     };
     result_fields.push(field("next_actions", Value::List(next_actions)));
 
-    // Auto-tick: when a completed handoff arrives on a non-terminal loop,
-    // immediately tick the recipe so it advances through wait_for_maker → gates → prompt
-    // without requiring a manual tick from the user.
+    // Auto-advance: when a completed handoff arrives on a non-terminal loop,
+    // advance the recipe through gates → retry → prompt synchronously.
+    // The agent will see the handoff record output only after this function returns,
+    // but any prompts sent by auto_advance (via notify socket / daemon) will be
+    // queued in the PTY buffer and processed by the agent after it reads our output.
     if handoff.status == HandoffStatus::Completed && !final_loop_status.is_executor_terminal() {
         if let Ok(Some(updated_run)) = LoopService::get_loop(conn, &loop_run.id) {
             if let Some(ref policy_json) = updated_run.policy_json {
@@ -940,6 +918,10 @@ pub fn loop_handoff_record(
                 >(policy_json.clone())
                 {
                     crate::recipe_tick::auto_advance(conn, &loop_run.id, &mut snapshot, true);
+
+                    // Save final snapshot state
+                    let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                    let _ = LoopService::update_policy_json(conn, &loop_run.id, &updated_json);
                 }
             }
         }

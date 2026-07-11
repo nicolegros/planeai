@@ -1,7 +1,13 @@
 //! Durable loop data model — domain types for loop runs, sessions, events,
 //! artifacts, and verifier runs.
+//!
+//! Also contains the **transition table** — the declared state machine for loop
+//! status transitions. See [`apply`] for the pure transition function and
+//! [`LoopTrigger`] for the event vocabulary.
 
 use serde::{Deserialize, Serialize};
+
+use crate::handoff::HandoffStatus;
 
 // ─── Loop Status ─────────────────────────────────────────────────────────────
 
@@ -75,6 +81,13 @@ impl LoopStatus {
     /// these statuses are not terminal but the executor is not actively running.
     pub fn is_intervention_required(&self) -> bool {
         matches!(self, Self::Blocked | Self::NeedsHuman | Self::Stale)
+    }
+
+    /// The loop has completed its full lifecycle (approved, merged, cleaned).
+    /// These are past executor-terminal — no further transitions are valid
+    /// except forward through the lifecycle chain.
+    pub fn is_lifecycle_terminal(&self) -> bool {
+        matches!(self, Self::Approved | Self::Merged | Self::Cleaned)
     }
 }
 
@@ -167,4 +180,241 @@ pub struct VerifierRun {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+}
+
+// ─── Transition Table ────────────────────────────────────────────────────────
+
+/// Events that trigger loop status transitions. Callers declare what happened;
+/// the transition table ([`apply`]) decides the resulting state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum LoopTrigger {
+    /// Draft → Running (user starts the loop)
+    Start,
+    /// Any non-terminal → Cancelled
+    Cancel,
+    /// Running → Observing (handoff.wait step, no handoff found yet)
+    HandoffWaiting,
+    /// Observing → Running (handoff.wait step found an existing handoff)
+    HandoffConsumed,
+    /// Active → Observing|Blocked|NeedsHuman|Failed (external handoff record)
+    HandoffReceived(HandoffStatus),
+    /// Running → Verifying (gates.run step started)
+    GatesStarted,
+    /// Verifying → Running (gates.run step completed)
+    GatesCompleted,
+    /// Running → Blocked (max_rounds reached)
+    RoundBlocked,
+    /// Running → NeedsHuman (max_sessions reached)
+    SessionLimitReached,
+    /// Running → Failed (max_ticks exceeded)
+    MaxTicksExceeded,
+    /// Running → NeedsHuman (human.wait step)
+    HumanWaitReached,
+    /// Running → {allow-listed targets} (recipe loop.status step)
+    RecipeSetStatus(LoopStatus),
+    /// CompletedUnreviewed → Approved (human approves)
+    Approve,
+    /// Approved → Merged (PR merged)
+    MarkMerged,
+    /// Merged → Cleaned (worktree cleaned up)
+    MarkCleaned,
+}
+
+impl LoopTrigger {
+    /// Short string name for Display impls and error messages.
+    /// For structured logging/audit, use serde serialization which preserves payloads.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Cancel => "Cancel",
+            Self::HandoffWaiting => "HandoffWaiting",
+            Self::HandoffConsumed => "HandoffConsumed",
+            Self::HandoffReceived(_) => "HandoffReceived",
+            Self::GatesStarted => "GatesStarted",
+            Self::GatesCompleted => "GatesCompleted",
+            Self::RoundBlocked => "RoundBlocked",
+            Self::SessionLimitReached => "SessionLimitReached",
+            Self::MaxTicksExceeded => "MaxTicksExceeded",
+            Self::HumanWaitReached => "HumanWaitReached",
+            Self::RecipeSetStatus(_) => "RecipeSetStatus",
+            Self::Approve => "Approve",
+            Self::MarkMerged => "MarkMerged",
+            Self::MarkCleaned => "MarkCleaned",
+        }
+    }
+}
+
+/// Outcome of applying a trigger to a status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransitionResult {
+    /// Status changed to the contained value.
+    Changed(LoopStatus),
+    /// Trigger was valid but produced no state change (from == to).
+    Unchanged,
+}
+
+/// Error returned when a trigger is not valid from the current status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidTransition {
+    pub from: LoopStatus,
+    pub trigger: LoopTrigger,
+}
+
+impl std::fmt::Display for InvalidTransition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid transition: cannot apply {:?} from status '{}'",
+            self.trigger,
+            self.from.as_str()
+        )
+    }
+}
+
+impl std::error::Error for InvalidTransition {}
+
+/// Pure transition function — the declared state machine for loop status.
+///
+/// Given the current status and a trigger event, returns the new status
+/// (`Changed`), confirms a no-op (`Unchanged`), or rejects the transition
+/// (`InvalidTransition`).
+pub fn apply(
+    from: &LoopStatus,
+    trigger: &LoopTrigger,
+) -> Result<TransitionResult, InvalidTransition> {
+    let reject = || {
+        Err(InvalidTransition {
+            from: from.clone(),
+            trigger: trigger.clone(),
+        })
+    };
+
+    match trigger {
+        LoopTrigger::Start => match from {
+            LoopStatus::Draft => Ok(TransitionResult::Changed(LoopStatus::Running)),
+            _ => reject(),
+        },
+
+        LoopTrigger::Cancel => {
+            // Allowed from any non-terminal state (executor-terminal or lifecycle-terminal)
+            if from.is_executor_terminal() || from.is_lifecycle_terminal() {
+                reject()
+            } else {
+                Ok(TransitionResult::Changed(LoopStatus::Cancelled))
+            }
+        }
+
+        LoopTrigger::HandoffWaiting => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Observing)),
+            LoopStatus::Observing => Ok(TransitionResult::Unchanged),
+            _ => reject(),
+        },
+
+        LoopTrigger::HandoffConsumed => match from {
+            LoopStatus::Observing => Ok(TransitionResult::Changed(LoopStatus::Running)),
+            LoopStatus::Running => Ok(TransitionResult::Unchanged),
+            _ => reject(),
+        },
+
+        LoopTrigger::HandoffReceived(handoff_status) => {
+            // Valid from any "active" state (not terminal, not draft)
+            let is_active = matches!(
+                from,
+                LoopStatus::Running
+                    | LoopStatus::Observing
+                    | LoopStatus::Verifying
+                    | LoopStatus::NeedsHuman
+                    | LoopStatus::Blocked
+                    | LoopStatus::Stale
+            );
+            if !is_active {
+                return reject();
+            }
+            let target = match handoff_status {
+                HandoffStatus::Completed => LoopStatus::Observing,
+                HandoffStatus::Blocked => LoopStatus::Blocked,
+                HandoffStatus::NeedsHuman => LoopStatus::NeedsHuman,
+                HandoffStatus::Failed => LoopStatus::Failed,
+            };
+            if &target == from {
+                Ok(TransitionResult::Unchanged)
+            } else {
+                Ok(TransitionResult::Changed(target))
+            }
+        }
+
+        LoopTrigger::GatesStarted => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Verifying)),
+            _ => reject(),
+        },
+
+        LoopTrigger::GatesCompleted => match from {
+            LoopStatus::Verifying => Ok(TransitionResult::Changed(LoopStatus::Running)),
+            _ => reject(),
+        },
+
+        LoopTrigger::RoundBlocked => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Blocked)),
+            _ => reject(),
+        },
+
+        LoopTrigger::SessionLimitReached => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
+            _ => reject(),
+        },
+
+        LoopTrigger::MaxTicksExceeded => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Failed)),
+            _ => reject(),
+        },
+
+        LoopTrigger::HumanWaitReached => match from {
+            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
+            _ => reject(),
+        },
+
+        LoopTrigger::RecipeSetStatus(target) => {
+            // Only allowed from Running, and only to the allow-listed targets
+            if from != &LoopStatus::Running {
+                return reject();
+            }
+            const ALLOWED: &[LoopStatus] = &[
+                LoopStatus::Observing,
+                LoopStatus::Verifying,
+                LoopStatus::CompletedUnreviewed,
+                LoopStatus::Blocked,
+                LoopStatus::NeedsHuman,
+                LoopStatus::Failed,
+                LoopStatus::Cancelled,
+            ];
+            if ALLOWED.contains(target) {
+                Ok(TransitionResult::Changed(target.clone()))
+            } else {
+                reject()
+            }
+        }
+
+        LoopTrigger::Approve => match from {
+            LoopStatus::CompletedUnreviewed => Ok(TransitionResult::Changed(LoopStatus::Approved)),
+            _ => reject(),
+        },
+
+        LoopTrigger::MarkMerged => match from {
+            LoopStatus::Approved => Ok(TransitionResult::Changed(LoopStatus::Merged)),
+            _ => reject(),
+        },
+
+        LoopTrigger::MarkCleaned => match from {
+            LoopStatus::Merged => Ok(TransitionResult::Changed(LoopStatus::Cleaned)),
+            _ => reject(),
+        },
+    }
+}
+
+/// Returns true if the loop is in a state where ticking (executing a recipe step) is valid.
+pub fn can_tick(status: &LoopStatus) -> bool {
+    matches!(
+        status,
+        LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
+    )
 }

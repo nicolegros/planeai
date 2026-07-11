@@ -30,7 +30,7 @@ fn create_running_loop(conn: &rusqlite::Connection) -> LoopRun {
     )
     .unwrap();
 
-    LoopService::update_loop_status(conn, &run.id, LoopStatus::Running).unwrap();
+    LoopService::transition_loop(conn, &run.id, LoopTrigger::Start).unwrap();
     LoopService::get_loop(conn, &run.id).unwrap().unwrap()
 }
 
@@ -183,7 +183,7 @@ fn handoff_completed_transitions_running_to_observing() {
             content_json: Some(serde_json::to_value(&handoff).unwrap()),
             handoff_status: "completed".into(),
             event_payload: serde_json::json!({"status": "completed", "session_id": session_id}),
-            new_loop_status: Some(LoopStatus::Observing),
+            trigger: Some(LoopTrigger::HandoffReceived(HandoffStatus::Completed)),
         },
     )
     .unwrap();
@@ -204,7 +204,7 @@ fn handoff_blocked_transitions_running_to_blocked() {
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "blocked").unwrap();
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Blocked).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::RoundBlocked).unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::Blocked);
@@ -219,7 +219,7 @@ fn handoff_needs_human_transitions_running_to_needs_human() {
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "needs_human")
         .unwrap();
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::NeedsHuman).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::HumanWaitReached).unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::NeedsHuman);
@@ -233,7 +233,7 @@ fn handoff_failed_transitions_running_to_failed() {
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "failed").unwrap();
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Failed).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::MaxTicksExceeded).unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::Failed);
@@ -276,7 +276,7 @@ fn handoff_completed_does_not_transition_observing_loop() {
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
     // Move loop to observing first
-    LoopService::update_loop_status(&conn, &loop_run.id, LoopStatus::Observing).unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::HandoffWaiting).unwrap();
 
     // Another completed handoff should not change observing → anything
     // (per spec: "If loop is running, set to observing; otherwise leave unchanged")
@@ -309,7 +309,7 @@ fn handoff_artifact_is_persisted_with_correct_fields() {
             content_json: Some(content_json.clone()),
             handoff_status: "completed".into(),
             event_payload: serde_json::json!({"session_id": session_id, "status": "completed"}),
-            new_loop_status: None,
+            trigger: None,
         },
     )
     .unwrap();
@@ -446,7 +446,7 @@ fn record_handoff_atomic_success() {
             content_json: Some(serde_json::json!({"status": "completed"})),
             handoff_status: "completed".to_string(),
             event_payload: serde_json::json!({"status": "completed"}),
-            new_loop_status: Some(LoopStatus::Observing),
+            trigger: Some(LoopTrigger::HandoffReceived(HandoffStatus::Completed)),
         },
     )
     .unwrap();
@@ -489,7 +489,7 @@ fn record_handoff_fails_when_session_not_in_loop() {
             content_json: Some(serde_json::json!({"status": "completed"})),
             handoff_status: "completed".to_string(),
             event_payload: serde_json::json!({"status": "completed"}),
-            new_loop_status: Some(LoopStatus::Observing),
+            trigger: Some(LoopTrigger::HandoffReceived(HandoffStatus::Completed)),
         },
     );
 
@@ -528,7 +528,7 @@ fn record_handoff_does_not_leave_artifact_when_loop_missing() {
             content_json: Some(serde_json::json!({"status": "completed"})),
             handoff_status: "completed".to_string(),
             event_payload: serde_json::json!({"status": "completed"}),
-            new_loop_status: None,
+            trigger: None,
         },
     );
 
@@ -567,7 +567,7 @@ fn record_handoff_without_loop_status_change() {
             content_json: Some(serde_json::json!({"status": "completed"})),
             handoff_status: "completed".to_string(),
             event_payload: serde_json::json!({"status": "completed"}),
-            new_loop_status: None,
+            trigger: None,
         },
     )
     .unwrap();

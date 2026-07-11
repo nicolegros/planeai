@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use planeai_core::loop_recipe_service::RecipeService;
-use planeai_core::loop_run::{LoopRun, LoopStatus, LoopStrategy};
+#[cfg(test)]
+use planeai_core::loop_run::LoopStatus;
+use planeai_core::loop_run::{LoopRun, LoopStrategy, LoopTrigger};
 use planeai_core::loop_service::{CreateLoopParams, LoopService};
 
 use crate::state::DbState;
@@ -276,7 +278,7 @@ pub async fn create_loop_run(
 
         // Optionally start it
         if start {
-            LoopService::update_loop_status(&conn, &run.id, LoopStatus::Running)
+            LoopService::transition_loop(&conn, &run.id, LoopTrigger::Start)
                 .map_err(|e| e.to_string())?;
             LoopService::append_loop_event(
                 &conn,
@@ -401,15 +403,7 @@ pub async fn start_loop(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("loop not found: {loop_id}"))?;
 
-        if run.status != LoopStatus::Draft {
-            return Err(format!(
-                "loop {} is not in draft status (current: '{}')",
-                &loop_id[..8.min(loop_id.len())],
-                run.status.as_str()
-            ));
-        }
-
-        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Running)
+        LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Start)
             .map_err(|e| e.to_string())?;
 
         LoopService::append_loop_event(
@@ -455,19 +449,7 @@ pub async fn stop_loop(
     blocking(move || {
         let conn = conn_arc.lock().map_err(|e| e.to_string())?;
 
-        let run = LoopService::get_loop(&conn, &loop_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("loop not found: {loop_id}"))?;
-
-        if run.status.is_executor_terminal() {
-            return Err(format!(
-                "loop {} is already terminal (status: '{}')",
-                &loop_id[..8.min(loop_id.len())],
-                run.status.as_str()
-            ));
-        }
-
-        LoopService::update_loop_status(&conn, &loop_id, LoopStatus::Cancelled)
+        LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Cancel)
             .map_err(|e| e.to_string())?;
 
         LoopService::append_loop_event(
@@ -775,10 +757,10 @@ mod tests {
         .unwrap();
 
         // Start it
-        LoopService::update_loop_status(&conn, &run.id, LoopStatus::Running).unwrap();
+        LoopService::transition_loop(&conn, &run.id, LoopTrigger::Start).unwrap();
 
         // Stop it
-        LoopService::update_loop_status(&conn, &run.id, LoopStatus::Cancelled).unwrap();
+        LoopService::transition_loop(&conn, &run.id, LoopTrigger::Cancel).unwrap();
         LoopService::append_loop_event(
             &conn,
             &run.id,

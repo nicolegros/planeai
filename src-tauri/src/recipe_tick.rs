@@ -6,7 +6,7 @@
 
 use planeai_core::loop_recipe::*;
 use planeai_core::loop_recipe_service::RecipeSnapshot;
-use planeai_core::loop_run::LoopStatus;
+use planeai_core::loop_run::{LoopStatus, LoopTrigger};
 use planeai_core::loop_service::LoopService;
 use planeai_toon::{field, render, str_val, Field, Value};
 
@@ -105,7 +105,8 @@ pub fn tick_recipe(
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
-        let _ = LoopService::update_loop_status(conn, loop_id, LoopStatus::Failed);
+        let _ = LoopService::transition_loop(conn, loop_id, LoopTrigger::MaxTicksExceeded)
+            .map_err(|e| tracing::error!(loop_id = %short_id(loop_id), error = %e, "failed to transition loop to Failed on max_ticks"));
         let _ = LoopService::append_loop_event(
             conn,
             loop_id,
@@ -222,7 +223,8 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
     if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman).ok();
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::SessionLimitReached)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -540,8 +542,8 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     match found_handoff {
         None => {
-            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Observing)
-                .map_err(|e| format!("failed to update loop status: {e}"))?;
+            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffWaiting)
+                .map_err(|e| format!("failed to transition loop: {e}"))?;
             LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
@@ -570,8 +572,8 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         }
         Some((session_id, handoff_status)) => {
             // Handoff found — set loop back to Running so auto-tick continues
-            LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Running)
-                .map_err(|e| format!("failed to update loop status: {e}"))?;
+            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffConsumed)
+                .map_err(|e| format!("failed to transition loop: {e}"))?;
 
             // Record consumption timestamp so we don't re-consume this handoff in future rounds
             ctx.snapshot.runtime.last_handoff_consumed_at = Some(chrono::Utc::now().to_rfc3339());
@@ -657,8 +659,12 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     let new_status = LoopStatus::parse(status_str)
         .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, new_status.clone())
-        .map_err(|e| format!("failed to update status: {e}"))?;
+    LoopService::transition_loop(
+        ctx.conn,
+        ctx.loop_id,
+        LoopTrigger::RecipeSetStatus(new_status.clone()),
+    )
+    .map_err(|e| format!("failed to transition loop: {e}"))?;
 
     LoopService::append_loop_event(
         ctx.conn,
@@ -720,8 +726,8 @@ fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
-        .map_err(|e| format!("failed to update loop status: {e}"))?;
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -747,8 +753,8 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Blocked)
-            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::RoundBlocked)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -820,21 +826,12 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
     })
 }
 
-fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+fn exec_gates_run_body(
+    ctx: &mut TickContext,
+    step: &RecipeStep,
+) -> Result<(&'static str, Option<String>), String> {
     use planeai_core::verifier::{VerifierLimits, VerifyGateRequest};
 
-    if step.gates.is_empty() {
-        return Err(format!(
-            "step '{}': gates.run requires at least one gate declaration",
-            step.id
-        ));
-    }
-
-    LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::Verifying).ok();
-
-    // Resolve a session to run gates in.
-    // If step.role is specified, use that role's latest session; otherwise fall back to
-    // the last session across all roles.
     let session_id = if let Some(ref role) = step.role {
         ctx.snapshot
             .runtime
@@ -859,7 +856,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             })?
     };
 
-    // Resolve project path for CWD
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
         .map_err(|e| format!("failed to load loop: {e}"))?
         .ok_or_else(|| "loop not found".to_string())?;
@@ -868,15 +864,14 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         .map_err(|e| format!("failed to resolve project: {e}"))?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
 
-    // Resolve session worktree path
     let session = crate::db::get_session(ctx.conn, &session_id)
         .map_err(|e| format!("failed to get session: {e}"))?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
 
-    // Run all gates — stop on first failure
-    let mut overall_status = "pass";
+    let mut overall_status: &str = "pass";
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
+    let mut failed_gate_output_path: Option<String> = None;
     for gate in &step.gates {
         let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
         let request = VerifyGateRequest {
@@ -899,9 +894,9 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                         "fail"
                     };
                     failed_gate_name = gate.name.clone();
-                    // Read the gate output so we can feed it to the retry prompt
                     if let Some(ref path) = result.output_path {
                         failed_gate_output = std::fs::read_to_string(path).ok();
+                        failed_gate_output_path = result.output_path.clone();
                     }
                     break;
                 }
@@ -925,7 +920,6 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         }
     }
 
-    // Map result through on.pass / on.fail / on.error
     let next_step = step
         .on
         .as_ref()
@@ -935,30 +929,27 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let event_kind = if overall_status == "pass" {
         "recipe_step_completed"
     } else {
-        // Store gate failure in last_error for the retry prompt template
         ctx.snapshot.runtime.last_error = Some(if let Some(ref output) = failed_gate_output {
-            const MAX_GATE_OUTPUT: usize = 10_000;
-            let truncated = if output.len() > MAX_GATE_OUTPUT {
-                let suffix = "\n\n… [output truncated]";
+            let path_note = if let Some(ref path) = failed_gate_output_path {
+                format!("\n\nFull output log: {path}\nRead this file for complete details.")
+            } else {
+                String::new()
+            };
+            const MAX_GATE_OUTPUT: usize = 100_000;
+            let display_output = if output.len() > MAX_GATE_OUTPUT {
                 let safe_end = output[..MAX_GATE_OUTPUT]
                     .char_indices()
                     .last()
                     .map(|(i, c)| i + c.len_utf8())
                     .unwrap_or(0);
-                format!(
-                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
-                    failed_gate_name,
-                    overall_status,
-                    &output[..safe_end],
-                    suffix
-                )
+                format!("{}\n\n… [output truncated]", &output[..safe_end])
             } else {
-                format!(
-                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}",
-                    failed_gate_name, overall_status, output
-                )
+                output.clone()
             };
-            truncated
+            format!(
+                "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
+                failed_gate_name, overall_status, display_output, path_note
+            )
         } else {
             format!("Gate '{}' returned '{}'", failed_gate_name, overall_status)
         });
@@ -978,6 +969,27 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
+    Ok((overall_status, next_step))
+}
+
+fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    if step.gates.is_empty() {
+        return Err(format!(
+            "step '{}': gates.run requires at least one gate declaration",
+            step.id
+        ));
+    }
+
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
+
+    let gates_body_result = exec_gates_run_body(ctx, step);
+
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesCompleted)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
+
+    let (overall_status, next_step) = gates_body_result?;
+
     if let Some(ref ns) = next_step {
         ctx.snapshot.runtime.current_step = ns.clone();
     } else if overall_status != "pass" {
@@ -987,8 +999,8 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
             overall_status,
         );
-        LoopService::update_loop_status(ctx.conn, ctx.loop_id, LoopStatus::NeedsHuman)
-            .map_err(|e| format!("failed to update loop status: {e}"))?;
+        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
+            .map_err(|e| format!("failed to transition loop: {e}"))?;
         save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
         return Ok(TickResult {
@@ -1208,14 +1220,12 @@ pub fn auto_advance_with_arc(
             break;
         }
 
-        if is_gates_step(snapshot) {
-            break;
-        }
-
         let conn = match conn_arc.lock() {
             Ok(c) => c,
             Err(_) => break,
         };
+
+        let step_before = snapshot.runtime.current_step.clone();
 
         let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
 
@@ -1226,10 +1236,14 @@ pub fn auto_advance_with_arc(
             break;
         }
 
+        // If the step didn't advance, the loop is waiting for external input.
+        if snapshot.runtime.current_step == step_before {
+            drop(conn);
+            break;
+        }
+
         let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
-            r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
+            r.status.is_executor_terminal() || r.status.is_intervention_required()
         } else {
             false
         };
@@ -1261,9 +1275,7 @@ pub fn auto_advance(
             break;
         }
 
-        if is_gates_step(snapshot) {
-            break;
-        }
+        let step_before = snapshot.runtime.current_step.clone();
 
         let (_output, code) = tick_recipe(conn, loop_id, snapshot);
 
@@ -1274,11 +1286,15 @@ pub fn auto_advance(
             break;
         }
 
+        // If the step didn't advance, the loop is waiting for external input
+        // (e.g., handoff.wait with no handoff available). Stop to avoid
+        // spinning and emitting duplicate events.
+        if snapshot.runtime.current_step == step_before {
+            break;
+        }
+
         if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
-            if r.status.is_executor_terminal()
-                || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
-            {
+            if r.status.is_executor_terminal() || r.status.is_intervention_required() {
                 break;
             }
         }
@@ -1296,16 +1312,6 @@ fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
         .iter()
         .find(|s| &s.id == current)
         .map(|s| s.kind == "human.wait")
-        .unwrap_or(false)
-}
-
-fn is_gates_step(snapshot: &RecipeSnapshot) -> bool {
-    let current = &snapshot.runtime.current_step;
-    snapshot
-        .steps
-        .iter()
-        .find(|s| &s.id == current)
-        .map(|s| s.kind == planeai_core::loop_recipe::STEP_GATES_RUN)
         .unwrap_or(false)
 }
 
@@ -1426,6 +1432,29 @@ mod tests {
             "abc-123",
         );
         assert_eq!(result, "loop=abc-123 recipe=test-recipe");
+    }
+
+    #[test]
+    fn render_prompt_default_filter_with_missing_input() {
+        // This is the pattern used in maker-verifier recipe gate commands:
+        // {{ inputs.gate_command | default('make ci') }}
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+        let template = "{{ inputs.gate_command | default('make ci') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(
+            result, "make ci",
+            "default filter should produce 'make ci' when input is absent"
+        );
+    }
+
+    #[test]
+    fn render_prompt_default_filter_with_present_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("gate_command".to_string(), "cargo test".to_string());
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.gate_command | default('make ci') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "cargo test");
     }
 
     // ─── advance_step tests ──────────────────────────────────────────────────
