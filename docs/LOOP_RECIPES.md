@@ -422,10 +422,8 @@ planeai-cli axi loop create --recipe maker-verifier --goal "Implement pagination
 # → session created, status: observing (waiting for maker handoff)
 
 # After maker runs `planeai-cli axi loop handoff record ...`
-# The handoff record auto-advances through wait_for_maker → run_gates (stops before gates)
-# Manual tick to execute gates:
-planeai-cli axi loop tick <LOOP_ID>
-# → gates: pass, auto-advances through create_verifier → wait_for_verifier → parks at observing
+# Auto-advance: wait_for_maker → run_gates → create_verifier → wait_for_verifier → parks at observing
+# → gates: pass, status: observing (waiting for verifier handoff)
 
 # After verifier runs `planeai-cli axi loop handoff record ...`
 # Auto-advance: wait_for_verifier → completed_unreviewed (terminal)
@@ -500,11 +498,11 @@ The recipe runtime executes **one step per tick**, but multiple ticks are chaine
 Auto-advance stops when:
 
 - A tick returns an error (non-zero code).
-- The loop reaches a terminal, intervention-required, or observing state.
+- The loop reaches a terminal or intervention-required state.
+- The current step did not advance (i.e., the step is waiting for external input, such as `handoff.wait` with no handoff available).
 - The current step is a `human.wait` (requires explicit user action).
-- The current step is a `gates.run` (requires explicit tick to execute).
 
-This means that in practice, creating or starting a loop run will automatically execute through `session.create` → `handoff.wait` (which parks in `observing`), and a completed handoff will trigger advancement through `handoff.wait` → `gates.run` (stopping before gate execution).
+This means that in practice, creating or starting a loop run will automatically execute through `session.create` → `handoff.wait` (which parks in `observing` when no handoff is ready), and a completed handoff will trigger advancement through `handoff.wait` → `gates.run` → subsequent steps without requiring a manual tick.
 
 ### Manual Tick
 
@@ -578,7 +576,7 @@ Runs verifier gate commands declared inline. Each gate has a `name` and `command
     error: needs_human
 ```
 
-Gates execute in order and stop on the first failure. Results are persisted to `verifier_runs`. On failure, the gate's captured output (truncated to 10 KB) is stored in `runtime.last_error` so the retry prompt can include the failure details.
+Gates execute in order and stop on the first failure. The loop transitions to `verifying` while gates are running and back to `running` when they complete (via `GatesStarted` / `GatesCompleted` triggers). Results are persisted to `verifier_runs`. On failure, the gate's captured output (truncated to 100 KB) is stored in `runtime.last_error` so the retry prompt can include the failure details. When the output is truncated, a reference to the full output log file path is appended.
 
 ### `handoff.wait` Acceptance Model
 
@@ -632,7 +630,7 @@ Blocks are removed entirely when the referenced input is absent.
 ## Safety Rules
 
 1. **Bounded execution** — Every recipe must declare `max_ticks` in `policy`. The runner refuses to start unbounded loops.
-2. **Bounded auto-advance** — Auto-advance executes at most 10 ticks per trigger and stops at `gates.run`, `human.wait`, terminal, or observing states. This prevents runaway execution chains.
+2. **Bounded auto-advance** — Auto-advance executes at most 10 ticks per trigger and stops at `human.wait`, terminal, intervention-required states, or when the current step does not advance (waiting for external input). This prevents runaway execution chains.
 3. **Human merge only** — `merge_policy` only accepts `human` in v1. No auto-merge.
 4. **No auto-merge** — Even if all agents agree, a human must approve before changes land on the target branch.
 5. **No arbitrary shell** — Steps cannot execute arbitrary shell commands. The `gates.run` step kind executes only recipe-authored gate commands declared in the YAML — agents cannot inject commands at runtime.
