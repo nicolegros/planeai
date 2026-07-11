@@ -200,6 +200,8 @@ pub enum LoopTrigger {
     HandoffReceived(HandoffStatus),
     /// Running → Verifying (gates.run step started)
     GatesStarted,
+    /// Verifying → Running (gates.run step completed)
+    GatesCompleted,
     /// Running → Blocked (max_rounds reached)
     RoundBlocked,
     /// Running → NeedsHuman (max_sessions reached)
@@ -229,6 +231,7 @@ impl LoopTrigger {
             Self::HandoffConsumed => "HandoffConsumed",
             Self::HandoffReceived(_) => "HandoffReceived",
             Self::GatesStarted => "GatesStarted",
+            Self::GatesCompleted => "GatesCompleted",
             Self::RoundBlocked => "RoundBlocked",
             Self::SessionLimitReached => "SessionLimitReached",
             Self::MaxTicksExceeded => "MaxTicksExceeded",
@@ -342,6 +345,11 @@ pub fn apply(
 
         LoopTrigger::GatesStarted => match from {
             LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Verifying)),
+            _ => reject(),
+        },
+
+        LoopTrigger::GatesCompleted => match from {
+            LoopStatus::Verifying => Ok(TransitionResult::Changed(LoopStatus::Running)),
             _ => reject(),
         },
 

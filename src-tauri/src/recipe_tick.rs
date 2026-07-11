@@ -986,6 +986,9 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
+    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesCompleted)
+        .map_err(|e| format!("failed to transition loop: {e}"))?;
+
     if let Some(ref ns) = next_step {
         ctx.snapshot.runtime.current_step = ns.clone();
     } else if overall_status != "pass" {
