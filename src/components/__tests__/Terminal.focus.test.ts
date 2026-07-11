@@ -23,10 +23,6 @@ function createMockTerminal() {
   };
 }
 
-function createMockFitAddon() {
-  return { fit: vi.fn() };
-}
-
 // ── Extracted focus logic (mirrors Terminal.svelte $effect) ───────────────
 
 interface FocusState {
