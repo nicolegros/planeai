@@ -86,6 +86,10 @@ transition_cases! {
     gates_started_from_running: (LoopStatus::Running, LoopTrigger::GatesStarted) => changed(LoopStatus::Verifying);
     gates_started_from_draft_rejected: (LoopStatus::Draft, LoopTrigger::GatesStarted) => REJECTED;
 
+    // ─── GatesCompleted ──────────────────────────────────────────────────────
+    gates_completed_from_verifying: (LoopStatus::Verifying, LoopTrigger::GatesCompleted) => changed(LoopStatus::Running);
+    gates_completed_from_running_rejected: (LoopStatus::Running, LoopTrigger::GatesCompleted) => REJECTED;
+
     // ─── RoundBlocked ────────────────────────────────────────────────────────
     round_blocked_from_running: (LoopStatus::Running, LoopTrigger::RoundBlocked) => changed(LoopStatus::Blocked);
     round_blocked_from_observing_rejected: (LoopStatus::Observing, LoopTrigger::RoundBlocked) => REJECTED;
@@ -151,6 +155,7 @@ fn terminal_states_reject_all_non_lifecycle_triggers() {
         LoopTrigger::HandoffConsumed,
         LoopTrigger::HandoffReceived(HandoffStatus::Completed),
         LoopTrigger::GatesStarted,
+        LoopTrigger::GatesCompleted,
         LoopTrigger::RoundBlocked,
         LoopTrigger::SessionLimitReached,
         LoopTrigger::MaxTicksExceeded,

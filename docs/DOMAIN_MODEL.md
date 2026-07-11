@@ -265,6 +265,7 @@ Loop status changes are governed by a **declared state machine** (`planeai_core:
 | `HandoffConsumed`    | `observing`            | `running`              |
 | `HandoffReceived(s)` | any active¹            | depends on `s`²        |
 | `GatesStarted`       | `running`              | `verifying`            |
+| `GatesCompleted`     | `verifying`            | `running`              |
 | `RoundBlocked`       | `running`              | `blocked`              |
 | `SessionLimitReached`| `running`              | `needs_human`          |
 | `MaxTicksExceeded`   | `running`              | `failed`               |
