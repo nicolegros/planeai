@@ -1215,10 +1215,6 @@ pub fn auto_advance_with_arc(
             break;
         }
 
-        if is_gates_step(snapshot) {
-            break;
-        }
-
         let conn = match conn_arc.lock() {
             Ok(c) => c,
             Err(_) => break,
@@ -1236,7 +1232,6 @@ pub fn auto_advance_with_arc(
         let should_stop = if let Ok(Some(r)) = LoopService::get_loop(&conn, loop_id) {
             r.status.is_executor_terminal()
                 || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
         } else {
             false
         };
@@ -1268,10 +1263,6 @@ pub fn auto_advance(
             break;
         }
 
-        if is_gates_step(snapshot) {
-            break;
-        }
-
         let (_output, code) = tick_recipe(conn, loop_id, snapshot);
 
         let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
@@ -1284,7 +1275,6 @@ pub fn auto_advance(
         if let Ok(Some(r)) = LoopService::get_loop(conn, loop_id) {
             if r.status.is_executor_terminal()
                 || r.status.is_intervention_required()
-                || r.status == LoopStatus::Observing
             {
                 break;
             }
@@ -1303,16 +1293,6 @@ fn is_human_wait_step(snapshot: &RecipeSnapshot) -> bool {
         .iter()
         .find(|s| &s.id == current)
         .map(|s| s.kind == "human.wait")
-        .unwrap_or(false)
-}
-
-fn is_gates_step(snapshot: &RecipeSnapshot) -> bool {
-    let current = &snapshot.runtime.current_step;
-    snapshot
-        .steps
-        .iter()
-        .find(|s| &s.id == current)
-        .map(|s| s.kind == planeai_core::loop_recipe::STEP_GATES_RUN)
         .unwrap_or(false)
 }
 

@@ -2603,55 +2603,36 @@ fn maker_verifier_next_actions_contain_useful_guidance() {
 
 
 #[test]
-fn auto_advance_after_handoff_continues_past_wait_for_maker_when_handoff_exists() {
-    // Reproduces: after gates fail → prompt maker → maker records handoff →
-    // auto_advance runs increment_round_after_gates (round.next) → wait_for_maker.
-    // The handoff was just recorded so wait_for_maker should find it and continue
-    // to run_gates — NOT break at Observing.
+fn auto_advance_does_not_break_on_gates_or_observing() {
+    // Verify that auto_advance only breaks on terminal/intervention states,
+    // NOT on gates steps or observing status.
     let conn = setup_db();
     let maker_id = "maker-eeeeeeee-2222-3333-4444-555555555555";
 
-    // Set up at increment_round_after_gates (the step BEFORE wait_for_maker)
+    // Set up at wait_for_maker with a handoff ready
     let (loop_id, project_id, _) = setup_maker_verifier_flow(
         &conn,
-        "increment_round_after_gates",
-        1, // round 1 — round.next will bump to 2
+        "wait_for_maker",
+        1,
         Some(maker_id),
         None,
     );
     create_and_link_session(&conn, &loop_id, maker_id, "maker", 1, &project_id);
-
-    // Simulate: the FIRST round's handoff was consumed earlier (sets last_handoff_consumed_at)
-    let first_handoff_time = chrono::Utc::now().to_rfc3339();
-
-    // Small delay so the second handoff has a later timestamp
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Simulate: maker's SECOND handoff was JUST recorded
     insert_handoff(&conn, &loop_id, maker_id, "completed");
 
-    // Load snapshot and set last_handoff_consumed_at to simulate first consumption
     let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
     let mut snapshot: RecipeSnapshot =
         serde_json::from_value(run.policy_json.unwrap()).unwrap();
-    snapshot.runtime.last_handoff_consumed_at = Some(first_handoff_time);
 
-    // Save snapshot with the consumed timestamp
-    let json = serde_json::to_value(&snapshot).unwrap();
-    LoopService::update_policy_json(&conn, &loop_id, &json).unwrap();
+    crate::recipe_tick::auto_advance(&conn, &loop_id, &mut snapshot, false);
 
-    // Run auto_advance (simulating what handoff record does after recording)
-    crate::recipe_tick::auto_advance(&conn, &loop_id, &mut snapshot, true);
-
-    // Assert: auto_advance should have gone through:
-    // 1. increment_round_after_gates (round.next) → wait_for_maker
-    // 2. wait_for_maker (handoff found after first_handoff_time) → run_gates
-    // 3. Break at run_gates (gates step break)
-    assert_eq!(
-        snapshot.runtime.current_step, "run_gates",
-        "auto_advance should continue past wait_for_maker to run_gates when handoff exists. \
-         Got stuck at: {}",
-        snapshot.runtime.current_step
+    // auto_advance should have advanced through the full cycle:
+    // wait_for_maker → run_gates → gates_failed_retry → round.next → wait_for_maker
+    // Then parked at wait_for_maker (no second handoff available).
+    // Key proof: round incremented (went through the cycle, not stuck on first wait).
+    assert!(
+        snapshot.runtime.round >= 2,
+        "should have completed at least one full cycle (round={})",
+        snapshot.runtime.round
     );
-    assert_eq!(snapshot.runtime.round, 2, "round should have incremented");
 }
