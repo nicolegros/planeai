@@ -906,47 +906,22 @@ pub fn loop_handoff_record(
     result_fields.push(field("next_actions", Value::List(next_actions)));
 
     // Auto-advance: when a completed handoff arrives on a non-terminal loop,
-    // spawn a background thread to advance the recipe. This returns immediately
-    // so the agent is free to receive the next prompt (gates → retry → prompt).
-    // The thread opens its own DB connection to avoid blocking the caller.
+    // advance the recipe through gates → retry → prompt synchronously.
+    // The agent will see the handoff record output only after this function returns,
+    // but any prompts sent by auto_advance (via notify socket / daemon) will be
+    // queued in the PTY buffer and processed by the agent after it reads our output.
     if handoff.status == HandoffStatus::Completed && !final_loop_status.is_executor_terminal() {
         if let Ok(Some(updated_run)) = LoopService::get_loop(conn, &loop_run.id) {
             if let Some(ref policy_json) = updated_run.policy_json {
-                if let Ok(snapshot) = serde_json::from_value::<
+                if let Ok(mut snapshot) = serde_json::from_value::<
                     planeai_core::loop_recipe_service::RecipeSnapshot,
                 >(policy_json.clone())
                 {
-                    let loop_id = loop_run.id.clone();
-                    let db_path = planeai_paths::db_path();
-                    let mut snapshot_clone = snapshot;
+                    crate::recipe_tick::auto_advance(conn, &loop_run.id, &mut snapshot, true);
 
-                    std::thread::spawn(move || {
-                        // Small delay to let the CLI return and the agent become idle
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-
-                        let Ok(thread_conn) = rusqlite::Connection::open(&db_path) else {
-                            tracing::error!("auto_advance thread: failed to open DB");
-                            return;
-                        };
-                        // Enable WAL mode for concurrent read/write
-                        let _ = thread_conn.execute_batch("PRAGMA journal_mode=WAL;");
-
-                        crate::recipe_tick::auto_advance(
-                            &thread_conn,
-                            &loop_id,
-                            &mut snapshot_clone,
-                            true,
-                        );
-
-                        // Save final snapshot state
-                        let updated_json =
-                            serde_json::to_value(&snapshot_clone).unwrap_or_default();
-                        let _ = LoopService::update_policy_json(
-                            &thread_conn,
-                            &loop_id,
-                            &updated_json,
-                        );
-                    });
+                    // Save final snapshot state
+                    let updated_json = serde_json::to_value(&snapshot).unwrap_or_default();
+                    let _ = LoopService::update_policy_json(conn, &loop_run.id, &updated_json);
                 }
             }
         }
