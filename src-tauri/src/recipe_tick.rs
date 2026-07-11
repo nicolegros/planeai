@@ -1435,6 +1435,26 @@ mod tests {
         assert_eq!(result, "loop=abc-123 recipe=test-recipe");
     }
 
+    #[test]
+    fn render_prompt_default_filter_with_missing_input() {
+        // This is the pattern used in maker-verifier recipe gate commands:
+        // {{ inputs.gate_command | default('make ci') }}
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+        let template = "{{ inputs.gate_command | default('make ci') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "make ci", "default filter should produce 'make ci' when input is absent");
+    }
+
+    #[test]
+    fn render_prompt_default_filter_with_present_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("gate_command".to_string(), "cargo test".to_string());
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.gate_command | default('make ci') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "cargo test");
+    }
+
     // ─── advance_step tests ──────────────────────────────────────────────────
 
     #[test]
