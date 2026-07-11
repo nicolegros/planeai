@@ -1220,12 +1220,20 @@ pub fn auto_advance_with_arc(
             Err(_) => break,
         };
 
+        let step_before = snapshot.runtime.current_step.clone();
+
         let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
 
         let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
         let _ = LoopService::update_policy_json(&conn, loop_id, &updated_json);
 
         if code != 0 {
+            break;
+        }
+
+        // If the step didn't advance, the loop is waiting for external input.
+        if snapshot.runtime.current_step == step_before {
+            drop(conn);
             break;
         }
 
@@ -1263,12 +1271,21 @@ pub fn auto_advance(
             break;
         }
 
+        let step_before = snapshot.runtime.current_step.clone();
+
         let (_output, code) = tick_recipe(conn, loop_id, snapshot);
 
         let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
         let _ = LoopService::update_policy_json(conn, loop_id, &updated_json);
 
         if code != 0 {
+            break;
+        }
+
+        // If the step didn't advance, the loop is waiting for external input
+        // (e.g., handoff.wait with no handoff available). Stop to avoid
+        // spinning and emitting duplicate events.
+        if snapshot.runtime.current_step == step_before {
             break;
         }
 
