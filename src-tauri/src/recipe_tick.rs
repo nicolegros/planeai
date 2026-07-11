@@ -884,6 +884,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let mut overall_status = "pass";
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
+    let mut failed_gate_output_path: Option<String> = None;
     for gate in &step.gates {
         let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
         let request = VerifyGateRequest {
@@ -909,6 +910,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
                     // Read the gate output so we can feed it to the retry prompt
                     if let Some(ref path) = result.output_path {
                         failed_gate_output = std::fs::read_to_string(path).ok();
+                        failed_gate_output_path = result.output_path.clone();
                     }
                     break;
                 }
@@ -942,30 +944,18 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     let event_kind = if overall_status == "pass" {
         "recipe_step_completed"
     } else {
-        // Store gate failure in last_error for the retry prompt template
+        // Store gate failure in last_error for the retry prompt template.
+        // Include the full log path so the agent can read the complete output.
         ctx.snapshot.runtime.last_error = Some(if let Some(ref output) = failed_gate_output {
-            const MAX_GATE_OUTPUT: usize = 10_000;
-            let truncated = if output.len() > MAX_GATE_OUTPUT {
-                let suffix = "\n\n… [output truncated]";
-                let safe_end = output[..MAX_GATE_OUTPUT]
-                    .char_indices()
-                    .last()
-                    .map(|(i, c)| i + c.len_utf8())
-                    .unwrap_or(0);
-                format!(
-                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
-                    failed_gate_name,
-                    overall_status,
-                    &output[..safe_end],
-                    suffix
-                )
+            let path_note = if let Some(ref path) = failed_gate_output_path {
+                format!("\n\nFull output log: {path}\nRead this file for complete details.")
             } else {
-                format!(
-                    "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}",
-                    failed_gate_name, overall_status, output
-                )
+                String::new()
             };
-            truncated
+            format!(
+                "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
+                failed_gate_name, overall_status, output, path_note
+            )
         } else {
             format!("Gate '{}' returned '{}'", failed_gate_name, overall_status)
         });
