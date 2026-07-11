@@ -952,9 +952,20 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             } else {
                 String::new()
             };
+            const MAX_GATE_OUTPUT: usize = 100_000;
+            let display_output = if output.len() > MAX_GATE_OUTPUT {
+                let safe_end = output[..MAX_GATE_OUTPUT]
+                    .char_indices()
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                format!("{}\n\n… [output truncated]", &output[..safe_end])
+            } else {
+                output.clone()
+            };
             format!(
                 "Gate '{}' failed (exit status: {}).\n\nOutput:\n{}{}",
-                failed_gate_name, overall_status, output, path_note
+                failed_gate_name, overall_status, display_output, path_note
             )
         } else {
             format!("Gate '{}' returned '{}'", failed_gate_name, overall_status)
