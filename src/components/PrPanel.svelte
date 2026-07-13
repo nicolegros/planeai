@@ -23,6 +23,7 @@
 
   let merging = $state(false);
   let sendingFailures = $state(false);
+  let spinning = $state(false);
   let allowedStrategies = $state<string[]>([]);
   let selectedStrategy = $state<string>(localStorage.getItem(STORAGE_KEY) || "squash");
   let wrapperEl = $state<HTMLDivElement | null>(null);
@@ -47,7 +48,7 @@
     () => [
       { key: "o", toggle: () => openUrl(prUrl) },
       { key: "m", toggle: doMerge },
-      { key: "r", toggle: () => { refreshCiChecks(sessionId); refreshPrComments(sessionId); } },
+      { key: "r", toggle: doRefresh },
       { key: "R", toggle: markReady },
       { key: "f", toggle: sendFailuresToAgent },
       { key: "s", toggle: cycleStrategy },
@@ -69,6 +70,12 @@
       allowedStrategies = await pr.getAllowedStrategies(sessionId);
       if (allowedStrategies.length > 0 && !allowedStrategies.includes(selectedStrategy)) selectedStrategy = allowedStrategies[0];
     } catch { allowedStrategies = ["squash", "merge", "rebase"]; }
+  }
+
+  function doRefresh() {
+    spinning = true;
+    refreshCiChecks(sessionId);
+    refreshPrComments(sessionId);
   }
 
   function cycleStrategy() {
@@ -154,7 +161,7 @@
     <div class="py-3 border-b border-border">
       <div class="flex items-center mb-2">
         <span class="text-[10px] font-semibold tracking-[.06em] uppercase text-t3">Checks</span>
-        <button class="ml-auto text-t3 hover:text-t2" onclick={() => { refreshCiChecks(sessionId); refreshPrComments(sessionId); }}><RefreshCw size={11} /></button>
+        <button class="ml-auto text-t3 hover:text-t2" onclick={doRefresh}><RefreshCw size={11} class={spinning ? 'animate-spin-once' : ''} onanimationend={() => { spinning = false; }} /></button>
         <span class="ml-2 font-mono text-[10px] text-status-running">{checks.filter(c => classifyCheck(c) === 'pass').length} passed</span>
       </div>
       <div class="flex flex-col gap-1.5">
