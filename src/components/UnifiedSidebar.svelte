@@ -591,12 +591,15 @@
                 {@const childSessions = loopSessionsMap[loop.id] ?? []}
                 <li>
                   <!-- Loop item (aligned with status section headers) -->
-                  <button
+                  <div
+                    role="button"
+                    tabindex="0"
                     data-nav-index={loopNavIdx}
-                    class="group w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-left transition-colors rounded-lg
+                    class="group w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-left transition-colors rounded-lg cursor-pointer
                       {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                       {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
                     onclick={() => onSelectLoop?.(loop.id)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectLoop?.(loop.id); } }}
                     oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
                     title={loop.goal}
                   >
@@ -624,7 +627,7 @@
                     {#if childSessions.length > 0}
                       {#if loopCollapsed}<ChevronRight class="size-3 ml-auto text-t3 shrink-0" />{:else}<ChevronDown class="size-3 ml-auto text-t3 shrink-0" />{/if}
                     {/if}
-                  </button>
+                  </div>
                   <!-- Indented child sessions -->
                   {#if !loopCollapsed && childSessions.length > 0}
                     <ul class="space-y-0.5 mt-0.5">
