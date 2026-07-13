@@ -146,9 +146,30 @@ pub fn build_session_plan(
     })
 }
 
+/// Check if a git error indicates a worktree conflict.
+fn is_worktree_conflict(e: &str) -> bool {
+    e.contains("already checked out") || e.contains("already used by worktree")
+}
+
+/// Try to reuse an existing worktree where the branch is already checked out.
+fn reuse_existing_worktree(repo: &str, branch: &str, original_err: String) -> Result<String, String> {
+    match git::find_worktree_for_branch(repo, branch) {
+        Some(wt_path) => {
+            tracing::info!(
+                branch = %branch,
+                worktree = %wt_path,
+                "branch already in worktree, reusing"
+            );
+            Ok(wt_path)
+        }
+        None => Err(original_err),
+    }
+}
+
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
     // Resolve working_dir — may differ from plan if branch lives in a worktree
     let effective_working_dir;
+    let mut was_redirected = false;
 
     match &plan.branch_strategy {
         BranchStrategy::Checkout {
@@ -161,22 +182,9 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
                 Ok(()) => {
                     effective_working_dir = plan.working_dir.clone();
                 }
-                Err(e)
-                    if !*new
-                        && (e.contains("already checked out")
-                            || e.contains("already used by worktree")) =>
-                {
-                    // Branch is checked out in another worktree — use that path instead
-                    if let Some(wt_path) = git::find_worktree_for_branch(repo, branch) {
-                        tracing::info!(
-                            branch = %branch,
-                            worktree = %wt_path,
-                            "branch already in worktree, using that path"
-                        );
-                        effective_working_dir = wt_path;
-                    } else {
-                        return Err(e);
-                    }
+                Err(e) if !*new && is_worktree_conflict(&e) => {
+                    effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                    was_redirected = true;
                 }
                 Err(e) => return Err(e),
             }
@@ -191,21 +199,9 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
                 Ok(()) => {
                     effective_working_dir = path.clone();
                 }
-                Err(e)
-                    if e.contains("already checked out")
-                        || e.contains("already used by worktree") =>
-                {
-                    // Branch already in another worktree — use that instead of creating a new one
-                    if let Some(wt_path) = git::find_worktree_for_branch(repo, branch) {
-                        tracing::info!(
-                            branch = %branch,
-                            worktree = %wt_path,
-                            "branch already in worktree, reusing that path"
-                        );
-                        effective_working_dir = wt_path;
-                    } else {
-                        return Err(e);
-                    }
+                Err(e) if is_worktree_conflict(&e) => {
+                    effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                    was_redirected = true;
                 }
                 Err(e) => return Err(e),
             }
@@ -261,7 +257,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         // For redirected sessions (branch already in another worktree), store that path.
         // For worktree-created sessions, store the new worktree path.
         // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
-        if effective_working_dir != plan.working_dir {
+        if was_redirected {
             Some(effective_working_dir.as_str())
         } else {
             match &plan.branch_strategy {
