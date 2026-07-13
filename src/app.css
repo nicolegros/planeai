@@ -320,6 +320,17 @@ diffs-container {
     opacity: 0;
   }
 }
+@keyframes spin-once {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-spin-once {
+  animation: spin-once 400ms ease-in-out;
+}
 
 /* ── Titlebar drag region ── */
 [data-tauri-drag-region] {
