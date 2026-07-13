@@ -81,7 +81,7 @@ async function refreshLoopSessions(runs: LoopRunSummary[]): Promise<void> {
   const newMapping: Record<string, string> = {};
   const newSessions: Record<string, LoopSessionItem[]> = {};
 
-  details.forEach((result, i) => {
+  details.forEach((result, _i) => {
     if (result.status !== "fulfilled") return;
     const detail = result.value;
     newSessions[detail.run.id] = detail.sessions;
