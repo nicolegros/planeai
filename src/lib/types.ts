@@ -92,13 +92,15 @@ export interface JiraTasksResponse {
 
 // ─── Loop types ──────────────────────────────────────────────────────────────
 
+import type { LoopStatusValue } from "./loop-status";
+
 export interface LoopRunSummary {
   id: string;
   project_id: string;
   task_key: string | null;
   strategy: string;
   goal: string;
-  status: string;
+  status: LoopStatusValue;
   current_round: number;
   max_rounds: number;
   created_at: string;

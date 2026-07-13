@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { LoopRunSummary } from "../lib/types";
+  import { isActive, canStart, canTick, canStop, statusColor } from "../lib/loop-status";
   import { ChevronDown, ChevronRight, Square, Play } from "@lucide/svelte";
   import { ContextMenu } from "./ui";
 
@@ -18,32 +19,8 @@
   let collapsed = $state(false);
   let contextMenu = $state<{ x: number; y: number; loop: LoopRunSummary } | null>(null);
 
-  const statusColors: Record<string, string> = {
-    draft: "bg-t3",
-    running: "bg-status-running",
-    observing: "bg-status-running",
-    verifying: "bg-status-running",
-    completed_unreviewed: "bg-status-review",
-    blocked: "bg-status-exited",
-    needs_human: "bg-status-review",
-    stale: "bg-status-exited",
-    failed: "bg-status-exited",
-    cancelled: "bg-status-exited",
-    approved: "bg-status-running",
-    merged: "bg-status-idle",
-    cleaned: "bg-status-idle",
-  };
-
   function shortId(id: string): string {
     return id.slice(0, 8);
-  }
-
-  function statusColor(status: string): string {
-    return statusColors[status] ?? "bg-t3";
-  }
-
-  function isActive(status: string): boolean {
-    return ["running", "observing", "verifying"].includes(status);
   }
 </script>
 
@@ -89,7 +66,7 @@
 
               <!-- Quick actions (show on hover) -->
               <span class="hidden group-hover:flex items-center gap-0.5">
-                {#if loop.status === "draft"}
+                {#if canStart(loop.status)}
                   <button
                     class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1"
                     onclick={(e) => { e.stopPropagation(); onStartLoop(loop.id); }}
@@ -98,7 +75,7 @@
                   >
                     <Play class="size-3" />
                   </button>
-                {:else if isActive(loop.status)}
+                {:else if canTick(loop.status)}
                   <button
                     class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1"
                     onclick={(e) => { e.stopPropagation(); onTick(loop.id); }}
@@ -131,8 +108,8 @@
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
     items={[
-      ...(contextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop(contextMenu!.loop.id) }] : []),
-      ...(isActive(contextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStop(contextMenu!.loop.id) }] : []),
+      ...(canStart(contextMenu.loop.status) ? [{ label: "Start loop", onSelect: () => onStartLoop(contextMenu!.loop.id) }] : []),
+      ...(canStop(contextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStop(contextMenu!.loop.id) }] : []),
       { label: "Delete loop", danger: true, onSelect: () => onDelete(contextMenu!.loop.id) },
     ]}
   />
