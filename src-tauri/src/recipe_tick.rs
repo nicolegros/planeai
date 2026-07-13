@@ -1500,6 +1500,26 @@ mod tests {
         assert_eq!(result, "cargo test");
     }
 
+    #[test]
+    fn render_prompt_with_boolean_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("draft".to_string(), serde_json::Value::Bool(true));
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.draft }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "true");
+    }
+
+    #[test]
+    fn render_prompt_with_number_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert("count".to_string(), serde_json::json!(42));
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.count }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "42");
+    }
+
     // ─── advance_step tests ──────────────────────────────────────────────────
 
     #[test]
