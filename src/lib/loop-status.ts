@@ -31,22 +31,13 @@ export function isActive(s: LoopStatusValue): boolean {
 /** Status indicates the loop has reached an end state. */
 export function isTerminal(s: LoopStatusValue): boolean {
   return (
-    s === "failed" ||
-    s === "cancelled" ||
-    s === "approved" ||
-    s === "merged" ||
-    s === "cleaned"
+    s === "failed" || s === "cancelled" || s === "approved" || s === "merged" || s === "cleaned"
   );
 }
 
 /** Status indicates the loop needs human attention before it can proceed. */
 export function isInterventionRequired(s: LoopStatusValue): boolean {
-  return (
-    s === "blocked" ||
-    s === "needs_human" ||
-    s === "completed_unreviewed" ||
-    s === "stale"
-  );
+  return s === "blocked" || s === "needs_human" || s === "completed_unreviewed" || s === "stale";
 }
 
 // ─── Action guards ───────────────────────────────────────────────────────────

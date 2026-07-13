@@ -34,7 +34,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                               |
 | **Loop recipe**      | A declarative YAML definition (`planeai.loop.recipe.v1`) describing a reusable loop workflow — roles, steps, knowledge, tools, and policy. Discovered from project (`.planeai/loops/`), user (`~/.config/planeai/loops/`), or builtin sources. See `docs/LOOP_RECIPES.md`.                            |
 | **Recipe snapshot**  | A runtime copy of a resolved recipe plus inputs, tick counter, and created session IDs. Stored in `policy_json` on the loop run. The recipe tick runner reads and updates it on each tick.                                                                                                            |
-| **Loop trigger**     | A typed event (`LoopTrigger`) that drives loop status transitions via a declared state machine (`loop_run::apply`). Callers declare what happened (e.g., `Start`, `Cancel`, `HandoffReceived`); the transition table decides the resulting state. Replaces direct status assignment.                   |
+| **Loop trigger**     | A typed event (`LoopTrigger`) that drives loop status transitions via a declared state machine (`loop_run::apply`). Callers declare what happened (e.g., `Start`, `Cancel`, `HandoffReceived`); the transition table decides the resulting state. Replaces direct status assignment.                  |
 
 ## Session lifecycle (v1)
 

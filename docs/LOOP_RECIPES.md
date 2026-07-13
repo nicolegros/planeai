@@ -132,14 +132,14 @@ policy:
   merge_policy: human
 ```
 
-| Field            | Type    | Default | Description                                    |
-| ---------------- | ------- | ------- | ---------------------------------------------- |
-| `max_rounds`     | integer | 3       | Maximum iteration rounds                       |
-| `max_ticks`      | integer | 50      | Hard cap on total steps executed               |
-| `max_sessions`   | integer | 5       | Maximum concurrent agent sessions              |
-| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds   |
-| `merge_policy`   | string  | `human` | Only `human` is supported in v1               |
-| `auto_approve`   | bool    | `true`  | Launch sessions in auto-approve (yolo) mode    |
+| Field            | Type    | Default | Description                                  |
+| ---------------- | ------- | ------- | -------------------------------------------- |
+| `max_rounds`     | integer | 3       | Maximum iteration rounds                     |
+| `max_ticks`      | integer | 50      | Hard cap on total steps executed             |
+| `max_sessions`   | integer | 5       | Maximum concurrent agent sessions            |
+| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds |
+| `merge_policy`   | string  | `human` | Only `human` is supported in v1              |
+| `auto_approve`   | bool    | `true`  | Launch sessions in auto-approve (yolo) mode  |
 
 ### steps
 
@@ -538,7 +538,13 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
     "last_error": null,
     "last_handoff_consumed_at": null
   },
-  "policy": { "max_rounds": 3, "max_ticks": 50, "max_sessions": 5, "merge_policy": "human", "auto_approve": true }
+  "policy": {
+    "max_rounds": 3,
+    "max_ticks": 50,
+    "max_sessions": 5,
+    "merge_policy": "human",
+    "auto_approve": true
+  }
 }
 ```
 

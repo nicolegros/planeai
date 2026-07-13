@@ -257,23 +257,23 @@ Loop status changes are governed by a **declared state machine** (`planeai_core:
 
 **Triggers and their valid transitions:**
 
-| Trigger              | Valid From             | Target Status          |
-| -------------------- | ---------------------- | ---------------------- |
-| `Start`              | `draft`                | `running`              |
-| `Cancel`             | any non-terminal       | `cancelled`            |
-| `HandoffWaiting`     | `running`              | `observing`            |
-| `HandoffConsumed`    | `observing`            | `running`              |
-| `HandoffReceived(s)` | any active¹            | depends on `s`²        |
-| `GatesStarted`       | `running`              | `verifying`            |
-| `GatesCompleted`     | `verifying`            | `running`              |
-| `RoundBlocked`       | `running`              | `blocked`              |
-| `SessionLimitReached`| `running`              | `needs_human`          |
-| `MaxTicksExceeded`   | `running`              | `failed`               |
-| `HumanWaitReached`   | `running`              | `needs_human`          |
-| `RecipeSetStatus(t)` | `running`              | `t` (allow-listed³)    |
-| `Approve`            | `completed_unreviewed` | `approved`             |
-| `MarkMerged`         | `approved`             | `merged`               |
-| `MarkCleaned`        | `merged`               | `cleaned`              |
+| Trigger               | Valid From             | Target Status       |
+| --------------------- | ---------------------- | ------------------- |
+| `Start`               | `draft`                | `running`           |
+| `Cancel`              | any non-terminal       | `cancelled`         |
+| `HandoffWaiting`      | `running`              | `observing`         |
+| `HandoffConsumed`     | `observing`            | `running`           |
+| `HandoffReceived(s)`  | any active¹            | depends on `s`²     |
+| `GatesStarted`        | `running`              | `verifying`         |
+| `GatesCompleted`      | `verifying`            | `running`           |
+| `RoundBlocked`        | `running`              | `blocked`           |
+| `SessionLimitReached` | `running`              | `needs_human`       |
+| `MaxTicksExceeded`    | `running`              | `failed`            |
+| `HumanWaitReached`    | `running`              | `needs_human`       |
+| `RecipeSetStatus(t)`  | `running`              | `t` (allow-listed³) |
+| `Approve`             | `completed_unreviewed` | `approved`          |
+| `MarkMerged`          | `approved`             | `merged`            |
+| `MarkCleaned`         | `merged`               | `cleaned`           |
 
 ¹ Active = `running`, `observing`, `verifying`, `needs_human`, `blocked`, `stale`.
 ² `Completed` → `observing`, `Blocked` → `blocked`, `NeedsHuman` → `needs_human`, `Failed` → `failed`.
@@ -371,10 +371,10 @@ Declarative YAML definitions that describe reusable loop workflows. A recipe spe
 
 **`RecipeSnapshot` sub-types:**
 
-| Type             | Key Fields                                                                                                      |
-| ---------------- | --------------------------------------------------------------------------------------------------------------- |
-| `RecipeRuntime`  | `current_step`, `tick_count`, `round`, `created_session_ids`, `last_error`, `last_handoff_consumed_at`          |
-| `SnapshotPolicy` | `max_rounds`, `max_ticks`, `max_sessions`, `merge_policy`, `auto_approve`                                       |
+| Type             | Key Fields                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `RecipeRuntime`  | `current_step`, `tick_count`, `round`, `created_session_ids`, `last_error`, `last_handoff_consumed_at` |
+| `SnapshotPolicy` | `max_rounds`, `max_ticks`, `max_sessions`, `merge_policy`, `auto_approve`                              |
 
 - `last_handoff_consumed_at` (string, nullable) — RFC 3339 timestamp of the last consumed handoff. Used to ignore stale handoffs from previous rounds when checking `handoff.wait` steps.
 - `auto_approve` (bool, default `true`) — when true, sessions created by the recipe are launched in auto-approve (yolo) mode, enabling autonomous tool use without confirmation prompts.

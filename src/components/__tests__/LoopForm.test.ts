@@ -11,7 +11,12 @@ vi.mock("../../lib/api", () => ({
           description: "Two-agent loop",
           source: "builtin",
           inputs: {
-            goal: { required: true, input_type: "textarea", label: "Goal", description: "What should this loop accomplish?" },
+            goal: {
+              required: true,
+              input_type: "textarea",
+              label: "Goal",
+              description: "What should this loop accomplish?",
+            },
             task_key: { required: false, input_type: "task", label: "Task" },
             base_branch: { required: false, input_type: "branch", label: "Base branch" },
           },
@@ -119,7 +124,9 @@ describe("LoopForm", () => {
     flushSync();
 
     // Fill in the goal textarea (dynamic input)
-    const goalTextarea = target.querySelector<HTMLTextAreaElement>("[data-field='input-goal'] textarea")!;
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
     goalTextarea.value = "Fix the authentication bug";
     goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
@@ -152,7 +159,9 @@ describe("LoopForm", () => {
     flushSync();
 
     // Fill in the required goal
-    const goalTextarea = target.querySelector<HTMLTextAreaElement>("[data-field='input-goal'] textarea")!;
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
     goalTextarea.value = "Draft loop";
     goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
@@ -184,7 +193,9 @@ describe("LoopForm", () => {
     await tick();
     flushSync();
 
-    const goalTextarea = target.querySelector<HTMLTextAreaElement>("[data-field='input-goal'] textarea")!;
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
     goalTextarea.value = "Fix the bug";
     goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
@@ -219,7 +230,9 @@ describe("LoopForm", () => {
     flushSync();
 
     // Fill in goal (the only required field for maker-verifier)
-    const goalTextarea = target.querySelector<HTMLTextAreaElement>("[data-field='input-goal'] textarea")!;
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
     goalTextarea.value = "Some goal";
     goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
@@ -298,7 +311,9 @@ describe("LoopForm", () => {
     flushSync();
 
     // Fill only goal, leave task_key and base_branch empty
-    const goalTextarea = target.querySelector<HTMLTextAreaElement>("[data-field='input-goal'] textarea")!;
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
     goalTextarea.value = "Just the goal";
     goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     flushSync();
