@@ -61,9 +61,10 @@ pub struct RecipeTrigger {
 }
 
 /// Supported input types for recipe inputs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum InputType {
+    #[default]
     Text,
     Textarea,
     Branch,
@@ -71,12 +72,6 @@ pub enum InputType {
     Boolean,
     Select,
     Number,
-}
-
-impl Default for InputType {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
