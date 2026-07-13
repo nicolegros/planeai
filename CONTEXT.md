@@ -267,6 +267,14 @@ Sessions can run in two modes:
 - **Archive** — kills tmux/daemon session, marks session archived. Worktree directory is preserved on disk.
 - **Destroy** — kills tmux/daemon session, runs `git worktree remove --force`, deletes directory, removes from DB.
 
+### Cleanup safety
+
+Session cleanup only deletes worktrees and branches for **loop-managed branches** (those whose name starts with `loop/`). User-created branches (e.g., `feature/my-branch`) are never removed, even if a loop session was pointed at them via a step's `branch` field. This prevents accidental deletion of work that exists independently of a loop.
+
+### Branch redirect
+
+When a `session.create` step specifies an existing branch (via the step's `branch` field) and that branch is already checked out in another worktree, the session creation redirects to the existing worktree path rather than failing. The session records that worktree path for gate execution and agent work, but cleanup will not delete it (see cleanup safety above).
+
 ### Data model
 
 Sessions table has `worktree_path TEXT NULL`. Non-null indicates worktree mode.

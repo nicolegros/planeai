@@ -60,14 +60,33 @@ pub struct RecipeTrigger {
     pub kind: String,
 }
 
+/// Supported input types for recipe inputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InputType {
+    Text,
+    Textarea,
+    Branch,
+    Task,
+    Boolean,
+    Select,
+    Number,
+}
+
+impl Default for InputType {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeInput {
     #[serde(default)]
     pub required: bool,
     /// Input type: text, textarea, branch, task, boolean, select, number.
-    /// Defaults to "text" when not specified.
+    /// Defaults to `InputType::Text` when not specified.
     #[serde(default, rename = "type")]
-    pub input_type: Option<String>,
+    pub input_type: InputType,
     /// Human-readable label for the input field.
     #[serde(default)]
     pub label: Option<String>,
@@ -311,7 +330,7 @@ mod tests {
         "#;
         let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
         assert!(input.required);
-        assert_eq!(input.input_type, Some("select".to_string()));
+        assert_eq!(input.input_type, InputType::Select);
         assert_eq!(input.label, Some("Merge strategy".to_string()));
         assert_eq!(input.description, Some("How to merge the PR".to_string()));
         assert_eq!(
@@ -326,13 +345,13 @@ mod tests {
     }
 
     #[test]
-    fn recipe_input_defaults_type_to_none_for_backwards_compat() {
+    fn recipe_input_defaults_type_to_text() {
         let yaml = r#"
             required: true
         "#;
         let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
         assert!(input.required);
-        assert_eq!(input.input_type, None);
+        assert_eq!(input.input_type, InputType::Text);
         assert_eq!(input.label, None);
         assert_eq!(input.description, None);
         assert_eq!(input.default, None);
@@ -347,7 +366,7 @@ mod tests {
             default: true
         "#;
         let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
-        assert_eq!(input.input_type, Some("boolean".to_string()));
+        assert_eq!(input.input_type, InputType::Boolean);
         assert_eq!(input.default, Some(serde_json::Value::Bool(true)));
     }
 
@@ -359,7 +378,7 @@ mod tests {
             default: 5
         "#;
         let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
-        assert_eq!(input.input_type, Some("number".to_string()));
+        assert_eq!(input.input_type, InputType::Number);
         assert_eq!(input.default, Some(serde_json::json!(5)));
     }
 

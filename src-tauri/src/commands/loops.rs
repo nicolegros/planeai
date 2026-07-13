@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use planeai_core::loop_recipe::{InputType, SelectOption};
 use planeai_core::loop_recipe_service::RecipeService;
 #[cfg(test)]
 use planeai_core::loop_run::LoopStatus;
@@ -114,8 +115,7 @@ pub struct RecipeSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeInputSummary {
     pub required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_type: Option<String>,
+    pub input_type: InputType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,7 +123,7 @@ pub struct RecipeInputSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<planeai_core::loop_recipe::SelectOption>,
+    pub options: Vec<SelectOption>,
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
