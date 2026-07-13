@@ -144,6 +144,9 @@ pub fn loop_create(
                 }
                 m
             };
+            if let Err(e) = RecipeService::validate_inputs(&snapshot_inputs, &dr.recipe.inputs) {
+                return (emit_error(&format!("input validation failed: {e}"), &[]), 1);
+            }
             let snapshot = RecipeService::create_snapshot(dr, snapshot_inputs);
             let max_r = snapshot.policy.max_rounds as i64;
             let json_val = serde_json::to_value(&snapshot).ok();

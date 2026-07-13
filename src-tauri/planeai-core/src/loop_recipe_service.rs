@@ -415,6 +415,63 @@ impl RecipeService {
         }
     }
 
+    /// Validate inputs against recipe input definitions.
+    pub fn validate_inputs(
+        inputs: &BTreeMap<String, serde_json::Value>,
+        recipe_inputs: &BTreeMap<String, RecipeInput>,
+    ) -> Result<(), String> {
+        for (key, def) in recipe_inputs {
+            let value = inputs.get(key);
+
+            // Check required
+            if def.required {
+                match value {
+                    None => return Err(format!("input '{}' is required", key)),
+                    Some(serde_json::Value::String(s)) if s.is_empty() => {
+                        return Err(format!("input '{}' is required", key))
+                    }
+                    Some(serde_json::Value::Null) => {
+                        return Err(format!("input '{}' is required", key))
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check type if value is present
+            if let Some(val) = value {
+                if val.is_null() {
+                    continue;
+                }
+                match def.input_type {
+                    InputType::Boolean => {
+                        if !val.is_boolean() {
+                            return Err(format!("input '{}' must be a boolean", key));
+                        }
+                    }
+                    InputType::Number => {
+                        if !val.is_number() {
+                            return Err(format!("input '{}' must be a number", key));
+                        }
+                    }
+                    InputType::Select => {
+                        if let Some(s) = val.as_str() {
+                            let valid = def.options.iter().any(|o| o.value == s);
+                            if !valid {
+                                return Err(format!(
+                                    "input '{}' has invalid option '{}'",
+                                    key, s
+                                ));
+                            }
+                        }
+                    }
+                    // text, textarea, branch, task: accept any string
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Parse YAML content into a LoopRecipe.
     pub fn parse_yaml(content: &str) -> Result<LoopRecipe, String> {
         serde_yml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))
