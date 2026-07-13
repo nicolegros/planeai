@@ -49,7 +49,8 @@ export async function refreshLoopsForProject(projectId: string): Promise<void> {
   try {
     const runs = await loopsApi.list(projectId);
     loopsByProject = { ...loopsByProject, [projectId]: runs };
-    await refreshLoopSessions(runs);
+    const allRuns = Object.values(loopsByProject).flat();
+    await refreshLoopSessions(allRuns);
   } catch {
     // Silently ignore — project might not exist yet
   }
