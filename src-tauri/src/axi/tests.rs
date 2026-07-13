@@ -506,6 +506,7 @@ fn loop_create_outputs_toon_with_loop_id_and_status() {
         "Implement auth",
         3,
         false,
+        None,
     );
     assert_eq!(code, 0, "output:\n{output}");
     assert!(output.contains("loop:"), "output:\n{output}");
@@ -541,6 +542,7 @@ fn loop_create_with_start_outputs_running_status() {
         "Build feature",
         5,
         true,
+        None,
     );
     assert_eq!(code, 0, "output:\n{output}");
     assert!(output.contains("status: running"), "output:\n{output}");
@@ -565,6 +567,7 @@ fn loop_create_with_session_id_env_stores_parent() {
         "Goal",
         3,
         false,
+        None,
     );
     std::env::remove_var("PLANEAI_SESSION_ID");
 
@@ -614,6 +617,7 @@ fn loop_create_validates_task_key() {
         "Goal",
         3,
         false,
+        None,
     );
     assert_eq!(code, 0, "output:\n{output}");
     assert!(output.contains("task_key: MYA-1"), "output:\n{output}");
@@ -629,6 +633,7 @@ fn loop_create_validates_task_key() {
         "Goal",
         3,
         false,
+        None,
     );
     assert_eq!(code, 1, "output:\n{output}");
     assert!(output.contains("task not found"), "output:\n{output}");
@@ -649,6 +654,7 @@ fn loop_create_rejects_invalid_max_rounds() {
         "Goal",
         0,
         false,
+        None,
     );
     assert_eq!(code, 1, "output:\n{output}");
     assert!(
@@ -673,6 +679,7 @@ fn loop_observe_returns_status_and_events() {
         "Build auth",
         3,
         false,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -711,6 +718,7 @@ fn loop_tick_appends_event_and_returns_state() {
         "Goal",
         3,
         false,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -746,6 +754,7 @@ fn loop_stop_cancels_running_loop() {
         "Goal",
         3,
         true,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -774,6 +783,7 @@ fn loop_stop_is_idempotent_on_terminal_status() {
         "Goal",
         3,
         true,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -801,6 +811,7 @@ fn loop_stop_treats_completed_unreviewed_as_terminal() {
         "Goal",
         3,
         true,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -839,6 +850,7 @@ fn loop_tick_rejects_terminal_status() {
         "Goal",
         3,
         true,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -867,6 +879,7 @@ fn loop_tree_handles_zero_sessions() {
         "Goal",
         3,
         false,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -890,6 +903,7 @@ fn loop_prefix_resolution_works() {
         "Goal",
         3,
         false,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
     let prefix = &loop_id[..8];
@@ -916,6 +930,7 @@ fn loop_tree_shows_sessions_with_children() {
         "Goal",
         3,
         false,
+        None,
     );
     let loop_id = extract_loop_id(&create_output);
 
@@ -1463,6 +1478,7 @@ fn loop_create_with_recipe_stores_snapshot() {
         "Build auth",
         3,
         false,
+        None,
     );
     assert_eq!(code, 0, "output:\n{output}");
 
@@ -1495,6 +1511,7 @@ fn loop_create_strategy_alias_works() {
         "Build feature",
         3,
         false,
+        None,
     );
     assert_eq!(code, 0, "output:\n{output}");
     assert!(
@@ -1523,6 +1540,7 @@ fn recipe_tick_session_create_fails_gracefully_when_backend_unavailable() {
         "Implement feature",
         3,
         false,
+        None,
     );
     assert_eq!(create_code, 0, "create output:\n{create_output}");
 
@@ -1556,6 +1574,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
         kind: STEP_SESSION_PROMPT.into(),
         role: Some("maker".into()),
         prompt: Some("Do the thing".into()),
+        branch: None,
         from: None,
         on: None,
         status: None,
@@ -1635,6 +1654,7 @@ fn recipe_tick_max_ticks_prevents_runaway() {
         "Implement feature",
         3,
         false,
+        None,
     );
     assert_eq!(create_code, 0, "create output:\n{create_output}");
 
@@ -1680,6 +1700,7 @@ fn recipe_tick_round_next_increments_round() {
             kind: STEP_ROUND_NEXT.into(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -1693,6 +1714,7 @@ fn recipe_tick_round_next_increments_round() {
             kind: STEP_LOOP_EVENT.into(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -1782,6 +1804,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
         kind: STEP_ROUND_NEXT.into(),
         role: None,
         prompt: None,
+        branch: None,
         from: None,
         on: None,
         status: None,
@@ -1899,7 +1922,10 @@ fn setup_maker_verifier_flow(
     }
 
     let mut inputs = BTreeMap::new();
-    inputs.insert("goal".to_string(), "Implement the feature".to_string());
+    inputs.insert(
+        "goal".to_string(),
+        serde_json::Value::String("Implement the feature".to_string()),
+    );
 
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
@@ -2093,7 +2119,10 @@ fn setup_maker_verifier_flow_with_path(
         .push(maker_id.to_string());
 
     let mut inputs = BTreeMap::new();
-    inputs.insert("goal".to_string(), "Implement the feature".to_string());
+    inputs.insert(
+        "goal".to_string(),
+        serde_json::Value::String("Implement the feature".to_string()),
+    );
 
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
@@ -2185,8 +2214,10 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
     {
         let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
         let mut snap: RecipeSnapshot = serde_json::from_value(run.policy_json.unwrap()).unwrap();
-        snap.inputs
-            .insert("gate_command".to_string(), "true".to_string());
+        snap.inputs.insert(
+            "gate_command".to_string(),
+            serde_json::Value::String("true".to_string()),
+        );
         let updated_json = serde_json::to_value(&snap).unwrap();
         LoopService::update_policy_json(&conn, &loop_id, &updated_json).unwrap();
     }
@@ -2499,6 +2530,7 @@ fn maker_verifier_first_tick_creates_maker_session_and_loop_sessions_row() {
         "Implement the feature",
         3,
         false,
+        None,
     );
     assert_eq!(create_code, 0, "create output:\n{create_output}");
     let loop_id = extract_loop_id(&create_output);

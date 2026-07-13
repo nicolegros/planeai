@@ -65,7 +65,7 @@ pub struct RecipeSnapshot {
     pub recipe_id: String,
     pub recipe_source: String,
     pub recipe_path: Option<String>,
-    pub inputs: BTreeMap<String, String>,
+    pub inputs: BTreeMap<String, serde_json::Value>,
     pub runtime: RecipeRuntime,
     pub policy: SnapshotPolicy,
     pub roles: BTreeMap<String, RecipeRole>,
@@ -378,7 +378,7 @@ impl RecipeService {
     /// Create a snapshot for storing in policy_json.
     pub fn create_snapshot(
         discovered: &DiscoveredRecipe,
-        inputs: BTreeMap<String, String>,
+        inputs: BTreeMap<String, serde_json::Value>,
     ) -> RecipeSnapshot {
         let recipe = &discovered.recipe;
         let first_step_id = recipe
@@ -626,7 +626,10 @@ mod tests {
             path: None,
         };
         let mut inputs = BTreeMap::new();
-        inputs.insert("goal".to_string(), "implement feature X".to_string());
+        inputs.insert(
+            "goal".to_string(),
+            serde_json::Value::String("implement feature X".to_string()),
+        );
 
         let snapshot = RecipeService::create_snapshot(&discovered, inputs.clone());
         assert_eq!(snapshot.recipe_schema, RECIPE_SCHEMA_V1);

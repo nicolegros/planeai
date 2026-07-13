@@ -270,11 +270,8 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .map_err(|e| format!("failed to resolve project: {e}"))?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
 
-    // 4. Build branch name for the session
+    // 4. Determine worktree usage based on isolation
     let round = ctx.snapshot.runtime.round;
-    let branch_name = format!("loop/{}/{}-r{}", short_id(ctx.loop_id), role_id, round);
-
-    // 5. Create the session via the standard path
     let use_worktree = isolation == "worktree";
     let base_branch = if round > 1 && use_worktree {
         // Worktree-isolated roles (maker) base on their own previous round
@@ -302,7 +299,11 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         maker_branch
     } else {
         // Round 1 worktree role: use configured base_branch from inputs, or None (defaults to main)
-        ctx.snapshot.inputs.get("base_branch").cloned()
+        ctx.snapshot
+            .inputs
+            .get("base_branch")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     };
 
     // Render prompt before session creation so it's baked into the launch command
@@ -312,11 +313,14 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
         .map(|tpl| render_prompt(tpl, ctx.snapshot, ctx.loop_id));
     let has_prompt = rendered_prompt.is_some();
 
+    // Resolve branch: use step.branch (rendered) if present, otherwise generated name
+    let (branch_name, new_branch) = resolve_branch_for_step(step, ctx.snapshot, ctx.loop_id);
+
     let opts = crate::cli::SessionCreateOpts {
         project: project.name.clone(),
         branch: branch_name.clone(),
         name: Some(format!("{} ({})", role_id, short_id(ctx.loop_id))),
-        new_branch: true,
+        new_branch,
         worktree: use_worktree,
         base_branch,
         yolo: ctx.snapshot.policy.auto_approve,
@@ -644,6 +648,7 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
         "observing",
         "verifying",
         "completed_unreviewed",
+        "approved",
         "blocked",
         "needs_human",
         "failed",
@@ -1041,6 +1046,31 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/// Resolve the branch name and whether it's a new branch for a session.create step.
+///
+/// If the step has a `branch` field, render it through the template engine.
+/// If the rendered result is non-empty, use it as-is (existing branch, new_branch=false).
+/// Otherwise, fall back to the loop-generated branch name (new_branch=true).
+fn resolve_branch_for_step(
+    step: &RecipeStep,
+    snapshot: &RecipeSnapshot,
+    loop_id: &str,
+) -> (String, bool) {
+    let role_id = step.role.as_deref().unwrap_or("default");
+    let round = snapshot.runtime.round;
+    let generated = format!("loop/{}/{}-r{}", short_id(loop_id), role_id, round);
+
+    if let Some(ref branch_tpl) = step.branch {
+        let rendered = render_prompt(branch_tpl, snapshot, loop_id);
+        let trimmed = rendered.trim();
+        if !trimmed.is_empty() {
+            return (trimmed.to_string(), false);
+        }
+    }
+
+    (generated, true)
+}
+
 fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep> {
     steps.iter().find(|s| s.id == id)
 }
@@ -1325,7 +1355,7 @@ mod tests {
 
     fn minimal_snapshot(
         steps: Vec<RecipeStep>,
-        inputs: BTreeMap<String, String>,
+        inputs: BTreeMap<String, serde_json::Value>,
     ) -> RecipeSnapshot {
         let first_step = steps.first().map(|s| s.id.clone()).unwrap_or_default();
         RecipeSnapshot {
@@ -1362,6 +1392,7 @@ mod tests {
             kind: kind.to_string(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -1377,7 +1408,10 @@ mod tests {
     #[test]
     fn render_prompt_substitutes_input_variables() {
         let mut inputs = BTreeMap::new();
-        inputs.insert("goal".to_string(), "fix the bug".to_string());
+        inputs.insert(
+            "goal".to_string(),
+            serde_json::Value::String("fix the bug".to_string()),
+        );
         let snapshot = minimal_snapshot(vec![], inputs);
 
         let result = render_prompt("Do this: {{ inputs.goal }}", &snapshot, "loop-123");
@@ -1387,7 +1421,10 @@ mod tests {
     #[test]
     fn render_prompt_compact_syntax() {
         let mut inputs = BTreeMap::new();
-        inputs.insert("goal".to_string(), "ship it".to_string());
+        inputs.insert(
+            "goal".to_string(),
+            serde_json::Value::String("ship it".to_string()),
+        );
         let snapshot = minimal_snapshot(vec![], inputs);
 
         let result = render_prompt("Do: {{inputs.goal}}", &snapshot, "loop-123");
@@ -1405,7 +1442,10 @@ mod tests {
     #[test]
     fn render_prompt_keeps_present_conditional_blocks() {
         let mut inputs = BTreeMap::new();
-        inputs.insert("task_key".to_string(), "PROJ-1".to_string());
+        inputs.insert(
+            "task_key".to_string(),
+            serde_json::Value::String("PROJ-1".to_string()),
+        );
         let snapshot = minimal_snapshot(vec![], inputs);
 
         let template = "{% if inputs.task_key %}key={{ inputs.task_key }}{% endif %}";
@@ -1450,7 +1490,10 @@ mod tests {
     #[test]
     fn render_prompt_default_filter_with_present_input() {
         let mut inputs = BTreeMap::new();
-        inputs.insert("gate_command".to_string(), "cargo test".to_string());
+        inputs.insert(
+            "gate_command".to_string(),
+            serde_json::Value::String("cargo test".to_string()),
+        );
         let snapshot = minimal_snapshot(vec![], inputs);
         let template = "{{ inputs.gate_command | default('make ci') }}";
         let result = render_prompt(template, &snapshot, "loop-1");
@@ -1525,5 +1568,67 @@ mod tests {
     #[test]
     fn short_id_exact_eight() {
         assert_eq!(short_id("12345678"), "12345678");
+    }
+
+    // ─── resolve_branch_for_step tests ───────────────────────────────────────
+
+    #[test]
+    fn resolve_branch_uses_step_branch_when_present() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "branch".to_string(),
+            serde_json::Value::String("feature/my-branch".to_string()),
+        );
+        let snapshot = minimal_snapshot(vec![], inputs);
+
+        let mut step = make_step("create_maker", "session.create");
+        step.branch = Some("{{ inputs.branch }}".to_string());
+
+        let (branch_name, new_branch) = resolve_branch_for_step(&step, &snapshot, "loop-abc12345");
+        assert_eq!(branch_name, "feature/my-branch");
+        assert!(!new_branch, "existing branch should set new_branch=false");
+    }
+
+    #[test]
+    fn resolve_branch_falls_back_to_generated_when_absent() {
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+
+        let mut step = make_step("create_maker", "session.create");
+        step.role = Some("maker".to_string());
+
+        let (branch_name, new_branch) = resolve_branch_for_step(&step, &snapshot, "loop-abc12345");
+        assert_eq!(branch_name, "loop/loop-abc/maker-r1");
+        assert!(new_branch, "generated branch should set new_branch=true");
+    }
+
+    #[test]
+    fn resolve_branch_falls_back_when_rendered_empty() {
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+
+        let mut step = make_step("create_maker", "session.create");
+        step.role = Some("maker".to_string());
+        step.branch = Some("{{ inputs.branch }}".to_string()); // inputs.branch is not set
+
+        let (branch_name, new_branch) = resolve_branch_for_step(&step, &snapshot, "loop-abc12345");
+        // When rendered template is empty, fall back to generated branch
+        assert_eq!(branch_name, "loop/loop-abc/maker-r1");
+        assert!(new_branch);
+    }
+
+    #[test]
+    fn resolve_branch_renders_template_with_runtime_vars() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "branch".to_string(),
+            serde_json::Value::String("fix/round".to_string()),
+        );
+        let snapshot = minimal_snapshot(vec![], inputs);
+
+        let mut step = make_step("create_maker", "session.create");
+        step.branch = Some("{{ inputs.branch }}-{{ runtime.round }}".to_string());
+
+        let (branch_name, new_branch) = resolve_branch_for_step(&step, &snapshot, "loop-abc12345");
+        assert_eq!(branch_name, "fix/round-1");
+        assert!(!new_branch);
     }
 }

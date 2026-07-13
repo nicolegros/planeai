@@ -168,3 +168,34 @@ pub fn detect_default_branch(repo_path: &str) -> Result<String, String> {
 
     Err("could not detect default branch".to_string())
 }
+
+/// Find the worktree path where a given branch is checked out.
+/// Returns None if the branch is not checked out in any worktree.
+pub fn find_worktree_for_branch(repo_path: &str, branch: &str) -> Option<String> {
+    let output = git_cmd()
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut current_path: Option<String> = None;
+
+    for line in stdout.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(path.to_string());
+        } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+            if b == branch {
+                return current_path;
+            }
+        } else if line.is_empty() {
+            current_path = None;
+        }
+    }
+
+    None
+}

@@ -64,6 +64,29 @@ pub struct RecipeTrigger {
 pub struct RecipeInput {
     #[serde(default)]
     pub required: bool,
+    /// Input type: text, textarea, branch, task, boolean, select, number.
+    /// Defaults to "text" when not specified.
+    #[serde(default, rename = "type")]
+    pub input_type: Option<String>,
+    /// Human-readable label for the input field.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Description/help text shown below the input.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Default value. Type depends on `input_type`: string, bool, or number.
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
+    /// Options for `select` type inputs.
+    #[serde(default)]
+    pub options: Vec<SelectOption>,
+}
+
+/// An option for select-type recipe inputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SelectOption {
+    pub value: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -142,6 +165,11 @@ pub struct RecipeStep {
     pub role: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Optional branch override for session.create steps. When present, the session
+    /// checks out this existing branch instead of creating a loop-managed one.
+    /// Supports template rendering (e.g., `{{ inputs.branch }}`).
+    #[serde(default)]
+    pub branch: Option<String>,
     #[serde(default)]
     pub from: Option<String>,
     #[serde(default)]
@@ -268,12 +296,115 @@ mod tests {
     use super::*;
 
     #[test]
+    fn recipe_input_deserializes_with_all_fields() {
+        let yaml = r#"
+            required: true
+            type: select
+            label: "Merge strategy"
+            description: "How to merge the PR"
+            default: "squash"
+            options:
+              - value: squash
+                label: "Squash merge"
+              - value: rebase
+                label: "Rebase"
+        "#;
+        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        assert!(input.required);
+        assert_eq!(input.input_type, Some("select".to_string()));
+        assert_eq!(input.label, Some("Merge strategy".to_string()));
+        assert_eq!(input.description, Some("How to merge the PR".to_string()));
+        assert_eq!(
+            input.default,
+            Some(serde_json::Value::String("squash".to_string()))
+        );
+        assert_eq!(input.options.len(), 2);
+        assert_eq!(input.options[0].value, "squash");
+        assert_eq!(input.options[0].label, "Squash merge");
+        assert_eq!(input.options[1].value, "rebase");
+        assert_eq!(input.options[1].label, "Rebase");
+    }
+
+    #[test]
+    fn recipe_input_defaults_type_to_none_for_backwards_compat() {
+        let yaml = r#"
+            required: true
+        "#;
+        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        assert!(input.required);
+        assert_eq!(input.input_type, None);
+        assert_eq!(input.label, None);
+        assert_eq!(input.description, None);
+        assert_eq!(input.default, None);
+        assert!(input.options.is_empty());
+    }
+
+    #[test]
+    fn recipe_input_boolean_default() {
+        let yaml = r#"
+            type: boolean
+            label: "Draft PR"
+            default: true
+        "#;
+        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(input.input_type, Some("boolean".to_string()));
+        assert_eq!(input.default, Some(serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn recipe_input_number_default() {
+        let yaml = r#"
+            type: number
+            label: "Max retries"
+            default: 5
+        "#;
+        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(input.input_type, Some("number".to_string()));
+        assert_eq!(input.default, Some(serde_json::json!(5)));
+    }
+
+    #[test]
+    fn recipe_inputs_sorted_alphabetically() {
+        let yaml = r#"
+            schema: planeai.loop.recipe.v1
+            id: test
+            name: Test
+            trigger:
+              kind: manual
+            inputs:
+              goal:
+                required: true
+                type: textarea
+              branch:
+                required: true
+                type: branch
+              gate_command:
+                required: false
+                type: text
+            roles:
+              maker:
+                mode: write
+            policy:
+              max_rounds: 3
+            steps:
+              - id: start
+                kind: loop.event
+                event_kind: started
+        "#;
+        let recipe: LoopRecipe = serde_yml::from_str(yaml).unwrap();
+        let keys: Vec<&String> = recipe.inputs.keys().collect();
+        // BTreeMap sorts alphabetically
+        assert_eq!(keys, vec!["branch", "gate_command", "goal"]);
+    }
+
+    #[test]
     fn step_v1_executable() {
         let step = RecipeStep {
             id: "s1".into(),
             kind: STEP_SESSION_CREATE.into(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -293,6 +424,7 @@ mod tests {
             kind: STEP_PR_FEEDBACK_WAIT.into(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -312,6 +444,7 @@ mod tests {
             kind: "totally.unknown".into(),
             role: None,
             prompt: None,
+            branch: None,
             from: None,
             on: None,
             status: None,
@@ -349,5 +482,32 @@ mod tests {
         };
         assert!(!trigger.is_v1_executable());
         assert!(!trigger.is_recognized());
+    }
+
+    #[test]
+    fn step_session_create_with_branch_field() {
+        let yaml = r#"
+            id: create_gatekeeper
+            kind: session.create
+            role: gatekeeper
+            branch: "{{ inputs.branch }}"
+            prompt: "Fix the issues"
+        "#;
+        let step: RecipeStep = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(step.id, "create_gatekeeper");
+        assert_eq!(step.branch, Some("{{ inputs.branch }}".to_string()));
+        assert_eq!(step.role, Some("gatekeeper".to_string()));
+    }
+
+    #[test]
+    fn step_without_branch_field_defaults_to_none() {
+        let yaml = r#"
+            id: create_maker
+            kind: session.create
+            role: maker
+            prompt: "Implement the feature"
+        "#;
+        let step: RecipeStep = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(step.branch, None);
     }
 }

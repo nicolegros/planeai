@@ -75,20 +75,30 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         &ops.kill,
     );
 
-    // Remove worktree if applicable
+    // Remove worktree if applicable — only for loop-managed branches (loop/...)
+    // that the session created. User branches (e.g. pla-238/bdccd0c1) are never
+    // owned by a loop session and must not be deleted.
+    let is_loop_managed_branch = ctx
+        .branch
+        .as_ref()
+        .map(|b| b.starts_with("loop/"))
+        .unwrap_or(false);
+
     if let Some(ref wt_path) = ctx.worktree_path {
-        if let Some(ref project_path) = ctx.project_path {
-            if let Err(e) = (ops.remove_worktree)(project_path, wt_path) {
-                errors.push(format!("worktree remove: {e}"));
+        if is_loop_managed_branch {
+            if let Some(ref project_path) = ctx.project_path {
+                if let Err(e) = (ops.remove_worktree)(project_path, wt_path) {
+                    errors.push(format!("worktree remove: {e}"));
+                }
             }
-        }
-        if let Err(e) = (ops.remove_dir)(wt_path) {
-            errors.push(format!("remove dir: {e}"));
-        }
-        // Delete the branch that was created with the worktree
-        if let (Some(ref project_path), Some(ref branch)) = (&ctx.project_path, &ctx.branch) {
-            if let Err(e) = (ops.delete_branch)(project_path, branch) {
-                errors.push(format!("branch delete: {e}"));
+            if let Err(e) = (ops.remove_dir)(wt_path) {
+                errors.push(format!("remove dir: {e}"));
+            }
+            // Delete the branch that was created with the worktree
+            if let (Some(ref project_path), Some(ref branch)) = (&ctx.project_path, &ctx.branch) {
+                if let Err(e) = (ops.delete_branch)(project_path, branch) {
+                    errors.push(format!("branch delete: {e}"));
+                }
             }
         }
     }
@@ -330,7 +340,7 @@ mod tests {
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
-            branch: Some("test-iv".to_string()),
+            branch: Some("loop/abcd1234/test-iv".to_string()),
             session_id: None,
             tab_count: 1,
         };
@@ -348,7 +358,10 @@ mod tests {
         BR_DELETED.with(|v| {
             assert_eq!(
                 v.borrow().as_slice(),
-                &[("/tmp/myapp".to_string(), "test-iv".to_string())]
+                &[(
+                    "/tmp/myapp".to_string(),
+                    "loop/abcd1234/test-iv".to_string()
+                )]
             );
         });
     }
@@ -369,7 +382,7 @@ mod tests {
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
             project_path: Some("/tmp/myapp".to_string()),
-            branch: Some("feat-x".to_string()),
+            branch: Some("loop/abcd1234/feat-x".to_string()),
             session_id: None,
             tab_count: 1,
         };

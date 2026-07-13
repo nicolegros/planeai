@@ -108,7 +108,7 @@ transition_cases! {
     recipe_set_completed: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed)) => changed(LoopStatus::CompletedUnreviewed);
     recipe_set_cancelled: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::Cancelled)) => changed(LoopStatus::Cancelled);
     recipe_set_running_rejected: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::Running)) => REJECTED;
-    recipe_set_approved_rejected: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::Approved)) => REJECTED;
+    recipe_set_approved_allowed: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::Approved)) => changed(LoopStatus::Approved);
     recipe_set_from_observing_rejected: (LoopStatus::Observing, LoopTrigger::RecipeSetStatus(LoopStatus::Failed)) => REJECTED;
 
     // ─── Post-review lifecycle ───────────────────────────────────────────────
