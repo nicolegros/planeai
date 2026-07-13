@@ -5,9 +5,9 @@
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
-  import { shouldHideProject } from "../lib/sidebar-session-order";
+  import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -15,7 +15,6 @@
   import TaskPanel from "./TaskPanel.svelte";
   import JiraSidebarSection from "./JiraSidebarSection.svelte";
   import AssignJiraDialog from "./AssignJiraDialog.svelte";
-  import LoopGroup from "./LoopGroup.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
@@ -61,6 +60,21 @@
 
   // Aggregate all loops across all projects
   const allLoops = $derived(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)));
+
+  // Loop session data for nesting under parent loops
+  const loopSessionsMap = $derived.by(() => {
+    const map: Record<string, import("../lib/types").LoopSessionItem[]> = {};
+    for (const loop of allLoops) {
+      const items = loopStore.getSessionsForLoop(loop.id);
+      if (items.length > 0) map[loop.id] = items;
+    }
+    return map;
+  });
+
+  // Set of session IDs that belong to a loop (used to exclude from orphan list)
+  const loopSessionIds = $derived(new Set(
+    Object.values(loopSessionsMap).flatMap((items) => items.map((i) => i.session_id))
+  ));
 
   let navRef = $state<HTMLElement | undefined>(undefined);
   let sidebarWidth = $state(getLayoutWidth("sidebar", 266));
@@ -132,6 +146,19 @@
   let contextMenu = $state<{ x: number; y: number; session: Session } | null>(null);
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
   let taskContextMenu = $state<{ x: number; y: number; task: TaskItem; projectPath: string } | null>(null);
+  let loopContextMenu = $state<{ x: number; y: number; loop: import("../lib/types").LoopRunSummary } | null>(null);
+
+  // Loop helpers
+  const loopStatusColors: Record<string, string> = {
+    draft: "bg-t3", running: "bg-status-running", observing: "bg-status-running",
+    verifying: "bg-status-running", completed_unreviewed: "bg-status-review",
+    blocked: "bg-status-exited", needs_human: "bg-status-review", stale: "bg-status-exited",
+    failed: "bg-status-exited", cancelled: "bg-status-exited", approved: "bg-status-running",
+    merged: "bg-status-idle", cleaned: "bg-status-idle",
+  };
+  function loopStatusColor(status: string): string { return loopStatusColors[status] ?? "bg-t3"; }
+  function isLoopActive(status: string): boolean { return ["running", "observing", "verifying"].includes(status); }
+  function shortId(id: string): string { return id.slice(0, 8); }
 
   // Jira task assignment
   let assignTask = $state<TaskItem | null>(null);
@@ -168,14 +195,18 @@
   // External triggers
   let taskPanelRef = $state<TaskPanel | undefined>(undefined);
 
-  // Derive orphan sessions (no task_key or task_key not in loaded tasks)
+  // Derive orphan sessions (no task_key or task_key not in loaded tasks, and not in a loop)
   const allTaskKeys = $derived(new Set(Object.values(tasksByProject).flat().map(t => t.key)));
-  const orphanSessions = $derived(sessions.filter(s => !s.task_key || !allTaskKeys.has(s.task_key)));
+  const orphanSessions = $derived(sessions.filter(s => (!s.task_key || !allTaskKeys.has(s.task_key)) && !loopSessionIds.has(s.id)));
   const orphansByProject = $derived(
     projects.map(p => ({ project: p, sessions: orphanSessions.filter(s => s.project_id === p.id) })).filter(g => g.sessions.length > 0)
   );
 
-  const previewSessionId = $derived(getPreviewId());
+  const previewId = $derived(getPreviewId());
+  /** If previewing a loop dashboard, this is the loop ID; otherwise null */
+  const previewLoopId = $derived(previewId && isLoopId(previewId) ? parseLoopId(previewId) : null);
+  /** If previewing a session (not a loop), this is the session ID; otherwise null */
+  const previewSessionId = $derived(previewId && !isLoopId(previewId) ? previewId : null);
 
   function sessionForTask(key: string): Session | undefined {
     return sessions.find(s => s.task_key === key);
@@ -241,19 +272,32 @@
       const orphans = orphansByProject.find(g => g.project.id === p.id)?.sessions ?? [];
       const tasks = tasksByProject[p.path] ?? [];
       const visibleTaskCount = tasks.filter(t => !(t.status === "done" && getSettings().hide_done_tasks)).length;
-      return !shouldHideProject(orphans.length, visibleTaskCount, !!getSettings().hide_empty_projects);
+      const loopCount = loopStore.getLoopsForProject(p.id).length;
+      return !shouldHideProject(orphans.length, visibleTaskCount, !!getSettings().hide_empty_projects, loopCount);
     })
   );
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "project_header"; project: Project } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
+  type NavItem = { type: "project_header"; project: Project } | { type: "loop"; loop: import("../lib/types").LoopRunSummary } | { type: "loop_session"; session: Session; loopId: string; item: import("../lib/types").LoopSessionItem } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of visibleProjects) {
       const projectKey = `project:${project.id}`;
       result.push({ type: "project_header", project });
       if (isProjectCollapsed(project)) continue;
-      // Orphans first
+      // Loops first (with their child sessions)
+      const projectLoops = loopStore.getLoopsForProject(project.id);
+      for (const loop of projectLoops) {
+        result.push({ type: "loop", loop });
+        const loopKey = `loop:${loop.id}`;
+        if (collapsedSections[loopKey]) continue;
+        const children = loopSessionsMap[loop.id] ?? [];
+        for (const item of children) {
+          const session = sessions.find(s => s.id === item.session_id);
+          if (session) result.push({ type: "loop_session", session, loopId: loop.id, item });
+        }
+      }
+      // Orphans
       const projectOrphans = orphansByProject.find(g => g.project.id === project.id)?.sessions ?? [];
       for (const s of projectOrphans) result.push({ type: "orphan", session: s });
       // Then tasks by status
@@ -282,6 +326,8 @@
     const map = new Map<string, number>();
     flatNav.forEach((item, i) => {
       if (item.type === "project_header") map.set(`project:${item.project.id}`, i);
+      else if (item.type === "loop") map.set(`loop:${item.loop.id}`, i);
+      else if (item.type === "loop_session") map.set(`loop_session:${item.session.id}`, i);
       else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
       else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
       else if (item.type === "task") map.set(`task:${item.task.key}`, i);
@@ -300,12 +346,20 @@
     navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
-  // Auto-focus active session when sessions panel is toggled
+  // Auto-focus active session/loop when sessions panel is toggled
   $effect(() => {
     if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") return;
+    // If viewing a loop dashboard, highlight the loop item
+    if (selectedLoopId) {
+      const idx = flatNavIndex.get(`loop:${selectedLoopId}`);
+      if (idx !== undefined) setSelectedIndex(idx);
+      return;
+    }
     if (!activeSessionId) return;
-    // Try orphan lookup first
-    let idx = flatNavIndex.get(`orphan:${activeSessionId}`);
+    // Try loop_session lookup first
+    let idx = flatNavIndex.get(`loop_session:${activeSessionId}`);
+    // Then orphan lookup
+    if (idx === undefined) idx = flatNavIndex.get(`orphan:${activeSessionId}`);
     // If not found, look up via task_key
     if (idx === undefined) {
       const active = sessions.find(s => s.id === activeSessionId);
@@ -331,6 +385,13 @@
       if (current.type === "project_header") {
         const key = `project:${current.project.id}`;
         if (!collapsedSections[key]) collapsedSections = { ...collapsedSections, [key]: true };
+      } else if (current.type === "loop") {
+        const loopKey = `loop:${current.loop.id}`;
+        if (!collapsedSections[loopKey]) collapsedSections = { ...collapsedSections, [loopKey]: true };
+      } else if (current.type === "loop_session") {
+        // Jump to parent loop
+        const loopIdx = flatNavIndex.get(`loop:${current.loopId}`);
+        if (loopIdx !== undefined) setSelectedIndex(loopIdx);
       } else if (current.type === "status_header") {
         const sectionKey = `${current.projectPath}:${current.status}`;
         if (!collapsedSections[sectionKey]) {
@@ -362,6 +423,9 @@
       if (current.type === "project_header") {
         const key = `project:${current.project.id}`;
         if (collapsedSections[key]) collapsedSections = { ...collapsedSections, [key]: false };
+      } else if (current.type === "loop") {
+        const loopKey = `loop:${current.loop.id}`;
+        if (collapsedSections[loopKey]) collapsedSections = { ...collapsedSections, [loopKey]: false };
       } else if (current.type === "status_header") {
         const sectionKey = `${current.projectPath}:${current.status}`;
         if (collapsedSections[sectionKey]) collapsedSections = { ...collapsedSections, [sectionKey]: false };
@@ -394,6 +458,16 @@
 
     if (current.type === "jira_task") {
       if (action.type === "select") openAssignDialog(current.task);
+      return;
+    }
+
+    if (current.type === "loop") {
+      if (action.type === "select") { onSelectLoop?.(current.loop.id); }
+      return;
+    }
+
+    if (current.type === "loop_session") {
+      if (action.type === "select") { onSelectSession(current.session.id); focusTerminal(); }
       return;
     }
 
@@ -479,17 +553,6 @@
         <button onclick={onAddProject} class="text-xs text-accent hover:underline">Add a project →</button>
       </div>
     {:else}
-      <!-- Loop runs section (above projects) -->
-      <LoopGroup
-        loops={allLoops}
-        {selectedLoopId}
-        onSelectLoop={(id) => onSelectLoop?.(id)}
-        onStartLoop={(id) => onStartLoop?.(id)}
-        onTick={(id) => onTickLoop?.(id)}
-        onStop={(id) => onStopLoop?.(id)}
-        onDelete={(id) => onDeleteLoop?.(id)}
-      />
-
       {#each visibleProjects as project (project.id)}
         {@const projectTasks = tasksByProject[project.path] ?? []}
         {@const statusGroups = groupByStatus(projectTasks)}
@@ -513,6 +576,100 @@
           </button>
 
           {#if !projectCollapsed}
+
+          <!-- Loops at top of project -->
+          {@const projectLoops = loopStore.getLoopsForProject(project.id)}
+          {#if projectLoops.length > 0}
+            <ul class="space-y-0.5 mb-1">
+              {#each projectLoops as loop (loop.id)}
+                {@const loopNavIdx = flatNavIndex.get(`loop:${loop.id}`) ?? -1}
+                {@const isLoopSelected = zone === 'sidebar' && loopNavIdx === getSelectedIndex()}
+                {@const isLoopDashboardActive = loop.id === selectedLoopId}
+                {@const isLoopPreviewing = loop.id === previewLoopId}
+                {@const loopKey = `loop:${loop.id}`}
+                {@const loopCollapsed = collapsedSections[loopKey] ?? false}
+                {@const childSessions = loopSessionsMap[loop.id] ?? []}
+                <li>
+                  <!-- Loop item (aligned with status section headers) -->
+                  <div
+                    role="button"
+                    tabindex="0"
+                    data-nav-index={loopNavIdx}
+                    class="group w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-left transition-colors rounded-lg cursor-pointer
+                      {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                      {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
+                    onclick={() => onSelectLoop?.(loop.id)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectLoop?.(loop.id); } }}
+                    oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
+                    title={loop.goal}
+                  >
+                    <!-- Status dot -->
+                    <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
+                    <!-- Label -->
+                    {#if loop.task_key}
+                      <span class="font-medium text-[12.5px] text-t1 truncate">{loop.task_key}</span>
+                    {:else}
+                      <span class="text-t3 font-mono text-xs truncate">{shortId(loop.id)}</span>
+                    {/if}
+                    <span class="text-t3 text-xs">{loop.strategy}</span>
+                    <!-- Round counter -->
+                    <span class="text-t3 text-xs shrink-0">{loop.current_round}/{loop.max_rounds}</span>
+                    <!-- Quick actions (show on hover) -->
+                    <span class="hidden group-hover:flex items-center gap-0.5">
+                      {#if loop.status === "draft"}
+                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onStartLoop?.(loop.id); }} title="Start" aria-label="Start loop"><Play class="size-3" /></button>
+                      {:else if isLoopActive(loop.status)}
+                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-t1" onclick={(e) => { e.stopPropagation(); onTickLoop?.(loop.id); }} title="Tick" aria-label="Tick loop"><Play class="size-3" /></button>
+                        <button class="p-0.5 rounded hover:bg-panel-hi text-t3 hover:text-status-exited" onclick={(e) => { e.stopPropagation(); onStopLoop?.(loop.id); }} title="Stop" aria-label="Stop loop"><Square class="size-3" /></button>
+                      {/if}
+                    </span>
+                    <!-- Chevron on right -->
+                    {#if childSessions.length > 0}
+                      {#if loopCollapsed}<ChevronRight class="size-3 ml-auto text-t3 shrink-0" />{:else}<ChevronDown class="size-3 ml-auto text-t3 shrink-0" />{/if}
+                    {/if}
+                  </div>
+                  <!-- Indented child sessions -->
+                  {#if !loopCollapsed && childSessions.length > 0}
+                    <ul class="space-y-0.5 mt-0.5">
+                      {#each childSessions as item (item.session_id)}
+                        {@const childSession = sessions.find(s => s.id === item.session_id)}
+                        {#if childSession}
+                          {@const childNavIdx = flatNavIndex.get(`loop_session:${childSession.id}`) ?? -1}
+                          {@const isChildActive = childSession.id === activeSessionId}
+                          {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
+                          {@const isChildPreviewing = childSession.id === previewSessionId}
+                          <li>
+                            <div class="flex items-center gap-1.5">
+                              <span class="w-[2px] self-stretch rounded-full transition-opacity {isChildActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
+                              <button
+                                data-nav-index={childNavIdx}
+                                class="flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2
+                                  {isChildActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                                  {isChildPreviewing ? 'ring-2 ring-accent' : isChildSelected ? 'ring-2 ring-accent' : ''}"
+                                onclick={() => { onSelectSession(childSession.id); focusTerminal(); }}
+                              >
+                                <span class="shrink-0 font-mono text-[10px] text-t3">{item.role}</span>
+                                <span class="truncate font-medium text-t1">{childSession.name || childSession.branch}</span>
+                                <span class="ml-auto shrink-0 flex items-center gap-1.5">
+                                  {#if orchestrator.getReviewReady()[childSession.id]}
+                                    <Lightbulb class="size-3.5 text-status-review animate-pulse" />
+                                  {:else if childSession.status === 'exited'}
+                                    <span class="font-mono text-[9px] text-t3 bg-panel-hi rounded px-[5px] py-[1px]">exited</span>
+                                  {:else if agentStates[childSession.id] === 'Busy'}
+                                    <LoaderCircle class="size-3 animate-spin text-t2" />
+                                  {/if}
+                                </span>
+                              </button>
+                            </div>
+                          </li>
+                        {/if}
+                      {/each}
+                    </ul>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
 
           <!-- Orphan sessions at top -->
           {#if projectOrphans.length > 0}
@@ -735,6 +892,20 @@
             { label: "Delete session", danger: true, onSelect: () => onDeleteSession(linkedSession) },
           ]
         : []),
+    ]}
+  />
+{/if}
+
+<!-- Loop context menu -->
+{#if loopContextMenu}
+  <ContextMenu
+    x={loopContextMenu.x}
+    y={loopContextMenu.y}
+    onClose={() => (loopContextMenu = null)}
+    items={[
+      ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
+      ...(isLoopActive(loopContextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStopLoop?.(loopContextMenu!.loop.id) }] : []),
+      { label: "Delete loop", danger: true, onSelect: () => onDeleteLoop?.(loopContextMenu!.loop.id) },
     ]}
   />
 {/if}
