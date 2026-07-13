@@ -43,10 +43,11 @@
     onTickLoop?: (loopId: string) => void;
     onStopLoop?: (loopId: string) => void;
     onDeleteLoop?: (loopId: string) => void;
+    onDeleteLoopSession?: (session: Session, loopId: string) => void;
     selectedLoopId?: string | null;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, selectedLoopId = null }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, selectedLoopId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -147,6 +148,7 @@
   let projectContextMenu = $state<{ x: number; y: number; project: Project } | null>(null);
   let taskContextMenu = $state<{ x: number; y: number; task: TaskItem; projectPath: string } | null>(null);
   let loopContextMenu = $state<{ x: number; y: number; loop: import("../lib/types").LoopRunSummary } | null>(null);
+  let loopSessionContextMenu = $state<{ x: number; y: number; session: Session; loopId: string } | null>(null);
 
   // Loop helpers
   const loopStatusColors: Record<string, string> = {
@@ -463,11 +465,13 @@
 
     if (current.type === "loop") {
       if (action.type === "select") { onSelectLoop?.(current.loop.id); }
+      else if (action.type === "delete") { onDeleteLoop?.(current.loop.id); }
       return;
     }
 
     if (current.type === "loop_session") {
       if (action.type === "select") { onSelectSession(current.session.id); focusTerminal(); }
+      else if (action.type === "delete") { onDeleteLoopSession?.(current.session, current.loopId); }
       return;
     }
 
@@ -647,6 +651,7 @@
                                   {isChildActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
                                   {isChildPreviewing ? 'ring-2 ring-accent' : isChildSelected ? 'ring-2 ring-accent' : ''}"
                                 onclick={() => { onSelectSession(childSession.id); focusTerminal(); }}
+                                oncontextmenu={(e) => { e.preventDefault(); loopSessionContextMenu = { x: e.clientX, y: e.clientY, session: childSession, loopId: loop.id }; }}
                               >
                                 <span class="shrink-0 font-mono text-[10px] text-t3">{item.role}</span>
                                 <span class="truncate font-medium text-t1">{childSession.name || childSession.branch}</span>
@@ -906,6 +911,19 @@
       ...(loopContextMenu.loop.status === "draft" ? [{ label: "Start loop", onSelect: () => onStartLoop?.(loopContextMenu!.loop.id) }] : []),
       ...(isLoopActive(loopContextMenu.loop.status) ? [{ label: "Stop loop", onSelect: () => onStopLoop?.(loopContextMenu!.loop.id) }] : []),
       { label: "Delete loop", danger: true, onSelect: () => onDeleteLoop?.(loopContextMenu!.loop.id) },
+    ]}
+  />
+{/if}
+
+<!-- Loop session context menu -->
+{#if loopSessionContextMenu}
+  <ContextMenu
+    x={loopSessionContextMenu.x}
+    y={loopSessionContextMenu.y}
+    onClose={() => (loopSessionContextMenu = null)}
+    items={[
+      { label: "Review", onSelect: () => { onSelectSession(loopSessionContextMenu!.session.id); orchestrator.toggleDiff(); } },
+      { label: "Delete", danger: true, onSelect: () => { onDeleteLoopSession?.(loopSessionContextMenu!.session, loopSessionContextMenu!.loopId); loopSessionContextMenu = null; } },
     ]}
   />
 {/if}
