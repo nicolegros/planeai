@@ -14,7 +14,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Yolo mode**        | A per-session toggle that appends the provider's `yolo_flag` to the launch command, enabling auto-approval of tool use. Disabled if the provider has no `yolo_flag`.                                                                                                                                  |
 | **Focus zone**       | A region of the UI that can receive keyboard input: sidebar or terminal. App-level chords (Cmd/Ctrl+B, Cmd/Ctrl+N, Cmd/Ctrl+Shift+P, Cmd/Ctrl+1-9, Ctrl+Tab, Escape) are always intercepted regardless of which zone has focus.                                                                       |
 | **Form keyboard**    | A vim-like normal/insert mode controller (`createFormKeyboardController`) used by modal forms (PR form, PR panel). Normal mode maps single-key mnemonics to field focus or toggle actions. Insert mode is entered on text field focus; Escape returns to normal; Escape in normal dismisses the form. |
-| **Tab switcher**     | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms.                                                                                                                                                                                           |
+| **Tab switcher**     | An MRU overlay triggered by holding Ctrl+Tab. Each subsequent Tab moves selection; releasing Ctrl confirms. Includes both sessions and active loop dashboards (`loop:<id>` entries).                                                                                                                  |
 | **Notification**     | (future) A signal that an agent needs human attention.                                                                                                                                                                                                                                                |
 | **Token**            | A semantic CSS custom property defined in the active theme file (e.g., `--color-surface-200`, `--terminal-background`). Mapped to Tailwind utilities via `@theme` block in `app.css`.                                                                                                                 |
 | **Primitive**        | A reusable styled Svelte component in `src/components/ui/` that wraps bits-ui behavior (for complex interactives) or provides app-specific defaults (Button, Input). The building block for feature components.                                                                                       |
@@ -309,15 +309,15 @@ The loop system (CLI-based via `planeai-cli axi loop ...`) has a corresponding U
 
 ### Entry points
 
-- **Sidebar**: `LoopGroup` section renders above projects. Shows all loops across projects with status dots, round counters, and quick action buttons (tick, stop).
-- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal), verifier runs (pass/fail with expandable inline output), artifacts (copyable path, open in editor), and recent events timeline.
+- **Sidebar**: Loops render inside each project (above orphan sessions and tasks). Each loop shows a status dot, strategy label, round counter, and hover-revealed quick action buttons (start, tick, stop). Loop sessions are nested as collapsible children under their parent loop — they do not appear as orphans. Loops also participate in the MRU tab switcher (Ctrl+Tab) and session navigation (next/prev) as `loop:<id>` entries.
+- **Dashboard**: Selecting a loop in the sidebar shows `LoopDashboard` in the main content area. Displays goal, status, sessions table (clickable to open terminal, with index numbers), verifier runs (pass/fail with expandable inline output), artifacts (copyable path, open in editor), and recent events timeline. Keyboard shortcuts: `R` refresh, `S` start (draft only), `T` tick (active loops), `X` stop (active loops), `1`–`9` open session by index.
 - **Create form**: `Cmd+N` → `l` opens `LoopForm` — project picker (when multiple projects), goal, recipe picker, task link, base branch, max rounds, draft checkbox. Keyboard-driven (p=project, g=goal, r=recipe, t=task, b=base branch, m=max rounds, d=toggle draft, Mod+Enter=submit, Esc=cancel).
 - **Actions**: Refresh, Tick (fire-and-forget), Stop from the dashboard. Quick tick/stop from sidebar hover.
 
 ### State management
 
-- `src/lib/loop-store.svelte.ts` — reactive store with `refreshAllLoops()`, `setActiveLoopId()`, and `startLoopEventListener()`.
-- Backend emits `loop-state-changed` Tauri event on mutations (create, tick, stop). Frontend listens and auto-refreshes.
+- `src/lib/loop-store.svelte.ts` — reactive store with `refreshAllLoops()`, `setActiveLoopId()`, `getSessionsForLoop()`, `getLoopIdForSession()`, and `startLoopEventListener()`. Eagerly fetches detail for non-draft loops to maintain session-to-loop mappings.
+- Backend emits `loop-state-changed` Tauri event on mutations (create, tick, stop). Frontend also listens to `sessions-changed` and `agent-state-change` (debounced 2 s) to catch auto-advance ticks triggered by agent handoffs.
 
 ### Backend commands
 
