@@ -126,6 +126,68 @@ pub struct RecipeInputSummary {
     pub options: Vec<SelectOption>,
 }
 
+// ─── Validation ──────────────────────────────────────────────────────────────
+
+use planeai_core::loop_recipe::RecipeInput;
+
+/// Validate inputs against recipe input definitions.
+/// Returns Ok(()) or Err with a description of what's wrong.
+fn validate_recipe_inputs(
+    inputs: &std::collections::BTreeMap<String, serde_json::Value>,
+    recipe_inputs: &std::collections::BTreeMap<String, RecipeInput>,
+) -> Result<(), String> {
+    for (key, def) in recipe_inputs {
+        let value = inputs.get(key);
+
+        // Check required
+        if def.required {
+            match value {
+                None => return Err(format!("input '{}' is required", key)),
+                Some(serde_json::Value::String(s)) if s.is_empty() => {
+                    return Err(format!("input '{}' is required", key))
+                }
+                Some(serde_json::Value::Null) => {
+                    return Err(format!("input '{}' is required", key))
+                }
+                _ => {}
+            }
+        }
+
+        // Check type if value is present
+        if let Some(val) = value {
+            if val.is_null() {
+                continue;
+            }
+            match def.input_type {
+                InputType::Boolean => {
+                    if !val.is_boolean() {
+                        return Err(format!("input '{}' must be a boolean", key));
+                    }
+                }
+                InputType::Number => {
+                    if !val.is_number() {
+                        return Err(format!("input '{}' must be a number", key));
+                    }
+                }
+                InputType::Select => {
+                    if let Some(s) = val.as_str() {
+                        let valid = def.options.iter().any(|o| o.value == s);
+                        if !valid {
+                            return Err(format!(
+                                "input '{}' has invalid option '{}'",
+                                key, s
+                            ));
+                        }
+                    }
+                }
+                // text, textarea, branch, task: accept any string
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -285,6 +347,10 @@ pub async fn create_loop_run(
             Some(_) => return Err("inputs must be a JSON object".to_string()),
             None => std::collections::BTreeMap::new(),
         };
+
+        // Validate inputs against recipe definitions
+        validate_recipe_inputs(&inputs_map, &discovered.recipe.inputs)
+            .map_err(|e| format!("input validation failed: {e}"))?;
 
         // Extract goal and task_key by convention
         let goal = inputs_map

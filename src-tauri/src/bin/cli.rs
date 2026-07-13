@@ -1163,6 +1163,83 @@ fn run_axi_project(conn: &rusqlite::Connection, action: AxiProjectAction) -> i32
     code
 }
 
+/// Merge inputs from all CLI sources with precedence: JSON blob < key=value pairs < legacy flags.
+///
+/// Returns the merged input map on success, or `(error_output, exit_code)` on parse errors.
+/// Emits a deprecation warning to stderr when legacy flags are used.
+fn merge_cli_inputs(
+    inputs_json: &Option<String>,
+    input_kv: &[String],
+    goal: String,
+    task: &Option<String>,
+    base_branch: &Option<String>,
+) -> Result<std::collections::BTreeMap<String, serde_json::Value>, (String, i32)> {
+    let mut merged: std::collections::BTreeMap<String, serde_json::Value> =
+        std::collections::BTreeMap::new();
+
+    // Layer 1: --inputs JSON (lowest precedence)
+    if let Some(json_str) = inputs_json {
+        match serde_json::from_str::<serde_json::Value>(json_str) {
+            Ok(serde_json::Value::Object(map)) => {
+                for (k, v) in map {
+                    merged.insert(k, v);
+                }
+            }
+            Ok(_) => {
+                let output = planeai_toon::render(&[planeai_toon::field(
+                    "error",
+                    planeai_toon::str_val("--inputs must be a JSON object"),
+                )]);
+                return Err((output, 1));
+            }
+            Err(e) => {
+                let output = planeai_toon::render(&[planeai_toon::field(
+                    "error",
+                    planeai_toon::str_val(&format!("--inputs: invalid JSON: {e}")),
+                )]);
+                return Err((output, 1));
+            }
+        }
+    }
+
+    // Layer 2: --input key=value pairs
+    for kv in input_kv {
+        if let Some((key, val)) = kv.split_once('=') {
+            merged.insert(key.to_string(), serde_json::Value::String(val.to_string()));
+        } else {
+            let output = planeai_toon::render(&[planeai_toon::field(
+                "error",
+                planeai_toon::str_val(&format!("--input must be key=value, got: {kv}")),
+            )]);
+            return Err((output, 1));
+        }
+    }
+
+    // Layer 3: Legacy flags (highest precedence for backwards compat)
+    let legacy_flag_used = !goal.is_empty() || task.is_some() || base_branch.is_some();
+    if !goal.is_empty() {
+        merged.insert("goal".to_string(), serde_json::Value::String(goal));
+    }
+    if let Some(tk) = task {
+        merged.insert(
+            "task_key".to_string(),
+            serde_json::Value::String(tk.clone()),
+        );
+    }
+    if let Some(bb) = base_branch {
+        merged.insert(
+            "base_branch".to_string(),
+            serde_json::Value::String(bb.clone()),
+        );
+    }
+
+    if legacy_flag_used {
+        eprintln!("warning: --goal, --task, and --base-branch are deprecated. Use --input key=value instead.");
+    }
+
+    Ok(merged)
+}
+
 fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -> i32 {
     let (output, code) = match action {
         AxiLoopAction::Create {
@@ -1177,60 +1254,11 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             input_kv,
             inputs_json,
         } => {
-            // Merge inputs from all sources (lowest to highest precedence):
-            // 1. --inputs JSON blob
-            // 2. --input key=value pairs
-            // 3. Legacy flags: --goal, --task, --base-branch (highest precedence for backwards compat)
-            let mut merged: std::collections::BTreeMap<String, serde_json::Value> =
-                std::collections::BTreeMap::new();
-
-            // Layer 1: --inputs JSON
-            if let Some(ref json_str) = inputs_json {
-                match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(serde_json::Value::Object(map)) => {
-                        for (k, v) in map {
-                            merged.insert(k, v);
-                        }
-                    }
-                    Ok(_) => {
-                        return emit_axi_error("--inputs must be a JSON object");
-                    }
-                    Err(e) => {
-                        return emit_axi_error(&format!("--inputs: invalid JSON: {e}"));
-                    }
-                }
-            }
-
-            // Layer 2: --input key=value pairs
-            for kv in &input_kv {
-                if let Some((key, val)) = kv.split_once('=') {
-                    merged.insert(key.to_string(), serde_json::Value::String(val.to_string()));
-                } else {
-                    return emit_axi_error(&format!("--input must be key=value, got: {kv}"));
-                }
-            }
-
-            // Layer 3: Legacy flags (highest precedence for backwards compat)
-            let legacy_flag_used = !goal.is_empty() || task.is_some() || base_branch.is_some();
-            if !goal.is_empty() {
-                merged.insert("goal".to_string(), serde_json::Value::String(goal));
-            }
-            if let Some(ref tk) = task {
-                merged.insert(
-                    "task_key".to_string(),
-                    serde_json::Value::String(tk.clone()),
-                );
-            }
-            if let Some(ref bb) = base_branch {
-                merged.insert(
-                    "base_branch".to_string(),
-                    serde_json::Value::String(bb.clone()),
-                );
-            }
-
-            if legacy_flag_used {
-                eprintln!("warning: --goal, --task, and --base-branch are deprecated. Use --input key=value instead.");
-            }
+            let merged = match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch)
+            {
+                Ok(m) => m,
+                Err((output, code)) => return { print!("{output}"); code },
+            };
 
             // Extract goal from merged inputs (required)
             let final_goal = match merged.get("goal").and_then(|v| v.as_str()) {

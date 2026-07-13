@@ -124,6 +124,22 @@
     ...taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })),
   ]);
 
+  // Track whether user has attempted to submit (to show errors only after first attempt)
+  let submitAttempted = $state(false);
+
+  // Per-field validation errors
+  const inputErrors = $derived.by(() => {
+    const errors: Record<string, string> = {};
+    for (const [key, def] of recipeInputEntries) {
+      if (!def.required) continue;
+      const val = inputValues[key];
+      if (val === undefined || val === null || val === "") {
+        errors[key] = "Required";
+      }
+    }
+    return errors;
+  });
+
   // Validation: all required inputs must have non-empty values
   const canSubmit = $derived.by(() => {
     if (!recipeId || submitting) return false;
@@ -136,6 +152,7 @@
   });
 
   async function submit() {
+    submitAttempted = true;
     if (!canSubmit) return;
     submitting = true;
 
@@ -343,6 +360,10 @@
 
       {#if def.description && inputType !== "textarea" && inputType !== "text"}
         <p class="text-xs text-t3">{def.description}</p>
+      {/if}
+
+      {#if submitAttempted && inputErrors[key]}
+        <p class="text-xs text-red-400 mt-0.5">{inputErrors[key]}</p>
       {/if}
     </div>
   {/each}

@@ -329,4 +329,66 @@ describe("LoopForm", () => {
     expect(callArgs.inputs).not.toHaveProperty("task_key");
     expect(callArgs.inputs).not.toHaveProperty("base_branch");
   });
+
+  it("does not show validation errors before first submit attempt", async () => {
+    const target = renderForm();
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    // Goal is required and empty, but no error shown yet
+    const goalField = target.querySelector("[data-field='input-goal']");
+    const errorText = goalField!.querySelector(".text-red-400:not(span)");
+    expect(errorText).toBeNull();
+  });
+
+  it("shows inline validation errors after submit attempt with empty required fields", async () => {
+    const target = renderForm();
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    // Submit the form without filling required fields
+    const form = target.querySelector("form")!;
+    form.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    flushSync();
+
+    // Now the error should be visible for the required "goal" field
+    const goalField = target.querySelector("[data-field='input-goal']");
+    const errorText = goalField!.querySelector("p.text-red-400");
+    expect(errorText).not.toBeNull();
+    expect(errorText!.textContent).toBe("Required");
+  });
+
+  it("hides validation error once the field is filled", async () => {
+    const target = renderForm();
+    await tick();
+    flushSync();
+    await tick();
+    flushSync();
+
+    // Submit to trigger errors
+    const form = target.querySelector("form")!;
+    form.dispatchEvent(new Event("submit", { bubbles: true }));
+    await tick();
+    flushSync();
+
+    // Error should be visible
+    const goalField = target.querySelector("[data-field='input-goal']");
+    expect(goalField!.querySelector("p.text-red-400")).not.toBeNull();
+
+    // Now fill in the goal
+    const goalTextarea = target.querySelector<HTMLTextAreaElement>(
+      "[data-field='input-goal'] textarea",
+    )!;
+    goalTextarea.value = "A valid goal";
+    goalTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+    flushSync();
+
+    // Error should disappear
+    expect(goalField!.querySelector("p.text-red-400")).toBeNull();
+  });
 });
