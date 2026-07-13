@@ -10,6 +10,8 @@ pub mod db;
 pub mod git;
 pub mod ipc;
 pub mod logging;
+pub mod loop_decision;
+pub mod loop_effects;
 pub mod paths;
 pub mod recipe_tick;
 pub mod session_ops;
