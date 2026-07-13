@@ -277,7 +277,7 @@ Loop status changes are governed by a **declared state machine** (`planeai_core:
 
 ¹ Active = `running`, `observing`, `verifying`, `needs_human`, `blocked`, `stale`.
 ² `Completed` → `observing`, `Blocked` → `blocked`, `NeedsHuman` → `needs_human`, `Failed` → `failed`.
-³ Allow-listed targets: `observing`, `verifying`, `completed_unreviewed`, `blocked`, `needs_human`, `failed`, `cancelled`.
+³ Allow-listed targets: `observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`.
 
 **Design rules:**
 
@@ -366,6 +366,7 @@ Declarative YAML definitions that describe reusable loop workflows. A recipe spe
 | Type             | Description                                                                                        |
 | ---------------- | -------------------------------------------------------------------------------------------------- |
 | `LoopRecipe`     | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools)                            |
+| `RecipeInput`    | Input definition within a recipe: `type` (text\|textarea\|branch\|task\|boolean\|select\|number), `label`, `description`, `default`, `required`, `options` (for select: `[{value, label}]`) |
 | `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions |
 | `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                          |
 
