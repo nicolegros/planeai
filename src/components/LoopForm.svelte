@@ -53,7 +53,7 @@
       for (const [key, def] of entries) {
         if (def.default !== undefined && def.default !== null) {
           newValues[key] = def.default;
-        } else if (resolveInputType(def) === "boolean") {
+        } else if (def.input_type === "boolean") {
           newValues[key] = false;
         } else {
           newValues[key] = "";
@@ -62,7 +62,7 @@
       // If taskKey prop was passed and there's a task input, pre-fill it
       if (taskKey) {
         for (const [key, def] of entries) {
-          if (resolveInputType(def) === "task") {
+          if (def.input_type === "task") {
             newValues[key] = taskKey;
             break;
           }
@@ -72,9 +72,7 @@
     });
   });
 
-  function resolveInputType(def: RecipeInputDef): string {
-    return def.input_type ?? "text";
-  }
+
 
   // Load recipes when project changes
   $effect(() => {
@@ -161,7 +159,7 @@
       const inputs: Record<string, unknown> = {};
       for (const [key, def] of recipeInputEntries) {
         const val = inputValues[key];
-        const type = resolveInputType(def);
+        const type = def.input_type;
         if (type === "boolean") {
           inputs[key] = val;
         } else if (typeof val === "string") {
@@ -271,7 +269,7 @@
   </div>
 
   {#each recipeInputEntries as [key, def] (key)}
-    {@const inputType = resolveInputType(def)}
+    {@const inputType = def.input_type}
     {@const label = getInputLabel(key, def)}
     {@const shortcut = inputShortcuts[key]}
     {@const isRequired = def.required}
