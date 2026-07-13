@@ -159,4 +159,19 @@ export interface RecipeSummary {
   name: string;
   description: string | null;
   source: string;
+  inputs: Record<string, RecipeInputDef>;
+}
+
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
+export interface RecipeInputDef {
+  required: boolean;
+  input_type: string;
+  label?: string | null;
+  description?: string | null;
+  default?: unknown;
+  options?: SelectOption[];
 }

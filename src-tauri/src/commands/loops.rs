@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use planeai_core::loop_recipe::RecipeInput;
 use planeai_core::loop_recipe_service::RecipeService;
 #[cfg(test)]
 use planeai_core::loop_run::LoopStatus;
@@ -107,6 +108,7 @@ pub struct RecipeSummary {
     pub name: String,
     pub description: Option<String>,
     pub source: String,
+    pub inputs: std::collections::BTreeMap<String, RecipeInput>,
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -202,6 +204,7 @@ pub async fn list_loop_recipes(
                 name: dr.recipe.name,
                 description: dr.recipe.description,
                 source: dr.source.as_str().to_string(),
+                inputs: dr.recipe.inputs,
             })
             .collect())
     })
@@ -209,16 +212,13 @@ pub async fn list_loop_recipes(
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn create_loop_run(
     db_state: State<'_, DbState>,
     app_handle: AppHandle,
     project_id: String,
-    goal: String,
     recipe_id: String,
-    task_key: Option<String>,
+    inputs: Option<serde_json::Value>,
     max_rounds: Option<i64>,
-    base_branch: Option<String>,
     start: bool,
 ) -> Result<LoopRunSummary, String> {
     tracing::info!(project_id = %project_id, recipe_id = %recipe_id, start, "create_loop_run");
@@ -247,18 +247,30 @@ pub async fn create_loop_run(
             ));
         }
 
+        // Parse inputs from frontend (JSON object → BTreeMap<String, Value>)
+        let inputs_map: std::collections::BTreeMap<String, serde_json::Value> = match inputs {
+            Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+            Some(_) => return Err("inputs must be a JSON object".to_string()),
+            None => std::collections::BTreeMap::new(),
+        };
+
+        // Validate inputs against recipe definitions
+        RecipeService::validate_inputs(&inputs_map, &discovered.recipe.inputs)
+            .map_err(|e| format!("input validation failed: {e}"))?;
+
+        // Extract goal and task_key by convention
+        let goal = inputs_map
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let task_key = inputs_map
+            .get("task_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         // Build snapshot for policy_json
-        let mut inputs = std::collections::BTreeMap::new();
-        inputs.insert("goal".to_string(), goal.clone());
-        if let Some(ref key) = task_key {
-            inputs.insert("task_key".to_string(), key.clone());
-        }
-        if let Some(ref branch) = base_branch {
-            if !branch.is_empty() {
-                inputs.insert("base_branch".to_string(), branch.clone());
-            }
-        }
-        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs_map);
         let resolved_max_rounds = max_rounds.unwrap_or(snapshot.policy.max_rounds as i64);
         let policy_json = serde_json::to_value(&snapshot).ok();
         let policy_json_for_tick = policy_json.clone();

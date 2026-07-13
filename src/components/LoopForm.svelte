@@ -1,10 +1,11 @@
 <script lang="ts">
   import { loops as loopsApi, tasks as tasksApi, projects as projectsApi } from "../lib/api";
-  import type { LoopRunSummary, RecipeSummary, TaskItem } from "../lib/types";
+  import type { LoopRunSummary, RecipeSummary, TaskItem, RecipeInputDef } from "../lib/types";
   import { Button, Label, Select } from "./ui";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import { untrack } from "svelte";
   import { LoaderCircle } from "@lucide/svelte";
 
   interface Props {
@@ -16,21 +17,62 @@
 
   let { projects, onCreated, onCancel, taskKey = null }: Props = $props();
 
+  // svelte-ignore state_referenced_locally
   let selectedProjectId = $state(projects[0]?.id ?? "");
   const selectedProject = $derived(projects.find(p => p.id === selectedProjectId));
 
-  let goal = $state("");
   let recipeId = $state("");
-  // svelte-ignore state_referenced_locally
-  let selectedTaskKey = $state(taskKey ?? "");
   let maxRounds = $state(3);
-  let baseBranch = $state("");
   let draft = $state(false);
   let submitting = $state(false);
 
   let recipes = $state<RecipeSummary[]>([]);
   let taskItems = $state<TaskItem[]>([]);
   let branches = $state<{ value: string; label: string }[]>([]);
+
+  // Dynamic input values keyed by input name
+  let inputValues = $state<Record<string, unknown>>({});
+
+  const selectedRecipe = $derived(recipes.find(r => r.id === recipeId));
+  const recipeInputs = $derived(selectedRecipe?.inputs ?? {});
+  const recipeInputEntries = $derived(Object.entries(recipeInputs));
+
+  // Track previous recipe to detect changes
+  let lastRecipeId = "";
+
+  // Initialize input values when recipe changes
+  $effect(() => {
+    const currentRecipeId = recipeId;
+    const entries = recipeInputEntries;
+    // Only reset values when recipe actually changes
+    if (currentRecipeId === lastRecipeId) return;
+    lastRecipeId = currentRecipeId;
+
+    untrack(() => {
+      const newValues: Record<string, unknown> = {};
+      for (const [key, def] of entries) {
+        if (def.default !== undefined && def.default !== null) {
+          newValues[key] = def.default;
+        } else if (def.input_type === "boolean") {
+          newValues[key] = false;
+        } else {
+          newValues[key] = "";
+        }
+      }
+      // If taskKey prop was passed and there's a task input, pre-fill it
+      if (taskKey) {
+        for (const [key, def] of entries) {
+          if (def.input_type === "task") {
+            newValues[key] = taskKey;
+            break;
+          }
+        }
+      }
+      inputValues = newValues;
+    });
+  });
+
+
 
   // Load recipes when project changes
   $effect(() => {
@@ -44,7 +86,7 @@
     );
   });
 
-  // Load tasks when project changes
+  // Load tasks when project changes (needed for task-type inputs)
   $effect(() => {
     const path = selectedProject?.path;
     if (!path) return;
@@ -54,7 +96,7 @@
     );
   });
 
-  // Load branches when project changes
+  // Load branches when project changes (needed for branch-type inputs)
   $effect(() => {
     const path = selectedProject?.path;
     if (!path) return;
@@ -80,20 +122,59 @@
     ...taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })),
   ]);
 
-  const canSubmit = $derived(goal.trim().length > 0 && recipeId.length > 0 && !submitting);
+  // Track whether user has attempted to submit (to show errors only after first attempt)
+  let submitAttempted = $state(false);
+
+  // Per-field validation errors
+  const inputErrors = $derived.by(() => {
+    const errors: Record<string, string> = {};
+    for (const [key, def] of recipeInputEntries) {
+      if (!def.required) continue;
+      const val = inputValues[key];
+      if (val === undefined || val === null || val === "") {
+        errors[key] = "Required";
+      }
+    }
+    return errors;
+  });
+
+  // Validation: all required inputs must have non-empty values
+  const canSubmit = $derived.by(() => {
+    if (!recipeId || submitting) return false;
+    for (const [key, def] of recipeInputEntries) {
+      if (!def.required) continue;
+      const val = inputValues[key];
+      if (val === undefined || val === null || val === "") return false;
+    }
+    return true;
+  });
 
   async function submit() {
+    submitAttempted = true;
     if (!canSubmit) return;
     submitting = true;
 
     try {
+      // Collect inputs, trimming strings
+      const inputs: Record<string, unknown> = {};
+      for (const [key, def] of recipeInputEntries) {
+        const val = inputValues[key];
+        const type = def.input_type;
+        if (type === "boolean") {
+          inputs[key] = val;
+        } else if (typeof val === "string") {
+          const trimmed = val.trim();
+          if (trimmed) inputs[key] = trimmed;
+        } else if (val !== undefined && val !== null && val !== "") {
+          inputs[key] = val;
+        }
+      }
+
       const result = await loopsApi.create({
         projectId: selectedProjectId,
-        goal: goal.trim(),
         recipeId,
-        taskKey: selectedTaskKey || null,
+        inputs,
         maxRounds,
-        baseBranch: baseBranch || null,
         start: !draft,
       });
       onCreated(result);
@@ -103,17 +184,42 @@
     }
   }
 
+  // Shortcut keys for dynamic inputs: assign first letter of each key (deduplicated)
+  const RESERVED_KEYS = new Set(["p", "r", "m", "d"]);
+  const inputShortcuts = $derived.by(() => {
+    const map: Record<string, string> = {};
+    const used = new Set(RESERVED_KEYS);
+    for (const [key] of recipeInputEntries) {
+      // Try first letter, then subsequent letters
+      let assigned = "";
+      for (const ch of key.toLowerCase().replace(/[^a-z]/g, "")) {
+        if (!used.has(ch)) {
+          assigned = ch;
+          used.add(ch);
+          break;
+        }
+      }
+      map[key] = assigned;
+    }
+    return map;
+  });
+
   // Form keyboard controller
   let wrapperEl: HTMLDivElement | undefined = $state();
-  let goalRef: HTMLTextAreaElement | undefined = $state();
 
   const fk = createFormKeyboardController(
     () => [
       ...(projects.length > 1 ? [{ key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='project'] input") ?? null }] : []),
-      { key: "g", ref: () => goalRef ?? null },
       { key: "r", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='recipe'] input") ?? null },
-      { key: "t", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='task'] input") ?? null },
-      { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
+      // Dynamic input field bindings
+      ...recipeInputEntries.map(([key]) => {
+        const shortcut = inputShortcuts[key];
+        if (!shortcut) return null;
+        return {
+          key: shortcut,
+          ref: () => wrapperEl?.querySelector<HTMLElement>(`[data-field='input-${key}'] input, [data-field='input-${key}'] textarea`) ?? null,
+        };
+      }).filter((b): b is NonNullable<typeof b> => b !== null),
       { key: "m", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='max-rounds'] input") ?? null },
       { key: "d", toggle: () => (draft = !draft) },
     ],
@@ -124,6 +230,10 @@
 
   function metaEnter(e: KeyboardEvent) {
     if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); }
+  }
+
+  function getInputLabel(key: string, def: RecipeInputDef): string {
+    return def.label ?? key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }
 </script>
 
@@ -144,19 +254,6 @@
     </div>
   {/if}
 
-  <div class="space-y-1" data-field="goal">
-    <Label>Goal <span class="font-mono text-[10px] px-1 rounded {badge}">G</span></Label>
-    <textarea
-      bind:this={goalRef}
-      bind:value={goal}
-      data-field="goal"
-      onkeydown={metaEnter}
-      class="w-full rounded-md border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent resize-y min-h-[60px]"
-      placeholder="What should this loop accomplish?"
-      rows="3"
-    ></textarea>
-  </div>
-
   <div class="space-y-1" data-field="recipe">
     <Label>Recipe <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
     {#if recipeItems.length > 0}
@@ -171,26 +268,103 @@
     {/if}
   </div>
 
-  <div class="space-y-1" data-field="task">
-    <Label>Task <span class="font-mono text-[10px] px-1 rounded {badge}">T</span></Label>
-    <Select
-      items={taskSelectItems}
-      bind:value={selectedTaskKey}
-      onkeydown={metaEnter}
-      placeholder="Link to task…"
-    />
-  </div>
+  {#each recipeInputEntries as [key, def] (key)}
+    {@const inputType = def.input_type}
+    {@const label = getInputLabel(key, def)}
+    {@const shortcut = inputShortcuts[key]}
+    {@const isRequired = def.required}
 
-  <div class="space-y-1" data-field="base">
-    <Label>Base branch <span class="font-mono text-[10px] px-1 rounded {badge}">B</span></Label>
-    <Select
-      items={branches}
-      bind:value={baseBranch}
-      onkeydown={metaEnter}
-      placeholder="main"
-      emptyText="No branches found"
-    />
-  </div>
+    <div class="space-y-1" data-field="input-{key}">
+      {#if inputType === "boolean"}
+        <div class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="input-{key}"
+            checked={!!inputValues[key]}
+            onchange={(e) => { inputValues[key] = (e.currentTarget as HTMLInputElement).checked; }}
+            class="rounded border-border accent-accent focus:ring-accent"
+            data-input-key={key}
+          />
+          <Label for="input-{key}">
+            {label}
+            {#if isRequired}<span class="text-red-400">*</span>{/if}
+            {#if shortcut}<span class="font-mono text-[10px] px-1 rounded {badge}">{shortcut.toUpperCase()}</span>{/if}
+          </Label>
+        </div>
+      {:else}
+        <Label>
+          {label}
+          {#if isRequired}<span class="text-red-400">*</span>{/if}
+          {#if shortcut}<span class="font-mono text-[10px] px-1 rounded {badge}">{shortcut.toUpperCase()}</span>{/if}
+        </Label>
+
+        {#if inputType === "textarea"}
+          <textarea
+            value={String(inputValues[key] ?? "")}
+            oninput={(e) => { inputValues[key] = (e.currentTarget as HTMLTextAreaElement).value; }}
+            onkeydown={metaEnter}
+            data-input-key={key}
+            class="w-full rounded-md border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent resize-y min-h-[60px]"
+            placeholder={def.description ?? ""}
+            rows="3"
+          ></textarea>
+        {:else if inputType === "branch"}
+          <Select
+            items={branches}
+            value={String(inputValues[key] ?? "")}
+            onValueChange={(v) => { inputValues[key] = v; }}
+            onkeydown={metaEnter}
+            placeholder="Select branch…"
+            emptyText="No branches found"
+          />
+        {:else if inputType === "task"}
+          <Select
+            items={taskSelectItems}
+            value={String(inputValues[key] ?? "")}
+            onValueChange={(v) => { inputValues[key] = v; }}
+            onkeydown={metaEnter}
+            placeholder="Link to task…"
+          />
+        {:else if inputType === "select"}
+          <Select
+            items={def.options ?? []}
+            value={String(inputValues[key] ?? "")}
+            onValueChange={(v) => { inputValues[key] = v; }}
+            onkeydown={metaEnter}
+            placeholder="Select…"
+          />
+        {:else if inputType === "number"}
+          <input
+            type="number"
+            value={inputValues[key] != null ? Number(inputValues[key]) : ""}
+            oninput={(e) => { inputValues[key] = (e.currentTarget as HTMLInputElement).valueAsNumber; }}
+            onkeydown={metaEnter}
+            data-input-key={key}
+            class="w-full rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent"
+          />
+        {:else}
+          <!-- text or unknown type: single-line input -->
+          <input
+            type="text"
+            value={String(inputValues[key] ?? "")}
+            oninput={(e) => { inputValues[key] = (e.currentTarget as HTMLInputElement).value; }}
+            onkeydown={metaEnter}
+            data-input-key={key}
+            placeholder={def.description ?? ""}
+            class="w-full rounded-md border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent"
+          />
+        {/if}
+      {/if}
+
+      {#if def.description && inputType !== "textarea" && inputType !== "text"}
+        <p class="text-xs text-t3">{def.description}</p>
+      {/if}
+
+      {#if submitAttempted && inputErrors[key]}
+        <p class="text-xs text-red-400 mt-0.5">{inputErrors[key]}</p>
+      {/if}
+    </div>
+  {/each}
 
   <div class="space-y-1" data-field="max-rounds">
     <Label>Max rounds <span class="font-mono text-[10px] px-1 rounded {badge}">M</span></Label>

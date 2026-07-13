@@ -146,24 +146,66 @@ pub fn build_session_plan(
     })
 }
 
+/// Check if a git error indicates a worktree conflict.
+fn is_worktree_conflict(e: &str) -> bool {
+    e.contains("already checked out") || e.contains("already used by worktree")
+}
+
+/// Try to reuse an existing worktree where the branch is already checked out.
+fn reuse_existing_worktree(
+    repo: &str,
+    branch: &str,
+    original_err: String,
+) -> Result<String, String> {
+    match git::find_worktree_for_branch(repo, branch) {
+        Some(wt_path) => {
+            tracing::info!(
+                branch = %branch,
+                worktree = %wt_path,
+                "branch already in worktree, reusing"
+            );
+            Ok(wt_path)
+        }
+        None => Err(original_err),
+    }
+}
+
 pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<String, String> {
+    // Resolve working_dir — may differ from plan if branch lives in a worktree
+    let effective_working_dir;
+    let mut was_redirected = false;
+
     match &plan.branch_strategy {
         BranchStrategy::Checkout {
             repo,
             branch,
             new,
             base,
-        } => {
-            git::checkout_branch(repo, branch, *new, base.as_deref())?;
-        }
+        } => match git::checkout_branch(repo, branch, *new, base.as_deref()) {
+            Ok(()) => {
+                effective_working_dir = plan.working_dir.clone();
+            }
+            Err(e) if !*new && is_worktree_conflict(&e) => {
+                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                was_redirected = true;
+            }
+            Err(e) => return Err(e),
+        },
         BranchStrategy::Worktree {
             repo,
             path,
             branch,
             base,
-        } => {
-            git::worktree_add(repo, path, branch, base)?;
-        }
+        } => match git::worktree_add(repo, path, branch, base) {
+            Ok(()) => {
+                effective_working_dir = path.clone();
+            }
+            Err(e) if is_worktree_conflict(&e) => {
+                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                was_redirected = true;
+            }
+            Err(e) => return Err(e),
+        },
     }
 
     if plan.backend == "daemon" {
@@ -185,7 +227,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             &plan.session_id,
             program,
             &args_refs,
-            &plan.working_dir,
+            &effective_working_dir,
             Some(&session_env),
         )?;
     } else if let Some(tmux_name) = &plan.tmux_name {
@@ -194,7 +236,7 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             let extra_path_dirs = env.config.resolved_extra_path_dirs();
             tmux::create_session_with_cmd_and_path(
                 tmux_name,
-                &plan.working_dir,
+                &effective_working_dir,
                 &plan.command,
                 &plan.session_id,
                 &extra_path_dirs,
@@ -211,9 +253,17 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
         &plan.session_name,
         plan.tmux_name.as_deref(),
         &plan.branch,
-        match &plan.branch_strategy {
-            BranchStrategy::Worktree { path, .. } => Some(path.as_str()),
-            BranchStrategy::Checkout { .. } => None,
+        // Store worktree_path so gates and agents know where to run.
+        // For redirected sessions (branch already in another worktree), store that path.
+        // For worktree-created sessions, store the new worktree path.
+        // Cleanup guards against deleting non-loop-managed worktrees via branch name check.
+        if was_redirected {
+            Some(effective_working_dir.as_str())
+        } else {
+            match &plan.branch_strategy {
+                BranchStrategy::Worktree { path, .. } => Some(path.as_str()),
+                BranchStrategy::Checkout { .. } => None,
+            }
         },
         Some(&plan.provider),
         &plan.backend,

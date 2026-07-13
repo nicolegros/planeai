@@ -34,7 +34,7 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Loop strategy**    | A freeform identifier defining how a loop orchestrates its sessions (e.g., "maker-verifier", "multi-agent"). When a matching loop recipe exists, the strategy resolves to the recipe and the loop is driven by the recipe tick runtime.                                                               |
 | **Loop recipe**      | A declarative YAML definition (`planeai.loop.recipe.v1`) describing a reusable loop workflow — roles, steps, knowledge, tools, and policy. Discovered from project (`.planeai/loops/`), user (`~/.config/planeai/loops/`), or builtin sources. See `docs/LOOP_RECIPES.md`.                            |
 | **Recipe snapshot**  | A runtime copy of a resolved recipe plus inputs, tick counter, and created session IDs. Stored in `policy_json` on the loop run. The recipe tick runner reads and updates it on each tick.                                                                                                            |
-| **Loop trigger**     | A typed event (`LoopTrigger`) that drives loop status transitions via a declared state machine (`loop_run::apply`). Callers declare what happened (e.g., `Start`, `Cancel`, `HandoffReceived`); the transition table decides the resulting state. Replaces direct status assignment.                   |
+| **Loop trigger**     | A typed event (`LoopTrigger`) that drives loop status transitions via a declared state machine (`loop_run::apply`). Callers declare what happened (e.g., `Start`, `Cancel`, `HandoffReceived`); the transition table decides the resulting state. Replaces direct status assignment.                  |
 
 ## Session lifecycle (v1)
 
@@ -266,6 +266,14 @@ Sessions can run in two modes:
 
 - **Archive** — kills tmux/daemon session, marks session archived. Worktree directory is preserved on disk.
 - **Destroy** — kills tmux/daemon session, runs `git worktree remove --force`, deletes directory, removes from DB.
+
+### Cleanup safety
+
+Session cleanup only deletes worktrees and branches for **loop-managed branches** (those whose name starts with `loop/`). User-created branches (e.g., `feature/my-branch`) are never removed, even if a loop session was pointed at them via a step's `branch` field. This prevents accidental deletion of work that exists independently of a loop.
+
+### Branch redirect
+
+When a `session.create` step specifies an existing branch (via the step's `branch` field) and that branch is already checked out in another worktree, the session creation redirects to the existing worktree path rather than failing. The session records that worktree path for gate execution and agent work, but cleanup will not delete it (see cleanup safety above).
 
 ### Data model
 

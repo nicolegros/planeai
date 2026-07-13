@@ -81,7 +81,7 @@ describe("vim-registry", () => {
   });
 
   it("routes :wq to the correct editor", () => {
-    const { view: viewA, mockCm: cmA } = makeMockView("A");
+    const { view: viewA, mockCm: _cmA } = makeMockView("A");
     const { view: viewB, mockCm: cmB } = makeMockView("B");
     const handlersA = makeHandlers();
     const handlersB = makeHandlers();

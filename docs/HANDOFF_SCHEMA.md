@@ -77,12 +77,12 @@ planeai-cli axi loop handoff path --loop <LOOP_ID> --session <SESSION_ID>
 
 ## Status Values
 
-| Status        | Meaning                                           | Loop Transition (if active)        |
-| ------------- | ------------------------------------------------- | ---------------------------------- |
-| `completed`   | Work is done, ready for verification              | → observing (+ auto-tick advance)  |
-| `blocked`     | Cannot proceed without external input             | → blocked                          |
-| `needs_human` | Requires human decision or review                 | → needs_human                      |
-| `failed`      | Work failed (e.g., tests don't pass, infra broke) | → failed                           |
+| Status        | Meaning                                           | Loop Transition (if active)       |
+| ------------- | ------------------------------------------------- | --------------------------------- |
+| `completed`   | Work is done, ready for verification              | → observing (+ auto-tick advance) |
+| `blocked`     | Cannot proceed without external input             | → blocked                         |
+| `needs_human` | Requires human decision or review                 | → needs_human                     |
+| `failed`      | Work failed (e.g., tests don't pass, infra broke) | → failed                          |
 
 "Active" means the loop is currently in `running`, `observing`, `verifying`, `needs_human`, `blocked`, or `stale` status.
 

@@ -65,7 +65,7 @@ pub struct RecipeSnapshot {
     pub recipe_id: String,
     pub recipe_source: String,
     pub recipe_path: Option<String>,
-    pub inputs: BTreeMap<String, String>,
+    pub inputs: BTreeMap<String, serde_json::Value>,
     pub runtime: RecipeRuntime,
     pub policy: SnapshotPolicy,
     pub roles: BTreeMap<String, RecipeRole>,
@@ -378,7 +378,7 @@ impl RecipeService {
     /// Create a snapshot for storing in policy_json.
     pub fn create_snapshot(
         discovered: &DiscoveredRecipe,
-        inputs: BTreeMap<String, String>,
+        inputs: BTreeMap<String, serde_json::Value>,
     ) -> RecipeSnapshot {
         let recipe = &discovered.recipe;
         let first_step_id = recipe
@@ -413,6 +413,60 @@ impl RecipeService {
             knowledge: recipe.knowledge.clone(),
             tools: recipe.tools.clone(),
         }
+    }
+
+    /// Validate inputs against recipe input definitions.
+    pub fn validate_inputs(
+        inputs: &BTreeMap<String, serde_json::Value>,
+        recipe_inputs: &BTreeMap<String, RecipeInput>,
+    ) -> Result<(), String> {
+        for (key, def) in recipe_inputs {
+            let value = inputs.get(key);
+
+            // Check required
+            if def.required {
+                match value {
+                    None => return Err(format!("input '{}' is required", key)),
+                    Some(serde_json::Value::String(s)) if s.is_empty() => {
+                        return Err(format!("input '{}' is required", key))
+                    }
+                    Some(serde_json::Value::Null) => {
+                        return Err(format!("input '{}' is required", key))
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check type if value is present
+            if let Some(val) = value {
+                if val.is_null() {
+                    continue;
+                }
+                match def.input_type {
+                    InputType::Boolean => {
+                        if !val.is_boolean() {
+                            return Err(format!("input '{}' must be a boolean", key));
+                        }
+                    }
+                    InputType::Number => {
+                        if !val.is_number() {
+                            return Err(format!("input '{}' must be a number", key));
+                        }
+                    }
+                    InputType::Select => {
+                        if let Some(s) = val.as_str() {
+                            let valid = def.options.iter().any(|o| o.value == s);
+                            if !valid {
+                                return Err(format!("input '{}' has invalid option '{}'", key, s));
+                            }
+                        }
+                    }
+                    // text, textarea, branch, task: accept any string
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Parse YAML content into a LoopRecipe.
@@ -626,7 +680,10 @@ mod tests {
             path: None,
         };
         let mut inputs = BTreeMap::new();
-        inputs.insert("goal".to_string(), "implement feature X".to_string());
+        inputs.insert(
+            "goal".to_string(),
+            serde_json::Value::String("implement feature X".to_string()),
+        );
 
         let snapshot = RecipeService::create_snapshot(&discovered, inputs.clone());
         assert_eq!(snapshot.recipe_schema, RECIPE_SCHEMA_V1);

@@ -382,6 +382,7 @@ pub fn apply(
                 LoopStatus::Observing,
                 LoopStatus::Verifying,
                 LoopStatus::CompletedUnreviewed,
+                LoopStatus::Approved,
                 LoopStatus::Blocked,
                 LoopStatus::NeedsHuman,
                 LoopStatus::Failed,

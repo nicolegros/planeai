@@ -10,11 +10,20 @@ trigger:
 
 inputs:
   goal:
+    type: textarea
+    label: Goal
+    description: What should the maker implement?
     required: true
   task_key:
+    type: task
+    label: Linked task
     required: false
   gate_command:
+    type: text
+    label: Gate command
+    description: Command to verify the implementation
     required: false
+    default: make ci
 
 knowledge:
   files:

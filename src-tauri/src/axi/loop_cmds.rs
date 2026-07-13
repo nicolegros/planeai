@@ -1,5 +1,7 @@
 //! AXI loop subcommands — create, observe, tick, stop, tree, handoff, verify.
 
+use std::collections::BTreeMap;
+
 use planeai_toon::{field, int_val, render, str_val, Value};
 
 use super::helpers::{
@@ -19,11 +21,11 @@ pub fn loop_create(
     goal: &str,
     max_rounds: i64,
     start: bool,
+    inputs: Option<BTreeMap<String, serde_json::Value>>,
 ) -> (String, i32) {
     use planeai_core::loop_recipe_service::RecipeService;
     use planeai_core::loop_run::{LoopStrategy, LoopTrigger};
     use planeai_core::loop_service::{CreateLoopParams, LoopService};
-    use std::collections::BTreeMap;
 
     // Validate max_rounds
     if max_rounds < 1 {
@@ -125,12 +127,27 @@ pub fn loop_create(
 
     let resolved = match discovered {
         Some(ref dr) => {
-            let mut inputs = BTreeMap::new();
-            inputs.insert("goal".to_string(), goal.to_string());
-            if let Some(key) = task_key {
-                inputs.insert("task_key".to_string(), key.to_string());
+            // Use provided inputs map, falling back to building from explicit params
+            let snapshot_inputs = if let Some(ref inp) = inputs {
+                inp.clone()
+            } else {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "goal".to_string(),
+                    serde_json::Value::String(goal.to_string()),
+                );
+                if let Some(key) = task_key {
+                    m.insert(
+                        "task_key".to_string(),
+                        serde_json::Value::String(key.to_string()),
+                    );
+                }
+                m
+            };
+            if let Err(e) = RecipeService::validate_inputs(&snapshot_inputs, &dr.recipe.inputs) {
+                return (emit_error(&format!("input validation failed: {e}"), &[]), 1);
             }
-            let snapshot = RecipeService::create_snapshot(dr, inputs);
+            let snapshot = RecipeService::create_snapshot(dr, snapshot_inputs);
             let max_r = snapshot.policy.max_rounds as i64;
             let json_val = serde_json::to_value(&snapshot).ok();
             ResolvedRecipe {

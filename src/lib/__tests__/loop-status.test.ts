@@ -57,8 +57,7 @@ describe("loop-status", () => {
 
     it("returns false for non-terminal statuses", () => {
       const nonTerminal = ALL_STATUSES.filter(
-        (s) =>
-          !["failed", "cancelled", "approved", "merged", "cleaned"].includes(s),
+        (s) => !["failed", "cancelled", "approved", "merged", "cleaned"].includes(s),
       );
       for (const s of nonTerminal) {
         expect(isTerminal(s)).toBe(false);
@@ -76,10 +75,7 @@ describe("loop-status", () => {
 
     it("returns false for statuses not needing intervention", () => {
       const noIntervention = ALL_STATUSES.filter(
-        (s) =>
-          !["blocked", "needs_human", "completed_unreviewed", "stale"].includes(
-            s,
-          ),
+        (s) => !["blocked", "needs_human", "completed_unreviewed", "stale"].includes(s),
       );
       for (const s of noIntervention) {
         expect(isInterventionRequired(s)).toBe(false);
@@ -166,12 +162,8 @@ describe("loop-status", () => {
     });
 
     it("returns expected badge colors for key statuses", () => {
-      expect(statusBadgeColor("running")).toBe(
-        "bg-status-running/20 text-status-running",
-      );
-      expect(statusBadgeColor("failed")).toBe(
-        "bg-status-exited/20 text-status-exited",
-      );
+      expect(statusBadgeColor("running")).toBe("bg-status-running/20 text-status-running");
+      expect(statusBadgeColor("failed")).toBe("bg-status-exited/20 text-status-exited");
     });
   });
 
