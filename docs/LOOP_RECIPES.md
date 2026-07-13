@@ -92,26 +92,26 @@ inputs:
 
 **Input definition fields:**
 
-| Field         | Type            | Default  | Description                                                              |
-| ------------- | --------------- | -------- | ------------------------------------------------------------------------ |
-| `required`    | bool            | `false`  | Whether the user must supply a value                                     |
-| `type`        | string          | `text`   | Input widget type (see below)                                            |
-| `label`       | string          | key name | Human-readable label shown in the form                                   |
-| `description` | string          | null     | Help text displayed below the input field                                |
-| `default`     | string/bool/num | null     | Pre-filled value; type matches `type` field                              |
-| `options`     | list            | `[]`     | Choices for `select` inputs; each entry has `value` and `label` strings  |
+| Field         | Type            | Default  | Description                                                             |
+| ------------- | --------------- | -------- | ----------------------------------------------------------------------- |
+| `required`    | bool            | `false`  | Whether the user must supply a value                                    |
+| `type`        | string          | `text`   | Input widget type (see below)                                           |
+| `label`       | string          | key name | Human-readable label shown in the form                                  |
+| `description` | string          | null     | Help text displayed below the input field                               |
+| `default`     | string/bool/num | null     | Pre-filled value; type matches `type` field                             |
+| `options`     | list            | `[]`     | Choices for `select` inputs; each entry has `value` and `label` strings |
 
 **Supported input types:**
 
-| Type       | Widget                                  | Default value type |
-| ---------- | --------------------------------------- | ------------------ |
-| `text`     | Single-line text input                  | string             |
-| `textarea` | Multi-line text input                   | string             |
-| `branch`   | Branch picker (populated from git)      | string             |
-| `task`     | Task picker (populated from project)    | string             |
-| `boolean`  | Checkbox                                | bool               |
-| `select`   | Dropdown with `options`                 | string             |
-| `number`   | Numeric input                           | number             |
+| Type       | Widget                               | Default value type |
+| ---------- | ------------------------------------ | ------------------ |
+| `text`     | Single-line text input               | string             |
+| `textarea` | Multi-line text input                | string             |
+| `branch`   | Branch picker (populated from git)   | string             |
+| `task`     | Task picker (populated from project) | string             |
+| `boolean`  | Checkbox                             | bool               |
+| `select`   | Dropdown with `options`              | string             |
+| `number`   | Numeric input                        | number             |
 
 When `type` is omitted, it defaults to `text` for backwards compatibility. Inputs are rendered in alphabetical order in the create form.
 
@@ -227,20 +227,20 @@ steps:
 
 Step fields reference:
 
-| Field        | Description                                                                                      |
-| ------------ | ------------------------------------------------------------------------------------------------ |
-| `id`         | Unique step identifier (required)                                                                |
-| `kind`       | Step kind — see supported kinds below (required)                                                 |
-| `role`       | Target role for session steps                                                                    |
-| `prompt`     | Message/instruction text                                                                         |
+| Field        | Description                                                                                                                                                                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`         | Unique step identifier (required)                                                                                                                                                                                                               |
+| `kind`       | Step kind — see supported kinds below (required)                                                                                                                                                                                                |
+| `role`       | Target role for session steps                                                                                                                                                                                                                   |
+| `prompt`     | Message/instruction text                                                                                                                                                                                                                        |
 | `branch`     | Branch override for `session.create` steps; uses an existing branch instead of generating one. Supports template rendering (e.g., `{{ inputs.branch }}`). When empty or absent, a loop-managed branch (`loop/<id>/<role>-r<round>`) is created. |
-| `from`       | Source role for handoff.wait                                                                     |
-| `on`         | Condition map for conditional steps                                                              |
-| `status`     | Target status for loop.status                                                                    |
-| `next`       | Explicit next step ID (overrides sequential order)                                               |
-| `select`     | Selection criteria                                                                               |
-| `event_kind` | Event kind for loop.event                                                                        |
-| `gates`      | List of gate declarations for gates.run steps                                                    |
+| `from`       | Source role for handoff.wait                                                                                                                                                                                                                    |
+| `on`         | Condition map for conditional steps                                                                                                                                                                                                             |
+| `status`     | Target status for loop.status                                                                                                                                                                                                                   |
+| `next`       | Explicit next step ID (overrides sequential order)                                                                                                                                                                                              |
+| `select`     | Selection criteria                                                                                                                                                                                                                              |
+| `event_kind` | Event kind for loop.event                                                                                                                                                                                                                       |
+| `gates`      | List of gate declarations for gates.run steps                                                                                                                                                                                                   |
 
 ## Built-in Maker-Verifier Recipe
 
@@ -532,16 +532,16 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 
 ## Supported Step Kinds (v1)
 
-| Kind             | Description                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Kind             | Description                                                                                                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session.create` | Spawn a new agent session (in a worktree by default) and send initial prompt. Supports an optional `branch` field to check out an existing branch instead of generating one. |
-| `session.prompt` | Send a message to an existing session (requires `select: latest`)                                                           |
-| `handoff.wait`   | Pause until the source role produces an accepted handoff artifact                                                           |
-| `loop.status`    | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`) |
-| `loop.event`     | Emit a structured event into the loop's event log                                                                           |
-| `human.wait`     | Block until a human responds in the UI                                                                                      |
-| `round.next`     | Increment the round counter (enforces `max_rounds`)                                                                         |
-| `gates.run`      | Run verifier gate commands and branch on pass/fail/error                                                                    |
+| `session.prompt` | Send a message to an existing session (requires `select: latest`)                                                                                                            |
+| `handoff.wait`   | Pause until the source role produces an accepted handoff artifact                                                                                                            |
+| `loop.status`    | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`)                                      |
+| `loop.event`     | Emit a structured event into the loop's event log                                                                                                                            |
+| `human.wait`     | Block until a human responds in the UI                                                                                                                                       |
+| `round.next`     | Increment the round counter (enforces `max_rounds`)                                                                                                                          |
+| `gates.run`      | Run verifier gate commands and branch on pass/fail/error                                                                                                                     |
 
 ## Runtime: Auto-Advance Tick Model
 

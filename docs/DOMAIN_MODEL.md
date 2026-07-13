@@ -363,12 +363,12 @@ Declarative YAML definitions that describe reusable loop workflows. A recipe spe
 
 **Key types:**
 
-| Type             | Description                                                                                        |
-| ---------------- | -------------------------------------------------------------------------------------------------- |
-| `LoopRecipe`     | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools)                            |
+| Type             | Description                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LoopRecipe`     | Parsed YAML definition (roles, steps, policy, inputs, knowledge, tools)                                                                                                                     |
 | `RecipeInput`    | Input definition within a recipe: `type` (text\|textarea\|branch\|task\|boolean\|select\|number), `label`, `description`, `default`, `required`, `options` (for select: `[{value, label}]`) |
-| `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions |
-| `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                          |
+| `RecipeSnapshot` | Runtime state stored in `policy_json` — recipe + resolved inputs + tick counter + created sessions                                                                                          |
+| `RecipeService`  | Discovery, loading, validation, and snapshot creation (file-based, no DB)                                                                                                                   |
 
 **`RecipeSnapshot` sub-types:**
 
