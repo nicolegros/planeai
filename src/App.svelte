@@ -12,7 +12,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
-  import { isTerminal } from "./lib/loop-status";
+  import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
@@ -129,6 +129,7 @@
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
+  let loopToDelete = $state<import("./lib/types").LoopRunSummary | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
 
@@ -200,6 +201,24 @@
   async function deleteProject(p: Project) {
     await projectStore.deleteProject(p.id);
     projectToDelete = null;
+  }
+
+  /** Delete a loop record only (sessions become standalone). */
+  async function deleteLoopOnly(loopId: string) {
+    await loopsApi.delete(loopId);
+    if (loopStore.getActiveLoopId() === loopId) loopStore.setActiveLoopId(null);
+    loopStore.refreshAllLoops(projects.map(p => p.id));
+  }
+
+  /** Delete a loop and destroy all its linked sessions. */
+  async function deleteLoopAndSessions(loopId: string) {
+    const sessionIds = await loopsApi.delete(loopId);
+    if (loopStore.getActiveLoopId() === loopId) loopStore.setActiveLoopId(null);
+    for (const sid of sessionIds) {
+      const s = sessions.find(x => x.id === sid);
+      if (s) await orchestrator.deleteSession(s);
+    }
+    loopStore.refreshAllLoops(projects.map(p => p.id));
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -310,6 +329,12 @@
         e.stopImmediatePropagation();
         if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') projectToDelete = null;
         else if (e.key === 'd' || e.key === 'y') deleteProject(projectToDelete);
+      } else if (loopToDelete) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.key === 'Escape' || e.key === 'c' || e.key === 'n') { loopToDelete = null; focusTerminal(); }
+        else if (e.key === 'l') { const id = loopToDelete.id; loopToDelete = null; focusTerminal(); deleteLoopOnly(id); }
+        else if (e.key === 'a') { const id = loopToDelete.id; loopToDelete = null; focusTerminal(); deleteLoopAndSessions(id); }
       } else if (showQuitConfirm) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -392,7 +417,8 @@
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
-        onDeleteLoop={(id) => { loopsApi.delete(id).then(() => { if (loopStore.getActiveLoopId() === id) loopStore.setActiveLoopId(null); loopStore.refreshAllLoops(projects.map(p => p.id)); }); }}
+        onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
+        onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
         selectedLoopId={activeLoopId}
       />
   {/if}
@@ -593,6 +619,35 @@
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { deleteProject(ptd); }}>
               <span class="flex-1 text-[13.5px]">Delete</span>
               <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">d</span>
+            </button>
+          </div>
+        </div>
+      </SharedDialog>
+    {/if}
+    {#if loopToDelete}
+      {@const ltd = loopToDelete}
+      {@const loopSessionCount = (loopStore.getSessionsForLoop(ltd.id) ?? []).length}
+      <SharedDialog open={true} onOpenChange={(v) => { if (!v) loopToDelete = null; }} title="Delete loop" class="w-[268px] rounded-[13px] border-border-s shadow-[0_24px_64px_-14px_rgba(0,0,0,0.55)] overflow-hidden">
+        <div>
+          <div class="flex flex-col px-[15px] pt-[13px] pb-[11px] gap-1">
+            <div class="flex items-center">
+              <span class="text-[13px] font-semibold text-t1">Delete loop <span class="font-bold">{ltd.task_key || ltd.goal.slice(0, 20)}</span>?</span>
+              <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
+            </div>
+            <p class="text-[11px] text-t3">This loop has {loopSessionCount} session{loopSessionCount !== 1 ? 's' : ''}.</p>
+          </div>
+          <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { loopToDelete = null; focusTerminal(); }}>
+              <span class="flex-1 text-[13.5px] text-t1">Cancel</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">n</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors text-t1" onclick={() => { const id = ltd.id; loopToDelete = null; focusTerminal(); deleteLoopOnly(id); }}>
+              <span class="flex-1 text-[13.5px]">Delete loop only</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">l</span>
+            </button>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-red-500/10 transition-colors text-red-400" onclick={() => { const id = ltd.id; loopToDelete = null; focusTerminal(); deleteLoopAndSessions(id); }}>
+              <span class="flex-1 text-[13.5px]">Delete loop and sessions</span>
+              <span class="font-mono text-[10px] text-red-400/70 border border-red-500/30 rounded-[5px] px-1.5 py-[2px]">a</span>
             </button>
           </div>
         </div>
