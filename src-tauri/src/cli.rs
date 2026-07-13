@@ -152,7 +152,11 @@ fn is_worktree_conflict(e: &str) -> bool {
 }
 
 /// Try to reuse an existing worktree where the branch is already checked out.
-fn reuse_existing_worktree(repo: &str, branch: &str, original_err: String) -> Result<String, String> {
+fn reuse_existing_worktree(
+    repo: &str,
+    branch: &str,
+    original_err: String,
+) -> Result<String, String> {
     match git::find_worktree_for_branch(repo, branch) {
         Some(wt_path) => {
             tracing::info!(
@@ -177,35 +181,31 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             branch,
             new,
             base,
-        } => {
-            match git::checkout_branch(repo, branch, *new, base.as_deref()) {
-                Ok(()) => {
-                    effective_working_dir = plan.working_dir.clone();
-                }
-                Err(e) if !*new && is_worktree_conflict(&e) => {
-                    effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                    was_redirected = true;
-                }
-                Err(e) => return Err(e),
+        } => match git::checkout_branch(repo, branch, *new, base.as_deref()) {
+            Ok(()) => {
+                effective_working_dir = plan.working_dir.clone();
             }
-        }
+            Err(e) if !*new && is_worktree_conflict(&e) => {
+                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                was_redirected = true;
+            }
+            Err(e) => return Err(e),
+        },
         BranchStrategy::Worktree {
             repo,
             path,
             branch,
             base,
-        } => {
-            match git::worktree_add(repo, path, branch, base) {
-                Ok(()) => {
-                    effective_working_dir = path.clone();
-                }
-                Err(e) if is_worktree_conflict(&e) => {
-                    effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
-                    was_redirected = true;
-                }
-                Err(e) => return Err(e),
+        } => match git::worktree_add(repo, path, branch, base) {
+            Ok(()) => {
+                effective_working_dir = path.clone();
             }
-        }
+            Err(e) if is_worktree_conflict(&e) => {
+                effective_working_dir = reuse_existing_worktree(repo, branch, e)?;
+                was_redirected = true;
+            }
+            Err(e) => return Err(e),
+        },
     }
 
     if plan.backend == "daemon" {

@@ -1257,7 +1257,12 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             let merged = match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch)
             {
                 Ok(m) => m,
-                Err((output, code)) => return { print!("{output}"); code },
+                Err((output, code)) => {
+                    return {
+                        print!("{output}");
+                        code
+                    }
+                }
             };
 
             // Extract goal from merged inputs (required)

@@ -111,8 +111,6 @@ pub struct RecipeSummary {
     pub inputs: std::collections::BTreeMap<String, RecipeInput>,
 }
 
-
-
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 #[tauri::command]

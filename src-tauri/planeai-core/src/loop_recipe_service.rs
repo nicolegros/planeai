@@ -457,10 +457,7 @@ impl RecipeService {
                         if let Some(s) = val.as_str() {
                             let valid = def.options.iter().any(|o| o.value == s);
                             if !valid {
-                                return Err(format!(
-                                    "input '{}' has invalid option '{}'",
-                                    key, s
-                                ));
+                                return Err(format!("input '{}' has invalid option '{}'", key, s));
                             }
                         }
                     }
