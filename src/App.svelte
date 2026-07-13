@@ -12,6 +12,7 @@
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
+  import { isTerminal } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
@@ -206,10 +207,11 @@
   /** Valid IDs for MRU cycling — includes session IDs + loop:<id> entries. */
   function getSwitchableIds(): Set<string> {
     const ids = orchestrator.getSwitchableSessionIds();
-    // Add all non-draft loop IDs
     for (const p of projects) {
       for (const loop of loopStore.getLoopsForProject(p.id)) {
-        ids.add(`loop:${loop.id}`);
+        if (loop.status !== "draft" && !isTerminal(loop.status)) {
+          ids.add(`loop:${loop.id}`);
+        }
       }
     }
     return ids;
@@ -331,8 +333,8 @@
     function onKeyUp(e: KeyboardEvent) {
       const isModRelease = (e.key === "Control" && !e.ctrlKey) || (e.key === "Meta" && !e.metaKey);
       if (!isModRelease) return;
-      if (getCycleState().isCycling) { const target = commit(); if (target) routeNavTarget(target); focusTerminal(); }
-      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) routeNavTarget(target); focusTerminal(); }
+      if (getCycleState().isCycling) { const target = commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
+      if (navCycle.isCycling()) { const target = navCycle.commit(); if (target) { routeNavTarget(target); if (!isLoopId(target)) focusTerminal(); } }
     }
     function onBlur() { setTimeout(() => { if (!document.hasFocus()) { if (getCycleState().isCycling) cancel(); if (navCycle.isCycling()) navCycle.cancel(); } }, 0); }
     window.addEventListener("keyup", onKeyUp);
