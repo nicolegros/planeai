@@ -1211,6 +1211,7 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             }
 
             // Layer 3: Legacy flags (highest precedence for backwards compat)
+            let legacy_flag_used = !goal.is_empty() || task.is_some() || base_branch.is_some();
             if !goal.is_empty() {
                 merged.insert("goal".to_string(), serde_json::Value::String(goal));
             }
@@ -1225,6 +1226,10 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
                     "base_branch".to_string(),
                     serde_json::Value::String(bb.clone()),
                 );
+            }
+
+            if legacy_flag_used {
+                eprintln!("warning: --goal, --task, and --base-branch are deprecated. Use --input key=value instead.");
             }
 
             // Extract goal from merged inputs (required)
