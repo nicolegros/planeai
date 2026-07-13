@@ -187,8 +187,28 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
             branch,
             base,
         } => {
-            git::worktree_add(repo, path, branch, base)?;
-            effective_working_dir = path.clone();
+            match git::worktree_add(repo, path, branch, base) {
+                Ok(()) => {
+                    effective_working_dir = path.clone();
+                }
+                Err(e)
+                    if e.contains("already checked out")
+                        || e.contains("already used by worktree") =>
+                {
+                    // Branch already in another worktree — use that instead of creating a new one
+                    if let Some(wt_path) = git::find_worktree_for_branch(repo, branch) {
+                        tracing::info!(
+                            branch = %branch,
+                            worktree = %wt_path,
+                            "branch already in worktree, reusing that path"
+                        );
+                        effective_working_dir = wt_path;
+                    } else {
+                        return Err(e);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
         }
     }
 
