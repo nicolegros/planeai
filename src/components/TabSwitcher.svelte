@@ -32,6 +32,7 @@
     blocked: "bg-status-exited", needs_human: "bg-status-review",
     failed: "bg-status-exited", cancelled: "bg-status-exited",
     approved: "bg-status-running", merged: "bg-status-idle", cleaned: "bg-status-idle",
+    stale: "bg-status-exited",
   };
 
   function getSession(id: string) {

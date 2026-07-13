@@ -272,7 +272,8 @@
       const orphans = orphansByProject.find(g => g.project.id === p.id)?.sessions ?? [];
       const tasks = tasksByProject[p.path] ?? [];
       const visibleTaskCount = tasks.filter(t => !(t.status === "done" && getSettings().hide_done_tasks)).length;
-      return !shouldHideProject(orphans.length, visibleTaskCount, !!getSettings().hide_empty_projects);
+      const loopCount = loopStore.getLoopsForProject(p.id).length;
+      return !shouldHideProject(orphans.length, visibleTaskCount, !!getSettings().hide_empty_projects, loopCount);
     })
   );
 

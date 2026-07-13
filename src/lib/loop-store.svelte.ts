@@ -77,8 +77,8 @@ async function refreshLoopSessions(runs: LoopRunSummary[]): Promise<void> {
   if (active.length === 0) return;
 
   const details = await Promise.allSettled(active.map((r) => loopsApi.detail(r.id)));
-  const newMapping: Record<string, string> = { ...sessionToLoop };
-  const newSessions: Record<string, LoopSessionItem[]> = { ...loopSessions };
+  const newMapping: Record<string, string> = {};
+  const newSessions: Record<string, LoopSessionItem[]> = {};
 
   details.forEach((result, i) => {
     if (result.status !== "fulfilled") return;

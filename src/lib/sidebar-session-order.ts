@@ -16,8 +16,9 @@ export function shouldHideProject(
   orphanCount: number,
   visibleTaskCount: number,
   hideEmpty: boolean,
+  loopCount: number = 0,
 ): boolean {
-  return hideEmpty && orphanCount === 0 && visibleTaskCount === 0;
+  return hideEmpty && orphanCount === 0 && visibleTaskCount === 0 && loopCount === 0;
 }
 
 /** Detect whether a cycle/MRU item is a loop dashboard vs a session. */
