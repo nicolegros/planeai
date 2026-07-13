@@ -88,16 +88,16 @@ pub struct RecipeInput {
     #[serde(default, rename = "type")]
     pub input_type: InputType,
     /// Human-readable label for the input field.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Description/help text shown below the input.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Default value. Type depends on `input_type`: string, bool, or number.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     /// Options for `select` type inputs.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<SelectOption>,
 }
 

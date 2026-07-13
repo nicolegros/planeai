@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use planeai_core::loop_recipe::{InputType, SelectOption};
+use planeai_core::loop_recipe::InputType;
 use planeai_core::loop_recipe_service::RecipeService;
 #[cfg(test)]
 use planeai_core::loop_run::LoopStatus;
@@ -108,22 +108,7 @@ pub struct RecipeSummary {
     pub name: String,
     pub description: Option<String>,
     pub source: String,
-    pub inputs: std::collections::BTreeMap<String, RecipeInputSummary>,
-}
-
-/// Serializable summary of a recipe input for the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecipeInputSummary {
-    pub required: bool,
-    pub input_type: InputType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<SelectOption>,
+    pub inputs: std::collections::BTreeMap<String, RecipeInput>,
 }
 
 // ─── Validation ──────────────────────────────────────────────────────────────
@@ -281,24 +266,7 @@ pub async fn list_loop_recipes(
                 name: dr.recipe.name,
                 description: dr.recipe.description,
                 source: dr.source.as_str().to_string(),
-                inputs: dr
-                    .recipe
-                    .inputs
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            RecipeInputSummary {
-                                required: v.required,
-                                input_type: v.input_type,
-                                label: v.label,
-                                description: v.description,
-                                default: v.default,
-                                options: v.options,
-                            },
-                        )
-                    })
-                    .collect(),
+                inputs: dr.recipe.inputs,
             })
             .collect())
     })
