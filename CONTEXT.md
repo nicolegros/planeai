@@ -36,6 +36,18 @@ A cross-platform agent session orchestrator. Manages multiple AI coding agents r
 | **Recipe snapshot**  | A runtime copy of a resolved recipe plus inputs, tick counter, and created session IDs. Stored in `policy_json` on the loop run. The recipe tick runner reads and updates it on each tick.                                                                                                            |
 | **Loop trigger**     | A typed event (`LoopTrigger`) that drives loop status transitions via a declared state machine (`loop_run::apply`). Callers declare what happened (e.g., `Start`, `Cancel`, `HandoffReceived`); the transition table decides the resulting state. Replaces direct status assignment.                  |
 
+### Recipe tick architecture (decision/effect split)
+
+The recipe tick runtime is split into three modules:
+
+| Module             | Role                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------- |
+| `loop_decision.rs` | **Pure decision logic.** Deterministic functions: `(&mut snapshot, step) → TickDecision`.   |
+| `loop_effects.rs`  | **Effect types + executor traits.** `EffectExecutor` (writes), `LoopQueries` (reads).       |
+| `recipe_tick.rs`   | **Wiring layer.** Dispatches to decisions, executes resulting effects. Zero business logic. |
+
+The `Effect` enum is the seam between decision and execution. Tests inject mock executors/queries; production uses `RealEffectExecutor`. Decision functions are testable without any I/O — they take a snapshot and return effects to execute.
+
 ## Session lifecycle (v1)
 
 ```
