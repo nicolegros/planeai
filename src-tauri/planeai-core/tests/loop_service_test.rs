@@ -1238,3 +1238,115 @@ fn add_artifact_rejects_handoff_kind() {
         "add_artifact must reject kind='handoff' — use record_handoff instead"
     );
 }
+
+// ─── Status derivation cannot desync ─────────────────────────────────────────
+
+#[test]
+fn persist_snapshot_always_derives_status_from_step_pointer() {
+    use planeai_core::loop_recipe::{RecipeKnowledge, RecipeStep, RecipeTools};
+    use planeai_core::loop_recipe_service::{
+        RecipeRuntime, RecipeSnapshot, SnapshotPolicy,
+    };
+    use std::collections::BTreeMap;
+
+    let conn = test_db();
+    let run = LoopService::create_loop(
+        &conn,
+        CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: LoopStrategy::new("test"),
+            goal: "test derivation".into(),
+            max_rounds: 3,
+            policy_json: None,
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    // Manually set status to Running (simulating transition_loop(Start))
+    conn.execute(
+        "UPDATE loop_runs SET status = 'running' WHERE id = ?1",
+        rusqlite::params![run.id],
+    )
+    .unwrap();
+
+    // Build a snapshot with step pointer at a handoff.wait step
+    let snapshot = RecipeSnapshot {
+        recipe_schema: "planeai.loop.recipe.v1".into(),
+        recipe_id: "test".into(),
+        recipe_source: "test".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "wait_step".into(),
+            tick_count: 1,
+            round: 1,
+            created_session_ids: BTreeMap::new(),
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles: BTreeMap::new(),
+        steps: vec![RecipeStep {
+            id: "wait_step".into(),
+            kind: "handoff.wait".into(),
+            role: None,
+            prompt: None,
+            branch: None,
+            from: None,
+            on: None,
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        }],
+        knowledge: RecipeKnowledge { files: vec![], instructions: vec![] },
+        tools: RecipeTools { required: vec![], optional: vec![] },
+    };
+
+    // persist_snapshot should derive Observing from handoff.wait, overriding Running
+    LoopService::persist_snapshot(&conn, &run.id, &snapshot).unwrap();
+    let updated = LoopService::get_loop(&conn, &run.id).unwrap().unwrap();
+    assert_eq!(
+        updated.status,
+        LoopStatus::Observing,
+        "persist_snapshot must overwrite status regardless of previous value"
+    );
+
+    // Now manually set status to something else directly (simulating a rogue caller)
+    conn.execute(
+        "UPDATE loop_runs SET status = 'failed' WHERE id = ?1",
+        rusqlite::params![run.id],
+    )
+    .unwrap();
+
+    // persist_snapshot again — must still derive from step pointer, not keep 'failed'
+    LoopService::persist_snapshot(&conn, &run.id, &snapshot).unwrap();
+    let updated2 = LoopService::get_loop(&conn, &run.id).unwrap().unwrap();
+    assert_eq!(
+        updated2.status,
+        LoopStatus::Observing,
+        "persist_snapshot must always overwrite status from step pointer, never retain stale value"
+    );
+
+    // Verify status_override takes precedence over step kind
+    let mut snapshot_with_override = snapshot.clone();
+    snapshot_with_override.runtime.status_override = Some(LoopStatus::Blocked);
+    LoopService::persist_snapshot(&conn, &run.id, &snapshot_with_override).unwrap();
+    let updated3 = LoopService::get_loop(&conn, &run.id).unwrap().unwrap();
+    assert_eq!(
+        updated3.status,
+        LoopStatus::Blocked,
+        "status_override must take precedence over step-kind derivation"
+    );
+}

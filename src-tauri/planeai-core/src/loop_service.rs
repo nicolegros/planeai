@@ -145,6 +145,28 @@ pub struct RecordHandoffResult {
 
 pub struct LoopService;
 
+// ─── Status Derivation Helper ────────────────────────────────────────────────
+
+/// Compute the effective `LoopStatus` for a recipe snapshot.
+///
+/// Resolution order:
+/// 1. `snapshot.runtime.status_override` — wins when set (blocking executors).
+/// 2. Step-kind derivation via [`derive_status_from_step`] using the current step.
+///
+/// Returns `None` only if the current step kind is unrecognized and no override is set.
+pub fn derive_effective_status(snapshot: &RecipeSnapshot) -> Option<LoopStatus> {
+    snapshot
+        .runtime
+        .status_override
+        .clone()
+        .or_else(|| {
+            let current_step = snapshot.steps.iter().find(|s| s.id == snapshot.runtime.current_step);
+            let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
+            let step_status = current_step.and_then(|s| s.status.as_deref());
+            derive_status_from_step(step_kind, step_status)
+        })
+}
+
 impl LoopService {
     /// Idempotent migration — safe to run on fresh and existing production databases.
     ///
@@ -468,6 +490,11 @@ impl LoopService {
     ///
     /// Use this when the transition must be atomic with other writes
     /// (e.g., `record_handoff` bundles artifact + status in one tx).
+    ///
+    /// For recipe-driven loops, validates that the transition result is consistent
+    /// with what `persist_snapshot` derivation would produce. Logs a warning on
+    /// divergence (expected for lifecycle triggers like Start/Cancel/Approve that
+    /// intentionally override the step-derived status).
     pub fn transition_in_tx(
         tx: &rusqlite::Transaction,
         id: &str,
@@ -519,6 +546,36 @@ impl LoopService {
                     params![id, now, payload.to_string()],
                 )?;
 
+                // Validate: if this loop has a recipe snapshot, check whether
+                // the trigger-driven status agrees with step-pointer derivation.
+                // Divergence is expected for lifecycle triggers (Start, Cancel,
+                // Approve, etc.) but signals a potential desync for recipe triggers.
+                let policy_str: Option<String> = tx
+                    .query_row(
+                        "SELECT policy_json FROM loop_runs WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                if let Some(ref json_str) = policy_str {
+                    if let Ok(snapshot) = serde_json::from_str::<RecipeSnapshot>(json_str) {
+                        let derived = derive_effective_status(&snapshot);
+                        if let Some(ref expected) = derived {
+                            if expected != new_status {
+                                tracing::debug!(
+                                    loop_id = %id,
+                                    trigger = %trigger.name(),
+                                    transition_status = %new_status.as_str(),
+                                    derived_status = %expected.as_str(),
+                                    "transition_loop produced status that diverges from step-pointer derivation \
+                                     (expected for lifecycle triggers)"
+                                );
+                            }
+                        }
+                    }
+                }
+
                 Ok(new_status.clone())
             }
         }
@@ -527,7 +584,7 @@ impl LoopService {
     /// Persist the recipe snapshot and atomically derive + set the status column.
     ///
     /// This is the single choke point for snapshot persistence. Status is derived
-    /// from the current step pointer (with `status_override` taking precedence).
+    /// via [`derive_effective_status`] (override first, then step-kind derivation).
     /// If the derived status differs from the current DB status, a
     /// `status_transition` audit event is emitted.
     pub fn persist_snapshot(conn: &Connection, id: &str, snapshot: &RecipeSnapshot) -> SqlResult<()> {
@@ -536,16 +593,7 @@ impl LoopService {
         let json_str = json_val.to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Resolve the effective status: override wins, then step-kind derivation
-        let current_step = snapshot.steps.iter().find(|s| s.id == snapshot.runtime.current_step);
-        let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
-        let step_status = current_step.and_then(|s| s.status.as_deref());
-
-        let derived = snapshot
-            .runtime
-            .status_override
-            .clone()
-            .or_else(|| derive_status_from_step(step_kind, step_status));
+        let derived = derive_effective_status(snapshot);
 
         let tx = conn.unchecked_transaction()?;
 

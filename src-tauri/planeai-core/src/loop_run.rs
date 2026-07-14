@@ -185,49 +185,36 @@ pub struct VerifierRun {
 
 /// Events that trigger loop status transitions. Callers declare what happened;
 /// the transition table ([`apply`]) decides the resulting state.
+///
+/// **Note on recipe-tick usage:** Since PLA-232, recipe executors derive status
+/// from the step pointer rather than firing triggers. Variants marked `(†)` below
+/// are not fired by `recipe_tick` but are retained for external callers (e.g.,
+/// `record_handoff`) and the transition table's reference semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum LoopTrigger {
     /// Draft → Running (user starts the loop)
     Start,
     /// Any non-terminal → Cancelled
     Cancel,
-    /// Running → Observing (handoff.wait step, no handoff found yet).
-    /// Not fired by recipe_tick (status derived from step pointer); retained for
-    /// external callers and the transition table's reference semantics.
+    /// (†) Running → Observing (handoff.wait step, no handoff found yet)
     HandoffWaiting,
-    /// Observing → Running (handoff.wait step found an existing handoff).
-    /// Not fired by recipe_tick (status derived from step pointer); retained for
-    /// external callers and the transition table's reference semantics.
+    /// (†) Observing → Running (handoff.wait step found an existing handoff)
     HandoffConsumed,
     /// Active → Observing|Blocked|NeedsHuman|Failed (external handoff record)
     HandoffReceived(HandoffStatus),
-    /// Running → Verifying (gates.run step started).
-    /// Not fired by recipe_tick (status derived from step pointer); retained for
-    /// external callers and the transition table's reference semantics.
+    /// (†) Running → Verifying (gates.run step started)
     GatesStarted,
-    /// Verifying → Running (gates.run step completed).
-    /// Not fired by recipe_tick (status derived from step pointer); retained for
-    /// external callers and the transition table's reference semantics.
+    /// (†) Verifying → Running (gates.run step completed)
     GatesCompleted,
-    /// Running → Blocked (max_rounds reached).
-    /// Not fired by recipe_tick (uses status_override); retained for external
-    /// callers and the transition table's reference semantics.
+    /// (†) Running → Blocked (max_rounds reached)
     RoundBlocked,
-    /// Running → NeedsHuman (max_sessions reached).
-    /// Not fired by recipe_tick (uses status_override); retained for external
-    /// callers and the transition table's reference semantics.
+    /// (†) Running → NeedsHuman (max_sessions reached)
     SessionLimitReached,
-    /// Running → Failed (max_ticks exceeded).
-    /// Not fired by recipe_tick (uses status_override); retained for external
-    /// callers and the transition table's reference semantics.
+    /// (†) Running → Failed (max_ticks exceeded)
     MaxTicksExceeded,
-    /// Running → NeedsHuman (human.wait step).
-    /// Not fired by recipe_tick (uses status_override); retained for external
-    /// callers and the transition table's reference semantics.
+    /// (†) Running → NeedsHuman (human.wait step)
     HumanWaitReached,
-    /// Running → {allow-listed targets} (recipe loop.status step).
-    /// Not fired by recipe_tick (status derived from step pointer); retained for
-    /// external callers and the transition table's reference semantics.
+    /// (†) Running → {allow-listed targets} (recipe loop.status step)
     RecipeSetStatus(LoopStatus),
     /// CompletedUnreviewed → Approved (human approves)
     Approve,
