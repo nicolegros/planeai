@@ -191,25 +191,43 @@ pub enum LoopTrigger {
     Start,
     /// Any non-terminal → Cancelled
     Cancel,
-    /// Running → Observing (handoff.wait step, no handoff found yet)
+    /// Running → Observing (handoff.wait step, no handoff found yet).
+    /// Not fired by recipe_tick (status derived from step pointer); retained for
+    /// external callers and the transition table's reference semantics.
     HandoffWaiting,
-    /// Observing → Running (handoff.wait step found an existing handoff)
+    /// Observing → Running (handoff.wait step found an existing handoff).
+    /// Not fired by recipe_tick (status derived from step pointer); retained for
+    /// external callers and the transition table's reference semantics.
     HandoffConsumed,
     /// Active → Observing|Blocked|NeedsHuman|Failed (external handoff record)
     HandoffReceived(HandoffStatus),
-    /// Running → Verifying (gates.run step started)
+    /// Running → Verifying (gates.run step started).
+    /// Not fired by recipe_tick (status derived from step pointer); retained for
+    /// external callers and the transition table's reference semantics.
     GatesStarted,
-    /// Verifying → Running (gates.run step completed)
+    /// Verifying → Running (gates.run step completed).
+    /// Not fired by recipe_tick (status derived from step pointer); retained for
+    /// external callers and the transition table's reference semantics.
     GatesCompleted,
-    /// Running → Blocked (max_rounds reached)
+    /// Running → Blocked (max_rounds reached).
+    /// Not fired by recipe_tick (uses status_override); retained for external
+    /// callers and the transition table's reference semantics.
     RoundBlocked,
-    /// Running → NeedsHuman (max_sessions reached)
+    /// Running → NeedsHuman (max_sessions reached).
+    /// Not fired by recipe_tick (uses status_override); retained for external
+    /// callers and the transition table's reference semantics.
     SessionLimitReached,
-    /// Running → Failed (max_ticks exceeded)
+    /// Running → Failed (max_ticks exceeded).
+    /// Not fired by recipe_tick (uses status_override); retained for external
+    /// callers and the transition table's reference semantics.
     MaxTicksExceeded,
-    /// Running → NeedsHuman (human.wait step)
+    /// Running → NeedsHuman (human.wait step).
+    /// Not fired by recipe_tick (uses status_override); retained for external
+    /// callers and the transition table's reference semantics.
     HumanWaitReached,
-    /// Running → {allow-listed targets} (recipe loop.status step)
+    /// Running → {allow-listed targets} (recipe loop.status step).
+    /// Not fired by recipe_tick (status derived from step pointer); retained for
+    /// external callers and the transition table's reference semantics.
     RecipeSetStatus(LoopStatus),
     /// CompletedUnreviewed → Approved (human approves)
     Approve,

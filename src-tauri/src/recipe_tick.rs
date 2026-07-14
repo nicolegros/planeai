@@ -639,6 +639,16 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     }
 }
 
+/// Execute a `loop.status` step — declares the loop's status.
+///
+/// The step pointer stays at this step (never advances). Status is derived from
+/// `step.status` by `persist_snapshot`. This makes `loop.status` a **parking
+/// spot**: the loop remains here until an external event (handoff, human resume,
+/// or recipe routing via `step.on`) moves the pointer elsewhere.
+///
+/// - Terminal/intervention statuses halt ticking via the tick guard.
+/// - Non-terminal statuses (observing, verifying) halt `auto_advance` because
+///   the step pointer doesn't change between ticks.
 fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     let status_str = step.status.as_deref().unwrap_or("observing");
 
