@@ -102,6 +102,8 @@ impl GateStatus {
 
 // ─── EffectExecutor Trait ────────────────────────────────────────────────────
 
+/// Abstraction over side-effectful write operations. Production uses
+/// [`RealEffectExecutor`]; tests inject a mock that records effects without I/O.
 pub trait EffectExecutor {
     fn create_session(
         &self,
@@ -149,6 +151,14 @@ pub trait EffectExecutor {
         loop_id: &str,
         round: i64,
     ) -> Result<(), String>;
+}
+
+// ─── LoopQueries Trait ───────────────────────────────────────────────────────
+
+/// Read-only queries used to gather decision inputs. Separated from
+/// [`EffectExecutor`] because reads are not effects — they provide data
+/// for the decision layer without changing state.
+pub trait LoopQueries {
     fn get_loop(
         &self,
         conn: &rusqlite::Connection,
@@ -368,7 +378,9 @@ impl EffectExecutor for RealEffectExecutor {
         .map_err(|e| format!("failed to update current_round: {e}"))?;
         Ok(())
     }
+}
 
+impl LoopQueries for RealEffectExecutor {
     fn get_loop(
         &self,
         conn: &rusqlite::Connection,

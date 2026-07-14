@@ -10,7 +10,7 @@ use planeai_core::loop_service::LoopService;
 use planeai_toon::{field, render, str_val, Value};
 
 use crate::loop_decision::{self, PreTickResult, TickDecision};
-use crate::loop_effects::{Effect, EffectExecutor, GateStatus, RealEffectExecutor};
+use crate::loop_effects::{Effect, EffectExecutor, GateStatus, LoopQueries, RealEffectExecutor};
 
 fn render_tick_result(loop_id: &str, recipe_id: &str, d: TickDecision) -> (String, i32) {
     let tick = vec![
@@ -36,17 +36,18 @@ pub fn tick_recipe(
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
 ) -> (String, i32) {
-    tick_recipe_with_executor(conn, loop_id, snapshot, &RealEffectExecutor)
+    tick_recipe_with_executor(conn, loop_id, snapshot, &RealEffectExecutor, &RealEffectExecutor)
 }
 
-/// Execute one recipe step using a provided effect executor (testable seam).
+/// Execute one recipe step using provided executor and queries (testable seam).
 pub fn tick_recipe_with_executor(
     conn: &rusqlite::Connection,
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
     executor: &dyn EffectExecutor,
+    queries: &dyn LoopQueries,
 ) -> (String, i32) {
-    let loop_status = executor
+    let loop_status = queries
         .get_loop(conn, loop_id)
         .ok()
         .flatten()
@@ -64,7 +65,7 @@ pub fn tick_recipe_with_executor(
     };
     snapshot.runtime.tick_count += 1;
     let result = match step.kind.as_str() {
-        STEP_SESSION_CREATE => exec_session_create(conn, executor, snapshot, &step, loop_id),
+        STEP_SESSION_CREATE => exec_session_create(conn, executor, queries, snapshot, &step, loop_id),
         STEP_SESSION_PROMPT => exec_simple(
             conn,
             executor,
@@ -73,7 +74,7 @@ pub fn tick_recipe_with_executor(
             loop_id,
             loop_decision::decide_session_prompt,
         ),
-        STEP_HANDOFF_WAIT => exec_handoff_wait(conn, executor, snapshot, &step, loop_id),
+        STEP_HANDOFF_WAIT => exec_handoff_wait(conn, executor, queries, snapshot, &step, loop_id),
         STEP_LOOP_STATUS => exec_simple(
             conn,
             executor,
@@ -106,7 +107,7 @@ pub fn tick_recipe_with_executor(
             loop_id,
             loop_decision::decide_round_next,
         ),
-        STEP_GATES_RUN => exec_gates_run(conn, executor, snapshot, &step, loop_id),
+        STEP_GATES_RUN => exec_gates_run(conn, executor, queries, snapshot, &step, loop_id),
         _ => return render_error("unsupported recipe step kind"),
     };
     match result {
@@ -150,15 +151,16 @@ where
 fn exec_session_create(
     conn: &rusqlite::Connection,
     executor: &dyn EffectExecutor,
+    queries: &dyn LoopQueries,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
     loop_id: &str,
 ) -> Result<TickDecision, String> {
     let role_id = step.role.as_deref().unwrap_or("default");
-    let existing = executor
+    let existing = queries
         .list_loop_sessions(conn, loop_id)
         .unwrap_or_default();
-    let loop_run = executor
+    let loop_run = queries
         .get_loop(conn, loop_id)?
         .ok_or_else(|| "loop not found".to_string())?;
     let maker_branch = if step.role.as_deref() != Some("maker") {
@@ -168,7 +170,7 @@ fn exec_session_create(
             .get("maker")
             .and_then(|ids| ids.last())
             .and_then(|sid| {
-                executor
+                queries
                     .get_session(conn, sid)
                     .ok()
                     .flatten()
@@ -237,6 +239,7 @@ fn exec_session_create(
 fn exec_handoff_wait(
     conn: &rusqlite::Connection,
     executor: &dyn EffectExecutor,
+    queries: &dyn LoopQueries,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
     loop_id: &str,
@@ -248,7 +251,7 @@ fn exec_handoff_wait(
         .get(role_id)
         .cloned()
         .unwrap_or_default();
-    let found = executor.find_handoff(
+    let found = queries.find_handoff(
         conn,
         loop_id,
         &sids,
@@ -258,7 +261,7 @@ fn exec_handoff_wait(
         None => loop_decision::decide_handoff_wait_waiting(snapshot, step, loop_id, role_id),
         Some((sid, status)) => {
             let summary = if status != "completed" {
-                executor.extract_handoff_summary(conn, loop_id, &sid).ok()
+                queries.extract_handoff_summary(conn, loop_id, &sid).ok()
             } else {
                 None
             };
@@ -274,6 +277,7 @@ fn exec_handoff_wait(
 fn exec_gates_run(
     conn: &rusqlite::Connection,
     executor: &dyn EffectExecutor,
+    queries: &dyn LoopQueries,
     snapshot: &mut RecipeSnapshot,
     step: &RecipeStep,
     loop_id: &str,
@@ -281,13 +285,13 @@ fn exec_gates_run(
     loop_decision::decide_gates_run_preflight(step)?;
     executor.transition_loop(conn, loop_id, LoopTrigger::GatesStarted)?;
     let session_id = resolve_gate_session(snapshot, step)?;
-    let loop_run = executor
+    let loop_run = queries
         .get_loop(conn, loop_id)?
         .ok_or("loop not found".to_string())?;
-    let project = executor
+    let project = queries
         .get_project(conn, &loop_run.project_id)?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
-    let session = executor
+    let session = queries
         .get_session(conn, &session_id)?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
     let (status, name, output, path) = run_gates(
