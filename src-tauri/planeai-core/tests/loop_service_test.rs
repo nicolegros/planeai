@@ -1290,6 +1290,8 @@ fn persist_snapshot_always_derives_status_from_step_pointer() {
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
+            candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1313,6 +1315,7 @@ fn persist_snapshot_always_derives_status_from_step_pointer() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         }],
         knowledge: RecipeKnowledge {
             files: vec![],
@@ -1412,6 +1415,8 @@ fn persist_snapshot_marks_stale_on_unknown_step_kind() {
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
+            candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1435,6 +1440,7 @@ fn persist_snapshot_marks_stale_on_unknown_step_kind() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         }],
         knowledge: RecipeKnowledge {
             files: vec![],

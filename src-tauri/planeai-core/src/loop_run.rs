@@ -373,15 +373,19 @@ pub fn can_tick(status: &LoopStatus) -> bool {
 /// Returns `None` for unrecognized step kinds.
 pub fn derive_status_from_step(step_kind: &str, step_status: Option<&str>) -> Option<LoopStatus> {
     use crate::loop_recipe::{
-        STEP_GATES_RUN, STEP_HANDOFF_WAIT, STEP_HUMAN_WAIT, STEP_LOOP_EVENT, STEP_LOOP_STATUS,
-        STEP_ROUND_NEXT, STEP_SESSION_CREATE, STEP_SESSION_PROMPT,
+        STEP_ARBITER_RANK, STEP_CANDIDATES_CREATE, STEP_CANDIDATES_WAIT, STEP_GATES_RUN,
+        STEP_HANDOFF_WAIT, STEP_HUMAN_WAIT, STEP_LOOP_EVENT, STEP_LOOP_STATUS, STEP_ROUND_NEXT,
+        STEP_SESSION_CREATE, STEP_SESSION_PROMPT,
     };
 
     match step_kind {
-        STEP_SESSION_CREATE | STEP_SESSION_PROMPT | STEP_LOOP_EVENT | STEP_ROUND_NEXT => {
-            Some(LoopStatus::Running)
-        }
-        STEP_HANDOFF_WAIT => Some(LoopStatus::Observing),
+        STEP_SESSION_CREATE
+        | STEP_SESSION_PROMPT
+        | STEP_LOOP_EVENT
+        | STEP_ROUND_NEXT
+        | STEP_CANDIDATES_CREATE
+        | STEP_ARBITER_RANK => Some(LoopStatus::Running),
+        STEP_HANDOFF_WAIT | STEP_CANDIDATES_WAIT => Some(LoopStatus::Observing),
         STEP_GATES_RUN => Some(LoopStatus::Verifying),
         STEP_HUMAN_WAIT => Some(LoopStatus::NeedsHuman),
         STEP_LOOP_STATUS => {
@@ -404,8 +408,11 @@ mod tests {
             ("session.prompt", None, Some(LoopStatus::Running)),
             ("loop.event", None, Some(LoopStatus::Running)),
             ("round.next", None, Some(LoopStatus::Running)),
+            ("candidates.create", None, Some(LoopStatus::Running)),
+            ("arbiter.rank", None, Some(LoopStatus::Running)),
             // Waiting steps
             ("handoff.wait", None, Some(LoopStatus::Observing)),
+            ("candidates.wait", None, Some(LoopStatus::Observing)),
             ("gates.run", None, Some(LoopStatus::Verifying)),
             ("human.wait", None, Some(LoopStatus::NeedsHuman)),
             // loop.status uses the step's status field
@@ -447,6 +454,9 @@ mod tests {
             "human.wait",
             "round.next",
             "gates.run",
+            "candidates.create",
+            "candidates.wait",
+            "arbiter.rank",
         ];
         for kind in &v1_kinds {
             assert!(

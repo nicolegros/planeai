@@ -166,6 +166,14 @@ enum AxiLoopAction {
         /// Base branch for worktree isolation (deprecated: use --input base_branch="...")
         #[arg(long, hide = true)]
         base_branch: Option<String>,
+        /// Comma-separated provider names for n-candidates-arbiter strategy
+        /// (shorthand for --input providers="claude,codex,kiro")
+        #[arg(long, value_delimiter = ',')]
+        providers: Vec<String>,
+        /// Provider for the arbiter session in n-candidates-arbiter strategy
+        /// (shorthand for --input arbiter_provider="copilot")
+        #[arg(long)]
+        arbiter_provider: Option<String>,
         /// Set an input key=value pair (repeatable, e.g. --input goal="Fix bug" --input task_key=BUG-1)
         #[arg(long = "input", value_name = "KEY=VALUE")]
         input_kv: Vec<String>,
@@ -1251,19 +1259,39 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             project,
             start,
             base_branch,
+            providers,
+            arbiter_provider,
             input_kv,
             inputs_json,
         } => {
-            let merged = match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch)
-            {
-                Ok(m) => m,
-                Err((output, code)) => {
-                    return {
-                        print!("{output}");
-                        code
+            let mut merged =
+                match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch) {
+                    Ok(m) => m,
+                    Err((output, code)) => {
+                        return {
+                            print!("{output}");
+                            code
+                        }
                     }
+                };
+
+            // Inject --providers as inputs.providers (comma-separated)
+            if !providers.is_empty() && !merged.contains_key("providers") {
+                merged.insert(
+                    "providers".to_string(),
+                    serde_json::Value::String(providers.join(",")),
+                );
+            }
+
+            // Inject --arbiter-provider as inputs.arbiter_provider
+            if let Some(ref ap) = arbiter_provider {
+                if !merged.contains_key("arbiter_provider") {
+                    merged.insert(
+                        "arbiter_provider".to_string(),
+                        serde_json::Value::String(ap.clone()),
+                    );
                 }
-            };
+            }
 
             // Extract goal from merged inputs (required)
             let final_goal = match merged.get("goal").and_then(|v| v.as_str()) {

@@ -213,6 +213,9 @@ pub fn tick_recipe(
         STEP_HUMAN_WAIT => exec_human_wait(&mut ctx, &step),
         STEP_ROUND_NEXT => exec_round_next(&mut ctx, &step),
         STEP_GATES_RUN => exec_gates_run(&mut ctx, &step),
+        STEP_CANDIDATES_CREATE => exec_candidates_create(&mut ctx, &step),
+        STEP_CANDIDATES_WAIT => exec_candidates_wait(&mut ctx, &step),
+        STEP_ARBITER_RANK => exec_arbiter_rank(&mut ctx, &step),
         _ => return render_error("unsupported recipe step kind"),
     };
 
@@ -297,13 +300,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     };
 
     // 3. Resolve project from loop
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
-
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (loop_run, project) = resolve_loop_project(ctx)?;
 
     // 4. Determine worktree usage based on isolation
     let round = ctx.snapshot.runtime.round;
@@ -828,7 +825,8 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
         });
     }
 
-    // Increment round
+    // Increment round — clear per-round state so it doesn't carry over.
+    ctx.snapshot.runtime.candidate_handoffs.clear();
     ctx.snapshot.runtime.round += 1;
     let new_round = ctx.snapshot.runtime.round;
 
@@ -865,91 +863,120 @@ fn exec_gates_run_body(
 ) -> Result<(&'static str, Option<String>), String> {
     use planeai_core::verifier::{VerifierLimits, VerifyGateRequest};
 
-    let session_id = if let Some(ref role) = step.role {
+    let session_ids: Vec<String> = if let Some(ref role) = step.role {
         ctx.snapshot
             .runtime
             .created_session_ids
             .get(role)
-            .and_then(|ids| ids.last())
             .cloned()
-            .ok_or_else(|| format!("step '{}': no sessions found for role '{}'", step.id, role))?
+            .unwrap_or_default()
     } else {
         ctx.snapshot
             .runtime
             .created_session_ids
             .values()
             .flatten()
-            .last()
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "step '{}': no sessions available for gate execution",
-                    step.id
-                )
-            })?
+            .collect()
     };
 
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
+    if session_ids.is_empty() {
+        let role_display = step.role.as_deref().unwrap_or("(any)");
+        return Err(format!(
+            "step '{}': no sessions found for role '{}'",
+            step.id, role_display
+        ));
+    }
 
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (_loop_run, project) = resolve_loop_project(ctx)?;
 
-    let session = crate::db::get_session(ctx.conn, &session_id)
-        .map_err(|e| format!("failed to get session: {e}"))?
-        .ok_or_else(|| format!("session not found: {session_id}"))?;
-
+    // Run gates against ALL sessions for the role (supports n-candidates).
     let mut overall_status: &str = "pass";
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
     let mut failed_gate_output_path: Option<String> = None;
-    for gate in &step.gates {
-        let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
-        let request = VerifyGateRequest {
-            loop_id: ctx.loop_id.to_string(),
-            session_id: session_id.clone(),
-            name: gate.name.clone(),
-            command: rendered_command,
-            project_path: project.path.clone(),
-            session_worktree_path: session.worktree_path.clone(),
-            limits: VerifierLimits::default(),
+
+    for session_id in &session_ids {
+        let session = match crate::db::get_session(ctx.conn, session_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                tracing::warn!(session_id = %short_id(session_id), "gates: session not found, skipping");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(session_id = %short_id(session_id), error = %e, "gates: failed to load session, skipping");
+                continue;
+            }
         };
 
-        match planeai_core::verifier::run_verifier_gate(ctx.conn, request) {
-            Ok(result) => {
-                let status_str = result.status.as_str();
-                if status_str != "pass" {
-                    overall_status = if status_str == "error" {
-                        "error"
-                    } else {
-                        "fail"
-                    };
-                    failed_gate_name = gate.name.clone();
-                    if let Some(ref path) = result.output_path {
-                        failed_gate_output = std::fs::read_to_string(path).ok();
-                        failed_gate_output_path = result.output_path.clone();
+        for gate in &step.gates {
+            let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
+
+            // Defense-in-depth: reject gate commands with shell metacharacters that
+            // could indicate injection (backticks, $(), eval). Gate commands are
+            // authored by humans at loop creation time, not agents.
+            const FORBIDDEN_PATTERNS: &[&str] = &["`", "$(", "${", "eval "];
+            for pattern in FORBIDDEN_PATTERNS {
+                if rendered_command.contains(pattern) {
+                    return Err(format!(
+                        "step '{}': gate '{}' command contains forbidden pattern '{}' — \
+                         gate commands must not use command substitution or eval",
+                        step.id, gate.name, pattern
+                    ));
+                }
+            }
+
+            let request = VerifyGateRequest {
+                loop_id: ctx.loop_id.to_string(),
+                session_id: session_id.clone(),
+                name: gate.name.clone(),
+                command: rendered_command,
+                project_path: project.path.clone(),
+                session_worktree_path: session.worktree_path.clone(),
+                limits: VerifierLimits::default(),
+            };
+
+            match planeai_core::verifier::run_verifier_gate(ctx.conn, request) {
+                Ok(result) => {
+                    let status_str = result.status.as_str();
+                    if status_str != "pass" {
+                        overall_status = if status_str == "error" {
+                            "error"
+                        } else {
+                            "fail"
+                        };
+                        failed_gate_name = gate.name.clone();
+                        if let Some(ref path) = result.output_path {
+                            failed_gate_output = std::fs::read_to_string(path).ok();
+                            failed_gate_output_path = result.output_path.clone();
+                        }
+                        // For multi-candidate: record which session failed but continue
+                        // checking others. The first failure determines the overall status.
+                        break;
                     }
+                }
+                Err(e) => {
+                    LoopService::append_loop_event(
+                        ctx.conn,
+                        ctx.loop_id,
+                        "recipe_step_failed",
+                        &serde_json::json!({
+                            "step_id": step.id,
+                            "gate": gate.name,
+                            "session_id": session_id,
+                            "error": e.to_string(),
+                        }),
+                    )
+                    .ok();
+                    overall_status = "error";
+                    failed_gate_name = gate.name.clone();
                     break;
                 }
             }
-            Err(e) => {
-                LoopService::append_loop_event(
-                    ctx.conn,
-                    ctx.loop_id,
-                    "recipe_step_failed",
-                    &serde_json::json!({
-                        "step_id": step.id,
-                        "gate": gate.name,
-                        "error": e.to_string(),
-                    }),
-                )
-                .ok();
-                overall_status = "error";
-                failed_gate_name = gate.name.clone();
-                break;
-            }
+        }
+        // Stop at first session that fails (fail-fast for routing).
+        if overall_status != "pass" {
+            break;
         }
     }
 
@@ -1066,7 +1093,820 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
     })
 }
 
+// ─── N-Candidates + Arbiter Step Executors ───────────────────────────────────
+
+fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    let role_id = step.role.as_deref().unwrap_or("default");
+
+    // 1. Render providers template and split by comma
+    let providers_tpl = step
+        .providers
+        .as_deref()
+        .ok_or_else(|| format!("step '{}': candidates.create requires 'providers'", step.id))?;
+    let rendered_providers = render_prompt(providers_tpl, ctx.snapshot, ctx.loop_id);
+    let providers: Vec<&str> = rendered_providers
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if providers.is_empty() {
+        return Err(format!(
+            "step '{}': providers list is empty after rendering",
+            step.id
+        ));
+    }
+
+    // Validate provider names: only alphanumeric, dashes, underscores, and dots allowed.
+    // This prevents branch-name injection via crafted provider strings (SECURITY 1).
+    for p in &providers {
+        if !p
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err(format!(
+                "step '{}': invalid provider name '{}' — only alphanumeric, dashes, underscores, and dots are allowed",
+                step.id, p
+            ));
+        }
+    }
+
+    // Deduplicate providers to prevent branch collisions (ROBUSTNESS 1).
+    let providers: Vec<&str> = {
+        let mut seen = std::collections::HashSet::new();
+        providers.into_iter().filter(|p| seen.insert(*p)).collect()
+    };
+
+    tracing::info!(
+        loop_id = %short_id(ctx.loop_id),
+        step_id = %step.id,
+        count = providers.len(),
+        "exec_candidates_create: creating {} candidate sessions",
+        providers.len()
+    );
+    tracing::debug!(
+        loop_id = %short_id(ctx.loop_id),
+        providers = ?providers,
+        "exec_candidates_create: provider list"
+    );
+
+    // 2. Check max_sessions
+    let existing_sessions =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
+    let remaining_capacity = ctx
+        .snapshot
+        .policy
+        .max_sessions
+        .saturating_sub(existing_sessions.len() as u32);
+
+    if (providers.len() as u32) > remaining_capacity {
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
+        LoopService::append_loop_event(
+            ctx.conn,
+            ctx.loop_id,
+            "recipe_runtime_limit_reached",
+            &serde_json::json!({
+                "step_id": step.id,
+                "limit": "max_sessions",
+                "requested": providers.len(),
+                "remaining_capacity": remaining_capacity,
+            }),
+        )
+        .ok();
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![field("limit", str_val("max_sessions"))],
+            next_actions: vec![format!(
+                "need {} sessions but only {} capacity remaining",
+                providers.len(),
+                remaining_capacity
+            )],
+        });
+    }
+
+    // 3. Resolve loop and project
+    let (loop_run, project) = resolve_loop_project(ctx)?;
+
+    let round = ctx.snapshot.runtime.round;
+
+    // Render prompt (shared across all candidates)
+    let rendered_prompt = step
+        .prompt
+        .as_ref()
+        .map(|tpl| render_prompt(tpl, ctx.snapshot, ctx.loop_id));
+
+    // Base branch for candidates
+    let base_branch = ctx
+        .snapshot
+        .inputs
+        .get("base_branch")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // 4. Create a session for each provider.
+    // Idempotency guard: on retry (partial failure), skip providers that already have
+    // sessions tracked from a previous attempt (CORRECTNESS 2, ROBUSTNESS 1).
+    let existing_providers: std::collections::HashSet<String> =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|ls| ls.role == role_id && ls.round == round as i64)
+            .filter_map(|ls| ls.provider.clone())
+            .collect();
+
+    let mut created_sessions = Vec::new();
+    for provider_name in &providers {
+        // Skip providers that already succeeded in a previous attempt
+        if existing_providers.contains(*provider_name) {
+            continue;
+        }
+
+        let branch_name = format!(
+            "loop/{}/{}-{}-r{}",
+            short_id(ctx.loop_id),
+            role_id,
+            provider_name,
+            round
+        );
+
+        // "default" means "use the user's configured default provider"
+        let provider_opt = if *provider_name == "default" {
+            None
+        } else {
+            Some(provider_name.to_string())
+        };
+
+        let opts = crate::cli::SessionCreateOpts {
+            project: project.name.clone(),
+            branch: branch_name.clone(),
+            name: Some(format!(
+                "{}-{} ({})",
+                role_id,
+                provider_name,
+                short_id(ctx.loop_id)
+            )),
+            new_branch: true,
+            worktree: true,
+            base_branch: base_branch.clone(),
+            yolo: ctx.snapshot.policy.auto_approve,
+            provider: provider_opt,
+            task_key: loop_run.task_key.clone(),
+            prompt: rendered_prompt.clone(),
+            parent_session_id: loop_run.created_by_session_id.clone(),
+        };
+
+        let session = match crate::cli::create_session(ctx.conn, opts) {
+            Ok(s) => {
+                tracing::info!(
+                    loop_id = %short_id(ctx.loop_id),
+                    session_id = %s.id,
+                    role = %role_id,
+                    provider = %provider_name,
+                    branch = %branch_name,
+                    "exec_candidates_create: candidate session created"
+                );
+                s
+            }
+            Err(e) => {
+                tracing::error!(
+                    loop_id = %short_id(ctx.loop_id),
+                    role = %role_id,
+                    provider = %provider_name,
+                    error = %e,
+                    "exec_candidates_create: session creation failed"
+                );
+                LoopService::append_loop_event(
+                    ctx.conn,
+                    ctx.loop_id,
+                    "recipe_step_failed",
+                    &serde_json::json!({
+                        "step_id": step.id,
+                        "kind": step.kind,
+                        "provider": provider_name,
+                        "error": e,
+                    }),
+                )
+                .ok();
+                return Err(format!(
+                    "candidates.create failed for provider '{}': {e}",
+                    provider_name
+                ));
+            }
+        };
+
+        // Link session to loop
+        let provider_str = provider_name.to_string();
+
+        LoopService::add_loop_session(
+            ctx.conn,
+            planeai_core::loop_service::AddLoopSessionParams {
+                loop_id: ctx.loop_id.to_string(),
+                session_id: session.id.clone(),
+                role: role_id.to_string(),
+                round: round as i64,
+                provider: Some(provider_str),
+                status: "active".to_string(),
+            },
+        )
+        .map_err(|e| format!("failed to link session to loop: {e}"))?;
+
+        // Track in runtime
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .entry(role_id.to_string())
+            .or_default()
+            .push(session.id.clone());
+
+        // Persist snapshot after each successful session so partial failures
+        // don't leave orphaned sessions untracked (CORRECTNESS 2).
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+        created_sessions.push((session.id, provider_name.to_string()));
+    }
+
+    // 5. Append event and advance
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_step_completed",
+        &serde_json::json!({
+            "step_id": step.id,
+            "kind": step.kind,
+            "candidates_created": created_sessions.len(),
+            "providers": providers,
+            "role": role_id,
+            "round": round,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    advance_step(ctx.snapshot, step);
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field(
+            "candidates_created",
+            Value::Object(vec![
+                field("count", str_val(&created_sessions.len().to_string())),
+                field("role", str_val(role_id)),
+                field(
+                    "providers",
+                    Value::List(providers.iter().map(|p| p.to_string()).collect()),
+                ),
+            ]),
+        )],
+        next_actions: vec![format!(
+            "wait for all {} candidates to hand off, then run `planeai-cli axi loop tick {}`",
+            created_sessions.len(),
+            short_id(ctx.loop_id)
+        )],
+    })
+}
+
+fn exec_candidates_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    let role_id = step.from.as_deref().unwrap_or("default");
+    let round = ctx.snapshot.runtime.round;
+
+    // Only consider sessions from the current round (created_session_ids accumulates
+    // across rounds, but candidate_handoffs is cleared per round).
+    let all_session_ids = ctx
+        .snapshot
+        .runtime
+        .created_session_ids
+        .get(role_id)
+        .cloned()
+        .unwrap_or_default();
+
+    let current_round_sessions: std::collections::HashSet<String> =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|ls| ls.role == role_id && ls.round == round as i64)
+            .map(|ls| ls.session_id.clone())
+            .collect();
+
+    let session_ids: Vec<String> = all_session_ids
+        .into_iter()
+        .filter(|sid| current_round_sessions.contains(sid))
+        .collect();
+
+    if session_ids.is_empty() {
+        return Err(format!(
+            "step '{}': no sessions exist for role '{role_id}'",
+            step.id
+        ));
+    }
+
+    let total_candidates = session_ids.len();
+    let after_ts = ctx.snapshot.runtime.last_handoff_consumed_at.as_deref();
+
+    // Check each candidate session for handoffs
+    let mut new_handoffs_found = false;
+    for session_id in &session_ids {
+        // Skip if we already tracked this candidate's handoff
+        if ctx
+            .snapshot
+            .runtime
+            .candidate_handoffs
+            .contains_key(session_id)
+        {
+            continue;
+        }
+
+        // Check for handoff from this specific session
+        let found = match LoopService::find_handoff_for_sessions(
+            ctx.conn,
+            ctx.loop_id,
+            std::slice::from_ref(session_id),
+            after_ts,
+        ) {
+            Ok(f) => f,
+            Err(e) => {
+                // Single-session query failure should not abort the entire step (ROBUSTNESS 3).
+                tracing::warn!(
+                    loop_id = %short_id(ctx.loop_id),
+                    session_id = %short_id(session_id),
+                    error = %e,
+                    "exec_candidates_wait: handoff query failed for session, skipping"
+                );
+                continue;
+            }
+        };
+
+        if let Some((_sid, handoff_status)) = found {
+            tracing::info!(
+                loop_id = %short_id(ctx.loop_id),
+                session_id = %short_id(session_id),
+                handoff_status = %handoff_status,
+                "exec_candidates_wait: candidate handoff received"
+            );
+            ctx.snapshot
+                .runtime
+                .candidate_handoffs
+                .insert(session_id.clone(), handoff_status);
+            new_handoffs_found = true;
+        }
+    }
+
+    // Track persistent query failures: if no new handoffs were discovered and
+    // all unresolved queries failed/returned nothing, increment the failure counter.
+    // Escalate to needs_human after 5 consecutive failed ticks.
+    if new_handoffs_found {
+        ctx.snapshot.runtime.candidates_query_failures = 0;
+    } else {
+        ctx.snapshot.runtime.candidates_query_failures += 1;
+        const MAX_QUERY_FAILURES: u32 = 5;
+        if ctx.snapshot.runtime.candidates_query_failures >= MAX_QUERY_FAILURES {
+            tracing::error!(
+                loop_id = %short_id(ctx.loop_id),
+                consecutive_failures = ctx.snapshot.runtime.candidates_query_failures,
+                "exec_candidates_wait: persistent handoff query failures, escalating to needs_human"
+            );
+            ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
+            LoopService::append_loop_event(
+                ctx.conn,
+                ctx.loop_id,
+                "recipe_step_failed",
+                &serde_json::json!({
+                    "step_id": step.id,
+                    "kind": step.kind,
+                    "reason": "persistent_query_failures",
+                    "consecutive_failures": ctx.snapshot.runtime.candidates_query_failures,
+                }),
+            )
+            .ok();
+            save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+            return Ok(TickResult {
+                step_id: step.id.clone(),
+                step_kind: step.kind.clone(),
+                status: "needs_human".into(),
+                extra: vec![field(
+                    "reason",
+                    str_val("persistent handoff query failures"),
+                )],
+                next_actions: vec![
+                    "handoff queries have failed repeatedly — check database health".to_string(),
+                ],
+            });
+        }
+    }
+
+    let completed_count = ctx.snapshot.runtime.candidate_handoffs.len();
+
+    // Check if all candidates have handed off
+    if completed_count >= total_candidates {
+        tracing::info!(
+            loop_id = %short_id(ctx.loop_id),
+            total = total_candidates,
+            completed = completed_count,
+            "exec_candidates_wait: all candidates have handed off"
+        );
+
+        // Record consumption timestamp
+        ctx.snapshot.runtime.last_handoff_consumed_at = Some(chrono::Utc::now().to_rfc3339());
+        ctx.snapshot.runtime.status_override = None;
+
+        // Route via step.on (key="all_complete") if available
+        let next_step = step
+            .on
+            .as_ref()
+            .and_then(|m| m.get("all_complete"))
+            .cloned();
+
+        LoopService::append_loop_event(
+            ctx.conn,
+            ctx.loop_id,
+            "recipe_step_completed",
+            &serde_json::json!({
+                "step_id": step.id,
+                "kind": step.kind,
+                "total_candidates": total_candidates,
+                "completed_candidates": completed_count,
+                "candidate_handoffs": &ctx.snapshot.runtime.candidate_handoffs,
+                "next_step": next_step,
+            }),
+        )
+        .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+        if let Some(ref ns) = next_step {
+            ctx.snapshot.runtime.current_step = ns.clone();
+        } else {
+            advance_step(ctx.snapshot, step);
+        }
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+        let next_display = next_step.as_deref().unwrap_or("(next)");
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "observing".into(),
+            extra: vec![
+                field(
+                    "candidates_complete",
+                    Value::Object(vec![
+                        field("total", str_val(&total_candidates.to_string())),
+                        field("completed", str_val(&completed_count.to_string())),
+                    ]),
+                ),
+                field("next_step", str_val(next_display)),
+            ],
+            next_actions: vec![format!(
+                "all candidates complete — run `planeai-cli axi loop tick {}` to continue to '{}'",
+                short_id(ctx.loop_id),
+                next_display
+            )],
+        });
+    }
+
+    // Not all candidates have handed off yet — stay at this step
+    if new_handoffs_found {
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+    }
+
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_step_waiting",
+        &serde_json::json!({
+            "step_id": step.id,
+            "waiting_for": "candidate_handoffs",
+            "role": role_id,
+            "total": total_candidates,
+            "completed": completed_count,
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field(
+            "waiting_for",
+            Value::Object(vec![
+                field("kind", str_val("candidate_handoffs")),
+                field("role", str_val(role_id)),
+                field("total", str_val(&total_candidates.to_string())),
+                field("completed", str_val(&completed_count.to_string())),
+            ]),
+        )],
+        next_actions: vec![format!(
+            "{}/{} candidates have handed off — waiting for remaining",
+            completed_count, total_candidates
+        )],
+    })
+}
+
+fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
+    let role_id = step.role.as_deref().unwrap_or("arbiter");
+
+    // 1. Check max_sessions
+    let existing_sessions =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
+    if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
+        LoopService::append_loop_event(
+            ctx.conn,
+            ctx.loop_id,
+            "recipe_runtime_limit_reached",
+            &serde_json::json!({
+                "step_id": step.id,
+                "limit": "max_sessions",
+                "current": existing_sessions.len(),
+                "max": ctx.snapshot.policy.max_sessions,
+            }),
+        )
+        .ok();
+        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+        return Ok(TickResult {
+            step_id: step.id.clone(),
+            step_kind: step.kind.clone(),
+            status: "needs_human".into(),
+            extra: vec![field("limit", str_val("max_sessions"))],
+            next_actions: vec!["max_sessions reached — cannot create arbiter session".to_string()],
+        });
+    }
+
+    // 2. Resolve role from recipe
+    let role = ctx.snapshot.roles.get(role_id).cloned();
+    let provider = role
+        .as_ref()
+        .map(|r| r.provider.clone())
+        .unwrap_or_else(|| "default".to_string());
+    let isolation = role
+        .as_ref()
+        .map(|r| r.isolation.clone())
+        .unwrap_or_else(|| "readonly".to_string());
+
+    let provider_opt = if provider == "default" {
+        None
+    } else {
+        Some(provider.clone())
+    };
+
+    // 3. Resolve project from loop
+    let (loop_run, project) = resolve_loop_project(ctx)?;
+
+    let round = ctx.snapshot.runtime.round;
+
+    // 4. Build candidates context for the arbiter prompt
+    // The candidate role is derived from step.from (e.g., "maker"), defaulting to "maker".
+    let candidate_role = step.from.as_deref().unwrap_or("maker");
+    let candidates_context = build_candidates_context(ctx, candidate_role);
+
+    // 5. Render the prompt with candidates context
+    let rendered_prompt = step.prompt.as_ref().map(|tpl| {
+        render_prompt_with_candidates(tpl, ctx.snapshot, ctx.loop_id, &candidates_context)
+    });
+
+    // 6. Create arbiter session
+    let use_worktree = isolation == "worktree";
+    let branch_name = format!("loop/{}/{}-r{}", short_id(ctx.loop_id), role_id, round);
+
+    // For readonly/review roles, base on first maker's branch so they can see the code.
+    // Always create a new branch (new_branch=true) — for non-worktree isolation the session
+    // still needs its own branch created from the maker's branch point.
+    let base_branch = if !use_worktree {
+        ctx.snapshot
+            .runtime
+            .created_session_ids
+            .get("maker")
+            .and_then(|ids| ids.first())
+            .and_then(|sid| {
+                crate::db::get_session(ctx.conn, sid)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.branch)
+            })
+    } else {
+        None
+    };
+
+    // Override provider with inputs.arbiter_provider if specified (CORRECTNESS 3).
+    // "default" means "use the user's configured default provider" → pass None.
+    let provider_opt = match ctx
+        .snapshot
+        .inputs
+        .get("arbiter_provider")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some("default") => None,
+        Some(ap) => {
+            // Validate arbiter provider name (same rules as candidate providers).
+            if !ap
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+            {
+                return Err(format!(
+                    "step '{}': invalid arbiter_provider '{}' — only alphanumeric, dashes, underscores, and dots are allowed",
+                    step.id, ap
+                ));
+            }
+            Some(ap.to_string())
+        }
+        None => provider_opt,
+    };
+
+    // Resolve the effective provider name for logging/tracking
+    let effective_provider = provider_opt.as_deref().unwrap_or("default").to_string();
+
+    let opts = crate::cli::SessionCreateOpts {
+        project: project.name.clone(),
+        branch: branch_name.clone(),
+        name: Some(format!("{} ({})", role_id, short_id(ctx.loop_id))),
+        new_branch: true,
+        worktree: use_worktree,
+        base_branch,
+        yolo: ctx.snapshot.policy.auto_approve,
+        provider: provider_opt,
+        task_key: loop_run.task_key.clone(),
+        prompt: rendered_prompt,
+        parent_session_id: loop_run.created_by_session_id.clone(),
+    };
+
+    let session = match crate::cli::create_session(ctx.conn, opts) {
+        Ok(s) => {
+            tracing::info!(
+                loop_id = %short_id(ctx.loop_id),
+                session_id = %s.id,
+                role = %role_id,
+                provider = %effective_provider,
+                "exec_arbiter_rank: arbiter session created"
+            );
+            s
+        }
+        Err(e) => {
+            tracing::error!(
+                loop_id = %short_id(ctx.loop_id),
+                role = %role_id,
+                error = %e,
+                "exec_arbiter_rank: session creation failed"
+            );
+            LoopService::append_loop_event(
+                ctx.conn,
+                ctx.loop_id,
+                "recipe_step_failed",
+                &serde_json::json!({
+                    "step_id": step.id,
+                    "kind": step.kind,
+                    "error": e,
+                }),
+            )
+            .ok();
+            return Err(format!("arbiter.rank session creation failed: {e}"));
+        }
+    };
+
+    // 7. Link session to loop
+    // 7. Track session in runtime state BEFORE linking — reduces the orphan
+    //    window since retries can detect the already-created session.
+    ctx.snapshot
+        .runtime
+        .created_session_ids
+        .entry(role_id.to_string())
+        .or_default()
+        .push(session.id.clone());
+
+    // 8. Link session to loop
+    LoopService::add_loop_session(
+        ctx.conn,
+        planeai_core::loop_service::AddLoopSessionParams {
+            loop_id: ctx.loop_id.to_string(),
+            session_id: session.id.clone(),
+            role: role_id.to_string(),
+            round: round as i64,
+            provider: Some(effective_provider.clone()),
+            status: "active".to_string(),
+        },
+    )
+    .map_err(|e| {
+        tracing::warn!(
+            session_id = %session.id,
+            loop_id = %ctx.loop_id,
+            role = %role_id,
+            "orphaned arbiter session: created but failed to link to loop; manual cleanup may be needed"
+        );
+        format!("failed to link arbiter session to loop: {e}")
+    })?;
+
+    // 9. Append event and advance
+    LoopService::append_loop_event(
+        ctx.conn,
+        ctx.loop_id,
+        "recipe_step_completed",
+        &serde_json::json!({
+            "step_id": step.id,
+            "kind": step.kind,
+            "session_id": session.id,
+            "role": role_id,
+            "round": round,
+            "candidates_reviewed": ctx.snapshot.runtime.candidate_handoffs.len(),
+        }),
+    )
+    .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+    advance_step(ctx.snapshot, step);
+    save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+    Ok(TickResult {
+        step_id: step.id.clone(),
+        step_kind: step.kind.clone(),
+        status: "observing".into(),
+        extra: vec![field(
+            "arbiter_session",
+            Value::Object(vec![
+                field("id", str_val(short_id(&session.id))),
+                field("role", str_val(role_id)),
+                field("provider", str_val(&effective_provider)),
+            ]),
+        )],
+        next_actions: vec![format!(
+            "wait for arbiter handoff, then run `planeai-cli axi loop tick {}`",
+            short_id(ctx.loop_id)
+        )],
+    })
+}
+
+/// Build a formatted string describing all candidate sessions and their handoff status
+/// for injection into the arbiter prompt.
+fn build_candidates_context(ctx: &TickContext, candidate_role: &str) -> String {
+    let mut lines = Vec::new();
+
+    // Collect candidate info from loop_sessions table
+    let loop_sessions = LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
+
+    for ls in &loop_sessions {
+        // Only include sessions matching the candidate role
+        if ls.role != candidate_role {
+            continue;
+        }
+
+        let handoff_status = ctx
+            .snapshot
+            .runtime
+            .candidate_handoffs
+            .get(&ls.session_id)
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
+
+        let provider = ls.provider.as_deref().unwrap_or("unknown");
+
+        // Try to get branch info from the session
+        let branch = crate::db::get_session(ctx.conn, &ls.session_id)
+            .ok()
+            .flatten()
+            .map(|s| s.branch)
+            .unwrap_or_else(|| "(unknown)".to_string());
+
+        lines.push(format!(
+            "- Session: {} | Provider: {} | Branch: {} | Handoff: {}",
+            short_id(&ls.session_id),
+            provider,
+            branch,
+            handoff_status
+        ));
+    }
+
+    if lines.is_empty() {
+        "(no candidates found)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// Render a prompt template with additional `candidates` variable in the context.
+fn render_prompt_with_candidates(
+    template: &str,
+    snapshot: &RecipeSnapshot,
+    loop_id: &str,
+    candidates_context: &str,
+) -> String {
+    render_prompt_inner(template, snapshot, loop_id, Some(candidates_context))
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Resolve the loop run and its associated project. Shared by session-creating executors.
+fn resolve_loop_project(
+    ctx: &TickContext,
+) -> Result<(planeai_core::loop_run::LoopRun, crate::db::Project), String> {
+    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
+        .map_err(|e| format!("failed to load loop: {e}"))?
+        .ok_or_else(|| "loop not found".to_string())?;
+    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
+        .map_err(|e| format!("failed to resolve project: {e}"))?
+        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    Ok((loop_run, project))
+}
 
 /// Resolve the branch name and whether it's a new branch for a session.create step.
 ///
@@ -1171,6 +2011,17 @@ fn save_snapshot(
 /// No file inclusion, no shell execution, no arbitrary code.
 #[allow(dead_code)] // Used by tests; production usage lands when session.create is wired.
 fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> String {
+    render_prompt_inner(template, snapshot, loop_id, None)
+}
+
+/// Internal prompt renderer. Accepts optional extra context (e.g., candidates summary).
+/// Both `render_prompt` and `render_prompt_with_candidates` delegate here.
+fn render_prompt_inner(
+    template: &str,
+    snapshot: &RecipeSnapshot,
+    loop_id: &str,
+    candidates_context: Option<&str>,
+) -> String {
     use minijinja::{context, Environment};
 
     let mut env = Environment::new();
@@ -1203,7 +2054,8 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
             .join("\n")
     };
 
-    // Build the context
+    // Build the context — candidates is included as empty string when absent so
+    // templates referencing {{ candidates }} don't fail.
     let ctx = context! {
         inputs => &snapshot.inputs,
         loop_run => context! {
@@ -1219,6 +2071,7 @@ fn render_prompt(template: &str, snapshot: &RecipeSnapshot, loop_id: &str) -> St
             round => snapshot.runtime.round,
             last_error => snapshot.runtime.last_error.as_deref().unwrap_or(""),
         },
+        candidates => candidates_context.unwrap_or(""),
     };
 
     match tpl.render(ctx) {
@@ -1397,6 +2250,8 @@ mod tests {
                 status_override: None,
                 last_activity_at: None,
                 session_observations: BTreeMap::new(),
+                candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
@@ -1427,6 +2282,7 @@ mod tests {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         }
     }
 

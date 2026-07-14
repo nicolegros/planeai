@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 // ─── Built-in recipes (embedded at compile time) ─────────────────────────────
 
 const BUILTIN_MAKER_VERIFIER: &str = include_str!("../resources/recipes/maker-verifier.yaml");
+const BUILTIN_N_CANDIDATES_ARBITER: &str =
+    include_str!("../resources/recipes/n-candidates-arbiter.yaml");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -102,6 +104,14 @@ pub struct RecipeRuntime {
     /// Per-session observation state for stale/heartbeat detection.
     #[serde(default)]
     pub session_observations: BTreeMap<String, SessionObservation>,
+    /// Per-candidate handoff status tracking for candidates.wait.
+    /// Maps session_id → handoff status string (e.g., "completed", "failed").
+    #[serde(default)]
+    pub candidate_handoffs: BTreeMap<String, String>,
+    /// Counter for consecutive ticks where all handoff queries failed in candidates.wait.
+    /// Reset to 0 when at least one query succeeds. Escalates to needs_human at threshold.
+    #[serde(default)]
+    pub candidates_query_failures: u32,
 }
 
 /// Tracks the last-known observation cursor for a loop-owned session.
@@ -138,6 +148,13 @@ impl RecipeService {
     pub fn builtin_recipes() -> Vec<DiscoveredRecipe> {
         let mut recipes = Vec::new();
         if let Ok(recipe) = Self::parse_yaml(BUILTIN_MAKER_VERIFIER) {
+            recipes.push(DiscoveredRecipe {
+                recipe,
+                source: RecipeSource::Builtin,
+                path: None,
+            });
+        }
+        if let Ok(recipe) = Self::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER) {
             recipes.push(DiscoveredRecipe {
                 recipe,
                 source: RecipeSource::Builtin,
@@ -273,10 +290,16 @@ impl RecipeService {
         }
 
         // Step validation
-        let role_bearing_kinds: HashSet<&str> =
-            [STEP_SESSION_CREATE, STEP_SESSION_PROMPT, STEP_HANDOFF_WAIT]
-                .into_iter()
-                .collect();
+        let role_bearing_kinds: HashSet<&str> = [
+            STEP_SESSION_CREATE,
+            STEP_SESSION_PROMPT,
+            STEP_HANDOFF_WAIT,
+            STEP_CANDIDATES_CREATE,
+            STEP_CANDIDATES_WAIT,
+            STEP_ARBITER_RANK,
+        ]
+        .into_iter()
+        .collect();
 
         let mut referenced_roles: HashSet<String> = HashSet::new();
 
@@ -433,6 +456,8 @@ impl RecipeService {
                 status_override: None,
                 last_activity_at: None,
                 session_observations: BTreeMap::new(),
+                candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,
@@ -833,5 +858,61 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("maker") && w.contains("project")));
+    }
+
+    #[test]
+    fn parse_builtin_n_candidates_arbiter() {
+        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER)
+            .expect("built-in n-candidates-arbiter should parse");
+        assert_eq!(recipe.schema, RECIPE_SCHEMA_V1);
+        assert_eq!(recipe.id, "n-candidates-arbiter");
+        assert_eq!(recipe.name, "N-Candidates + Arbiter");
+        assert_eq!(recipe.roles.len(), 2);
+        assert!(recipe.roles.contains_key("maker"));
+        assert!(recipe.roles.contains_key("arbiter"));
+        assert!(!recipe.steps.is_empty());
+    }
+
+    #[test]
+    fn validate_n_candidates_arbiter() {
+        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER).unwrap();
+        let result = RecipeService::validate(&recipe, None);
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn resolve_n_candidates_arbiter_by_id() {
+        let result = RecipeService::resolve("n-candidates-arbiter", None);
+        assert!(result.is_ok());
+        let dr = result.unwrap();
+        assert_eq!(dr.recipe.id, "n-candidates-arbiter");
+        assert_eq!(dr.source, RecipeSource::Builtin);
+    }
+
+    #[test]
+    fn n_candidates_arbiter_snapshot_creation() {
+        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER).unwrap();
+        let discovered = DiscoveredRecipe {
+            recipe,
+            source: RecipeSource::Builtin,
+            path: None,
+        };
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "goal".to_string(),
+            serde_json::Value::String("implement feature X".to_string()),
+        );
+        inputs.insert(
+            "providers".to_string(),
+            serde_json::Value::String("claude,kiro,copilot".to_string()),
+        );
+
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+        assert_eq!(snapshot.recipe_id, "n-candidates-arbiter");
+        assert_eq!(snapshot.runtime.current_step, "create_candidates");
+        assert_eq!(snapshot.policy.max_rounds, 1);
+        assert_eq!(snapshot.policy.max_sessions, 10);
+        assert_eq!(snapshot.policy.stale_after_ms, Some(900000));
+        assert!(snapshot.runtime.candidate_handoffs.is_empty());
     }
 }
