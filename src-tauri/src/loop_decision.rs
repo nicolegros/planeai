@@ -679,10 +679,11 @@ pub fn decide_gates_run_result(
                 .unwrap_or_default();
             const MAX: usize = 100_000;
             let display = if output.len() > MAX {
-                let end = output[..MAX]
+                let end = output
                     .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i <= MAX)
                     .last()
-                    .map(|(i, c)| i + c.len_utf8())
                     .unwrap_or(0);
                 format!("{}\n\n… [output truncated]", &output[..end])
             } else {
