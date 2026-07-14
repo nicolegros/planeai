@@ -69,7 +69,7 @@
               {loop.task_key ?? shortId(loop.id)}
             </span>
             <span class="text-[11px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">
-              {loop.strategy} · {loop.current_round}/{loop.max_rounds}
+              {loop.strategy} · max {loop.max_rounds} rounds
             </span>
             <span class="ml-auto shrink-0 text-[11.5px] {i === selectedIndex ? 'text-on-accent opacity-65' : 'text-t3'}">{getProjectName(loop.project_id)}</span>
           </div>

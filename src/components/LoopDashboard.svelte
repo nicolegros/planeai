@@ -193,7 +193,7 @@
           {detail.run.status}
         </span>
         <span class="text-t3 text-sm">
-          Round {detail.run.current_round}/{detail.run.max_rounds}
+          max {detail.run.max_rounds} rounds
         </span>
         <span class="text-t3 text-xs font-mono">{detail.run.strategy}</span>
       </div>

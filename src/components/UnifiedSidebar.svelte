@@ -616,8 +616,8 @@
                       <span class="text-t3 font-mono text-xs truncate">{shortId(loop.id)}</span>
                     {/if}
                     <span class="text-t3 text-xs">{loop.strategy}</span>
-                    <!-- Round counter -->
-                    <span class="text-t3 text-xs shrink-0">{loop.current_round}/{loop.max_rounds}</span>
+                    <!-- Round limit -->
+                    <span class="text-t3 text-xs shrink-0">max {loop.max_rounds} rounds</span>
                     <!-- Quick actions (show on hover) -->
                     <span class="hidden group-hover:flex items-center gap-0.5">
                       {#if loop.status === "draft"}

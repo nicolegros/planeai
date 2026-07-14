@@ -41,7 +41,6 @@ function makeLoop(overrides: Partial<LoopRunSummary> = {}): LoopRunSummary {
     strategy: "maker-verifier",
     goal: "Implement feature X",
     status: "running",
-    current_round: 1,
     max_rounds: 5,
     created_at: "",
     updated_at: "",

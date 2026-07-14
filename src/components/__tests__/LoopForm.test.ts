@@ -41,7 +41,6 @@ vi.mock("../../lib/api", () => ({
         strategy: "maker-verifier",
         goal: "Fix the bug",
         status: "running",
-        current_round: 0,
         max_rounds: 3,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",

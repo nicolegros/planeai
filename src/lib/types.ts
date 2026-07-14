@@ -101,7 +101,6 @@ export interface LoopRunSummary {
   strategy: string;
   goal: string;
   status: LoopStatusValue;
-  current_round: number;
   max_rounds: number;
   created_at: string;
   updated_at: string;
