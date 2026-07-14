@@ -300,13 +300,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     };
 
     // 3. Resolve project from loop
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
-
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (loop_run, project) = resolve_loop_project(&ctx)?;
 
     // 4. Determine worktree usage based on isolation
     let round = ctx.snapshot.runtime.round;
@@ -894,13 +888,7 @@ fn exec_gates_run_body(
         ));
     }
 
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
-
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (_loop_run, project) = resolve_loop_project(&ctx)?;
 
     // Run gates against ALL sessions for the role (supports n-candidates).
     let mut overall_status: &str = "pass";
@@ -1180,13 +1168,7 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
     }
 
     // 3. Resolve loop and project
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
-
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (loop_run, project) = resolve_loop_project(&ctx)?;
 
     let round = ctx.snapshot.runtime.round;
 
@@ -1632,13 +1614,7 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     };
 
     // 3. Resolve project from loop
-    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
-        .map_err(|e| format!("failed to load loop: {e}"))?
-        .ok_or_else(|| "loop not found".to_string())?;
-
-    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
-        .map_err(|e| format!("failed to resolve project: {e}"))?
-        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    let (loop_run, project) = resolve_loop_project(&ctx)?;
 
     let round = ctx.snapshot.runtime.round;
 
@@ -1883,6 +1859,19 @@ fn render_prompt_with_candidates(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Resolve the loop run and its associated project. Shared by session-creating executors.
+fn resolve_loop_project(
+    ctx: &TickContext,
+) -> Result<(planeai_core::loop_run::LoopRun, crate::db::Project), String> {
+    let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
+        .map_err(|e| format!("failed to load loop: {e}"))?
+        .ok_or_else(|| "loop not found".to_string())?;
+    let project = crate::db::get_project(ctx.conn, &loop_run.project_id)
+        .map_err(|e| format!("failed to resolve project: {e}"))?
+        .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
+    Ok((loop_run, project))
+}
 
 /// Resolve the branch name and whether it's a new branch for a session.create step.
 ///
