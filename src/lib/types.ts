@@ -169,7 +169,7 @@ export interface SelectOption {
 
 export interface RecipeInputDef {
   required: boolean;
-  input_type: string;
+  type: string;
   label?: string | null;
   description?: string | null;
   default?: unknown;

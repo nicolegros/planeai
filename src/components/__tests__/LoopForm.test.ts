@@ -13,12 +13,12 @@ vi.mock("../../lib/api", () => ({
           inputs: {
             goal: {
               required: true,
-              input_type: "textarea",
+              type: "textarea",
               label: "Goal",
               description: "What should this loop accomplish?",
             },
-            task_key: { required: false, input_type: "task", label: "Task" },
-            base_branch: { required: false, input_type: "branch", label: "Base branch" },
+            task_key: { required: false, type: "task", label: "Task" },
+            base_branch: { required: false, type: "branch", label: "Base branch" },
           },
         },
         {
@@ -27,8 +27,8 @@ vi.mock("../../lib/api", () => ({
           description: "Three-stage loop",
           source: "builtin",
           inputs: {
-            goal: { required: true, input_type: "textarea", label: "Goal" },
-            scope: { required: false, input_type: "text", label: "Scope", default: "full" },
+            goal: { required: true, type: "textarea", label: "Goal" },
+            scope: { required: false, type: "text", label: "Scope", default: "full" },
           },
         },
       ]),
@@ -281,8 +281,8 @@ describe("LoopForm", () => {
         description: "Three-stage loop",
         source: "builtin",
         inputs: {
-          goal: { required: true, input_type: "textarea", label: "Goal" },
-          scope: { required: false, input_type: "text", label: "Scope", default: "full" },
+          goal: { required: true, type: "textarea", label: "Goal" },
+          scope: { required: false, type: "text", label: "Scope", default: "full" },
         },
       },
     ]);

@@ -2738,9 +2738,12 @@ fn setup_stale_loop_with_sessions(
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-stale".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "wait_handoff".into(),
             tick_count: 1,
@@ -3047,9 +3050,12 @@ fn handoff_refreshes_activity() {
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-handoff-refresh".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "wait_handoff".into(),
             tick_count: 1,
@@ -3282,9 +3288,12 @@ fn verifier_refreshes_activity() {
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-verifier-refresh".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "run_gates".into(),
             tick_count: 1,
