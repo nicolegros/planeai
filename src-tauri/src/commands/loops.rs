@@ -98,6 +98,9 @@ pub struct LoopRunDetail {
     pub events: Vec<LoopEventItem>,
     pub artifacts: Vec<LoopArtifactItem>,
     pub verifier_runs: Vec<VerifierRunItem>,
+    /// The recipe snapshot (from policy_json). None for non-recipe loops.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipe_snapshot: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,12 +170,16 @@ pub async fn get_loop_run_detail(
         let artifacts = list_loop_artifacts_query(&conn, &loop_id)?;
         let verifier_runs = list_verifier_runs_query(&conn, &loop_id)?;
 
+        // Pass the raw policy_json (which is the RecipeSnapshot) to the frontend
+        let recipe_snapshot = run.policy_json.clone();
+
         Ok(LoopRunDetail {
             run: LoopRunSummary::from(run),
             sessions,
             events,
             artifacts,
             verifier_runs,
+            recipe_snapshot,
         })
     })
     .await
@@ -726,6 +733,7 @@ mod tests {
                 .collect(),
             artifacts,
             verifier_runs,
+            recipe_snapshot: None,
         };
 
         assert_eq!(detail.run.goal, "Fix auth bug");

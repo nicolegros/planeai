@@ -63,9 +63,15 @@ pub struct RecipeValidationResult {
 pub struct RecipeSnapshot {
     pub recipe_schema: String,
     pub recipe_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_description: Option<String>,
     pub recipe_source: String,
     pub recipe_path: Option<String>,
     pub inputs: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_defs: BTreeMap<String, RecipeInput>,
     pub runtime: RecipeRuntime,
     pub policy: SnapshotPolicy,
     pub roles: BTreeMap<String, RecipeRole>,
@@ -411,9 +417,12 @@ impl RecipeService {
         RecipeSnapshot {
             recipe_schema: recipe.schema.clone(),
             recipe_id: recipe.id.clone(),
+            recipe_name: Some(recipe.name.clone()),
+            recipe_description: recipe.description.clone(),
             recipe_source: discovered.source.as_str().to_string(),
             recipe_path: discovered.path.as_ref().map(|p| p.display().to_string()),
             inputs,
+            input_defs: recipe.inputs.clone(),
             runtime: RecipeRuntime {
                 current_step: first_step_id,
                 tick_count: 0,
@@ -724,6 +733,41 @@ mod tests {
         assert_eq!(snapshot.policy.max_sessions, 5);
         assert_eq!(snapshot.policy.stale_after_ms, Some(600000));
         assert_eq!(snapshot.policy.merge_policy, "human");
+
+        // recipe_name and recipe_description populated from recipe
+        assert_eq!(snapshot.recipe_name, Some("Maker + Verifier".to_string()));
+        assert!(snapshot.recipe_description.is_some());
+
+        // input_defs populated from recipe.inputs
+        assert!(!snapshot.input_defs.is_empty());
+        let goal_def = snapshot.input_defs.get("goal").expect("goal input_def");
+        assert!(goal_def.required);
+        assert_eq!(goal_def.input_type, InputType::Textarea);
+        assert_eq!(goal_def.label, Some("Goal".to_string()));
+    }
+
+    #[test]
+    fn snapshot_input_defs_match_recipe_inputs() {
+        let recipe = RecipeService::parse_yaml(BUILTIN_MAKER_VERIFIER).unwrap();
+        let discovered = DiscoveredRecipe {
+            recipe: recipe.clone(),
+            source: RecipeSource::Builtin,
+            path: None,
+        };
+        let inputs = BTreeMap::new();
+        let snapshot = RecipeService::create_snapshot(&discovered, inputs);
+
+        // All recipe inputs should appear in snapshot.input_defs
+        assert_eq!(snapshot.input_defs.len(), recipe.inputs.len());
+        for (key, def) in &recipe.inputs {
+            let snap_def = snapshot
+                .input_defs
+                .get(key)
+                .unwrap_or_else(|| panic!("input_defs missing key: {key}"));
+            assert_eq!(snap_def.required, def.required);
+            assert_eq!(snap_def.input_type, def.input_type);
+            assert_eq!(snap_def.label, def.label);
+        }
     }
 
     #[test]

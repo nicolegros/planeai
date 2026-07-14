@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { loops as loopsApi, tasks as tasksApi, projects as projectsApi } from "../lib/api";
+  import { loops as loopsApi, tasks as tasksApi } from "../lib/api";
   import type { LoopRunSummary, RecipeSummary, TaskItem, RecipeInputDef } from "../lib/types";
   import { Button, Label, Select } from "./ui";
+  import BranchSelect from "./BranchSelect.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
@@ -28,7 +29,6 @@
 
   let recipes = $state<RecipeSummary[]>([]);
   let taskItems = $state<TaskItem[]>([]);
-  let branches = $state<{ value: string; label: string }[]>([]);
 
   // Dynamic input values keyed by input name
   let inputValues = $state<Record<string, unknown>>({});
@@ -53,7 +53,7 @@
       for (const [key, def] of entries) {
         if (def.default !== undefined && def.default !== null) {
           newValues[key] = def.default;
-        } else if (def.input_type === "boolean") {
+        } else if (def.type === "boolean") {
           newValues[key] = false;
         } else {
           newValues[key] = "";
@@ -62,7 +62,7 @@
       // If taskKey prop was passed and there's a task input, pre-fill it
       if (taskKey) {
         for (const [key, def] of entries) {
-          if (def.input_type === "task") {
+          if (def.type === "task") {
             newValues[key] = taskKey;
             break;
           }
@@ -93,20 +93,6 @@
     tasksApi.list(path).then(
       (items) => (taskItems = items),
       () => (taskItems = []),
-    );
-  });
-
-  // Load branches when project changes (needed for branch-type inputs)
-  $effect(() => {
-    const path = selectedProject?.path;
-    if (!path) return;
-    projectsApi.listBranches(path).then(
-      (b) => {
-        branches = b
-          .filter((s) => !s.startsWith("remote:"))
-          .map((s) => ({ value: s, label: s }));
-      },
-      () => (branches = []),
     );
   });
 
@@ -159,7 +145,7 @@
       const inputs: Record<string, unknown> = {};
       for (const [key, def] of recipeInputEntries) {
         const val = inputValues[key];
-        const type = def.input_type;
+        const type = def.type;
         if (type === "boolean") {
           inputs[key] = val;
         } else if (typeof val === "string") {
@@ -269,7 +255,7 @@
   </div>
 
   {#each recipeInputEntries as [key, def] (key)}
-    {@const inputType = def.input_type}
+    {@const inputType = def.type}
     {@const label = getInputLabel(key, def)}
     {@const shortcut = inputShortcuts[key]}
     {@const isRequired = def.required}
@@ -309,13 +295,11 @@
             rows="3"
           ></textarea>
         {:else if inputType === "branch"}
-          <Select
-            items={branches}
+          <BranchSelect
+            projectPath={selectedProject?.path ?? ""}
             value={String(inputValues[key] ?? "")}
             onValueChange={(v) => { inputValues[key] = v; }}
             onkeydown={metaEnter}
-            placeholder="Select branch…"
-            emptyText="No branches found"
           />
         {:else if inputType === "task"}
           <Select

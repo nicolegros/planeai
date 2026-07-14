@@ -141,7 +141,7 @@ pub fn observe_sessions(
             {
                 had_activity = true;
             } else {
-                tracing::warn!(loop_id = %short_id(loop_id), session_id = %&session_id[..8], "observe_sessions: failed to append heartbeat event");
+                tracing::warn!(loop_id = %short_id(loop_id), session_id = %short_id(session_id), "observe_sessions: failed to append heartbeat event");
             }
         }
 

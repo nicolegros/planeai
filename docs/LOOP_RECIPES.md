@@ -580,8 +580,13 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
 {
   "recipe_schema": "planeai.loop.recipe.v1",
   "recipe_id": "maker-verifier",
+  "recipe_name": "Maker + Verifier",
+  "recipe_description": "One agent builds, another verifies.",
   "recipe_source": "builtin",
   "inputs": { "goal": "Fix the bug" },
+  "input_defs": {
+    "goal": { "required": true, "type": "textarea", "label": "Goal" }
+  },
   "runtime": {
     "current_step": "wait_for_maker",
     "tick_count": 3,
