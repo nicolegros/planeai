@@ -499,31 +499,6 @@ impl LoopService {
         id: &str,
         trigger: LoopTrigger,
     ) -> Result<LoopStatus, TransitionError> {
-        // Guard: reject recipe-tick triggers (†) on recipe-driven loops.
-        // These triggers should never be fired by recipe executors — status is
-        // derived from the step pointer via persist_snapshot instead.
-        if trigger.is_recipe_tick_trigger() {
-            let has_recipe: bool = tx
-                .query_row(
-                    "SELECT policy_json IS NOT NULL FROM loop_runs WHERE id = ?1",
-                    params![id],
-                    |row| row.get(0),
-                )
-                .unwrap_or(false);
-            if has_recipe {
-                tracing::warn!(
-                    loop_id = %id,
-                    trigger = %trigger.name(),
-                    "rejected recipe-tick trigger on recipe-driven loop — \
-                     use persist_snapshot for status derivation instead"
-                );
-                return Err(TransitionError::Invalid(InvalidTransition {
-                    from: LoopStatus::Running, // placeholder — the real issue is the trigger type
-                    trigger,
-                }));
-            }
-        }
-
         // 1. Load current status
         let current_status_str: String = tx
             .query_row(

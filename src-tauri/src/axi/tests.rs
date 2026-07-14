@@ -2646,7 +2646,7 @@ fn auto_advance_does_not_break_on_gates_or_observing() {
 
     // auto_advance should have advanced past the gates step without getting
     // stuck in the Verifying state. The flow after consuming the handoff is:
-    // wait_for_maker → run_gates (Verifying → Running via GatesCompleted) → gates_failed_retry
+    // wait_for_maker → run_gates (Verifying → Running via step derivation) → gates_failed_retry
     //
     // From gates_failed_retry, behavior depends on daemon availability:
     // - No daemon: session.prompt fails → auto_advance stops at gates_failed_retry

@@ -185,36 +185,15 @@ pub struct VerifierRun {
 
 /// Events that trigger loop status transitions. Callers declare what happened;
 /// the transition table ([`apply`]) decides the resulting state.
-///
-/// **Note on recipe-tick usage:** Since PLA-232, recipe executors derive status
-/// from the step pointer rather than firing triggers. Variants marked `(†)` below
-/// are not fired by `recipe_tick` but are retained for external callers (e.g.,
-/// `record_handoff`) and the transition table's reference semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum LoopTrigger {
     /// Draft → Running (user starts the loop)
     Start,
     /// Any non-terminal → Cancelled
     Cancel,
-    /// (†) Running → Observing (handoff.wait step, no handoff found yet)
-    HandoffWaiting,
-    /// (†) Observing → Running (handoff.wait step found an existing handoff)
-    HandoffConsumed,
     /// Active → Observing|Blocked|NeedsHuman|Failed (external handoff record)
     HandoffReceived(HandoffStatus),
-    /// (†) Running → Verifying (gates.run step started)
-    GatesStarted,
-    /// (†) Verifying → Running (gates.run step completed)
-    GatesCompleted,
-    /// (†) Running → Blocked (max_rounds reached)
-    RoundBlocked,
-    /// (†) Running → NeedsHuman (max_sessions reached)
-    SessionLimitReached,
-    /// (†) Running → Failed (max_ticks exceeded)
-    MaxTicksExceeded,
-    /// (†) Running → NeedsHuman (human.wait step)
-    HumanWaitReached,
-    /// (†) Running → {allow-listed targets} (recipe loop.status step)
+    /// Running → {allow-listed targets} (recipe loop.status step)
     RecipeSetStatus(LoopStatus),
     /// CompletedUnreviewed → Approved (human approves)
     Approve,
@@ -231,40 +210,12 @@ impl LoopTrigger {
         match self {
             Self::Start => "Start",
             Self::Cancel => "Cancel",
-            Self::HandoffWaiting => "HandoffWaiting",
-            Self::HandoffConsumed => "HandoffConsumed",
             Self::HandoffReceived(_) => "HandoffReceived",
-            Self::GatesStarted => "GatesStarted",
-            Self::GatesCompleted => "GatesCompleted",
-            Self::RoundBlocked => "RoundBlocked",
-            Self::SessionLimitReached => "SessionLimitReached",
-            Self::MaxTicksExceeded => "MaxTicksExceeded",
-            Self::HumanWaitReached => "HumanWaitReached",
             Self::RecipeSetStatus(_) => "RecipeSetStatus",
             Self::Approve => "Approve",
             Self::MarkMerged => "MarkMerged",
             Self::MarkCleaned => "MarkCleaned",
         }
-    }
-
-    /// Returns true if this trigger is a recipe-tick trigger (†) that should NOT
-    /// be fired on recipe-driven loops (status is derived from the step pointer
-    /// instead). Used as a runtime guard in `transition_in_tx`.
-    ///
-    /// Note: `RecipeSetStatus` is NOT included — it's a valid external operation
-    /// (e.g., `loop stop` marking a loop as completed_unreviewed).
-    pub fn is_recipe_tick_trigger(&self) -> bool {
-        matches!(
-            self,
-            Self::HandoffWaiting
-                | Self::HandoffConsumed
-                | Self::GatesStarted
-                | Self::GatesCompleted
-                | Self::RoundBlocked
-                | Self::SessionLimitReached
-                | Self::MaxTicksExceeded
-                | Self::HumanWaitReached
-        )
     }
 }
 
@@ -328,18 +279,6 @@ pub fn apply(
             }
         }
 
-        LoopTrigger::HandoffWaiting => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Observing)),
-            LoopStatus::Observing => Ok(TransitionResult::Unchanged),
-            _ => reject(),
-        },
-
-        LoopTrigger::HandoffConsumed => match from {
-            LoopStatus::Observing => Ok(TransitionResult::Changed(LoopStatus::Running)),
-            LoopStatus::Running => Ok(TransitionResult::Unchanged),
-            _ => reject(),
-        },
-
         LoopTrigger::HandoffReceived(handoff_status) => {
             // Valid from any "active" state (not terminal, not draft)
             let is_active = matches!(
@@ -366,36 +305,6 @@ pub fn apply(
                 Ok(TransitionResult::Changed(target))
             }
         }
-
-        LoopTrigger::GatesStarted => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Verifying)),
-            _ => reject(),
-        },
-
-        LoopTrigger::GatesCompleted => match from {
-            LoopStatus::Verifying => Ok(TransitionResult::Changed(LoopStatus::Running)),
-            _ => reject(),
-        },
-
-        LoopTrigger::RoundBlocked => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Blocked)),
-            _ => reject(),
-        },
-
-        LoopTrigger::SessionLimitReached => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
-            _ => reject(),
-        },
-
-        LoopTrigger::MaxTicksExceeded => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Failed)),
-            _ => reject(),
-        },
-
-        LoopTrigger::HumanWaitReached => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
-            _ => reject(),
-        },
 
         LoopTrigger::RecipeSetStatus(target) => {
             // Only allowed from Running, and only to the allow-listed targets
