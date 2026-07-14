@@ -1372,14 +1372,30 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
 
 fn exec_candidates_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     let role_id = step.from.as_deref().unwrap_or("default");
+    let round = ctx.snapshot.runtime.round;
 
-    let session_ids = ctx
+    // Only consider sessions from the current round (created_session_ids accumulates
+    // across rounds, but candidate_handoffs is cleared per round).
+    let all_session_ids = ctx
         .snapshot
         .runtime
         .created_session_ids
         .get(role_id)
         .cloned()
         .unwrap_or_default();
+
+    let current_round_sessions: std::collections::HashSet<String> =
+        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id)
+            .unwrap_or_default()
+            .iter()
+            .filter(|ls| ls.role == role_id && ls.round == round as i64)
+            .map(|ls| ls.session_id.clone())
+            .collect();
+
+    let session_ids: Vec<String> = all_session_ids
+        .into_iter()
+        .filter(|sid| current_round_sessions.contains(sid))
+        .collect();
 
     if session_ids.is_empty() {
         return Err(format!(
