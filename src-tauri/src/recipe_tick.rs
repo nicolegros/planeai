@@ -300,7 +300,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     };
 
     // 3. Resolve project from loop
-    let (loop_run, project) = resolve_loop_project(&ctx)?;
+    let (loop_run, project) = resolve_loop_project(ctx)?;
 
     // 4. Determine worktree usage based on isolation
     let round = ctx.snapshot.runtime.round;
@@ -888,7 +888,7 @@ fn exec_gates_run_body(
         ));
     }
 
-    let (_loop_run, project) = resolve_loop_project(&ctx)?;
+    let (_loop_run, project) = resolve_loop_project(ctx)?;
 
     // Run gates against ALL sessions for the role (supports n-candidates).
     let mut overall_status: &str = "pass";
@@ -911,6 +911,21 @@ fn exec_gates_run_body(
 
         for gate in &step.gates {
             let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
+
+            // Defense-in-depth: reject gate commands with shell metacharacters that
+            // could indicate injection (backticks, $(), eval). Gate commands are
+            // authored by humans at loop creation time, not agents.
+            const FORBIDDEN_PATTERNS: &[&str] = &["`", "$(", "${", "eval "];
+            for pattern in FORBIDDEN_PATTERNS {
+                if rendered_command.contains(pattern) {
+                    return Err(format!(
+                        "step '{}': gate '{}' command contains forbidden pattern '{}' — \
+                         gate commands must not use command substitution or eval",
+                        step.id, gate.name, pattern
+                    ));
+                }
+            }
+
             let request = VerifyGateRequest {
                 loop_id: ctx.loop_id.to_string(),
                 session_id: session_id.clone(),
@@ -1173,7 +1188,7 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
     }
 
     // 3. Resolve loop and project
-    let (loop_run, project) = resolve_loop_project(&ctx)?;
+    let (loop_run, project) = resolve_loop_project(ctx)?;
 
     let round = ctx.snapshot.runtime.round;
 
@@ -1619,7 +1634,7 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     };
 
     // 3. Resolve project from loop
-    let (loop_run, project) = resolve_loop_project(&ctx)?;
+    let (loop_run, project) = resolve_loop_project(ctx)?;
 
     let round = ctx.snapshot.runtime.round;
 
