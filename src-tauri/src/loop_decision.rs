@@ -2,6 +2,16 @@
 //!
 //! Every function in this module is deterministic. Side effects are described as
 //! [`Effect`] values; actual execution is delegated to an [`EffectExecutor`].
+//!
+//! # Design: `&mut RecipeSnapshot` instead of owned return
+//!
+//! The spec calls for `(snapshot, step) → (NewSnapshot, Vec<Effect>)`. We use
+//! `(&mut RecipeSnapshot, &RecipeStep, &str) → Result<TickDecision, String>`
+//! where `TickDecision` carries the `Vec<Effect>` and the snapshot is mutated
+//! in-place. This is the standard Rust idiom for "return new state" without
+//! cloning a ~2KB struct on every step. The functions remain **pure** in the
+//! meaningful sense: deterministic, no I/O, fully testable with just a snapshot
+//! and step inputs.
 
 use planeai_core::loop_recipe::*;
 use planeai_core::loop_recipe_service::RecipeSnapshot;
