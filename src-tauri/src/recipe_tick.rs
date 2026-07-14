@@ -1125,9 +1125,14 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
     tracing::info!(
         loop_id = %short_id(ctx.loop_id),
         step_id = %step.id,
-        providers = ?providers,
+        count = providers.len(),
         "exec_candidates_create: creating {} candidate sessions",
         providers.len()
+    );
+    tracing::debug!(
+        loop_id = %short_id(ctx.loop_id),
+        providers = ?providers,
+        "exec_candidates_create: provider list"
     );
 
     // 2. Check max_sessions
