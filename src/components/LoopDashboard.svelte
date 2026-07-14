@@ -4,7 +4,7 @@
   import { Button } from "./ui";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock, ChevronRight, ChevronDown } from "@lucide/svelte";
-  import LoopRecipeDefinition from "./LoopRecipeDefinition.svelte";
+  import LoopTimeline from "./LoopTimeline.svelte";
 
   interface Props {
     loopId: string;
@@ -170,7 +170,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl mx-auto">
+<div class="h-full overflow-y-auto p-6 space-y-6">
   {#if loading && !detail}
     <div class="flex items-center justify-center py-12">
       <RefreshCw class="size-5 text-t3 animate-spin" />
@@ -230,152 +230,113 @@
       </div>
     </div>
 
-    <!-- Recipe Definition -->
+    <!-- Main body: LoopTimeline for recipe loops, flat sections for non-recipe -->
     {#if detail.recipe_snapshot}
-      <LoopRecipeDefinition
+      <LoopTimeline
         snapshot={detail.recipe_snapshot}
+        sessions={detail.sessions}
+        verifierRuns={detail.verifier_runs}
+        events={detail.events}
+        artifacts={detail.artifacts}
+        onSelectSession={onSelectSession}
         onOpenFile={onOpenArtifact}
+        onLoadOutput={(path) => git.readFile(path)}
       />
-    {/if}
-
-    <!-- Sessions table -->
-    {#if detail.sessions.length > 0}
-      <section>
-        <h2 class="text-sm font-semibold text-t2 mb-2">Sessions</h2>
-        <div class="border border-border rounded-md overflow-hidden">
-          <table class="w-full text-sm">
-            <thead class="bg-panel-hi text-t3 text-xs">
-              <tr>
-                <th class="text-left px-3 py-1.5">#</th>
-                <th class="text-left px-3 py-1.5">Role</th>
-                <th class="text-left px-3 py-1.5">Session</th>
-                <th class="text-left px-3 py-1.5">Round</th>
-                <th class="text-left px-3 py-1.5">Provider</th>
-                <th class="text-left px-3 py-1.5">Status</th>
-                <th class="px-3 py-1.5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each detail.sessions as session, i (session.session_id)}
-                <tr class="border-t border-border hover:bg-panel-hi/50">
-                  <td class="px-3 py-2 font-mono text-xs text-t3">{i + 1}</td>
-                  <td class="px-3 py-2 text-t2 font-medium">{session.role}</td>
-                  <td class="px-3 py-2 font-mono text-xs text-t3">{shortId(session.session_id)}</td>
-                  <td class="px-3 py-2 text-t3">{session.round}</td>
-                  <td class="px-3 py-2 text-t3">{session.provider ?? "—"}</td>
-                  <td class="px-3 py-2 text-t2">{session.status}</td>
-                  <td class="px-3 py-2">
-                    <button
-                      class="text-accent hover:underline text-xs"
-                      onclick={() => onSelectSession(session.session_id)}
-                    >
-                      Open <span class={hintBadge}>{i + 1}</span>
-                    </button>
-                  </td>
+    {:else}
+      <!-- Flat sections for non-recipe loops -->
+      {#if detail.sessions.length > 0}
+        <section>
+          <h2 class="text-sm font-semibold text-t2 mb-2">Sessions</h2>
+          <div class="border border-border rounded-md overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-panel-hi text-t3 text-xs">
+                <tr>
+                  <th class="text-left px-3 py-1.5">#</th>
+                  <th class="text-left px-3 py-1.5">Role</th>
+                  <th class="text-left px-3 py-1.5">Session</th>
+                  <th class="text-left px-3 py-1.5">Round</th>
+                  <th class="text-left px-3 py-1.5">Provider</th>
+                  <th class="text-left px-3 py-1.5">Status</th>
+                  <th class="px-3 py-1.5"></th>
                 </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    {/if}
+              </thead>
+              <tbody>
+                {#each detail.sessions as session, i (session.session_id)}
+                  <tr class="border-t border-border hover:bg-panel-hi/50">
+                    <td class="px-3 py-2 font-mono text-xs text-t3">{i + 1}</td>
+                    <td class="px-3 py-2 text-t2 font-medium">{session.role}</td>
+                    <td class="px-3 py-2 font-mono text-xs text-t3">{shortId(session.session_id)}</td>
+                    <td class="px-3 py-2 text-t3">{session.round}</td>
+                    <td class="px-3 py-2 text-t3">{session.provider ?? "—"}</td>
+                    <td class="px-3 py-2 text-t2">{session.status}</td>
+                    <td class="px-3 py-2">
+                      <button class="text-accent hover:underline text-xs" onclick={() => onSelectSession(session.session_id)}>
+                        Open <span class={hintBadge}>{i + 1}</span>
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      {/if}
 
-    <!-- Verifier runs -->
-    {#if detail.verifier_runs.length > 0}
-      <section>
-        <h2 class="text-sm font-semibold text-t2 mb-2">Verifier Runs</h2>
-        <ul class="space-y-1">
-          {#each detail.verifier_runs as vr (vr.id)}
-            {@const Icon = verifierIcon(vr.status)}
-            {@const isExpanded = expandedVerifiers.has(vr.id)}
-            {@const output = verifierOutputs[vr.id]}
-            <li class="rounded-md border border-border overflow-hidden">
-              <button
-                class="w-full flex items-center gap-2 px-3 py-2 hover:bg-panel-hi/50 transition-colors"
-                onclick={() => toggleVerifierOutput(vr.id, vr.output_path)}
-              >
-                {#if isExpanded}<ChevronDown class="size-3 text-t3 shrink-0" />{:else}<ChevronRight class="size-3 text-t3 shrink-0" />{/if}
-                <Icon class="size-4 {verifierColor(vr.status)}" />
-                <span class="text-t1 text-sm font-medium flex-1 text-left">{vr.name}</span>
-                <code class="text-t3 text-xs font-mono truncate max-w-[200px]">{vr.command}</code>
-                {#if vr.exit_code != null}
-                  <span class="text-xs {vr.exit_code === 0 ? 'text-status-running' : 'text-status-exited'}">
-                    exit {vr.exit_code}
-                  </span>
-                {/if}
-              </button>
-              {#if isExpanded}
-                <div class="border-t border-border bg-panel">
-                  {#if output?.loading}
-                    <div class="px-3 py-2 text-xs text-t3">Loading…</div>
-                  {:else if output?.error}
-                    <div class="px-3 py-2 text-xs text-status-exited">{output.error}</div>
-                  {:else if output?.content != null}
-                    <pre class="px-3 py-2 text-xs font-mono text-t2 overflow-auto max-h-[400px] whitespace-pre-wrap break-words">{output.content}</pre>
-                  {:else}
-                    <div class="px-3 py-2 text-xs text-t3">No output available</div>
+      {#if detail.verifier_runs.length > 0}
+        <section>
+          <h2 class="text-sm font-semibold text-t2 mb-2">Verifier Runs</h2>
+          <ul class="space-y-1">
+            {#each detail.verifier_runs as vr (vr.id)}
+              {@const Icon = verifierIcon(vr.status)}
+              {@const isExpanded = expandedVerifiers.has(vr.id)}
+              {@const output = verifierOutputs[vr.id]}
+              <li class="rounded-md border border-border overflow-hidden">
+                <button class="w-full flex items-center gap-2 px-3 py-2 hover:bg-panel-hi/50 transition-colors" onclick={() => toggleVerifierOutput(vr.id, vr.output_path)}>
+                  {#if isExpanded}<ChevronDown class="size-3 text-t3 shrink-0" />{:else}<ChevronRight class="size-3 text-t3 shrink-0" />{/if}
+                  <Icon class="size-4 {verifierColor(vr.status)}" />
+                  <span class="text-t1 text-sm font-medium flex-1 text-left">{vr.name}</span>
+                  <code class="text-t3 text-xs font-mono truncate max-w-[200px]">{vr.command}</code>
+                  {#if vr.exit_code != null}
+                    <span class="text-xs {vr.exit_code === 0 ? 'text-status-running' : 'text-status-exited'}">exit {vr.exit_code}</span>
                   {/if}
-                </div>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-
-    <!-- Artifacts -->
-    {#if detail.artifacts.length > 0}
-      <section>
-        <h2 class="text-sm font-semibold text-t2 mb-2">Artifacts</h2>
-        <ul class="space-y-1">
-          {#each detail.artifacts as artifact (artifact.id)}
-            <li class="flex items-center gap-2 px-3 py-2 rounded-md border border-border">
-              <span class="text-t2 text-sm font-medium">{artifact.kind}</span>
-              {#if artifact.path}
-                <code class="text-t3 text-xs font-mono flex-1 truncate">{artifact.path}</code>
-                <button
-                  class="text-t3 hover:text-t1 p-0.5"
-                  onclick={() => copyPath(artifact.path!)}
-                  title="Copy path"
-                  aria-label="Copy artifact path"
-                >
-                  <Copy class="size-3" />
                 </button>
-                {#if onOpenArtifact}
-                  <button
-                    class="text-accent text-xs hover:underline"
-                    onclick={() => onOpenArtifact!(artifact.path!)}
-                  >
-                    Open
-                  </button>
+                {#if isExpanded}
+                  <div class="border-t border-border bg-panel">
+                    {#if output?.loading}
+                      <div class="px-3 py-2 text-xs text-t3">Loading…</div>
+                    {:else if output?.error}
+                      <div class="px-3 py-2 text-xs text-status-exited">{output.error}</div>
+                    {:else if output?.content != null}
+                      <pre class="px-3 py-2 text-xs font-mono text-t2 overflow-auto max-h-[400px] whitespace-pre-wrap break-words">{output.content}</pre>
+                    {:else}
+                      <div class="px-3 py-2 text-xs text-t3">No output available</div>
+                    {/if}
+                  </div>
                 {/if}
-              {:else}
-                <span class="text-t3 text-xs">(inline)</span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
 
-    <!-- Recent events -->
-    {#if detail.events.length > 0}
-      <section>
-        <h2 class="text-sm font-semibold text-t2 mb-2">Events</h2>
-        <ul class="space-y-0.5 text-xs">
-          {#each detail.events.slice(-20) as event (event.id)}
-            {@const payload = event.payload_json as Record<string, unknown> | null}
-            {@const stepId = payload?.step_id as string | undefined}
-            <li class="flex items-center gap-2 px-2 py-1 rounded hover:bg-panel-hi/50">
-              <span class="text-t2 font-medium min-w-[160px]">{event.kind}</span>
-              {#if stepId}
-                <code class="text-t3 font-mono">{stepId}</code>
-              {/if}
-              <span class="ml-auto text-t3 font-mono shrink-0">{event.ts.slice(11, 19)}</span>
-            </li>
-          {/each}
-        </ul>
-      </section>
+      {#if detail.events.length > 0}
+        <section>
+          <h2 class="text-sm font-semibold text-t2 mb-2">Events</h2>
+          <ul class="space-y-0.5 text-xs">
+            {#each detail.events.slice(-20) as event (event.id)}
+              {@const payload = event.payload_json as Record<string, unknown> | null}
+              {@const stepId = payload?.step_id as string | undefined}
+              <li class="flex items-center gap-2 px-2 py-1 rounded hover:bg-panel-hi/50">
+                <span class="text-t2 font-medium min-w-[160px]">{event.kind}</span>
+                {#if stepId}
+                  <code class="text-t3 font-mono">{stepId}</code>
+                {/if}
+                <span class="ml-auto text-t3 font-mono shrink-0">{new Date(event.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}</span>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
     {/if}
   {/if}
 </div>
