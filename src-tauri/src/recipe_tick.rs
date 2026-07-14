@@ -1755,6 +1755,16 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     };
 
     // 7. Link session to loop
+    // 7. Track session in runtime state BEFORE linking — reduces the orphan
+    //    window since retries can detect the already-created session.
+    ctx.snapshot
+        .runtime
+        .created_session_ids
+        .entry(role_id.to_string())
+        .or_default()
+        .push(session.id.clone());
+
+    // 8. Link session to loop
     LoopService::add_loop_session(
         ctx.conn,
         planeai_core::loop_service::AddLoopSessionParams {
@@ -1775,14 +1785,6 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
         );
         format!("failed to link arbiter session to loop: {e}")
     })?;
-
-    // 8. Track session in runtime state
-    ctx.snapshot
-        .runtime
-        .created_session_ids
-        .entry(role_id.to_string())
-        .or_default()
-        .push(session.id.clone());
 
     // 9. Append event and advance
     LoopService::append_loop_event(
