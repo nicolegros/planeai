@@ -1581,6 +1581,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
         select: Some("latest".into()),
         event_kind: None,
         gates: vec![],
+        providers: None,
     }];
 
     let snapshot = RecipeSnapshot {
@@ -1602,6 +1603,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1714,6 +1716,7 @@ fn recipe_tick_round_next_increments_round() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         },
         RecipeStep {
             id: "after_round".into(),
@@ -1728,6 +1731,7 @@ fn recipe_tick_round_next_increments_round() {
             select: None,
             event_kind: Some("post_round".into()),
             gates: vec![],
+            providers: None,
         },
     ];
 
@@ -1750,6 +1754,7 @@ fn recipe_tick_round_next_increments_round() {
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1824,6 +1829,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
         select: None,
         event_kind: None,
         gates: vec![],
+        providers: None,
     }];
 
     let snapshot = RecipeSnapshot {
@@ -1845,6 +1851,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1965,6 +1972,7 @@ fn setup_maker_verifier_flow(
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2169,6 +2177,7 @@ fn setup_maker_verifier_flow_with_path(
             status_override: None,
             last_activity_at: None,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2733,6 +2742,7 @@ fn setup_stale_loop_with_sessions(
         select: None,
         event_kind: None,
         gates: vec![],
+        providers: None,
     }];
 
     let snapshot = RecipeSnapshot {
@@ -2754,6 +2764,7 @@ fn setup_stale_loop_with_sessions(
             status_override: None,
             last_activity_at,
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -3030,6 +3041,7 @@ fn handoff_refreshes_activity() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         },
         RecipeStep {
             id: "done_step".into(),
@@ -3044,6 +3056,7 @@ fn handoff_refreshes_activity() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         },
     ];
 
@@ -3066,6 +3079,7 @@ fn handoff_refreshes_activity() {
             status_override: None,
             last_activity_at: Some(ten_min_ago.clone()),
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -3268,6 +3282,7 @@ fn verifier_refreshes_activity() {
                 name: "quick-check".to_string(),
                 command: "true".to_string(),
             }],
+            providers: None,
         },
         RecipeStep {
             id: "done_step".into(),
@@ -3282,6 +3297,7 @@ fn verifier_refreshes_activity() {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         },
     ];
 
@@ -3304,6 +3320,7 @@ fn verifier_refreshes_activity() {
             status_override: None,
             last_activity_at: Some(ten_min_ago.clone()),
             session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,

@@ -1,0 +1,242 @@
+schema: planeai.loop.recipe.v1
+id: n-candidates-arbiter
+name: N-Candidates + Arbiter
+description: >
+  Experimental strategy that runs N candidates in parallel, each implementing
+  the same goal independently, then an arbiter ranks the results and picks the
+  best candidate. Candidates work on isolated worktrees and the arbiter reviews
+  all results before recommending a winner.
+
+trigger:
+  kind: manual
+
+inputs:
+  goal:
+    type: textarea
+    label: Goal
+    description: What should the candidates implement?
+    required: true
+  task_key:
+    type: task
+    label: Linked task
+    required: false
+  providers:
+    type: text
+    label: Providers
+    description: Comma-separated provider names (one session per provider)
+    required: true
+  arbiter_provider:
+    type: text
+    label: Arbiter provider
+    description: Provider for the arbiter session
+    default: "default"
+  gate_command:
+    type: text
+    label: Gate command
+    description: Command to verify each candidate's implementation
+    default: make ci
+
+knowledge:
+  files:
+    - AGENTS.md
+    - CONTEXT.md
+  instructions:
+    - Follow repository conventions.
+    - Prefer existing PlaneAI services and domain types.
+    - Record progress through structured handoffs, not terminal claims.
+
+tools:
+  required:
+    - git
+    - plane_sessions
+    - plane_loops
+  optional:
+    - github
+    - jira
+    - mcp
+
+roles:
+  maker:
+    provider: default
+    mode: write
+    isolation: worktree
+    instructions: |
+      You are a candidate maker agent competing with other candidates.
+      Implement the requested change in your isolated worktree.
+      Do not claim completion unless you have recorded a structured handoff.
+
+  arbiter:
+    provider: default
+    mode: review
+    isolation: readonly
+    instructions: |
+      You are the arbiter agent.
+      Review and rank all candidate implementations. Do not edit files.
+      Report your ranking via a structured handoff.
+
+policy:
+  max_rounds: 1
+  max_ticks: 50
+  max_sessions: 10
+  stale_after_ms: 900000
+  merge_policy: human
+
+steps:
+  # ─── Create candidate sessions (one per provider) ────────────────────────────
+  - id: create_candidates
+    kind: candidates.create
+    role: maker
+    providers: "{{ inputs.providers }}"
+    prompt: |
+      You are running inside a PlaneAI loop as a candidate maker.
+
+      Loop:
+      {{ loop_run.id }}
+
+      Goal:
+      {{ inputs.goal }}
+
+      {% if inputs.task_key %}
+      Task:
+      {{ inputs.task_key }}
+      {% endif %}
+
+      Round: {{ runtime.round }}
+
+      Project knowledge:
+      {{ knowledge.files }}
+
+      Instructions:
+      - You are one of N candidates implementing the same goal independently.
+      - Work only in your assigned workspace.
+      - Make the smallest safe change that satisfies the goal.
+      - Run relevant checks if possible.
+      - When done, write and record a planeai.handoff.v1 handoff.
+      - Your handoff status must be one of: completed, blocked, needs_human, failed.
+
+      Handoff protocol:
+      1. Your session id is available as:
+         $PLANEAI_SESSION_ID
+
+      2. Get your expected handoff path:
+         planeai-cli axi loop handoff path \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID"
+
+      3. Write a JSON file with schema planeai.handoff.v1.
+
+      4. Record it:
+         planeai-cli axi loop handoff record \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID" \
+           --path <handoff-path>
+
+      5. After recording the handoff, stop and wait. Do not keep changing files unless prompted again.
+
+  # ─── Wait for all candidates to hand off ─────────────────────────────────────
+  - id: wait_for_candidates
+    kind: candidates.wait
+    from: maker
+    on:
+      all_complete: run_gates
+
+  # ─── Run verification gates against the last candidate (advisory) ──────────
+  # NOTE: gates.run currently executes against the last maker session only.
+  # With N candidates, this provides a spot-check rather than full verification.
+  # The arbiter should independently assess each candidate's quality.
+  - id: run_gates
+    kind: gates.run
+    role: maker
+    gates:
+      - name: ci
+        command: "{{ inputs.gate_command | default('make ci') }}"
+    on:
+      pass: create_arbiter
+      fail: gates_note
+      error: gates_note
+
+  # ─── Note gate failure but proceed to arbiter anyway ─────────────────────────
+  - id: gates_note
+    kind: loop.event
+    event_kind: gates_failed_noted
+    next: create_arbiter
+
+  # ─── Create arbiter session to rank candidates ───────────────────────────────
+  - id: create_arbiter
+    kind: arbiter.rank
+    role: arbiter
+    prompt: |
+      You are the arbiter agent in a PlaneAI N-Candidates loop.
+
+      Loop: {{ loop_run.id }}
+      Goal: {{ inputs.goal }}
+      Round: {{ runtime.round }}
+
+      Multiple candidate agents have independently implemented the same goal.
+      Your job is to review ALL candidate implementations and produce a ranking.
+
+      Candidates:
+      {{ candidates }}
+
+      Your responsibilities:
+      1. Review each candidate's diff and implementation approach.
+      2. Rank them from best to worst.
+      3. Explain the strengths and risks of each candidate.
+      4. Do NOT merge any branch automatically.
+      5. Do NOT edit any files.
+      6. Report your ranking and recommendation via a structured handoff.
+
+      Ranking criteria:
+      - Correctness: Does the implementation satisfy the goal?
+      - Quality: Code style, test coverage, maintainability.
+      - Safety: Are there risks, regressions, or edge cases?
+      - Completeness: Does it handle error cases and edge conditions?
+
+      When done, record a planeai.handoff.v1 handoff with:
+      - status: completed — if you have a clear winner to recommend.
+      - status: needs_human — if no candidate is acceptable or if it's too close to call.
+      - Include your full ranking in the summary field.
+
+      Handoff protocol:
+      1. Your session id is available as:
+         $PLANEAI_SESSION_ID
+
+      2. Get your expected handoff path:
+         planeai-cli axi loop handoff path \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID"
+
+      3. Write a JSON file with schema planeai.handoff.v1.
+
+      4. Record it:
+         planeai-cli axi loop handoff record \
+           --loop {{ loop_run.id }} \
+           --session "$PLANEAI_SESSION_ID" \
+           --path <handoff-path>
+
+  # ─── Wait for arbiter to hand off ───────────────────────────────────────────
+  - id: wait_for_arbiter
+    kind: handoff.wait
+    from: arbiter
+    on:
+      completed: completed_unreviewed
+      needs_human: needs_human
+      blocked: blocked
+      failed: failed
+
+  # ─── Terminal states ─────────────────────────────────────────────────────────
+  - id: completed_unreviewed
+    kind: loop.status
+    status: completed_unreviewed
+
+  - id: blocked
+    kind: loop.status
+    status: blocked
+
+  - id: needs_human
+    kind: loop.status
+    status: needs_human
+
+  - id: failed
+    kind: loop.status
+    status: failed

@@ -17,10 +17,12 @@ pub const STEP_HANDOFF_WAIT: &str = "handoff.wait";
 pub const STEP_HUMAN_WAIT: &str = "human.wait";
 pub const STEP_ROUND_NEXT: &str = "round.next";
 pub const STEP_GATES_RUN: &str = "gates.run";
+pub const STEP_CANDIDATES_CREATE: &str = "candidates.create";
+pub const STEP_CANDIDATES_WAIT: &str = "candidates.wait";
+pub const STEP_ARBITER_RANK: &str = "arbiter.rank";
 
 // Recognized but not executable step kinds
 pub const STEP_PR_FEEDBACK_WAIT: &str = "pr.feedback.wait";
-pub const STEP_ARBITER_RANK: &str = "arbiter.rank";
 pub const STEP_TASK_CREATE: &str = "task.create";
 pub const STEP_CONNECTOR_CALL: &str = "connector.call";
 
@@ -198,6 +200,9 @@ pub struct RecipeStep {
     pub event_kind: Option<String>,
     #[serde(default)]
     pub gates: Vec<RecipeGate>,
+    /// Template-rendered comma-separated list of provider names (for candidates.create).
+    #[serde(default)]
+    pub providers: Option<String>,
 }
 
 /// Inline gate declaration for gates.run steps.
@@ -219,12 +224,14 @@ const V1_STEP_KINDS: &[&str] = &[
     STEP_HUMAN_WAIT,
     STEP_ROUND_NEXT,
     STEP_GATES_RUN,
+    STEP_CANDIDATES_CREATE,
+    STEP_CANDIDATES_WAIT,
+    STEP_ARBITER_RANK,
 ];
 
 /// Recognized but not yet executable step kinds.
 const FUTURE_STEP_KINDS: &[&str] = &[
     STEP_PR_FEEDBACK_WAIT,
-    STEP_ARBITER_RANK,
     STEP_TASK_CREATE,
     STEP_CONNECTOR_CALL,
 ];
@@ -283,6 +290,42 @@ impl RecipeStep {
             }
             STEP_LOOP_STATUS if self.status.is_none() => {
                 problems.push(format!("step '{}': loop.status requires 'status'", self.id));
+            }
+            STEP_CANDIDATES_CREATE => {
+                if self.role.is_none() {
+                    problems.push(format!(
+                        "step '{}': candidates.create requires 'role'",
+                        self.id
+                    ));
+                }
+                if self.providers.is_none() {
+                    problems.push(format!(
+                        "step '{}': candidates.create requires 'providers'",
+                        self.id
+                    ));
+                }
+            }
+            STEP_CANDIDATES_WAIT => {
+                if self.from.is_none() {
+                    problems.push(format!(
+                        "step '{}': candidates.wait requires 'from'",
+                        self.id
+                    ));
+                }
+            }
+            STEP_ARBITER_RANK => {
+                if self.role.is_none() {
+                    problems.push(format!(
+                        "step '{}': arbiter.rank requires 'role'",
+                        self.id
+                    ));
+                }
+                if self.prompt.is_none() {
+                    problems.push(format!(
+                        "step '{}': arbiter.rank requires 'prompt'",
+                        self.id
+                    ));
+                }
             }
             _ => {}
         }
@@ -426,6 +469,7 @@ mod tests {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         };
         assert!(step.is_v1_executable());
         assert!(step.is_recognized());
@@ -446,6 +490,7 @@ mod tests {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         };
         assert!(!step.is_v1_executable());
         assert!(step.is_recognized());
@@ -466,6 +511,7 @@ mod tests {
             select: None,
             event_kind: None,
             gates: vec![],
+            providers: None,
         };
         assert!(!step.is_v1_executable());
         assert!(!step.is_recognized());
