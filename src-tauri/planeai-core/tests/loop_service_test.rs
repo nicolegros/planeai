@@ -1244,9 +1244,7 @@ fn add_artifact_rejects_handoff_kind() {
 #[test]
 fn persist_snapshot_always_derives_status_from_step_pointer() {
     use planeai_core::loop_recipe::{RecipeKnowledge, RecipeStep, RecipeTools};
-    use planeai_core::loop_recipe_service::{
-        RecipeRuntime, RecipeSnapshot, SnapshotPolicy,
-    };
+    use planeai_core::loop_recipe_service::{RecipeRuntime, RecipeSnapshot, SnapshotPolicy};
     use std::collections::BTreeMap;
 
     let conn = test_db();
@@ -1310,8 +1308,14 @@ fn persist_snapshot_always_derives_status_from_step_pointer() {
             event_kind: None,
             gates: vec![],
         }],
-        knowledge: RecipeKnowledge { files: vec![], instructions: vec![] },
-        tools: RecipeTools { required: vec![], optional: vec![] },
+        knowledge: RecipeKnowledge {
+            files: vec![],
+            instructions: vec![],
+        },
+        tools: RecipeTools {
+            required: vec![],
+            optional: vec![],
+        },
     };
 
     // persist_snapshot should derive Observing from handoff.wait, overriding Running
@@ -1356,9 +1360,7 @@ fn persist_snapshot_always_derives_status_from_step_pointer() {
 #[test]
 fn transition_loop_rejects_recipe_tick_triggers_on_recipe_driven_loops() {
     use planeai_core::loop_recipe::{RecipeKnowledge, RecipeStep, RecipeTools};
-    use planeai_core::loop_recipe_service::{
-        RecipeRuntime, RecipeSnapshot, SnapshotPolicy,
-    };
+    use planeai_core::loop_recipe_service::{RecipeRuntime, RecipeSnapshot, SnapshotPolicy};
     use std::collections::BTreeMap;
 
     let conn = test_db();
@@ -1418,8 +1420,14 @@ fn transition_loop_rejects_recipe_tick_triggers_on_recipe_driven_loops() {
             event_kind: None,
             gates: vec![],
         }],
-        knowledge: RecipeKnowledge { files: vec![], instructions: vec![] },
-        tools: RecipeTools { required: vec![], optional: vec![] },
+        knowledge: RecipeKnowledge {
+            files: vec![],
+            instructions: vec![],
+        },
+        tools: RecipeTools {
+            required: vec![],
+            optional: vec![],
+        },
     };
     LoopService::persist_snapshot(&conn, &run.id, &snapshot).unwrap();
 
@@ -1450,9 +1458,7 @@ fn transition_loop_rejects_recipe_tick_triggers_on_recipe_driven_loops() {
 #[test]
 fn persist_snapshot_marks_stale_on_unknown_step_kind() {
     use planeai_core::loop_recipe::{RecipeKnowledge, RecipeStep, RecipeTools};
-    use planeai_core::loop_recipe_service::{
-        RecipeRuntime, RecipeSnapshot, SnapshotPolicy,
-    };
+    use planeai_core::loop_recipe_service::{RecipeRuntime, RecipeSnapshot, SnapshotPolicy};
     use std::collections::BTreeMap;
 
     let conn = test_db();
@@ -1516,8 +1522,14 @@ fn persist_snapshot_marks_stale_on_unknown_step_kind() {
             event_kind: None,
             gates: vec![],
         }],
-        knowledge: RecipeKnowledge { files: vec![], instructions: vec![] },
-        tools: RecipeTools { required: vec![], optional: vec![] },
+        knowledge: RecipeKnowledge {
+            files: vec![],
+            instructions: vec![],
+        },
+        tools: RecipeTools {
+            required: vec![],
+            optional: vec![],
+        },
     };
 
     // persist_snapshot should mark as Stale (not silently leave Running)

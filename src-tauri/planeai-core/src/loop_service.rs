@@ -155,16 +155,15 @@ pub struct LoopService;
 ///
 /// Returns `None` only if the current step kind is unrecognized and no override is set.
 pub fn derive_effective_status(snapshot: &RecipeSnapshot) -> Option<LoopStatus> {
-    snapshot
-        .runtime
-        .status_override
-        .clone()
-        .or_else(|| {
-            let current_step = snapshot.steps.iter().find(|s| s.id == snapshot.runtime.current_step);
-            let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
-            let step_status = current_step.and_then(|s| s.status.as_deref());
-            derive_status_from_step(step_kind, step_status)
-        })
+    snapshot.runtime.status_override.clone().or_else(|| {
+        let current_step = snapshot
+            .steps
+            .iter()
+            .find(|s| s.id == snapshot.runtime.current_step);
+        let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
+        let step_status = current_step.and_then(|s| s.status.as_deref());
+        derive_status_from_step(step_kind, step_status)
+    })
 }
 
 impl LoopService {
@@ -611,7 +610,11 @@ impl LoopService {
     /// via [`derive_effective_status`] (override first, then step-kind derivation).
     /// If the derived status differs from the current DB status, a
     /// `status_transition` audit event is emitted.
-    pub fn persist_snapshot(conn: &Connection, id: &str, snapshot: &RecipeSnapshot) -> SqlResult<()> {
+    pub fn persist_snapshot(
+        conn: &Connection,
+        id: &str,
+        snapshot: &RecipeSnapshot,
+    ) -> SqlResult<()> {
         let json_val = serde_json::to_value(snapshot)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let json_str = json_val.to_string();
@@ -624,7 +627,11 @@ impl LoopService {
         if let Some(ref new_status) = derived {
             // Read current status for audit event
             let current_status_str: Option<String> = tx
-                .query_row("SELECT status FROM loop_runs WHERE id = ?1", params![id], |row| row.get(0))
+                .query_row(
+                    "SELECT status FROM loop_runs WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
                 .ok();
 
             let executor_finished_at = if new_status.is_executor_terminal() {

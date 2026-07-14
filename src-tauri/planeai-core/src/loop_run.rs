@@ -492,10 +492,18 @@ mod tests {
             ("gates.run", None, Some(LoopStatus::Verifying)),
             ("human.wait", None, Some(LoopStatus::NeedsHuman)),
             // loop.status uses the step's status field
-            ("loop.status", Some("completed_unreviewed"), Some(LoopStatus::CompletedUnreviewed)),
+            (
+                "loop.status",
+                Some("completed_unreviewed"),
+                Some(LoopStatus::CompletedUnreviewed),
+            ),
             ("loop.status", Some("failed"), Some(LoopStatus::Failed)),
             ("loop.status", Some("blocked"), Some(LoopStatus::Blocked)),
-            ("loop.status", Some("observing"), Some(LoopStatus::Observing)),
+            (
+                "loop.status",
+                Some("observing"),
+                Some(LoopStatus::Observing),
+            ),
             ("loop.status", None, Some(LoopStatus::Observing)), // default
             // Unknown kinds → None
             ("unknown.step", None, None),
@@ -514,8 +522,14 @@ mod tests {
     #[test]
     fn all_v1_step_kinds_produce_a_status() {
         let v1_kinds = [
-            "session.create", "session.prompt", "handoff.wait", "loop.status",
-            "loop.event", "human.wait", "round.next", "gates.run",
+            "session.create",
+            "session.prompt",
+            "handoff.wait",
+            "loop.status",
+            "loop.event",
+            "human.wait",
+            "round.next",
+            "gates.run",
         ];
         for kind in &v1_kinds {
             assert!(
