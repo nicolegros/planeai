@@ -588,12 +588,17 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
     "round": 1,
     "created_session_ids": { "maker": ["session-abc123"] },
     "last_error": null,
-    "last_handoff_consumed_at": null
+    "last_handoff_consumed_at": null,
+    "last_activity_at": "2025-07-09T21:30:00+00:00",
+    "session_observations": {
+      "session-abc123": { "last_cursor": 12 }
+    }
   },
   "policy": {
     "max_rounds": 3,
     "max_ticks": 50,
     "max_sessions": 5,
+    "stale_after_ms": 600000,
     "merge_policy": "human",
     "auto_approve": true
   }
@@ -605,6 +610,72 @@ The recipe runtime state is stored in `loop_runs.policy_json` as a snapshot:
 If the loop is in a terminal status (`completed_unreviewed`, `failed`, `cancelled`, `approved`, `merged`, `cleaned`), tick refuses to execute.
 
 If the loop requires intervention (`blocked`, `needs_human`, `stale`), tick returns a guarded response without advancing.
+
+### Stale Detection
+
+Stale detection identifies loops where agents have stopped making progress. It is configured via `policy.stale_after_ms` and runs on every explicit tick — there is no background scheduler or timer.
+
+**How it works:**
+
+1. The runtime tracks `last_activity_at` in the recipe snapshot (stored in `policy_json`).
+2. `last_activity_at` is refreshed only on **meaningful activity**: session creation, handoff accepted, verifier completed, or new session output observed.
+3. On each tick, before dispatching to a step executor, the runner checks whether `now - last_activity_at >= stale_after_ms`.
+4. If the threshold is exceeded, the loop transitions to `stale` status and the tick returns TOON next_actions.
+
+**Per-session observation:**
+
+Each tick observes all loop-owned sessions by checking the event log for new session-referencing events since the last observation. Per-session state is tracked in `runtime.session_observations`:
+
+```json
+{
+  "session_observations": {
+    "session-abc123": {
+      "last_cursor": 42
+    }
+  }
+}
+```
+
+When new activity is detected for a session, a `loop_heartbeat` event is emitted and `last_activity_at` is refreshed.
+
+**When activity is refreshed:**
+
+- A session is created (`session.create` step)
+- A handoff is found (`handoff.wait` step matches)
+- A verifier gate completes (`gates.run` step)
+- New session output is detected during observation (heartbeat)
+
+**When activity is NOT refreshed:**
+
+- Polling ticks with no result (e.g., `handoff.wait` with no handoff found)
+- Events appended by the stale detection system itself
+
+**When stale detection does NOT trigger:**
+
+- `stale_after_ms` is not configured (`null` or absent)
+- `last_activity_at` was never set (legacy snapshots created before this feature)
+- The loop is already in a terminal or intervention-required status
+
+**TOON next_actions for stale loops:**
+
+```
+next_actions[4]:
+  - inspect session output for progress
+  - prompt worker to continue
+  - stop loop: `planeai-cli axi loop stop <ID>`
+  - mark blocked if external dependency is stalling
+```
+
+**Recovering from stale:** A human (or orchestrator) must update the loop status back to `running` or `observing` before ticks will execute again. This prevents runaway detection loops.
+
+**Example configuration:**
+
+```yaml
+policy:
+  stale_after_ms: 600000 # 10 minutes
+```
+
+**Important:** Stale detection is deterministic and tick-driven. If no one calls `loop tick`, stale detection does not fire. This is by design — planeai does not run background work for loop observation.
 
 ### `round.next` Step
 

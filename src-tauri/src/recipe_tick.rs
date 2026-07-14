@@ -22,16 +22,20 @@ struct TickContext<'a> {
 // ─── TickResult ──────────────────────────────────────────────────────────────
 
 /// The outcome of executing one recipe step. Converted to TOON at the boundary.
-struct TickResult {
-    step_id: String,
-    step_kind: String,
-    status: String,
-    extra: Vec<Field>,
-    next_actions: Vec<String>,
+pub(crate) struct TickResult {
+    pub(crate) step_id: String,
+    pub(crate) step_kind: String,
+    pub(crate) status: String,
+    pub(crate) extra: Vec<Field>,
+    pub(crate) next_actions: Vec<String>,
 }
 
 /// Render a TickResult into TOON output.
-fn render_tick_result(loop_id: &str, recipe_id: &str, result: TickResult) -> (String, i32) {
+pub(crate) fn render_tick_result(
+    loop_id: &str,
+    recipe_id: &str,
+    result: TickResult,
+) -> (String, i32) {
     let tick_fields = vec![
         field("loop_id", str_val(loop_id)),
         field("recipe_id", str_val(recipe_id)),
@@ -86,6 +90,10 @@ pub fn tick_recipe(
         // Also guard intervention-required statuses (blocked, needs_human, stale)
         if run.status.is_intervention_required() {
             tracing::warn!(loop_id = %short_id(loop_id), status = %run.status.as_str(), "tick_recipe: loop requires intervention, cannot tick");
+
+            let next_actions =
+                crate::stale_detection::intervention_next_actions(&run.status, short_id(loop_id));
+
             return render_tick_result(
                 loop_id,
                 &snapshot.recipe_id,
@@ -94,12 +102,30 @@ pub fn tick_recipe(
                     step_kind: "(guarded)".into(),
                     status: run.status.as_str().to_string(),
                     extra: vec![],
-                    next_actions: vec![
-                        "loop requires human intervention before it can proceed".into()
-                    ],
+                    next_actions,
                 },
             );
         }
+    }
+
+    // ─── Seed last_activity_at on first tick ─────────────────────────────
+    if snapshot.runtime.last_activity_at.is_none() {
+        crate::stale_detection::refresh_activity(snapshot);
+    }
+
+    // ─── Session observation & heartbeat ─────────────────────────────────
+    // Runs BEFORE stale check so that fresh activity is detected before
+    // comparing elapsed time against the threshold.
+    let observed = crate::stale_detection::observe_sessions(conn, loop_id, snapshot);
+    if observed {
+        if let Err(e) = save_snapshot(conn, loop_id, snapshot) {
+            tracing::warn!(loop_id = %short_id(loop_id), error = %e, "tick_recipe: failed to persist observation state");
+        }
+    }
+
+    // ─── Stale detection ─────────────────────────────────────────────────
+    if let Some(output) = crate::stale_detection::check_stale(conn, loop_id, snapshot) {
+        return output;
     }
 
     // Check max_ticks
@@ -191,7 +217,17 @@ pub fn tick_recipe(
     };
 
     match result {
-        Ok(ref tr) => {
+        Ok(tr) => {
+            // Refresh activity if the step made meaningful progress
+            // (current_step advanced = real work, not just polling)
+            if ctx.snapshot.runtime.current_step != step.id {
+                crate::stale_detection::refresh_activity(ctx.snapshot);
+                // save_snapshot is already called inside each executor on advance,
+                // but we need to persist the refreshed last_activity_at
+                if let Err(e) = save_snapshot(conn, loop_id, ctx.snapshot) {
+                    tracing::warn!(loop_id = %short_id(loop_id), error = %e, "tick_recipe: failed to persist activity refresh");
+                }
+            }
             tracing::info!(
                 loop_id = %short_id(loop_id),
                 step_id = %tr.step_id,
@@ -199,7 +235,7 @@ pub fn tick_recipe(
                 status = %tr.status,
                 "tick_recipe: step completed"
             );
-            render_tick_result(loop_id, &ctx.snapshot.recipe_id, result.unwrap())
+            render_tick_result(loop_id, &ctx.snapshot.recipe_id, tr)
         }
         Err(ref msg) => {
             tracing::error!(
@@ -1062,7 +1098,7 @@ fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep> {
 }
 
 /// Extract the first 8 characters of an ID for display.
-fn short_id(id: &str) -> &str {
+pub(crate) fn short_id(id: &str) -> &str {
     &id[..std::cmp::min(8, id.len())]
 }
 
@@ -1356,11 +1392,14 @@ mod tests {
                 last_error: None,
                 last_handoff_consumed_at: None,
                 status_override: None,
+                last_activity_at: None,
+                session_observations: BTreeMap::new(),
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
                 max_ticks: 50,
                 max_sessions: 5,
+                stale_after_ms: None,
                 merge_policy: "human".into(),
                 auto_approve: true,
             },

@@ -307,7 +307,14 @@ pub fn apply(
         }
 
         LoopTrigger::RecipeSetStatus(target) => {
-            // Only allowed from Running, and only to the allow-listed targets
+            // From Running: any allow-listed target.
+            // From Observing: only Stale (for stale detection on idle loops).
+            if from == &LoopStatus::Observing {
+                if target != &LoopStatus::Stale {
+                    return reject();
+                }
+                return Ok(TransitionResult::Changed(target.clone()));
+            }
             if from != &LoopStatus::Running {
                 return reject();
             }
@@ -318,6 +325,7 @@ pub fn apply(
                 LoopStatus::Approved,
                 LoopStatus::Blocked,
                 LoopStatus::NeedsHuman,
+                LoopStatus::Stale,
                 LoopStatus::Failed,
                 LoopStatus::Cancelled,
             ];
