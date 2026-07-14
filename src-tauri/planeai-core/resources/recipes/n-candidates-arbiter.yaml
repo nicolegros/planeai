@@ -140,10 +140,7 @@ steps:
     on:
       all_complete: run_gates
 
-  # ─── Run verification gates against the last candidate (advisory) ──────────
-  # NOTE: gates.run currently executes against the last maker session only.
-  # With N candidates, this provides a spot-check rather than full verification.
-  # The arbiter should independently assess each candidate's quality.
+  # ─── Run verification gates against each candidate ────────────────────────────
   - id: run_gates
     kind: gates.run
     role: maker

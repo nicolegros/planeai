@@ -869,29 +869,30 @@ fn exec_gates_run_body(
 ) -> Result<(&'static str, Option<String>), String> {
     use planeai_core::verifier::{VerifierLimits, VerifyGateRequest};
 
-    let session_id = if let Some(ref role) = step.role {
+    let session_ids: Vec<String> = if let Some(ref role) = step.role {
         ctx.snapshot
             .runtime
             .created_session_ids
             .get(role)
-            .and_then(|ids| ids.last())
             .cloned()
-            .ok_or_else(|| format!("step '{}': no sessions found for role '{}'", step.id, role))?
+            .unwrap_or_default()
     } else {
         ctx.snapshot
             .runtime
             .created_session_ids
             .values()
             .flatten()
-            .last()
             .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "step '{}': no sessions available for gate execution",
-                    step.id
-                )
-            })?
+            .collect()
     };
+
+    if session_ids.is_empty() {
+        let role_display = step.role.as_deref().unwrap_or("(any)");
+        return Err(format!(
+            "step '{}': no sessions found for role '{}'",
+            step.id, role_display
+        ));
+    }
 
     let loop_run = LoopService::get_loop(ctx.conn, ctx.loop_id)
         .map_err(|e| format!("failed to load loop: {e}"))?
@@ -901,59 +902,78 @@ fn exec_gates_run_body(
         .map_err(|e| format!("failed to resolve project: {e}"))?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
 
-    let session = crate::db::get_session(ctx.conn, &session_id)
-        .map_err(|e| format!("failed to get session: {e}"))?
-        .ok_or_else(|| format!("session not found: {session_id}"))?;
-
+    // Run gates against ALL sessions for the role (supports n-candidates).
     let mut overall_status: &str = "pass";
     let mut failed_gate_name = String::new();
     let mut failed_gate_output: Option<String> = None;
     let mut failed_gate_output_path: Option<String> = None;
-    for gate in &step.gates {
-        let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
-        let request = VerifyGateRequest {
-            loop_id: ctx.loop_id.to_string(),
-            session_id: session_id.clone(),
-            name: gate.name.clone(),
-            command: rendered_command,
-            project_path: project.path.clone(),
-            session_worktree_path: session.worktree_path.clone(),
-            limits: VerifierLimits::default(),
+
+    for session_id in &session_ids {
+        let session = match crate::db::get_session(ctx.conn, session_id) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                tracing::warn!(session_id = %short_id(session_id), "gates: session not found, skipping");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(session_id = %short_id(session_id), error = %e, "gates: failed to load session, skipping");
+                continue;
+            }
         };
 
-        match planeai_core::verifier::run_verifier_gate(ctx.conn, request) {
-            Ok(result) => {
-                let status_str = result.status.as_str();
-                if status_str != "pass" {
-                    overall_status = if status_str == "error" {
-                        "error"
-                    } else {
-                        "fail"
-                    };
-                    failed_gate_name = gate.name.clone();
-                    if let Some(ref path) = result.output_path {
-                        failed_gate_output = std::fs::read_to_string(path).ok();
-                        failed_gate_output_path = result.output_path.clone();
+        for gate in &step.gates {
+            let rendered_command = render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
+            let request = VerifyGateRequest {
+                loop_id: ctx.loop_id.to_string(),
+                session_id: session_id.clone(),
+                name: gate.name.clone(),
+                command: rendered_command,
+                project_path: project.path.clone(),
+                session_worktree_path: session.worktree_path.clone(),
+                limits: VerifierLimits::default(),
+            };
+
+            match planeai_core::verifier::run_verifier_gate(ctx.conn, request) {
+                Ok(result) => {
+                    let status_str = result.status.as_str();
+                    if status_str != "pass" {
+                        overall_status = if status_str == "error" {
+                            "error"
+                        } else {
+                            "fail"
+                        };
+                        failed_gate_name = gate.name.clone();
+                        if let Some(ref path) = result.output_path {
+                            failed_gate_output = std::fs::read_to_string(path).ok();
+                            failed_gate_output_path = result.output_path.clone();
+                        }
+                        // For multi-candidate: record which session failed but continue
+                        // checking others. The first failure determines the overall status.
+                        break;
                     }
+                }
+                Err(e) => {
+                    LoopService::append_loop_event(
+                        ctx.conn,
+                        ctx.loop_id,
+                        "recipe_step_failed",
+                        &serde_json::json!({
+                            "step_id": step.id,
+                            "gate": gate.name,
+                            "session_id": session_id,
+                            "error": e.to_string(),
+                        }),
+                    )
+                    .ok();
+                    overall_status = "error";
+                    failed_gate_name = gate.name.clone();
                     break;
                 }
             }
-            Err(e) => {
-                LoopService::append_loop_event(
-                    ctx.conn,
-                    ctx.loop_id,
-                    "recipe_step_failed",
-                    &serde_json::json!({
-                        "step_id": step.id,
-                        "gate": gate.name,
-                        "error": e.to_string(),
-                    }),
-                )
-                .ok();
-                overall_status = "error";
-                failed_gate_name = gate.name.clone();
-                break;
-            }
+        }
+        // Stop at first session that fails (fail-fast for routing).
+        if overall_status != "pass" {
+            break;
         }
     }
 
