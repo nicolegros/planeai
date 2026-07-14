@@ -762,7 +762,8 @@ pub fn find_step<'a>(steps: &'a [RecipeStep], id: &str) -> Option<&'a RecipeStep
 }
 
 pub fn short_id(id: &str) -> &str {
-    &id[..std::cmp::min(8, id.len())]
+    // Slice by char boundary to avoid panics on multi-byte UTF-8
+    id.get(..8).unwrap_or(id)
 }
 
 pub fn advance_step(snapshot: &mut RecipeSnapshot, current: &RecipeStep) {
@@ -774,6 +775,10 @@ pub fn advance_step(snapshot: &mut RecipeSnapshot, current: &RecipeStep) {
     if let Some(i) = idx {
         if i + 1 < snapshot.steps.len() {
             snapshot.runtime.current_step = snapshot.steps[i + 1].id.clone();
+        } else {
+            // Last step completed — set a sentinel so pre_tick_guard returns
+            // "recipe step not found" on the next tick, preventing re-execution.
+            snapshot.runtime.current_step = "__completed__".to_string();
         }
     }
 }

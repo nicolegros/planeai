@@ -76,7 +76,12 @@ pub fn tick_recipe_with_executor(
         .map(|r| r.status);
     let step = match loop_decision::pre_tick_guard(snapshot, loop_status.as_ref(), loop_id) {
         PreTickResult::EarlyReturn { output, code } => {
-            if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
+            // Only fire max_ticks effects if the loop isn't already terminal/intervention
+            let is_active = loop_status
+                .as_ref()
+                .map(|s| !s.is_executor_terminal() && !s.is_intervention_required())
+                .unwrap_or(true);
+            if is_active && snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
                 for e in loop_decision::max_ticks_effects(loop_id) {
                     let _ = execute_effect(conn, executor, &e, snapshot);
                 }
@@ -263,9 +268,9 @@ fn exec_handoff_wait(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecisio
 
 fn exec_gates_run(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecision, String> {
     loop_decision::decide_gates_run_preflight(step)?;
-    ctx.executor
-        .transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)?;
 
+    // Resolve all dependencies BEFORE entering Verifying state so failures
+    // don't leave the loop stuck in Verifying.
     let session_id = resolve_gate_session(ctx.snapshot, step)?;
     let loop_run = ctx
         .queries
@@ -279,6 +284,10 @@ fn exec_gates_run(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecision, 
         .queries
         .get_session(ctx.conn, &session_id)?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
+
+    // Now enter Verifying — all setup is done, so GatesCompleted is guaranteed.
+    ctx.executor
+        .transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)?;
 
     let (status, name, output, path) = run_gates(
         ctx,

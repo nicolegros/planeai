@@ -1058,8 +1058,11 @@ impl LoopService {
         )?;
         let json_str =
             content.ok_or_else(|| LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows))?;
-        let val: serde_json::Value = serde_json::from_str(&json_str)
-            .map_err(|_| LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows))?;
+        let val: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+            LoopServiceError::InvalidStatus(InvalidLoopStatus(format!(
+                "handoff content_json parse error: {e}"
+            )))
+        })?;
         Ok(val
             .get("summary")
             .and_then(|v| v.as_str())
