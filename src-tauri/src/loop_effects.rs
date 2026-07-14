@@ -420,17 +420,7 @@ impl EffectExecutor for RealEffectExecutor {
         loop_id: &str,
         session_id: &str,
     ) -> Result<String, String> {
-        let content: Option<String> = conn.query_row(
-            "SELECT content_json FROM loop_artifacts WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' ORDER BY created_at DESC, id DESC LIMIT 1",
-            rusqlite::params![loop_id, session_id], |row| row.get(0),
-        ).map_err(|e| format!("failed to query handoff: {e}"))?;
-        let json_str = content.ok_or_else(|| "no content in handoff".to_string())?;
-        let val: serde_json::Value =
-            serde_json::from_str(&json_str).map_err(|e| format!("invalid json: {e}"))?;
-        Ok(val
-            .get("summary")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(no summary provided)")
-            .to_string())
+        LoopService::extract_handoff_summary(conn, loop_id, session_id)
+            .map_err(|e| format!("failed to extract handoff summary: {e}"))
     }
 }

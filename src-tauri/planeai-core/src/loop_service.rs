@@ -1041,6 +1041,32 @@ impl LoopService {
                 .and_then(|s| serde_json::from_str(&s).ok()),
         }))
     }
+
+    /// Extract the summary field from the most recent handoff artifact for a session.
+    /// Used to populate `runtime.last_error` so retry prompts can include structured feedback.
+    pub fn extract_handoff_summary(
+        conn: &Connection,
+        loop_id: &str,
+        session_id: &str,
+    ) -> Result<String, LoopServiceError> {
+        let content: Option<String> = conn.query_row(
+            "SELECT content_json FROM loop_artifacts \
+             WHERE loop_id = ?1 AND session_id = ?2 AND kind = 'handoff' \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![loop_id, session_id],
+            |row| row.get(0),
+        )?;
+        let json_str = content.ok_or_else(|| {
+            LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows)
+        })?;
+        let val: serde_json::Value = serde_json::from_str(&json_str)
+            .map_err(|_| LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows))?;
+        Ok(val
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no summary provided)")
+            .to_string())
+    }
 }
 
 // ─── Error type ──────────────────────────────────────────────────────────────
