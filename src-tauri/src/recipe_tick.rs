@@ -526,31 +526,89 @@ mod tests {
     }
 
     impl EffectExecutor for MockExecutor {
-        fn create_session(&self, _conn: &rusqlite::Connection, _effect: &Effect) -> Result<CreatedSession, String> {
+        fn create_session(
+            &self,
+            _conn: &rusqlite::Connection,
+            _effect: &Effect,
+        ) -> Result<CreatedSession, String> {
             self.effects.borrow_mut().push("create_session".into());
-            Ok(CreatedSession { id: "mock-session-1".into(), branch: "mock-branch".into(), worktree_path: None })
+            Ok(CreatedSession {
+                id: "mock-session-1".into(),
+                branch: "mock-branch".into(),
+                worktree_path: None,
+            })
         }
-        fn send_prompt(&self, _conn: &rusqlite::Connection, _sid: &str, _p: &str) -> Result<(), String> {
-            self.effects.borrow_mut().push("send_prompt".into()); Ok(())
+        fn send_prompt(
+            &self,
+            _conn: &rusqlite::Connection,
+            _sid: &str,
+            _p: &str,
+        ) -> Result<(), String> {
+            self.effects.borrow_mut().push("send_prompt".into());
+            Ok(())
         }
-        fn run_gate(&self, _conn: &rusqlite::Connection, _effect: &Effect) -> Result<GateResult, String> {
+        fn run_gate(
+            &self,
+            _conn: &rusqlite::Connection,
+            _effect: &Effect,
+        ) -> Result<GateResult, String> {
             self.effects.borrow_mut().push("run_gate".into());
-            Ok(GateResult { status: GateStatus::Pass, output: None, output_path: None })
+            Ok(GateResult {
+                status: GateStatus::Pass,
+                output: None,
+                output_path: None,
+            })
         }
-        fn transition_loop(&self, _conn: &rusqlite::Connection, _lid: &str, _t: LoopTrigger) -> Result<(), String> {
-            self.effects.borrow_mut().push("transition_loop".into()); Ok(())
+        fn transition_loop(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _t: LoopTrigger,
+        ) -> Result<(), String> {
+            self.effects.borrow_mut().push("transition_loop".into());
+            Ok(())
         }
-        fn append_event(&self, _conn: &rusqlite::Connection, _lid: &str, _k: &str, _p: &serde_json::Value) -> Result<(), String> {
-            self.effects.borrow_mut().push("append_event".into()); Ok(())
+        fn append_event(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _k: &str,
+            _p: &serde_json::Value,
+        ) -> Result<(), String> {
+            self.effects.borrow_mut().push("append_event".into());
+            Ok(())
         }
-        fn link_session(&self, _conn: &rusqlite::Connection, _lid: &str, _sid: &str, _r: &str, _rnd: i64, _p: Option<&str>) -> Result<(), String> {
-            self.effects.borrow_mut().push("link_session".into()); Ok(())
+        fn link_session(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _sid: &str,
+            _r: &str,
+            _rnd: i64,
+            _p: Option<&str>,
+        ) -> Result<(), String> {
+            self.effects.borrow_mut().push("link_session".into());
+            Ok(())
         }
-        fn save_snapshot(&self, _conn: &rusqlite::Connection, _lid: &str, _s: &RecipeSnapshot) -> Result<(), String> {
-            self.effects.borrow_mut().push("save_snapshot".into()); Ok(())
+        fn save_snapshot(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _s: &RecipeSnapshot,
+        ) -> Result<(), String> {
+            self.effects.borrow_mut().push("save_snapshot".into());
+            Ok(())
         }
-        fn update_current_round(&self, _conn: &rusqlite::Connection, _lid: &str, _r: i64) -> Result<(), String> {
-            self.effects.borrow_mut().push("update_current_round".into()); Ok(())
+        fn update_current_round(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _r: i64,
+        ) -> Result<(), String> {
+            self.effects
+                .borrow_mut()
+                .push("update_current_round".into());
+            Ok(())
         }
     }
 
@@ -562,34 +620,69 @@ mod tests {
         fn running() -> Self {
             Self {
                 loop_run: Some(LoopRun {
-                    id: "loop-1234".into(), project_id: "proj-1".into(), task_key: None,
-                    created_by_session_id: None, strategy: LoopStrategy::new("recipe"),
-                    goal: "test".into(), status: LoopStatus::Running, current_round: 1,
-                    max_rounds: 3, created_at: "2024-01-01T00:00:00Z".into(),
-                    updated_at: "2024-01-01T00:00:00Z".into(), executor_finished_at: None,
-                    policy_json: None, budget_json: None,
+                    id: "loop-1234".into(),
+                    project_id: "proj-1".into(),
+                    task_key: None,
+                    created_by_session_id: None,
+                    strategy: LoopStrategy::new("recipe"),
+                    goal: "test".into(),
+                    status: LoopStatus::Running,
+                    current_round: 1,
+                    max_rounds: 3,
+                    created_at: "2024-01-01T00:00:00Z".into(),
+                    updated_at: "2024-01-01T00:00:00Z".into(),
+                    executor_finished_at: None,
+                    policy_json: None,
+                    budget_json: None,
                 }),
             }
         }
     }
 
     impl LoopQueries for MockQueries {
-        fn get_loop(&self, _conn: &rusqlite::Connection, _lid: &str) -> Result<Option<LoopRun>, String> {
+        fn get_loop(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+        ) -> Result<Option<LoopRun>, String> {
             Ok(self.loop_run.clone())
         }
-        fn list_loop_sessions(&self, _conn: &rusqlite::Connection, _lid: &str) -> Result<Vec<LoopSession>, String> {
+        fn list_loop_sessions(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+        ) -> Result<Vec<LoopSession>, String> {
             Ok(vec![])
         }
-        fn find_handoff(&self, _conn: &rusqlite::Connection, _lid: &str, _sids: &[String], _ts: Option<&str>) -> Result<Option<(String, String)>, String> {
+        fn find_handoff(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _sids: &[String],
+            _ts: Option<&str>,
+        ) -> Result<Option<(String, String)>, String> {
             Ok(None)
         }
-        fn get_session(&self, _conn: &rusqlite::Connection, _sid: &str) -> Result<Option<crate::db::Session>, String> {
+        fn get_session(
+            &self,
+            _conn: &rusqlite::Connection,
+            _sid: &str,
+        ) -> Result<Option<crate::db::Session>, String> {
             Ok(None)
         }
-        fn get_project(&self, _conn: &rusqlite::Connection, _pid: &str) -> Result<Option<crate::db::Project>, String> {
+        fn get_project(
+            &self,
+            _conn: &rusqlite::Connection,
+            _pid: &str,
+        ) -> Result<Option<crate::db::Project>, String> {
             Ok(None)
         }
-        fn extract_handoff_summary(&self, _conn: &rusqlite::Connection, _lid: &str, _sid: &str) -> Result<String, String> {
+        fn extract_handoff_summary(
+            &self,
+            _conn: &rusqlite::Connection,
+            _lid: &str,
+            _sid: &str,
+        ) -> Result<String, String> {
             Ok("mock summary".into())
         }
     }
@@ -603,19 +696,48 @@ mod tests {
     fn minimal_snapshot(steps: Vec<RecipeStep>) -> RecipeSnapshot {
         let first = steps.first().map(|s| s.id.clone()).unwrap_or_default();
         RecipeSnapshot {
-            recipe_schema: "planeai.loop.recipe.v1".into(), recipe_id: "test".into(),
-            recipe_source: "builtin".into(), recipe_path: None, inputs: BTreeMap::new(),
-            runtime: RecipeRuntime { current_step: first, tick_count: 0, round: 1,
-                created_session_ids: BTreeMap::new(), last_error: None, last_handoff_consumed_at: None },
-            policy: SnapshotPolicy { max_rounds: 3, max_ticks: 50, max_sessions: 5,
-                merge_policy: "human".into(), auto_approve: true },
-            roles: BTreeMap::new(), steps, knowledge: RecipeKnowledge::default(), tools: RecipeTools::default(),
+            recipe_schema: "planeai.loop.recipe.v1".into(),
+            recipe_id: "test".into(),
+            recipe_source: "builtin".into(),
+            recipe_path: None,
+            inputs: BTreeMap::new(),
+            runtime: RecipeRuntime {
+                current_step: first,
+                tick_count: 0,
+                round: 1,
+                created_session_ids: BTreeMap::new(),
+                last_error: None,
+                last_handoff_consumed_at: None,
+            },
+            policy: SnapshotPolicy {
+                max_rounds: 3,
+                max_ticks: 50,
+                max_sessions: 5,
+                merge_policy: "human".into(),
+                auto_approve: true,
+            },
+            roles: BTreeMap::new(),
+            steps,
+            knowledge: RecipeKnowledge::default(),
+            tools: RecipeTools::default(),
         }
     }
 
     fn make_step(id: &str, kind: &str) -> RecipeStep {
-        RecipeStep { id: id.into(), kind: kind.into(), role: None, prompt: None, branch: None,
-            from: None, on: None, status: None, next: None, select: None, event_kind: None, gates: vec![] }
+        RecipeStep {
+            id: id.into(),
+            kind: kind.into(),
+            role: None,
+            prompt: None,
+            branch: None,
+            from: None,
+            on: None,
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        }
     }
 
     // ─── Wiring tests ────────────────────────────────────────────────────────
@@ -630,14 +752,24 @@ mod tests {
         let executor = MockExecutor::default();
         let queries = MockQueries::running();
 
-        let (output, code) = tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
+        let (output, code) =
+            tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
 
         assert_eq!(code, 0);
         assert!(output.contains("needs_human"));
         let effects = executor.effects.borrow();
-        assert!(effects.contains(&"transition_loop".to_string()), "should transition to needs_human");
-        assert!(effects.contains(&"append_event".to_string()), "should append event");
-        assert!(effects.contains(&"save_snapshot".to_string()), "should save snapshot");
+        assert!(
+            effects.contains(&"transition_loop".to_string()),
+            "should transition to needs_human"
+        );
+        assert!(
+            effects.contains(&"append_event".to_string()),
+            "should append event"
+        );
+        assert!(
+            effects.contains(&"save_snapshot".to_string()),
+            "should save snapshot"
+        );
     }
 
     #[test]
@@ -650,7 +782,8 @@ mod tests {
         let executor = MockExecutor::default();
         let queries = MockQueries::running();
 
-        let (_, code) = tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
+        let (_, code) =
+            tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
 
         assert_eq!(code, 0);
         let effects = executor.effects.borrow();
@@ -666,19 +799,32 @@ mod tests {
         let executor = MockExecutor::default();
         let queries = MockQueries {
             loop_run: Some(LoopRun {
-                id: "loop-1234".into(), project_id: "p".into(), task_key: None,
-                created_by_session_id: None, strategy: LoopStrategy::new("recipe"),
-                goal: "t".into(), status: LoopStatus::Failed, current_round: 1,
-                max_rounds: 3, created_at: "t".into(), updated_at: "t".into(),
-                executor_finished_at: None, policy_json: None, budget_json: None,
+                id: "loop-1234".into(),
+                project_id: "p".into(),
+                task_key: None,
+                created_by_session_id: None,
+                strategy: LoopStrategy::new("recipe"),
+                goal: "t".into(),
+                status: LoopStatus::Failed,
+                current_round: 1,
+                max_rounds: 3,
+                created_at: "t".into(),
+                updated_at: "t".into(),
+                executor_finished_at: None,
+                policy_json: None,
+                budget_json: None,
             }),
         };
 
-        let (output, code) = tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
+        let (output, code) =
+            tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
 
         assert_eq!(code, 1);
         assert!(output.contains("terminal"));
-        assert!(executor.effects.borrow().is_empty(), "no effects should execute for terminal loop");
+        assert!(
+            executor.effects.borrow().is_empty(),
+            "no effects should execute for terminal loop"
+        );
     }
 
     #[test]
@@ -690,12 +836,16 @@ mod tests {
         let executor = MockExecutor::default();
         let queries = MockQueries::running();
 
-        let (output, code) = tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
+        let (output, code) =
+            tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
 
         assert_eq!(code, 1);
         assert!(output.contains("max_ticks"));
         let effects = executor.effects.borrow();
-        assert!(effects.contains(&"transition_loop".to_string()), "should fire MaxTicksExceeded transition");
+        assert!(
+            effects.contains(&"transition_loop".to_string()),
+            "should fire MaxTicksExceeded transition"
+        );
     }
 
     #[test]
@@ -708,7 +858,8 @@ mod tests {
         let executor = MockExecutor::default();
         let queries = MockQueries::running();
 
-        let (_, code) = tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
+        let (_, code) =
+            tick_recipe_with_executor(&conn, "loop-1234", &mut snapshot, &executor, &queries);
 
         assert_eq!(code, 0);
         assert_eq!(snapshot.runtime.current_step, "ev2");
