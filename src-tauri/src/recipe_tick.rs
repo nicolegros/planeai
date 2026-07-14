@@ -831,7 +831,8 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
         });
     }
 
-    // Increment round
+    // Increment round — clear per-round state so it doesn't carry over.
+    ctx.snapshot.runtime.candidate_handoffs.clear();
     ctx.snapshot.runtime.round += 1;
     let new_round = ctx.snapshot.runtime.round;
 
@@ -1348,10 +1349,6 @@ fn exec_candidates_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<Ti
 }
 
 fn exec_candidates_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    // NOTE: candidate_handoffs is not scoped by round. If max_rounds > 1 were supported
-    // in the n-candidates-arbiter recipe, stale entries from round N would pre-satisfy
-    // round N+1. Currently max_rounds=1 in the builtin recipe so this is not an issue.
-    // If multi-round support is added, candidate_handoffs must be cleared at round boundaries.
     let role_id = step.from.as_deref().unwrap_or("default");
 
     let session_ids = ctx
