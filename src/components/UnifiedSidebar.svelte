@@ -602,18 +602,17 @@
                 {@const childSessions = loopSessionsMap[loop.id] ?? []}
                 <li>
                   <!-- Loop item (aligned with status section headers) -->
-                  <div
-                    role="button"
-                    tabindex="0"
-                    data-nav-index={loopNavIdx}
-                    class="group w-full flex items-center gap-1.5 pl-2 pr-2 py-1 text-left transition-colors rounded-lg cursor-pointer
-                      {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
-                      {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
-                    onclick={() => onSelectLoop?.(loop.id)}
-                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectLoop?.(loop.id); } }}
-                    oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
-                    title={loop.goal}
-                  >
+                  <div class="flex items-center gap-1.5">
+                    <span class="w-[2px] self-stretch rounded-full transition-opacity {isLoopDashboardActive ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
+                    <button
+                      data-nav-index={loopNavIdx}
+                      class="group flex-1 min-w-0 text-left py-[6px] text-[13px] flex items-center gap-1.5 transition-colors rounded-lg pl-4 pr-2 cursor-pointer
+                        {isLoopDashboardActive ? 'bg-accent-bg' : 'hover:bg-panel-hi'}
+                        {isLoopPreviewing ? 'ring-2 ring-accent' : isLoopSelected ? 'ring-2 ring-accent' : ''}"
+                      onclick={() => onSelectLoop?.(loop.id)}
+                      oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
+                      title={loop.goal}
+                    >
                     <!-- Status indicator -->
                     {#if isLoopTerminalSuccess(loop.status)}
                       <CheckCircle2 class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
@@ -644,6 +643,7 @@
                     {#if childSessions.length > 0}
                       {#if loopCollapsed}<ChevronRight class="size-3 ml-auto text-t3 shrink-0" />{:else}<ChevronDown class="size-3 ml-auto text-t3 shrink-0" />{/if}
                     {/if}
+                    </button>
                   </div>
                   <!-- Indented child sessions -->
                   {#if !loopCollapsed && childSessions.length > 0}
@@ -652,7 +652,7 @@
                         {@const childSession = sessions.find(s => s.id === item.session_id)}
                         {#if childSession}
                           {@const childNavIdx = flatNavIndex.get(`loop_session:${childSession.id}`) ?? -1}
-                          {@const isChildActive = childSession.id === activeSessionId}
+                          {@const isChildActive = childSession.id === activeSessionId && !selectedLoopId}
                           {@const isChildSelected = zone === 'sidebar' && childNavIdx === getSelectedIndex()}
                           {@const isChildPreviewing = childSession.id === previewSessionId}
                           <li>
@@ -694,7 +694,7 @@
             <ul class="space-y-0.5 mb-1">
               {#each projectOrphans as session (session.id)}
                 {@const globalIndex = flatNavIndex.get(`orphan:${session.id}`) ?? -1}
-                {@const isActive = session.id === activeSessionId}
+                {@const isActive = session.id === activeSessionId && !selectedLoopId}
                 {@const isSelected = zone === 'sidebar' && globalIndex === getSelectedIndex()}
                 {@const isPreviewing = session.id === previewSessionId}
                 <li class="transition-opacity duration-200 {fadingSessionIds.has(session.id) ? 'opacity-0' : 'opacity-100'}">
@@ -759,7 +759,7 @@
                   <ul class="space-y-0.5">
                     {#each items as task (task.key)}
                       {@const linked = sessionForTask(task.key)}
-                      {@const isActive = linked?.id === activeSessionId}
+                      {@const isActive = linked?.id === activeSessionId && !selectedLoopId}
                       {@const taskNavIdx = flatNavIndex.get(`task:${task.key}`) ?? -1}
                       {@const isSelected = zone === 'sidebar' && taskNavIdx === getSelectedIndex()}
                       {@const isParent = isParentTask(task, projectTasks)}
