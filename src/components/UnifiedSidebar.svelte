@@ -160,6 +160,13 @@
   };
   function loopStatusColor(status: string): string { return loopStatusColors[status] ?? "bg-t3"; }
   function isLoopActive(status: string): boolean { return ["running", "observing", "verifying"].includes(status); }
+  function isLoopTerminalSuccess(status: string): boolean { return ["completed_unreviewed", "approved", "merged", "cleaned"].includes(status); }
+  function isLoopTerminalFailure(status: string): boolean { return ["failed", "cancelled"].includes(status); }
+  const loopStatusTextColors: Record<string, string> = {
+    completed_unreviewed: "text-status-review", approved: "text-status-running",
+    merged: "text-status-idle", cleaned: "text-status-idle",
+    failed: "text-status-exited", cancelled: "text-status-exited",
+  };
   function shortId(id: string): string { return id.slice(0, 8); }
 
   // Jira task assignment
@@ -607,8 +614,14 @@
                     oncontextmenu={(e) => { e.preventDefault(); loopContextMenu = { x: e.clientX, y: e.clientY, loop }; }}
                     title={loop.goal}
                   >
-                    <!-- Status dot -->
-                    <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
+                    <!-- Status indicator -->
+                    {#if isLoopTerminalSuccess(loop.status)}
+                      <CheckCircle2 class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
+                    {:else if isLoopTerminalFailure(loop.status)}
+                      <XCircle class="size-3 shrink-0 {loopStatusTextColors[loop.status] ?? 'text-t3'}" />
+                    {:else}
+                      <span class="size-1.5 rounded-full shrink-0 {loopStatusColor(loop.status)}"></span>
+                    {/if}
                     <!-- Label -->
                     {#if loop.task_key}
                       <span class="font-medium text-[12.5px] text-t1 truncate">{loop.task_key}</span>
