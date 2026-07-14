@@ -290,10 +290,16 @@ impl RecipeService {
         }
 
         // Step validation
-        let role_bearing_kinds: HashSet<&str> =
-            [STEP_SESSION_CREATE, STEP_SESSION_PROMPT, STEP_HANDOFF_WAIT, STEP_CANDIDATES_CREATE, STEP_CANDIDATES_WAIT, STEP_ARBITER_RANK]
-                .into_iter()
-                .collect();
+        let role_bearing_kinds: HashSet<&str> = [
+            STEP_SESSION_CREATE,
+            STEP_SESSION_PROMPT,
+            STEP_HANDOFF_WAIT,
+            STEP_CANDIDATES_CREATE,
+            STEP_CANDIDATES_WAIT,
+            STEP_ARBITER_RANK,
+        ]
+        .into_iter()
+        .collect();
 
         let mut referenced_roles: HashSet<String> = HashSet::new();
 

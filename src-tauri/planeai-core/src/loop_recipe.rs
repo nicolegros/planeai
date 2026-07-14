@@ -230,11 +230,7 @@ const V1_STEP_KINDS: &[&str] = &[
 ];
 
 /// Recognized but not yet executable step kinds.
-const FUTURE_STEP_KINDS: &[&str] = &[
-    STEP_PR_FEEDBACK_WAIT,
-    STEP_TASK_CREATE,
-    STEP_CONNECTOR_CALL,
-];
+const FUTURE_STEP_KINDS: &[&str] = &[STEP_PR_FEEDBACK_WAIT, STEP_TASK_CREATE, STEP_CONNECTOR_CALL];
 
 /// V1-executable trigger kinds.
 const V1_TRIGGER_KINDS: &[&str] = &[TRIGGER_MANUAL];
@@ -315,10 +311,7 @@ impl RecipeStep {
             }
             STEP_ARBITER_RANK => {
                 if self.role.is_none() {
-                    problems.push(format!(
-                        "step '{}': arbiter.rank requires 'role'",
-                        self.id
-                    ));
+                    problems.push(format!("step '{}': arbiter.rank requires 'role'", self.id));
                 }
                 if self.prompt.is_none() {
                     problems.push(format!(

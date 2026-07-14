@@ -1264,16 +1264,16 @@ fn run_axi_loop(conn: &rusqlite::Connection, action: AxiLoopAction, cwd: &str) -
             input_kv,
             inputs_json,
         } => {
-            let mut merged = match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch)
-            {
-                Ok(m) => m,
-                Err((output, code)) => {
-                    return {
-                        print!("{output}");
-                        code
+            let mut merged =
+                match merge_cli_inputs(&inputs_json, &input_kv, goal, &task, &base_branch) {
+                    Ok(m) => m,
+                    Err((output, code)) => {
+                        return {
+                            print!("{output}");
+                            code
+                        }
                     }
-                }
-            };
+                };
 
             // Inject --providers as inputs.providers (comma-separated)
             if !providers.is_empty() && !merged.contains_key("providers") {

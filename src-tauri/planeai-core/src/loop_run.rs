@@ -379,8 +379,12 @@ pub fn derive_status_from_step(step_kind: &str, step_status: Option<&str>) -> Op
     };
 
     match step_kind {
-        STEP_SESSION_CREATE | STEP_SESSION_PROMPT | STEP_LOOP_EVENT | STEP_ROUND_NEXT
-        | STEP_CANDIDATES_CREATE | STEP_ARBITER_RANK => Some(LoopStatus::Running),
+        STEP_SESSION_CREATE
+        | STEP_SESSION_PROMPT
+        | STEP_LOOP_EVENT
+        | STEP_ROUND_NEXT
+        | STEP_CANDIDATES_CREATE
+        | STEP_ARBITER_RANK => Some(LoopStatus::Running),
         STEP_HANDOFF_WAIT | STEP_CANDIDATES_WAIT => Some(LoopStatus::Observing),
         STEP_GATES_RUN => Some(LoopStatus::Verifying),
         STEP_HUMAN_WAIT => Some(LoopStatus::NeedsHuman),

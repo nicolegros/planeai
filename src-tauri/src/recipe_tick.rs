@@ -1471,7 +1471,10 @@ fn exec_candidates_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<Tick
                 step_id: step.id.clone(),
                 step_kind: step.kind.clone(),
                 status: "needs_human".into(),
-                extra: vec![field("reason", str_val("persistent handoff query failures"))],
+                extra: vec![field(
+                    "reason",
+                    str_val("persistent handoff query failures"),
+                )],
                 next_actions: vec![
                     "handoff queries have failed repeatedly — check database health".to_string(),
                 ],
@@ -1698,10 +1701,7 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     };
 
     // Resolve the effective provider name for logging/tracking
-    let effective_provider = provider_opt
-        .as_deref()
-        .unwrap_or("default")
-        .to_string();
+    let effective_provider = provider_opt.as_deref().unwrap_or("default").to_string();
 
     let opts = crate::cli::SessionCreateOpts {
         project: project.name.clone(),
@@ -1826,8 +1826,7 @@ fn build_candidates_context(ctx: &TickContext, candidate_role: &str) -> String {
     let mut lines = Vec::new();
 
     // Collect candidate info from loop_sessions table
-    let loop_sessions =
-        LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
+    let loop_sessions = LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
 
     for ls in &loop_sessions {
         // Only include sessions matching the candidate role
