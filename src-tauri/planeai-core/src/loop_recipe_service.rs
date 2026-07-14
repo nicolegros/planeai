@@ -108,6 +108,10 @@ pub struct RecipeRuntime {
     /// Maps session_id → handoff status string (e.g., "completed", "failed").
     #[serde(default)]
     pub candidate_handoffs: BTreeMap<String, String>,
+    /// Counter for consecutive ticks where all handoff queries failed in candidates.wait.
+    /// Reset to 0 when at least one query succeeds. Escalates to needs_human at threshold.
+    #[serde(default)]
+    pub candidates_query_failures: u32,
 }
 
 /// Tracks the last-known observation cursor for a loop-owned session.
@@ -447,6 +451,7 @@ impl RecipeService {
                 last_activity_at: None,
                 session_observations: BTreeMap::new(),
                 candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,

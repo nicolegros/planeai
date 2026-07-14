@@ -1604,6 +1604,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             last_activity_at: None,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1755,6 +1756,7 @@ fn recipe_tick_round_next_increments_round() {
             last_activity_at: None,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1852,6 +1854,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             last_activity_at: None,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1973,6 +1976,7 @@ fn setup_maker_verifier_flow(
             last_activity_at: None,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2178,6 +2182,7 @@ fn setup_maker_verifier_flow_with_path(
             last_activity_at: None,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2765,6 +2770,7 @@ fn setup_stale_loop_with_sessions(
             last_activity_at,
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -3080,6 +3086,7 @@ fn handoff_refreshes_activity() {
             last_activity_at: Some(ten_min_ago.clone()),
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -3321,6 +3328,7 @@ fn verifier_refreshes_activity() {
             last_activity_at: Some(ten_min_ago.clone()),
             session_observations: BTreeMap::new(),
             candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,

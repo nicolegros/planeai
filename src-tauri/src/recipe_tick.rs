@@ -1437,6 +1437,46 @@ fn exec_candidates_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<Tick
         }
     }
 
+    // Track persistent query failures: if no new handoffs were discovered and
+    // all unresolved queries failed/returned nothing, increment the failure counter.
+    // Escalate to needs_human after 5 consecutive failed ticks.
+    if new_handoffs_found {
+        ctx.snapshot.runtime.candidates_query_failures = 0;
+    } else {
+        ctx.snapshot.runtime.candidates_query_failures += 1;
+        const MAX_QUERY_FAILURES: u32 = 5;
+        if ctx.snapshot.runtime.candidates_query_failures >= MAX_QUERY_FAILURES {
+            tracing::error!(
+                loop_id = %short_id(ctx.loop_id),
+                consecutive_failures = ctx.snapshot.runtime.candidates_query_failures,
+                "exec_candidates_wait: persistent handoff query failures, escalating to needs_human"
+            );
+            ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
+            LoopService::append_loop_event(
+                ctx.conn,
+                ctx.loop_id,
+                "recipe_step_failed",
+                &serde_json::json!({
+                    "step_id": step.id,
+                    "kind": step.kind,
+                    "reason": "persistent_query_failures",
+                    "consecutive_failures": ctx.snapshot.runtime.candidates_query_failures,
+                }),
+            )
+            .ok();
+            save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+            return Ok(TickResult {
+                step_id: step.id.clone(),
+                step_kind: step.kind.clone(),
+                status: "needs_human".into(),
+                extra: vec![field("reason", str_val("persistent handoff query failures"))],
+                next_actions: vec![
+                    "handoff queries have failed repeatedly — check database health".to_string(),
+                ],
+            });
+        }
+    }
+
     let completed_count = ctx.snapshot.runtime.candidate_handoffs.len();
 
     // Check if all candidates have handed off
@@ -2185,6 +2225,7 @@ mod tests {
                 last_activity_at: None,
                 session_observations: BTreeMap::new(),
                 candidate_handoffs: BTreeMap::new(),
+                candidates_query_failures: 0,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,
