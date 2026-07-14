@@ -234,14 +234,14 @@ Step fields reference:
 | `role`       | Target role for session steps                                                                                                                                                                                                                   |
 | `prompt`     | Message/instruction text                                                                                                                                                                                                                        |
 | `branch`     | Branch override for `session.create` steps; uses an existing branch instead of generating one. Supports template rendering (e.g., `{{ inputs.branch }}`). When empty or absent, a loop-managed branch (`loop/<id>/<role>-r<round>`) is created. |
-| `from`       | Source role for handoff.wait and candidates.wait                                                                                                                                                                                                 |
+| `from`       | Source role for handoff.wait and candidates.wait                                                                                                                                                                                                |
 | `on`         | Condition map for conditional steps                                                                                                                                                                                                             |
 | `status`     | Target status for loop.status                                                                                                                                                                                                                   |
 | `next`       | Explicit next step ID (overrides sequential order)                                                                                                                                                                                              |
 | `select`     | Selection criteria                                                                                                                                                                                                                              |
 | `event_kind` | Event kind for loop.event                                                                                                                                                                                                                       |
 | `gates`      | List of gate declarations for gates.run steps                                                                                                                                                                                                   |
-| `providers`  | Comma-separated provider list for `candidates.create` steps (template-rendered, e.g., `{{ inputs.providers }}`)                                                                                                                                  |
+| `providers`  | Comma-separated provider list for `candidates.create` steps (template-rendered, e.g., `{{ inputs.providers }}`)                                                                                                                                 |
 
 ## Built-in Maker-Verifier Recipe
 
@@ -578,20 +578,20 @@ planeai-cli axi loop create \
 
 ### Inputs
 
-| Input              | Type     | Required | Default    | Description                                    |
-| ------------------ | -------- | -------- | ---------- | ---------------------------------------------- |
-| `goal`             | textarea | yes      | —          | What should the candidates implement?          |
-| `task_key`         | task     | no       | —          | Linked task key                                |
-| `providers`        | text     | yes      | —          | Comma-separated provider names                 |
-| `arbiter_provider` | text     | no       | `default`  | Provider for the arbiter session               |
-| `gate_command`     | text     | no       | `make ci`  | Command to verify each candidate               |
+| Input              | Type     | Required | Default   | Description                           |
+| ------------------ | -------- | -------- | --------- | ------------------------------------- |
+| `goal`             | textarea | yes      | —         | What should the candidates implement? |
+| `task_key`         | task     | no       | —         | Linked task key                       |
+| `providers`        | text     | yes      | —         | Comma-separated provider names        |
+| `arbiter_provider` | text     | no       | `default` | Provider for the arbiter session      |
+| `gate_command`     | text     | no       | `make ci` | Command to verify each candidate      |
 
 ### Roles
 
-| Role    | Mode     | Isolation | Description                                  |
-| ------- | -------- | --------- | -------------------------------------------- |
-| maker   | write    | worktree  | Each candidate works in its own worktree     |
-| arbiter | review   | readonly  | Reviews all candidates, does not edit files  |
+| Role    | Mode   | Isolation | Description                                 |
+| ------- | ------ | --------- | ------------------------------------------- |
+| maker   | write  | worktree  | Each candidate works in its own worktree    |
+| arbiter | review | readonly  | Reviews all candidates, does not edit files |
 
 ## CLI Commands
 
@@ -629,19 +629,19 @@ Instantiates a new `LoopRun`, resolves inputs, and begins executing steps. Use `
 
 ## Supported Step Kinds (v1)
 
-| Kind               | Description                                                                                                                                                                  |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session.create`   | Spawn a new agent session (in a worktree by default) and send initial prompt. Supports an optional `branch` field to check out an existing branch instead of generating one. |
-| `session.prompt`   | Send a message to an existing session (requires `select: latest`)                                                                                                            |
-| `handoff.wait`     | Pause until the source role produces an accepted handoff artifact                                                                                                            |
-| `loop.status`      | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`)                                      |
-| `loop.event`       | Emit a structured event into the loop's event log                                                                                                                            |
-| `human.wait`       | Block until a human responds in the UI                                                                                                                                       |
-| `round.next`       | Increment the round counter (enforces `max_rounds`)                                                                                                                          |
-| `gates.run`        | Run verifier gate commands and branch on pass/fail/error                                                                                                                     |
-| `candidates.create`| Create N candidate sessions in parallel (one per provider). Requires `providers` field (comma-separated, template-rendered). **(experimental)**                              |
-| `candidates.wait`  | Wait for all candidate sessions to produce handoffs. Routes via `on: { all_complete: <step> }` when all are done. **(experimental)**                                         |
-| `arbiter.rank`     | Create an arbiter session with candidate summaries injected via `{{ candidates }}` template variable. **(experimental)**                                                      |
+| Kind                | Description                                                                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session.create`    | Spawn a new agent session (in a worktree by default) and send initial prompt. Supports an optional `branch` field to check out an existing branch instead of generating one. |
+| `session.prompt`    | Send a message to an existing session (requires `select: latest`)                                                                                                            |
+| `handoff.wait`      | Pause until the source role produces an accepted handoff artifact                                                                                                            |
+| `loop.status`       | Set the loop run status (`observing`, `verifying`, `completed_unreviewed`, `approved`, `blocked`, `needs_human`, `failed`, `cancelled`)                                      |
+| `loop.event`        | Emit a structured event into the loop's event log                                                                                                                            |
+| `human.wait`        | Block until a human responds in the UI                                                                                                                                       |
+| `round.next`        | Increment the round counter (enforces `max_rounds`)                                                                                                                          |
+| `gates.run`         | Run verifier gate commands and branch on pass/fail/error                                                                                                                     |
+| `candidates.create` | Create N candidate sessions in parallel (one per provider). Requires `providers` field (comma-separated, template-rendered). **(experimental)**                              |
+| `candidates.wait`   | Wait for all candidate sessions to produce handoffs. Routes via `on: { all_complete: <step> }` when all are done. **(experimental)**                                         |
+| `arbiter.rank`      | Create an arbiter session with candidate summaries injected via `{{ candidates }}` template variable. **(experimental)**                                                     |
 
 ## Runtime: Auto-Advance Tick Model
 
@@ -839,16 +839,16 @@ These are reserved in the schema but not implemented:
 
 Prompt templates use [minijinja](https://github.com/mitsuhiko/minijinja) syntax (Jinja2-compatible, sandboxed — no file inclusion or shell execution).
 
-| Variable                   | Description                                                    |
-| -------------------------- | -------------------------------------------------------------- |
-| `{{ inputs.goal }}`        | The goal passed at loop creation                               |
-| `{{ inputs.task_key }}`    | The task key (if provided)                                     |
-| `{{ inputs.<key> }}`       | Any custom input defined in the recipe                         |
-| `{{ loop_run.id }}`        | The loop run ID                                                |
-| `{{ recipe.id }}`          | The recipe ID                                                  |
-| `{{ knowledge.files }}`    | Rendered list of knowledge file references                     |
-| `{{ runtime.round }}`      | Current round number                                           |
-| `{{ runtime.last_error }}` | Last error message (if any)                                    |
+| Variable                   | Description                                                              |
+| -------------------------- | ------------------------------------------------------------------------ |
+| `{{ inputs.goal }}`        | The goal passed at loop creation                                         |
+| `{{ inputs.task_key }}`    | The task key (if provided)                                               |
+| `{{ inputs.<key> }}`       | Any custom input defined in the recipe                                   |
+| `{{ loop_run.id }}`        | The loop run ID                                                          |
+| `{{ recipe.id }}`          | The recipe ID                                                            |
+| `{{ knowledge.files }}`    | Rendered list of knowledge file references                               |
+| `{{ runtime.round }}`      | Current round number                                                     |
+| `{{ runtime.last_error }}` | Last error message (if any)                                              |
 | `{{ candidates }}`         | Formatted candidate summaries (available in `arbiter.rank` prompts only) |
 
 **Conditional blocks:**
