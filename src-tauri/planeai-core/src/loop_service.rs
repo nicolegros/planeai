@@ -1056,9 +1056,8 @@ impl LoopService {
             params![loop_id, session_id],
             |row| row.get(0),
         )?;
-        let json_str = content.ok_or_else(|| {
-            LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows)
-        })?;
+        let json_str =
+            content.ok_or_else(|| LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows))?;
         let val: serde_json::Value = serde_json::from_str(&json_str)
             .map_err(|_| LoopServiceError::Db(rusqlite::Error::QueryReturnedNoRows))?;
         Ok(val

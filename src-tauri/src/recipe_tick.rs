@@ -12,6 +12,20 @@ use planeai_toon::{field, render, str_val, Value};
 use crate::loop_decision::{self, PreTickResult, TickDecision};
 use crate::loop_effects::{Effect, EffectExecutor, GateStatus, LoopQueries, RealEffectExecutor};
 
+// ─── TickContext ─────────────────────────────────────────────────────────────
+
+/// Shared context threaded through all wiring functions, eliminating repeated
+/// parameter lists (conn, executor, queries, snapshot, loop_id).
+struct TickCtx<'a> {
+    conn: &'a rusqlite::Connection,
+    executor: &'a dyn EffectExecutor,
+    queries: &'a dyn LoopQueries,
+    snapshot: &'a mut RecipeSnapshot,
+    loop_id: &'a str,
+}
+
+// ─── Rendering ───────────────────────────────────────────────────────────────
+
 fn render_tick_result(loop_id: &str, recipe_id: &str, d: TickDecision) -> (String, i32) {
     let tick = vec![
         field("loop_id", str_val(loop_id)),
@@ -30,13 +44,21 @@ fn render_error(msg: &str) -> (String, i32) {
     (render(&[field("error", str_val(msg))]), 1)
 }
 
+// ─── Main Entry ──────────────────────────────────────────────────────────────
+
 /// Execute one recipe step for the given loop. Returns TOON output.
 pub fn tick_recipe(
     conn: &rusqlite::Connection,
     loop_id: &str,
     snapshot: &mut RecipeSnapshot,
 ) -> (String, i32) {
-    tick_recipe_with_executor(conn, loop_id, snapshot, &RealEffectExecutor, &RealEffectExecutor)
+    tick_recipe_with_executor(
+        conn,
+        loop_id,
+        snapshot,
+        &RealEffectExecutor,
+        &RealEffectExecutor,
+    )
 }
 
 /// Execute one recipe step using provided executor and queries (testable seam).
@@ -64,114 +86,77 @@ pub fn tick_recipe_with_executor(
         PreTickResult::Proceed { step } => *step,
     };
     snapshot.runtime.tick_count += 1;
+
+    let mut ctx = TickCtx {
+        conn,
+        executor,
+        queries,
+        snapshot,
+        loop_id,
+    };
     let result = match step.kind.as_str() {
-        STEP_SESSION_CREATE => exec_session_create(conn, executor, queries, snapshot, &step, loop_id),
-        STEP_SESSION_PROMPT => exec_simple(
-            conn,
-            executor,
-            snapshot,
-            &step,
-            loop_id,
-            loop_decision::decide_session_prompt,
-        ),
-        STEP_HANDOFF_WAIT => exec_handoff_wait(conn, executor, queries, snapshot, &step, loop_id),
-        STEP_LOOP_STATUS => exec_simple(
-            conn,
-            executor,
-            snapshot,
-            &step,
-            loop_id,
-            loop_decision::decide_loop_status,
-        ),
-        STEP_LOOP_EVENT => exec_simple_infallible(
-            conn,
-            executor,
-            snapshot,
-            &step,
-            loop_id,
-            loop_decision::decide_loop_event,
-        ),
-        STEP_HUMAN_WAIT => exec_simple_infallible(
-            conn,
-            executor,
-            snapshot,
-            &step,
-            loop_id,
-            loop_decision::decide_human_wait,
-        ),
-        STEP_ROUND_NEXT => exec_simple_infallible(
-            conn,
-            executor,
-            snapshot,
-            &step,
-            loop_id,
-            loop_decision::decide_round_next,
-        ),
-        STEP_GATES_RUN => exec_gates_run(conn, executor, queries, snapshot, &step, loop_id),
+        STEP_SESSION_CREATE => exec_session_create(&mut ctx, &step),
+        STEP_SESSION_PROMPT => exec_decide(&mut ctx, &step, loop_decision::decide_session_prompt),
+        STEP_HANDOFF_WAIT => exec_handoff_wait(&mut ctx, &step),
+        STEP_LOOP_STATUS => exec_decide(&mut ctx, &step, loop_decision::decide_loop_status),
+        STEP_LOOP_EVENT => exec_decide_ok(&mut ctx, &step, loop_decision::decide_loop_event),
+        STEP_HUMAN_WAIT => exec_decide_ok(&mut ctx, &step, loop_decision::decide_human_wait),
+        STEP_ROUND_NEXT => exec_decide_ok(&mut ctx, &step, loop_decision::decide_round_next),
+        STEP_GATES_RUN => exec_gates_run(&mut ctx, &step),
         _ => return render_error("unsupported recipe step kind"),
     };
+    let recipe_id = ctx.snapshot.recipe_id.clone();
     match result {
-        Ok(d) => render_tick_result(loop_id, &snapshot.recipe_id, d),
+        Ok(d) => render_tick_result(loop_id, &recipe_id, d),
         Err(msg) => render_error(&msg),
     }
 }
 
-fn exec_simple<F>(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    snapshot: &mut RecipeSnapshot,
-    step: &RecipeStep,
-    loop_id: &str,
-    decide: F,
-) -> Result<TickDecision, String>
+// ─── Generic Dispatchers ─────────────────────────────────────────────────────
+
+fn exec_decide<F>(ctx: &mut TickCtx, step: &RecipeStep, decide: F) -> Result<TickDecision, String>
 where
     F: FnOnce(&mut RecipeSnapshot, &RecipeStep, &str) -> Result<TickDecision, String>,
 {
-    let d = decide(snapshot, step, loop_id)?;
-    execute_all_effects(conn, executor, &d.effects, snapshot)?;
+    let d = decide(ctx.snapshot, step, ctx.loop_id)?;
+    execute_all_effects(ctx.conn, ctx.executor, &d.effects, ctx.snapshot)?;
     Ok(d)
 }
 
-fn exec_simple_infallible<F>(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    snapshot: &mut RecipeSnapshot,
+fn exec_decide_ok<F>(
+    ctx: &mut TickCtx,
     step: &RecipeStep,
-    loop_id: &str,
     decide: F,
 ) -> Result<TickDecision, String>
 where
     F: FnOnce(&mut RecipeSnapshot, &RecipeStep, &str) -> TickDecision,
 {
-    let d = decide(snapshot, step, loop_id);
-    execute_all_effects(conn, executor, &d.effects, snapshot)?;
+    let d = decide(ctx.snapshot, step, ctx.loop_id);
+    execute_all_effects(ctx.conn, ctx.executor, &d.effects, ctx.snapshot)?;
     Ok(d)
 }
 
-fn exec_session_create(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    queries: &dyn LoopQueries,
-    snapshot: &mut RecipeSnapshot,
-    step: &RecipeStep,
-    loop_id: &str,
-) -> Result<TickDecision, String> {
+// ─── Complex Step Executors ──────────────────────────────────────────────────
+
+fn exec_session_create(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecision, String> {
     let role_id = step.role.as_deref().unwrap_or("default");
-    let existing = queries
-        .list_loop_sessions(conn, loop_id)
+    let existing = ctx
+        .queries
+        .list_loop_sessions(ctx.conn, ctx.loop_id)
         .unwrap_or_default();
-    let loop_run = queries
-        .get_loop(conn, loop_id)?
+    let loop_run = ctx
+        .queries
+        .get_loop(ctx.conn, ctx.loop_id)?
         .ok_or_else(|| "loop not found".to_string())?;
     let maker_branch = if step.role.as_deref() != Some("maker") {
-        snapshot
+        ctx.snapshot
             .runtime
             .created_session_ids
             .get("maker")
             .and_then(|ids| ids.last())
             .and_then(|sid| {
-                queries
-                    .get_session(conn, sid)
+                ctx.queries
+                    .get_session(ctx.conn, sid)
                     .ok()
                     .flatten()
                     .map(|s| s.branch)
@@ -181,26 +166,27 @@ fn exec_session_create(
     };
 
     let mut decision = loop_decision::decide_session_create(
-        snapshot,
+        ctx.snapshot,
         step,
-        loop_id,
+        ctx.loop_id,
         existing.len() as u32,
         &loop_run,
         maker_branch,
     )?;
     for effect in &decision.effects {
         match effect {
-            Effect::CreateSession { .. } => match executor.create_session(conn, effect) {
+            Effect::CreateSession { .. } => match ctx.executor.create_session(ctx.conn, effect) {
                 Ok(created) => {
-                    let provider = snapshot
+                    let provider = ctx
+                        .snapshot
                         .roles
                         .get(role_id)
                         .map(|r| r.provider.clone())
                         .unwrap_or_else(|| "default".into());
                     let finalize = loop_decision::finalize_session_create(
-                        snapshot,
+                        ctx.snapshot,
                         step,
-                        loop_id,
+                        ctx.loop_id,
                         &created.id,
                         role_id,
                         &provider,
@@ -211,17 +197,17 @@ fn exec_session_create(
                             field("id", str_val(loop_decision::short_id(&created.id))),
                             field("role", str_val(role_id)),
                             field("provider", str_val(&provider)),
-                            field("round", str_val(&snapshot.runtime.round.to_string())),
+                            field("round", str_val(&ctx.snapshot.runtime.round.to_string())),
                         ]),
                     )];
                     for fe in &finalize {
-                        execute_effect(conn, executor, fe, snapshot)?;
+                        execute_effect(ctx.conn, ctx.executor, fe, ctx.snapshot)?;
                     }
                 }
                 Err(e) => {
-                    let _ = executor.append_event(
-                        conn,
-                        loop_id,
+                    let _ = ctx.executor.append_event(
+                        ctx.conn,
+                        ctx.loop_id,
                         "recipe_step_failed",
                         &serde_json::json!({"step_id": step.id, "kind": step.kind, "error": e}),
                     );
@@ -229,92 +215,91 @@ fn exec_session_create(
                 }
             },
             _ => {
-                execute_effect(conn, executor, effect, snapshot)?;
+                execute_effect(ctx.conn, ctx.executor, effect, ctx.snapshot)?;
             }
         }
     }
     Ok(decision)
 }
 
-fn exec_handoff_wait(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    queries: &dyn LoopQueries,
-    snapshot: &mut RecipeSnapshot,
-    step: &RecipeStep,
-    loop_id: &str,
-) -> Result<TickDecision, String> {
+fn exec_handoff_wait(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecision, String> {
     let role_id = step.from.as_deref().unwrap_or("default");
-    let sids = snapshot
+    let sids = ctx
+        .snapshot
         .runtime
         .created_session_ids
         .get(role_id)
         .cloned()
         .unwrap_or_default();
-    let found = queries.find_handoff(
-        conn,
-        loop_id,
-        &sids,
-        snapshot.runtime.last_handoff_consumed_at.as_deref(),
-    )?;
+    let after_ts = ctx.snapshot.runtime.last_handoff_consumed_at.as_deref();
+    let found = ctx
+        .queries
+        .find_handoff(ctx.conn, ctx.loop_id, &sids, after_ts)?;
     let decision = match found {
-        None => loop_decision::decide_handoff_wait_waiting(snapshot, step, loop_id, role_id),
+        None => {
+            loop_decision::decide_handoff_wait_waiting(ctx.snapshot, step, ctx.loop_id, role_id)
+        }
         Some((sid, status)) => {
             let summary = if status != "completed" {
-                queries.extract_handoff_summary(conn, loop_id, &sid).ok()
+                ctx.queries
+                    .extract_handoff_summary(ctx.conn, ctx.loop_id, &sid)
+                    .ok()
             } else {
                 None
             };
             loop_decision::decide_handoff_wait_consumed(
-                snapshot, step, loop_id, &sid, &status, summary,
+                ctx.snapshot,
+                step,
+                ctx.loop_id,
+                &sid,
+                &status,
+                summary,
             )
         }
     };
-    execute_all_effects(conn, executor, &decision.effects, snapshot)?;
+    execute_all_effects(ctx.conn, ctx.executor, &decision.effects, ctx.snapshot)?;
     Ok(decision)
 }
 
-fn exec_gates_run(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    queries: &dyn LoopQueries,
-    snapshot: &mut RecipeSnapshot,
-    step: &RecipeStep,
-    loop_id: &str,
-) -> Result<TickDecision, String> {
+fn exec_gates_run(ctx: &mut TickCtx, step: &RecipeStep) -> Result<TickDecision, String> {
     loop_decision::decide_gates_run_preflight(step)?;
-    executor.transition_loop(conn, loop_id, LoopTrigger::GatesStarted)?;
-    let session_id = resolve_gate_session(snapshot, step)?;
-    let loop_run = queries
-        .get_loop(conn, loop_id)?
+    ctx.executor
+        .transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)?;
+
+    let session_id = resolve_gate_session(ctx.snapshot, step)?;
+    let loop_run = ctx
+        .queries
+        .get_loop(ctx.conn, ctx.loop_id)?
         .ok_or("loop not found".to_string())?;
-    let project = queries
-        .get_project(conn, &loop_run.project_id)?
+    let project = ctx
+        .queries
+        .get_project(ctx.conn, &loop_run.project_id)?
         .ok_or_else(|| format!("project not found: {}", loop_run.project_id))?;
-    let session = queries
-        .get_session(conn, &session_id)?
+    let session = ctx
+        .queries
+        .get_session(ctx.conn, &session_id)?
         .ok_or_else(|| format!("session not found: {session_id}"))?;
+
     let (status, name, output, path) = run_gates(
-        conn,
-        executor,
-        snapshot,
+        ctx,
         step,
-        loop_id,
         &session_id,
         &project.path,
         &session.worktree_path,
     );
-    executor.transition_loop(conn, loop_id, LoopTrigger::GatesCompleted)?;
+    ctx.executor
+        .transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesCompleted)?;
+
     let decision = loop_decision::decide_gates_run_result(
-        snapshot,
+        ctx.snapshot,
         step,
-        loop_id,
+        ctx.loop_id,
         status,
         &name,
         output.as_deref(),
         path.as_deref(),
     );
-    execute_all_effects(conn, executor, &decision.effects, snapshot)?;
+    execute_all_effects(ctx.conn, ctx.executor, &decision.effects, ctx.snapshot)?;
     Ok(decision)
 }
 
@@ -344,13 +329,9 @@ fn resolve_gate_session(snapshot: &RecipeSnapshot, step: &RecipeStep) -> Result<
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_gates(
-    conn: &rusqlite::Connection,
-    executor: &dyn EffectExecutor,
-    snapshot: &RecipeSnapshot,
+    ctx: &TickCtx,
     step: &RecipeStep,
-    loop_id: &str,
     session_id: &str,
     project_path: &str,
     worktree_path: &Option<String>,
@@ -362,16 +343,16 @@ fn run_gates(
         Option<String>,
     ) = ("pass", String::new(), None, None);
     for gate in &step.gates {
-        let cmd = loop_decision::render_prompt(&gate.command, snapshot, loop_id);
+        let cmd = loop_decision::render_prompt(&gate.command, ctx.snapshot, ctx.loop_id);
         let effect = Effect::RunGate {
-            loop_id: loop_id.into(),
+            loop_id: ctx.loop_id.into(),
             session_id: session_id.into(),
             gate_name: gate.name.clone(),
             command: cmd,
             project_path: project_path.into(),
             worktree_path: worktree_path.clone(),
         };
-        match executor.run_gate(conn, &effect) {
+        match ctx.executor.run_gate(ctx.conn, &effect) {
             Ok(r) if r.status != GateStatus::Pass => {
                 status = if r.status == GateStatus::Error {
                     "error"
@@ -384,7 +365,7 @@ fn run_gates(
                 break;
             }
             Err(e) => {
-                let _ = executor.append_event(conn, loop_id, "recipe_step_failed",
+                let _ = ctx.executor.append_event(ctx.conn, ctx.loop_id, "recipe_step_failed",
                     &serde_json::json!({"step_id": step.id, "gate": gate.name, "error": e.to_string()}));
                 status = "error";
                 name = gate.name.clone();
@@ -395,6 +376,8 @@ fn run_gates(
     }
     (status, name, output, path)
 }
+
+// ─── Effect Execution ────────────────────────────────────────────────────────
 
 fn execute_effect(
     conn: &rusqlite::Connection,
@@ -441,6 +424,8 @@ fn execute_all_effects(
     }
     Ok(())
 }
+
+// ─── Auto-advance ────────────────────────────────────────────────────────────
 
 /// Auto-advance a loop's recipe through immediately-executable steps.
 pub fn auto_advance_with_arc(
