@@ -41,12 +41,10 @@ describe("PrPanel refresh spin animation", () => {
     wrapper.tabIndex = -1;
     document.body.appendChild(wrapper);
 
-    const fk = createFormKeyboardController(
-      () => [
-        { key: "r", toggle: doRefresh },
-      ],
-      { wrapper: () => wrapper, onDismiss: vi.fn() },
-    );
+    const fk = createFormKeyboardController(() => [{ key: "r", toggle: doRefresh }], {
+      wrapper: () => wrapper,
+      onDismiss: vi.fn(),
+    });
 
     fk.handleKeydown(makeKey("r"));
 
@@ -62,7 +60,9 @@ describe("PrPanel refresh spin animation", () => {
     // class={spinning ? 'animate-spin-once' : ''}
     // onanimationend={() => { spinning = false; }}
     let spinning = true;
-    const onAnimationEnd = () => { spinning = false; };
+    const onAnimationEnd = () => {
+      spinning = false;
+    };
 
     // Simulate animationend firing
     onAnimationEnd();
