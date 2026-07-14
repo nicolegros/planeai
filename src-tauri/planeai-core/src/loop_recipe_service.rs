@@ -91,6 +91,20 @@ pub struct RecipeRuntime {
     /// `round.next` at max_rounds → Blocked). Cleared when the loop resumes.
     #[serde(default)]
     pub status_override: Option<crate::loop_run::LoopStatus>,
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
+    /// Per-session observation state for stale/heartbeat detection.
+    #[serde(default)]
+    pub session_observations: BTreeMap<String, SessionObservation>,
+}
+
+/// Tracks the last-known observation cursor for a loop-owned session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionObservation {
+    /// Event ID cursor — events with id > this value are considered new.
+    /// `None` means never observed (first-tick seeding needed).
+    #[serde(default)]
+    pub last_cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +112,8 @@ pub struct SnapshotPolicy {
     pub max_rounds: u32,
     pub max_ticks: u32,
     pub max_sessions: u32,
+    #[serde(default)]
+    pub stale_after_ms: Option<u64>,
     pub merge_policy: String,
     #[serde(default = "default_auto_approve")]
     pub auto_approve: bool,
@@ -406,11 +422,14 @@ impl RecipeService {
                 last_error: None,
                 last_handoff_consumed_at: None,
                 status_override: None,
+                last_activity_at: None,
+                session_observations: BTreeMap::new(),
             },
             policy: SnapshotPolicy {
                 max_rounds: recipe.policy.max_rounds,
                 max_ticks: recipe.policy.max_ticks,
                 max_sessions: recipe.policy.max_sessions,
+                stale_after_ms: recipe.policy.stale_after_ms,
                 merge_policy: recipe.policy.merge_policy.clone(),
                 auto_approve: recipe.policy.auto_approve,
             },
@@ -703,6 +722,7 @@ mod tests {
         assert_eq!(snapshot.policy.max_rounds, 3);
         assert_eq!(snapshot.policy.max_ticks, 50);
         assert_eq!(snapshot.policy.max_sessions, 5);
+        assert_eq!(snapshot.policy.stale_after_ms, Some(600000));
         assert_eq!(snapshot.policy.merge_policy, "human");
     }
 

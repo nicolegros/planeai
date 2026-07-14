@@ -1597,11 +1597,14 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             last_error: None,
             last_handoff_consumed_at: None,
             status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
+            stale_after_ms: None,
             merge_policy: "human".into(),
             auto_approve: true,
         },
@@ -1739,11 +1742,14 @@ fn recipe_tick_round_next_increments_round() {
             last_error: None,
             last_handoff_consumed_at: None,
             status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
+            stale_after_ms: None,
             merge_policy: "human".into(),
             auto_approve: true,
         },
@@ -1828,11 +1834,14 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             last_error: None,
             last_handoff_consumed_at: None,
             status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
+            stale_after_ms: None,
             merge_policy: "human".into(),
             auto_approve: true,
         },
@@ -1942,11 +1951,14 @@ fn setup_maker_verifier_flow(
             last_error: None,
             last_handoff_consumed_at: None,
             status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
+            stale_after_ms: None,
             merge_policy: "human".into(),
             auto_approve: true,
         },
@@ -2140,11 +2152,14 @@ fn setup_maker_verifier_flow_with_path(
             last_error: None,
             last_handoff_consumed_at: None,
             status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
             max_ticks: 50,
             max_sessions: 5,
+            stale_after_ms: None,
             merge_policy: "human".into(),
             auto_approve: true,
         },
@@ -2660,4 +2675,699 @@ fn auto_advance_does_not_break_on_gates_or_observing() {
          current_step={}, round={}",
         snapshot.runtime.current_step, snapshot.runtime.round
     );
+}
+
+// ─── Stale detection tests (PLA-212) ─────────────────────────────────────────
+
+/// Helper: create a loop with a recipe snapshot configured for stale detection.
+/// Returns the loop ID.
+fn setup_stale_loop(
+    conn: &rusqlite::Connection,
+    stale_after_ms: Option<u64>,
+    last_activity_at: Option<String>,
+) -> String {
+    setup_stale_loop_with_sessions(conn, stale_after_ms, last_activity_at, None)
+}
+
+/// Extended helper that also accepts pre-populated session IDs for the maker role.
+fn setup_stale_loop_with_sessions(
+    conn: &rusqlite::Connection,
+    stale_after_ms: Option<u64>,
+    last_activity_at: Option<String>,
+    created_session_ids: Option<std::collections::BTreeMap<String, Vec<String>>>,
+) -> String {
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let steps = vec![RecipeStep {
+        id: "wait_handoff".into(),
+        kind: STEP_HANDOFF_WAIT.into(),
+        role: None,
+        prompt: None,
+        branch: None,
+        from: Some("maker".into()),
+        on: Some(BTreeMap::from([(
+            "completed".into(),
+            "wait_handoff".into(),
+        )])),
+        status: None,
+        next: None,
+        select: None,
+        event_kind: None,
+        gates: vec![],
+    }];
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-stale".into(),
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "wait_handoff".into(),
+            tick_count: 1,
+            round: 1,
+            created_session_ids: created_session_ids.unwrap_or_default(),
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at,
+            session_observations: BTreeMap::new(),
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms,
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles: BTreeMap::from([(
+            "maker".into(),
+            RecipeRole {
+                provider: "default".into(),
+                mode: "write".into(),
+                isolation: "worktree".into(),
+                instructions: None,
+            },
+        )]),
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+    let loop_run = LoopService::create_loop(
+        conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-stale"),
+            goal: "test stale detection".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    LoopService::transition_loop(conn, &loop_run.id, LoopTrigger::Start).unwrap();
+    loop_run.id
+}
+
+#[test]
+fn stale_detection_marks_loop_stale_after_timeout() {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(two_hours_ago));
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
+    assert!(
+        output.contains("stale"),
+        "expected stale status, got:\n{output}"
+    );
+    assert!(output.contains("inspect session output"), "got:\n{output}");
+    assert!(output.contains("prompt worker"), "got:\n{output}");
+    assert!(output.contains("stop loop"), "got:\n{output}");
+    assert!(output.contains("mark blocked"), "got:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    assert_eq!(updated.status, LoopStatus::Stale);
+
+    let events = LoopService::list_loop_events(&conn, &loop_id).unwrap();
+    assert!(
+        events.iter().any(|e| e.kind == "loop_stale_detected"),
+        "events: {:?}",
+        events.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn stale_detection_not_triggered_with_recent_activity() {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let five_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(five_min_ago));
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
+    assert!(!output.contains("stale_detected"), "got:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    assert_ne!(updated.status, LoopStatus::Stale);
+}
+
+#[test]
+fn stale_detection_not_triggered_when_no_stale_after_ms() {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, None, Some(two_hours_ago));
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
+    assert!(!output.contains("stale_detected"), "got:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    assert_ne!(updated.status, LoopStatus::Stale);
+}
+
+#[test]
+fn stale_detection_not_triggered_when_last_activity_at_is_none() {
+    use planeai_core::loop_run::LoopStatus;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), None);
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
+    assert!(!output.contains("stale_detected"), "got:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    assert_ne!(updated.status, LoopStatus::Stale);
+}
+
+#[test]
+fn stale_loop_cannot_be_ticked_again() {
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(two_hours_ago));
+
+    let (output, _) = loop_tick(&conn, &loop_id);
+    assert!(output.contains("stale"), "first tick should mark stale");
+
+    // Second tick should be guarded but still return actionable next_actions
+    let (output2, code2) = loop_tick(&conn, &loop_id);
+    assert_eq!(code2, 0, "output:\n{output2}");
+    assert!(output2.contains("stale"), "got:\n{output2}");
+    assert!(
+        output2.contains("inspect session output"),
+        "stale re-tick should return actionable next_actions, got:\n{output2}"
+    );
+    assert!(
+        output2.contains("prompt worker"),
+        "stale re-tick should mention prompt worker, got:\n{output2}"
+    );
+}
+
+#[test]
+fn polling_tick_does_not_refresh_activity() {
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(ten_min_ago.clone()));
+
+    let (_output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0);
+
+    let updated_run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    let snapshot: RecipeSnapshot =
+        serde_json::from_value(updated_run.policy_json.unwrap()).unwrap();
+
+    let activity = snapshot.runtime.last_activity_at.unwrap();
+    assert_eq!(
+        activity, ten_min_ago,
+        "polling tick should not refresh last_activity_at"
+    );
+}
+
+#[test]
+fn heartbeat_does_not_self_count_as_new_activity() {
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    // Create loop WITH sessions so observe_sessions actually runs
+    let loop_id = setup_stale_loop_with_sessions(
+        &conn,
+        Some(3_600_000),
+        Some(ten_min_ago.clone()),
+        Some(BTreeMap::from([("maker".into(), vec![session_id.clone()])])),
+    );
+
+    // Append one external event to seed the observation + trigger a heartbeat
+    LoopService::append_loop_event(
+        &conn,
+        &loop_id,
+        "session_output_detected",
+        &serde_json::json!({"session_id": session_id, "lines": 5}),
+    )
+    .unwrap();
+
+    // First tick: seeds cursor (no heartbeat)
+    let (_output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0);
+
+    // Second tick: detects the external event, emits loop_heartbeat, refreshes activity
+    let (_output2, code2) = loop_tick(&conn, &loop_id);
+    assert_eq!(code2, 0);
+
+    // Now: NO new external events. The loop_heartbeat from tick 2 exists in the DB.
+    // If the self-counting bug existed, tick 3 would count the heartbeat as new
+    // activity and refresh last_activity_at. With the fix, it should NOT refresh.
+
+    // Record current activity timestamp
+    let run_before = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    let snap_before: RecipeSnapshot =
+        serde_json::from_value(run_before.policy_json.unwrap()).unwrap();
+    let activity_before = snap_before.runtime.last_activity_at.unwrap();
+
+    // Third tick: only the loop_heartbeat event exists since cursor — should be excluded
+    let (_output3, code3) = loop_tick(&conn, &loop_id);
+    assert_eq!(code3, 0);
+
+    let run_after = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    let snap_after: RecipeSnapshot =
+        serde_json::from_value(run_after.policy_json.unwrap()).unwrap();
+    let activity_after = snap_after.runtime.last_activity_at.unwrap();
+
+    assert_eq!(
+        activity_before, activity_after,
+        "heartbeat events should not self-count as new activity"
+    );
+}
+
+#[test]
+fn handoff_refreshes_activity() {
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
+    use planeai_core::loop_service::{LoopService, RecordHandoffParams};
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    // Use a custom setup with a step that advances on handoff (not self-loop)
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+
+    let steps = vec![
+        RecipeStep {
+            id: "wait_handoff".into(),
+            kind: STEP_HANDOFF_WAIT.into(),
+            role: None,
+            prompt: None,
+            branch: None,
+            from: Some("maker".into()),
+            on: Some(BTreeMap::from([("completed".into(), "done_step".into())])),
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        },
+        RecipeStep {
+            id: "done_step".into(),
+            kind: STEP_HANDOFF_WAIT.into(),
+            role: None,
+            prompt: None,
+            branch: None,
+            from: Some("maker".into()),
+            on: None,
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        },
+    ];
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-handoff-refresh".into(),
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "wait_handoff".into(),
+            tick_count: 1,
+            round: 1,
+            created_session_ids: BTreeMap::from([("maker".into(), vec![session_id.clone()])]),
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at: Some(ten_min_ago.clone()),
+            session_observations: BTreeMap::new(),
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms: Some(3_600_000),
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles: BTreeMap::from([(
+            "maker".into(),
+            RecipeRole {
+                provider: "default".into(),
+                mode: "write".into(),
+                isolation: "worktree".into(),
+                instructions: None,
+            },
+        )]),
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: "proj-1".into(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-handoff-refresh"),
+            goal: "test handoff refresh".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
+    let loop_id = loop_run.id;
+
+    LoopService::add_loop_session(
+        &conn,
+        planeai_core::loop_service::AddLoopSessionParams {
+            loop_id: loop_id.clone(),
+            session_id: session_id.clone(),
+            role: "maker".to_string(),
+            round: 1,
+            provider: Some("claude".to_string()),
+            status: "running".to_string(),
+        },
+    )
+    .unwrap();
+
+    LoopService::record_handoff(
+        &conn,
+        RecordHandoffParams {
+            loop_id: loop_id.clone(),
+            session_id: session_id.clone(),
+            artifact_path: None,
+            content_json: Some(serde_json::json!({
+                "schema": "planeai.handoff.v1",
+                "status": "completed",
+                "summary": "Done",
+            })),
+            handoff_status: "completed".to_string(),
+            event_payload: serde_json::json!({"status": "completed"}),
+            trigger: None,
+        },
+    )
+    .unwrap();
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
+    assert!(output.contains("matched_handoff"), "got:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    let updated_snapshot: RecipeSnapshot =
+        serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+    let new_activity = updated_snapshot.runtime.last_activity_at.unwrap();
+    assert_ne!(
+        new_activity, ten_min_ago,
+        "handoff should refresh last_activity_at"
+    );
+}
+
+#[test]
+fn new_output_refreshes_activity_via_observation() {
+    use planeai_core::loop_recipe_service::RecipeSnapshot;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let loop_id = setup_stale_loop_with_sessions(
+        &conn,
+        Some(3_600_000),
+        Some(ten_min_ago.clone()),
+        Some(BTreeMap::from([("maker".into(), vec![session_id.clone()])])),
+    );
+
+    // Simulate new output by appending a session-referencing event.
+    // First tick seeds the cursor (no heartbeat). Second event + second tick triggers heartbeat.
+    LoopService::append_loop_event(
+        &conn,
+        &loop_id,
+        "session_output_detected",
+        &serde_json::json!({"session_id": session_id, "lines": 42}),
+    )
+    .unwrap();
+
+    // First tick: seeds observation cursor (first-run, no heartbeat emitted)
+    let (_output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0);
+
+    // Append another event after cursor is seeded
+    LoopService::append_loop_event(
+        &conn,
+        &loop_id,
+        "session_output_detected",
+        &serde_json::json!({"session_id": session_id, "lines": 10}),
+    )
+    .unwrap();
+
+    // Second tick: detects new event since cursor, emits heartbeat, refreshes activity
+    let (_output2, code2) = loop_tick(&conn, &loop_id);
+    assert_eq!(code2, 0);
+
+    let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
+    let updated_snapshot: RecipeSnapshot =
+        serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+    let new_activity = updated_snapshot.runtime.last_activity_at.unwrap();
+    assert_ne!(
+        new_activity, ten_min_ago,
+        "new output should refresh last_activity_at"
+    );
+
+    let events = LoopService::list_loop_events(&conn, &loop_id).unwrap();
+    assert!(
+        events.iter().any(|e| e.kind == "loop_heartbeat"),
+        "events: {:?}",
+        events.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn verifier_refreshes_activity() {
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let ten_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    // Create a real session so gates.run can resolve it
+    crate::db::create_session_with_id(
+        &conn,
+        &session_id,
+        &project.id,
+        "Maker",
+        None,
+        "main",
+        Some("/tmp/myapp"),
+        Some("claude"),
+        "daemon",
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let steps = vec![
+        RecipeStep {
+            id: "run_gates".into(),
+            kind: STEP_GATES_RUN.into(),
+            role: Some("maker".into()),
+            prompt: None,
+            branch: None,
+            from: None,
+            on: Some(BTreeMap::from([
+                ("pass".into(), "done_step".into()),
+                ("fail".into(), "done_step".into()),
+                ("error".into(), "done_step".into()),
+            ])),
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![RecipeGate {
+                name: "quick-check".to_string(),
+                command: "true".to_string(),
+            }],
+        },
+        RecipeStep {
+            id: "done_step".into(),
+            kind: STEP_HANDOFF_WAIT.into(),
+            role: None,
+            prompt: None,
+            branch: None,
+            from: Some("maker".into()),
+            on: None,
+            status: None,
+            next: None,
+            select: None,
+            event_kind: None,
+            gates: vec![],
+        },
+    ];
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-verifier-refresh".into(),
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "run_gates".into(),
+            tick_count: 1,
+            round: 1,
+            created_session_ids: BTreeMap::from([("maker".into(), vec![session_id.clone()])]),
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at: Some(ten_min_ago.clone()),
+            session_observations: BTreeMap::new(),
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms: Some(3_600_000),
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles: BTreeMap::from([(
+            "maker".into(),
+            RecipeRole {
+                provider: "default".into(),
+                mode: "write".into(),
+                isolation: "worktree".into(),
+                instructions: None,
+            },
+        )]),
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+    let loop_run = LoopService::create_loop(
+        &conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: project.id.clone(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-verifier"),
+            goal: "test verifier refresh".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
+
+    let (output, code) = loop_tick(&conn, &loop_run.id);
+    assert_eq!(code, 0, "output:\n{output}");
+
+    let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
+    let updated_snapshot: RecipeSnapshot =
+        serde_json::from_value(updated.policy_json.unwrap()).unwrap();
+    let new_activity = updated_snapshot.runtime.last_activity_at.unwrap();
+    assert_ne!(
+        new_activity, ten_min_ago,
+        "verifier completion should refresh last_activity_at"
+    );
+}
+
+#[test]
+fn cancelled_loop_does_not_become_stale() {
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(two_hours_ago));
+    LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Cancel).unwrap();
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 1, "output:\n{output}");
+    assert!(output.contains("terminal status"), "got:\n{output}");
+}
+
+#[test]
+fn completed_loop_does_not_become_stale() {
+    use planeai_core::loop_run::{LoopStatus, LoopTrigger};
+    use planeai_core::loop_service::LoopService;
+
+    let conn = setup_db();
+    crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    let two_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let loop_id = setup_stale_loop(&conn, Some(3_600_000), Some(two_hours_ago));
+    LoopService::transition_loop(
+        &conn,
+        &loop_id,
+        LoopTrigger::RecipeSetStatus(LoopStatus::CompletedUnreviewed),
+    )
+    .unwrap();
+
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 1, "output:\n{output}");
+    assert!(output.contains("terminal status"), "got:\n{output}");
 }

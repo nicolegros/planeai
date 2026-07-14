@@ -795,6 +795,41 @@ impl LoopService {
         rows.collect()
     }
 
+    /// Count events referencing a specific session since the given event ID.
+    /// Uses the indexed `loop_events(loop_id, id)` for bounded performance.
+    /// Excludes internal observation events (loop_heartbeat, loop_stale_detected)
+    /// to prevent self-counting that would defeat stale detection.
+    pub fn count_session_events_since(
+        conn: &Connection,
+        loop_id: &str,
+        session_id: &str,
+        after_event_id: i64,
+    ) -> SqlResult<(u64, Option<i64>)> {
+        // Count + get max event id in one query.
+        // Uses json_extract for structural matching (more robust than LIKE).
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*), MAX(id) FROM loop_events \
+             WHERE loop_id = ?1 AND id > ?2 \
+             AND json_extract(payload_json, '$.session_id') = ?3 \
+             AND kind NOT IN ('loop_heartbeat', 'loop_stale_detected')",
+        )?;
+        let result = stmt.query_row(params![loop_id, after_event_id, session_id], |row| {
+            let count: i64 = row.get(0)?;
+            let max_id: Option<i64> = row.get(1)?;
+            Ok((count as u64, max_id))
+        })?;
+        Ok(result)
+    }
+
+    /// Get the latest event ID for a loop (for cursor seeding).
+    pub fn latest_event_id(conn: &Connection, loop_id: &str) -> SqlResult<Option<i64>> {
+        conn.query_row(
+            "SELECT MAX(id) FROM loop_events WHERE loop_id = ?1",
+            params![loop_id],
+            |row| row.get(0),
+        )
+    }
+
     // ─── Artifacts ───────────────────────────────────────────────────────────
 
     pub fn add_artifact(conn: &Connection, params: AddArtifactParams) -> SqlResult<LoopArtifact> {
