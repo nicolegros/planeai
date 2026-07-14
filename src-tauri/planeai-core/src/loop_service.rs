@@ -7,6 +7,7 @@
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde_json::Value as JsonValue;
 
+use crate::loop_recipe_service::RecipeSnapshot;
 use crate::loop_run::*;
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -143,6 +144,27 @@ pub struct RecordHandoffResult {
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 pub struct LoopService;
+
+// ─── Status Derivation Helper ────────────────────────────────────────────────
+
+/// Compute the effective `LoopStatus` for a recipe snapshot.
+///
+/// Resolution order:
+/// 1. `snapshot.runtime.status_override` — wins when set (blocking executors).
+/// 2. Step-kind derivation via [`derive_status_from_step`] using the current step.
+///
+/// Returns `None` only if the current step kind is unrecognized and no override is set.
+pub fn derive_effective_status(snapshot: &RecipeSnapshot) -> Option<LoopStatus> {
+    snapshot.runtime.status_override.clone().or_else(|| {
+        let current_step = snapshot
+            .steps
+            .iter()
+            .find(|s| s.id == snapshot.runtime.current_step);
+        let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
+        let step_status = current_step.and_then(|s| s.status.as_deref());
+        derive_status_from_step(step_kind, step_status)
+    })
+}
 
 impl LoopService {
     /// Idempotent migration — safe to run on fresh and existing production databases.
@@ -405,7 +427,6 @@ impl LoopService {
             strategy: params.strategy,
             goal: params.goal,
             status: LoopStatus::Draft,
-            current_round: 0,
             max_rounds: params.max_rounds,
             created_at: now.clone(),
             updated_at: now,
@@ -418,7 +439,7 @@ impl LoopService {
     pub fn get_loop(conn: &Connection, id: &str) -> Result<Option<LoopRun>, LoopServiceError> {
         let row = conn
             .prepare(
-                "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, current_round, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
+                "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
                  FROM loop_runs WHERE id = ?1",
             )?
             .query_row(params![id], Self::row_to_loop_run);
@@ -435,7 +456,7 @@ impl LoopService {
         project_id: &str,
     ) -> Result<Vec<LoopRun>, LoopServiceError> {
         let mut stmt = conn.prepare(
-            "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, current_round, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
+            "SELECT id, project_id, task_key, created_by_session_id, strategy, goal, status, max_rounds, created_at, updated_at, executor_finished_at, policy_json, budget_json
              FROM loop_runs WHERE project_id = ?1 ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map(params![project_id], Self::row_to_loop_run)?;
@@ -468,6 +489,11 @@ impl LoopService {
     ///
     /// Use this when the transition must be atomic with other writes
     /// (e.g., `record_handoff` bundles artifact + status in one tx).
+    ///
+    /// For recipe-driven loops, validates that the transition result is consistent
+    /// with what `persist_snapshot` derivation would produce. Logs a warning on
+    /// divergence (expected for lifecycle triggers like Start/Cancel/Approve that
+    /// intentionally override the step-derived status).
     pub fn transition_in_tx(
         tx: &rusqlite::Transaction,
         id: &str,
@@ -519,29 +545,114 @@ impl LoopService {
                     params![id, now, payload.to_string()],
                 )?;
 
+                // Validate: if this loop has a recipe snapshot, check whether
+                // the trigger-driven status agrees with step-pointer derivation.
+                // Divergence is expected for lifecycle triggers (Start, Cancel,
+                // Approve, etc.) but signals a potential desync for recipe triggers.
+                let policy_str: Option<String> = tx
+                    .query_row(
+                        "SELECT policy_json FROM loop_runs WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                if let Some(ref json_str) = policy_str {
+                    if let Ok(snapshot) = serde_json::from_str::<RecipeSnapshot>(json_str) {
+                        let derived = derive_effective_status(&snapshot);
+                        if let Some(ref expected) = derived {
+                            if expected != new_status {
+                                tracing::warn!(
+                                    loop_id = %id,
+                                    trigger = %trigger.name(),
+                                    transition_status = %new_status.as_str(),
+                                    derived_status = %expected.as_str(),
+                                    "transition_loop status diverges from step-pointer derivation"
+                                );
+                            }
+                        }
+                    }
+                }
+
                 Ok(new_status.clone())
             }
         }
     }
 
-    /// Update the resolved recipe snapshot stored in policy_json.
-    /// Wraps the raw column update with touch_loop semantics so staleness
-    /// detection and future audit hooks work correctly.
-    pub fn update_policy_json(
+    /// Persist the recipe snapshot and atomically derive + set the status column.
+    ///
+    /// This is the single choke point for snapshot persistence. Status is derived
+    /// via [`derive_effective_status`] (override first, then step-kind derivation).
+    /// If the derived status differs from the current DB status, a
+    /// `status_transition` audit event is emitted.
+    pub fn persist_snapshot(
         conn: &Connection,
         id: &str,
-        policy_json: &serde_json::Value,
+        snapshot: &RecipeSnapshot,
     ) -> SqlResult<()> {
+        let json_val = serde_json::to_value(snapshot)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let json_str = json_val.to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        let json_str = policy_json.to_string();
+
+        let derived = derive_effective_status(snapshot);
+
         let tx = conn.unchecked_transaction()?;
-        let rows = tx.execute(
-            "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
-            params![json_str, now, id],
-        )?;
-        if rows == 0 {
-            return Err(rusqlite::Error::QueryReturnedNoRows);
+
+        if let Some(ref new_status) = derived {
+            // Read current status for audit event
+            let current_status_str: Option<String> = tx
+                .query_row(
+                    "SELECT status FROM loop_runs WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            let executor_finished_at = if new_status.is_executor_terminal() {
+                Some(now.clone())
+            } else {
+                None
+            };
+            let rows = tx.execute(
+                "UPDATE loop_runs SET policy_json = ?1, status = ?2, updated_at = ?3, executor_finished_at = COALESCE(?4, executor_finished_at) WHERE id = ?5",
+                params![json_str, new_status.as_str(), now, executor_finished_at, id],
+            )?;
+            if rows == 0 {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+
+            // Emit audit event if status actually changed
+            if current_status_str.as_deref() != Some(new_status.as_str()) {
+                let payload = serde_json::json!({
+                    "from": current_status_str.as_deref().unwrap_or("unknown"),
+                    "to": new_status.as_str(),
+                    "trigger": "step_derivation",
+                });
+                tx.execute(
+                    "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'status_transition', ?3)",
+                    params![id, now, payload.to_string()],
+                )?;
+            }
+        } else {
+            // Unrecognized step kind — this means a new step kind was added without
+            // updating derive_status_from_step. Set Stale to make the problem visible
+            // rather than silently retaining whatever status was there before (desync).
+            tracing::warn!(
+                loop_id = %id,
+                current_step = %snapshot.runtime.current_step,
+                "persist_snapshot: cannot derive status from step pointer (unknown step kind); \
+                 marking loop as Stale to prevent silent desync"
+            );
+            let rows = tx.execute(
+                "UPDATE loop_runs SET policy_json = ?1, status = 'stale', updated_at = ?2 WHERE id = ?3",
+                params![json_str, now, id],
+            )?;
+            if rows == 0 {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
         }
+
         tx.commit()?;
         Ok(())
     }
@@ -1028,16 +1139,15 @@ impl LoopService {
             strategy: LoopStrategy::new(row.get::<_, String>(4)?),
             goal: row.get(5)?,
             status,
-            current_round: row.get(7)?,
-            max_rounds: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
-            executor_finished_at: row.get(11)?,
+            max_rounds: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            executor_finished_at: row.get(10)?,
             policy_json: row
-                .get::<_, Option<String>>(12)?
+                .get::<_, Option<String>>(11)?
                 .and_then(|s| serde_json::from_str(&s).ok()),
             budget_json: row
-                .get::<_, Option<String>>(13)?
+                .get::<_, Option<String>>(12)?
                 .and_then(|s| serde_json::from_str(&s).ok()),
         }))
     }

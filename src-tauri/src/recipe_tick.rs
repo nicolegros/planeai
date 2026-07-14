@@ -6,7 +6,7 @@
 
 use planeai_core::loop_recipe::*;
 use planeai_core::loop_recipe_service::RecipeSnapshot;
-use planeai_core::loop_run::{LoopStatus, LoopTrigger};
+use planeai_core::loop_run::LoopStatus;
 use planeai_core::loop_service::LoopService;
 use planeai_toon::{field, render, str_val, Field, Value};
 
@@ -105,8 +105,8 @@ pub fn tick_recipe(
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
-        let _ = LoopService::transition_loop(conn, loop_id, LoopTrigger::MaxTicksExceeded)
-            .map_err(|e| tracing::error!(loop_id = %short_id(loop_id), error = %e, "failed to transition loop to Failed on max_ticks"));
+        snapshot.runtime.status_override = Some(LoopStatus::Failed);
+        let _ = save_snapshot(conn, loop_id, snapshot);
         let _ = LoopService::append_loop_event(
             conn,
             loop_id,
@@ -223,8 +223,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
     if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
-        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::SessionLimitReached)
-            .map_err(|e| format!("failed to transition loop: {e}"))?;
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -546,8 +545,7 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     match found_handoff {
         None => {
-            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffWaiting)
-                .map_err(|e| format!("failed to transition loop: {e}"))?;
+            // Step pointer stays at handoff.wait → status derived as Observing
             LoopService::append_loop_event(
                 ctx.conn,
                 ctx.loop_id,
@@ -575,12 +573,12 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
             })
         }
         Some((session_id, handoff_status)) => {
-            // Handoff found — set loop back to Running so auto-tick continues
-            LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HandoffConsumed)
-                .map_err(|e| format!("failed to transition loop: {e}"))?;
+            // Handoff found — step advances, status derived from next step kind
 
             // Record consumption timestamp so we don't re-consume this handoff in future rounds
             ctx.snapshot.runtime.last_handoff_consumed_at = Some(chrono::Utc::now().to_rfc3339());
+            // Clear any status_override since the loop is resuming
+            ctx.snapshot.runtime.status_override = None;
 
             let next_step = step
                 .on
@@ -641,6 +639,16 @@ fn exec_handoff_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
     }
 }
 
+/// Execute a `loop.status` step — declares the loop's status.
+///
+/// The step pointer stays at this step (never advances). Status is derived from
+/// `step.status` by `persist_snapshot`. This makes `loop.status` a **parking
+/// spot**: the loop remains here until an external event (handoff, human resume,
+/// or recipe routing via `step.on`) moves the pointer elsewhere.
+///
+/// - Terminal/intervention statuses halt ticking via the tick guard.
+/// - Non-terminal statuses (observing, verifying) halt `auto_advance` because
+///   the step pointer doesn't change between ticks.
 fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     let status_str = step.status.as_deref().unwrap_or("observing");
 
@@ -664,13 +672,6 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     let new_status = LoopStatus::parse(status_str)
         .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    LoopService::transition_loop(
-        ctx.conn,
-        ctx.loop_id,
-        LoopTrigger::RecipeSetStatus(new_status.clone()),
-    )
-    .map_err(|e| format!("failed to transition loop: {e}"))?;
-
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -679,9 +680,10 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
-    if !new_status.is_executor_terminal() && !new_status.is_intervention_required() {
-        advance_step(ctx.snapshot, step);
-    }
+    // Never advance: step pointer stays at loop.status, derivation reads
+    // step.status to produce the declared LoopStatus. Terminal/intervention
+    // statuses halt ticking via the guard; non-terminal statuses (observing,
+    // verifying) halt auto-advance because the step doesn't advance.
     save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
     let next_action = if new_status.is_executor_terminal() {
@@ -731,8 +733,7 @@ fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
-        .map_err(|e| format!("failed to transition loop: {e}"))?;
+    ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -758,8 +759,7 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::RoundBlocked)
-            .map_err(|e| format!("failed to transition loop: {e}"))?;
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::Blocked);
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -795,14 +795,6 @@ fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
     // Increment round
     ctx.snapshot.runtime.round += 1;
     let new_round = ctx.snapshot.runtime.round;
-
-    // Sync loop_runs.current_round
-    ctx.conn
-        .execute(
-            "UPDATE loop_runs SET current_round = ?1 WHERE id = ?2",
-            rusqlite::params![new_round as i64, ctx.loop_id],
-        )
-        .map_err(|e| format!("failed to update current_round: {e}"))?;
 
     LoopService::append_loop_event(
         ctx.conn,
@@ -985,13 +977,8 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
         ));
     }
 
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesStarted)
-        .map_err(|e| format!("failed to transition loop: {e}"))?;
-
+    // Status is derived as Verifying while step pointer is at gates.run
     let gates_body_result = exec_gates_run_body(ctx, step);
-
-    LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::GatesCompleted)
-        .map_err(|e| format!("failed to transition loop: {e}"))?;
 
     let (overall_status, next_step) = gates_body_result?;
 
@@ -1004,8 +991,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
             overall_status,
         );
-        LoopService::transition_loop(ctx.conn, ctx.loop_id, LoopTrigger::HumanWaitReached)
-            .map_err(|e| format!("failed to transition loop: {e}"))?;
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
         save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
         return Ok(TickResult {
@@ -1125,14 +1111,14 @@ fn advance_step(snapshot: &mut RecipeSnapshot, current: &RecipeStep) {
 }
 
 /// Save the updated snapshot back to policy_json via LoopService.
+/// Atomically derives and persists LoopStatus from the current step pointer,
+/// making the step pointer the single authority for loop state.
 fn save_snapshot(
     conn: &rusqlite::Connection,
     loop_id: &str,
     snapshot: &RecipeSnapshot,
 ) -> Result<(), String> {
-    let json_val =
-        serde_json::to_value(snapshot).map_err(|e| format!("failed to serialize snapshot: {e}"))?;
-    LoopService::update_policy_json(conn, loop_id, &json_val)
+    LoopService::persist_snapshot(conn, loop_id, snapshot)
         .map_err(|e| format!("failed to persist snapshot: {e}"))
 }
 
@@ -1259,8 +1245,7 @@ pub fn auto_advance_with_arc(
 
         let (_output, code) = tick_recipe(&conn, loop_id, snapshot);
 
-        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
-        let _ = LoopService::update_policy_json(&conn, loop_id, &updated_json);
+        // tick_recipe → save_snapshot already persisted the snapshot with derived status
 
         if code != 0 {
             break;
@@ -1309,8 +1294,7 @@ pub fn auto_advance(
 
         let (_output, code) = tick_recipe(conn, loop_id, snapshot);
 
-        let updated_json = serde_json::to_value(&*snapshot).unwrap_or_default();
-        let _ = LoopService::update_policy_json(conn, loop_id, &updated_json);
+        // tick_recipe → save_snapshot already persisted the snapshot with derived status
 
         if code != 0 {
             break;
@@ -1371,6 +1355,7 @@ mod tests {
                 created_session_ids: BTreeMap::new(),
                 last_error: None,
                 last_handoff_consumed_at: None,
+                status_override: None,
             },
             policy: SnapshotPolicy {
                 max_rounds: 3,

@@ -62,16 +62,6 @@ transition_cases! {
     cancel_from_merged_rejected: (LoopStatus::Merged, LoopTrigger::Cancel) => REJECTED;
     cancel_from_cleaned_rejected: (LoopStatus::Cleaned, LoopTrigger::Cancel) => REJECTED;
 
-    // ─── HandoffWaiting ──────────────────────────────────────────────────────
-    handoff_waiting_from_running: (LoopStatus::Running, LoopTrigger::HandoffWaiting) => changed(LoopStatus::Observing);
-    handoff_waiting_from_observing_unchanged: (LoopStatus::Observing, LoopTrigger::HandoffWaiting) => UNCHANGED;
-    handoff_waiting_from_draft_rejected: (LoopStatus::Draft, LoopTrigger::HandoffWaiting) => REJECTED;
-
-    // ─── HandoffConsumed ─────────────────────────────────────────────────────
-    handoff_consumed_from_observing: (LoopStatus::Observing, LoopTrigger::HandoffConsumed) => changed(LoopStatus::Running);
-    handoff_consumed_from_running_unchanged: (LoopStatus::Running, LoopTrigger::HandoffConsumed) => UNCHANGED;
-    handoff_consumed_from_draft_rejected: (LoopStatus::Draft, LoopTrigger::HandoffConsumed) => REJECTED;
-
     // ─── HandoffReceived routing ─────────────────────────────────────────────
     handoff_received_completed_from_running: (LoopStatus::Running, LoopTrigger::HandoffReceived(HandoffStatus::Completed)) => changed(LoopStatus::Observing);
     handoff_received_completed_from_observing_unchanged: (LoopStatus::Observing, LoopTrigger::HandoffReceived(HandoffStatus::Completed)) => UNCHANGED;
@@ -81,27 +71,6 @@ transition_cases! {
     handoff_received_failed_from_verifying: (LoopStatus::Verifying, LoopTrigger::HandoffReceived(HandoffStatus::Failed)) => changed(LoopStatus::Failed);
     handoff_received_from_draft_rejected: (LoopStatus::Draft, LoopTrigger::HandoffReceived(HandoffStatus::Completed)) => REJECTED;
     handoff_received_from_cancelled_rejected: (LoopStatus::Cancelled, LoopTrigger::HandoffReceived(HandoffStatus::Completed)) => REJECTED;
-
-    // ─── GatesStarted ────────────────────────────────────────────────────────
-    gates_started_from_running: (LoopStatus::Running, LoopTrigger::GatesStarted) => changed(LoopStatus::Verifying);
-    gates_started_from_draft_rejected: (LoopStatus::Draft, LoopTrigger::GatesStarted) => REJECTED;
-
-    // ─── GatesCompleted ──────────────────────────────────────────────────────
-    gates_completed_from_verifying: (LoopStatus::Verifying, LoopTrigger::GatesCompleted) => changed(LoopStatus::Running);
-    gates_completed_from_running_rejected: (LoopStatus::Running, LoopTrigger::GatesCompleted) => REJECTED;
-
-    // ─── RoundBlocked ────────────────────────────────────────────────────────
-    round_blocked_from_running: (LoopStatus::Running, LoopTrigger::RoundBlocked) => changed(LoopStatus::Blocked);
-    round_blocked_from_observing_rejected: (LoopStatus::Observing, LoopTrigger::RoundBlocked) => REJECTED;
-
-    // ─── SessionLimitReached ─────────────────────────────────────────────────
-    session_limit_from_running: (LoopStatus::Running, LoopTrigger::SessionLimitReached) => changed(LoopStatus::NeedsHuman);
-
-    // ─── MaxTicksExceeded ────────────────────────────────────────────────────
-    max_ticks_from_running: (LoopStatus::Running, LoopTrigger::MaxTicksExceeded) => changed(LoopStatus::Failed);
-
-    // ─── HumanWaitReached ────────────────────────────────────────────────────
-    human_wait_from_running: (LoopStatus::Running, LoopTrigger::HumanWaitReached) => changed(LoopStatus::NeedsHuman);
 
     // ─── RecipeSetStatus allow-list ──────────────────────────────────────────
     recipe_set_observing: (LoopStatus::Running, LoopTrigger::RecipeSetStatus(LoopStatus::Observing)) => changed(LoopStatus::Observing);
@@ -151,15 +120,7 @@ fn terminal_states_reject_all_non_lifecycle_triggers() {
     let non_lifecycle_triggers: Vec<LoopTrigger> = vec![
         LoopTrigger::Start,
         LoopTrigger::Cancel,
-        LoopTrigger::HandoffWaiting,
-        LoopTrigger::HandoffConsumed,
         LoopTrigger::HandoffReceived(HandoffStatus::Completed),
-        LoopTrigger::GatesStarted,
-        LoopTrigger::GatesCompleted,
-        LoopTrigger::RoundBlocked,
-        LoopTrigger::SessionLimitReached,
-        LoopTrigger::MaxTicksExceeded,
-        LoopTrigger::HumanWaitReached,
         LoopTrigger::RecipeSetStatus(LoopStatus::Observing),
     ];
 
@@ -182,13 +143,6 @@ fn terminal_states_reject_all_non_lifecycle_triggers() {
 fn completed_unreviewed_only_allows_approve() {
     let triggers: Vec<LoopTrigger> = vec![
         LoopTrigger::Start,
-        LoopTrigger::HandoffWaiting,
-        LoopTrigger::HandoffConsumed,
-        LoopTrigger::GatesStarted,
-        LoopTrigger::RoundBlocked,
-        LoopTrigger::SessionLimitReached,
-        LoopTrigger::MaxTicksExceeded,
-        LoopTrigger::HumanWaitReached,
         LoopTrigger::RecipeSetStatus(LoopStatus::Running),
     ];
 
@@ -312,15 +266,25 @@ fn transition_loop_unchanged_skips_db_write() {
     let loop_id = create_draft_loop(&conn);
 
     LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Start).unwrap();
-    LoopService::transition_loop(&conn, &loop_id, LoopTrigger::HandoffWaiting).unwrap();
+    // Move to Observing via HandoffReceived(Completed)
+    LoopService::transition_loop(
+        &conn,
+        &loop_id,
+        LoopTrigger::HandoffReceived(HandoffStatus::Completed),
+    )
+    .unwrap();
 
     let events_before = LoopService::list_loop_events(&conn, &loop_id)
         .unwrap()
         .len();
 
     // No-op: already Observing
-    let status =
-        LoopService::transition_loop(&conn, &loop_id, LoopTrigger::HandoffWaiting).unwrap();
+    let status = LoopService::transition_loop(
+        &conn,
+        &loop_id,
+        LoopTrigger::HandoffReceived(HandoffStatus::Completed),
+    )
+    .unwrap();
     assert_eq!(status, LoopStatus::Observing);
 
     let events_after = LoopService::list_loop_events(&conn, &loop_id)
@@ -334,7 +298,7 @@ fn transition_loop_invalid_does_not_mutate() {
     let (conn, _dir) = test_db();
     let loop_id = create_draft_loop(&conn);
 
-    let result = LoopService::transition_loop(&conn, &loop_id, LoopTrigger::GatesStarted);
+    let result = LoopService::transition_loop(&conn, &loop_id, LoopTrigger::Approve);
     assert!(result.is_err());
 
     let run = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();

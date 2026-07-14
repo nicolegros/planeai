@@ -204,7 +204,12 @@ fn handoff_blocked_transitions_running_to_blocked() {
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "blocked").unwrap();
-    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::RoundBlocked).unwrap();
+    // Set loop status to Blocked directly (trigger was removed)
+    conn.execute(
+        "UPDATE loop_runs SET status = 'blocked' WHERE id = ?1",
+        rusqlite::params![loop_run.id],
+    )
+    .unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::Blocked);
@@ -219,7 +224,12 @@ fn handoff_needs_human_transitions_running_to_needs_human() {
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "needs_human")
         .unwrap();
-    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::HumanWaitReached).unwrap();
+    // Set loop status to NeedsHuman directly (trigger was removed)
+    conn.execute(
+        "UPDATE loop_runs SET status = 'needs_human' WHERE id = ?1",
+        rusqlite::params![loop_run.id],
+    )
+    .unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::NeedsHuman);
@@ -233,7 +243,12 @@ fn handoff_failed_transitions_running_to_failed() {
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
     LoopService::update_loop_session_status(&conn, &loop_run.id, session_id, "failed").unwrap();
-    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::MaxTicksExceeded).unwrap();
+    // Set loop status to Failed directly (trigger was removed)
+    conn.execute(
+        "UPDATE loop_runs SET status = 'failed' WHERE id = ?1",
+        rusqlite::params![loop_run.id],
+    )
+    .unwrap();
 
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::Failed);
@@ -275,8 +290,12 @@ fn handoff_completed_does_not_transition_observing_loop() {
     let session_id = "sess-maker-005";
     add_session_to_loop(&conn, &loop_run.id, session_id, "maker");
 
-    // Move loop to observing first
-    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::HandoffWaiting).unwrap();
+    // Move loop to observing directly
+    conn.execute(
+        "UPDATE loop_runs SET status = 'observing' WHERE id = ?1",
+        rusqlite::params![loop_run.id],
+    )
+    .unwrap();
 
     // Another completed handoff should not change observing → anything
     // (per spec: "If loop is running, set to observing; otherwise leave unchanged")

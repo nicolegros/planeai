@@ -41,7 +41,6 @@ function makeLoop(overrides: Partial<LoopRunSummary> = {}): LoopRunSummary {
     strategy: "maker-verifier",
     goal: "Implement feature X",
     status: "running",
-    current_round: 1,
     max_rounds: 5,
     created_at: "",
     updated_at: "",
@@ -67,9 +66,7 @@ function makeLoopSessionItem(overrides: Partial<LoopSessionItem> = {}): LoopSess
  * Determines whether deleting a loop should show a confirmation dialog.
  * Returns true if dialog is needed (loop has sessions), false for instant delete.
  */
-function shouldShowLoopDeleteDialog(
-  loopSessions: LoopSessionItem[],
-): boolean {
+function shouldShowLoopDeleteDialog(loopSessions: LoopSessionItem[]): boolean {
   return loopSessions.length > 0;
 }
 
@@ -90,16 +87,10 @@ type MenuItem =
   | { label: string; danger?: boolean; onSelect: () => void }
   | { label: string; children: MenuItem[] };
 
-function buildLoopContextMenu(
-  loop: LoopRunSummary,
-): MenuItem[] {
+function buildLoopContextMenu(loop: LoopRunSummary): MenuItem[] {
   return [
-    ...(loop.status === "draft"
-      ? [{ label: "Start loop", onSelect: () => {} }]
-      : []),
-    ...(isActive(loop.status)
-      ? [{ label: "Stop loop", onSelect: () => {} }]
-      : []),
+    ...(loop.status === "draft" ? [{ label: "Start loop", onSelect: () => {} }] : []),
+    ...(isActive(loop.status) ? [{ label: "Stop loop", onSelect: () => {} }] : []),
     { label: "Delete loop", danger: true, onSelect: () => {} },
   ];
 }
@@ -132,21 +123,15 @@ describe("loop delete (PLA-239)", () => {
 
   describe("loop session delete guard", () => {
     it("refuses delete when loop is running", () => {
-      expect(canDeleteLoopSession("running")).toBe(
-        "Stop the loop before deleting its sessions",
-      );
+      expect(canDeleteLoopSession("running")).toBe("Stop the loop before deleting its sessions");
     });
 
     it("refuses delete when loop is observing", () => {
-      expect(canDeleteLoopSession("observing")).toBe(
-        "Stop the loop before deleting its sessions",
-      );
+      expect(canDeleteLoopSession("observing")).toBe("Stop the loop before deleting its sessions");
     });
 
     it("refuses delete when loop is verifying", () => {
-      expect(canDeleteLoopSession("verifying")).toBe(
-        "Stop the loop before deleting its sessions",
-      );
+      expect(canDeleteLoopSession("verifying")).toBe("Stop the loop before deleting its sessions");
     });
 
     it("allows delete when loop is completed_unreviewed", () => {

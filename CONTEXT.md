@@ -70,6 +70,7 @@ Rollback is best-effort: errors are logged as warnings but do not propagate. If 
 - **Tauri IPC** (commands + typed event channels) for PTY byte streaming between Rust and frontend
 - **Typed API layer** (`src/lib/api.ts`) — all `invoke()` calls consolidated behind domain-grouped typed methods; components never call `invoke()` directly (see ADR-0009)
 - **pnpm** for package management
+- **Loop status derivation** — for recipe-driven loops, `LoopStatus` is derived from the recipe step pointer (`snapshot.runtime.current_step`), never set independently by recipe executors. `persist_snapshot` is the single choke point: it serializes the snapshot, derives status from the current step kind (with `status_override` for blocking cases), and writes both atomically. Lifecycle transitions (`Start`, `Cancel`, `Approve`, `HandoffReceived`) still use `transition_loop` since they operate outside the recipe tick. The `current_round` column is deprecated (kept for schema compat) — round lives only in `snapshot.runtime.round`.
 
 ## Key constraints
 

@@ -517,7 +517,6 @@ fn loop_create_outputs_toon_with_loop_id_and_status() {
     );
     assert!(output.contains("goal: Implement auth"), "output:\n{output}");
     assert!(output.contains("max_rounds: 3"), "output:\n{output}");
-    assert!(output.contains("current_round: 0"), "output:\n{output}");
     assert!(output.contains("next_actions[1]:"), "output:\n{output}");
     assert!(
         output.contains("planeai-cli axi loop tick"),
@@ -1597,6 +1596,7 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
             created_session_ids: BTreeMap::new(), // No sessions!
             last_error: None,
             last_handoff_consumed_at: None,
+            status_override: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1738,6 +1738,7 @@ fn recipe_tick_round_next_increments_round() {
             created_session_ids: BTreeMap::new(),
             last_error: None,
             last_handoff_consumed_at: None,
+            status_override: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1778,9 +1779,8 @@ fn recipe_tick_round_next_increments_round() {
     assert_eq!(code, 0, "round.next should succeed, output:\n{output}");
     assert!(output.contains("round.next"), "output:\n{output}");
 
-    // Verify round was incremented in DB
+    // Verify round was incremented in snapshot.runtime.round (single source of truth)
     let updated = LoopService::get_loop(&conn, &loop_run.id).unwrap().unwrap();
-    assert_eq!(updated.current_round, 2, "current_round should be 2");
 
     // Verify snapshot runtime.round was updated
     let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
@@ -1827,6 +1827,7 @@ fn recipe_tick_round_next_enforces_max_rounds() {
             created_session_ids: BTreeMap::new(),
             last_error: None,
             last_handoff_consumed_at: None,
+            status_override: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -1940,6 +1941,7 @@ fn setup_maker_verifier_flow(
             created_session_ids,
             last_error: None,
             last_handoff_consumed_at: None,
+            status_override: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2137,6 +2139,7 @@ fn setup_maker_verifier_flow_with_path(
             created_session_ids,
             last_error: None,
             last_handoff_consumed_at: None,
+            status_override: None,
         },
         policy: SnapshotPolicy {
             max_rounds: 3,
@@ -2218,8 +2221,7 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
             "gate_command".to_string(),
             serde_json::Value::String("true".to_string()),
         );
-        let updated_json = serde_json::to_value(&snap).unwrap();
-        LoopService::update_policy_json(&conn, &loop_id, &updated_json).unwrap();
+        LoopService::persist_snapshot(&conn, &loop_id, &snap).unwrap();
     }
 
     let (output, code) = loop_tick(&conn, &loop_id);
@@ -2273,7 +2275,9 @@ fn maker_verifier_verifier_approval_marks_completed_unreviewed() {
     create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
     insert_handoff(&conn, &loop_id, verifier_id, "completed");
 
-    // Tick: handoff.wait should detect verifier completed → route to completed_unreviewed
+    // Tick: handoff.wait detects verifier completed → routes to completed_unreviewed step.
+    // Status is derived from the loop.status step's target immediately via save_snapshot,
+    // so the loop reaches terminal state in this single tick.
     let (output, code) = loop_tick(&conn, &loop_id);
     assert_eq!(code, 0, "output:\n{output}");
     assert!(
@@ -2281,15 +2285,7 @@ fn maker_verifier_verifier_approval_marks_completed_unreviewed() {
         "should route to completed_unreviewed, output:\n{output}"
     );
 
-    // Tick again: the loop.status step should set completed_unreviewed
-    let (output2, code2) = loop_tick(&conn, &loop_id);
-    assert_eq!(code2, 0, "output:\n{output2}");
-    assert!(
-        output2.contains("completed_unreviewed"),
-        "should set completed_unreviewed status, output:\n{output2}"
-    );
-
-    // Verify loop is now in terminal state
+    // Verify loop is now in terminal state (derived from step pointer)
     let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
     assert_eq!(updated.status, LoopStatus::CompletedUnreviewed);
 }
@@ -2343,7 +2339,6 @@ fn maker_verifier_round_increment_after_gates_fail_cycles_back() {
     assert!(output.contains("round.next"), "output:\n{output}");
 
     let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-    assert_eq!(updated.current_round, 2);
     let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
     assert_eq!(snap.runtime.round, 2);
     assert_eq!(snap.runtime.current_step, "wait_for_maker");
@@ -2370,7 +2365,6 @@ fn maker_verifier_round_increment_after_review_cycles_back() {
     assert!(output.contains("round.next"), "output:\n{output}");
 
     let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
-    assert_eq!(updated.current_round, 2);
     let snap: RecipeSnapshot = serde_json::from_value(updated.policy_json.unwrap()).unwrap();
     assert_eq!(snap.runtime.round, 2);
     assert_eq!(snap.runtime.current_step, "wait_for_maker");
@@ -2444,11 +2438,10 @@ fn maker_verifier_no_auto_merge_path_exists() {
     create_and_link_session(&conn, &loop_id, verifier_id, "verifier", 1, &project_id);
     insert_handoff(&conn, &loop_id, verifier_id, "completed");
 
-    // Tick 1: handoff.wait detects verifier completed → routes to completed_unreviewed
-    let (_output, _code) = loop_tick(&conn, &loop_id);
-    // Tick 2: loop.status sets completed_unreviewed
-    let (output2, code2) = loop_tick(&conn, &loop_id);
-    assert_eq!(code2, 0, "output:\n{output2}");
+    // Tick 1: handoff.wait detects verifier completed → routes to completed_unreviewed.
+    // Status is derived immediately from the loop.status step target.
+    let (output, code) = loop_tick(&conn, &loop_id);
+    assert_eq!(code, 0, "output:\n{output}");
 
     let updated = LoopService::get_loop(&conn, &loop_id).unwrap().unwrap();
     assert_eq!(
@@ -2653,7 +2646,7 @@ fn auto_advance_does_not_break_on_gates_or_observing() {
 
     // auto_advance should have advanced past the gates step without getting
     // stuck in the Verifying state. The flow after consuming the handoff is:
-    // wait_for_maker → run_gates (Verifying → Running via GatesCompleted) → gates_failed_retry
+    // wait_for_maker → run_gates (Verifying → Running via step derivation) → gates_failed_retry
     //
     // From gates_failed_retry, behavior depends on daemon availability:
     // - No daemon: session.prompt fails → auto_advance stops at gates_failed_retry

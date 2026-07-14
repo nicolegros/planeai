@@ -118,7 +118,6 @@ pub struct LoopRun {
     pub strategy: LoopStrategy,
     pub goal: String,
     pub status: LoopStatus,
-    pub current_round: i64,
     pub max_rounds: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -192,24 +191,8 @@ pub enum LoopTrigger {
     Start,
     /// Any non-terminal → Cancelled
     Cancel,
-    /// Running → Observing (handoff.wait step, no handoff found yet)
-    HandoffWaiting,
-    /// Observing → Running (handoff.wait step found an existing handoff)
-    HandoffConsumed,
     /// Active → Observing|Blocked|NeedsHuman|Failed (external handoff record)
     HandoffReceived(HandoffStatus),
-    /// Running → Verifying (gates.run step started)
-    GatesStarted,
-    /// Verifying → Running (gates.run step completed)
-    GatesCompleted,
-    /// Running → Blocked (max_rounds reached)
-    RoundBlocked,
-    /// Running → NeedsHuman (max_sessions reached)
-    SessionLimitReached,
-    /// Running → Failed (max_ticks exceeded)
-    MaxTicksExceeded,
-    /// Running → NeedsHuman (human.wait step)
-    HumanWaitReached,
     /// Running → {allow-listed targets} (recipe loop.status step)
     RecipeSetStatus(LoopStatus),
     /// CompletedUnreviewed → Approved (human approves)
@@ -227,15 +210,7 @@ impl LoopTrigger {
         match self {
             Self::Start => "Start",
             Self::Cancel => "Cancel",
-            Self::HandoffWaiting => "HandoffWaiting",
-            Self::HandoffConsumed => "HandoffConsumed",
             Self::HandoffReceived(_) => "HandoffReceived",
-            Self::GatesStarted => "GatesStarted",
-            Self::GatesCompleted => "GatesCompleted",
-            Self::RoundBlocked => "RoundBlocked",
-            Self::SessionLimitReached => "SessionLimitReached",
-            Self::MaxTicksExceeded => "MaxTicksExceeded",
-            Self::HumanWaitReached => "HumanWaitReached",
             Self::RecipeSetStatus(_) => "RecipeSetStatus",
             Self::Approve => "Approve",
             Self::MarkMerged => "MarkMerged",
@@ -304,18 +279,6 @@ pub fn apply(
             }
         }
 
-        LoopTrigger::HandoffWaiting => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Observing)),
-            LoopStatus::Observing => Ok(TransitionResult::Unchanged),
-            _ => reject(),
-        },
-
-        LoopTrigger::HandoffConsumed => match from {
-            LoopStatus::Observing => Ok(TransitionResult::Changed(LoopStatus::Running)),
-            LoopStatus::Running => Ok(TransitionResult::Unchanged),
-            _ => reject(),
-        },
-
         LoopTrigger::HandoffReceived(handoff_status) => {
             // Valid from any "active" state (not terminal, not draft)
             let is_active = matches!(
@@ -342,36 +305,6 @@ pub fn apply(
                 Ok(TransitionResult::Changed(target))
             }
         }
-
-        LoopTrigger::GatesStarted => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Verifying)),
-            _ => reject(),
-        },
-
-        LoopTrigger::GatesCompleted => match from {
-            LoopStatus::Verifying => Ok(TransitionResult::Changed(LoopStatus::Running)),
-            _ => reject(),
-        },
-
-        LoopTrigger::RoundBlocked => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Blocked)),
-            _ => reject(),
-        },
-
-        LoopTrigger::SessionLimitReached => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
-            _ => reject(),
-        },
-
-        LoopTrigger::MaxTicksExceeded => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::Failed)),
-            _ => reject(),
-        },
-
-        LoopTrigger::HumanWaitReached => match from {
-            LoopStatus::Running => Ok(TransitionResult::Changed(LoopStatus::NeedsHuman)),
-            _ => reject(),
-        },
 
         LoopTrigger::RecipeSetStatus(target) => {
             // Only allowed from Running, and only to the allow-listed targets
@@ -418,4 +351,101 @@ pub fn can_tick(status: &LoopStatus) -> bool {
         status,
         LoopStatus::Running | LoopStatus::Observing | LoopStatus::Verifying
     )
+}
+
+// ─── Status Derivation from Step Pointer ─────────────────────────────────────
+
+/// Pure derivation of `LoopStatus` from a recipe step's kind and status field.
+///
+/// This function has no knowledge of overrides or runtime state — it maps
+/// `(step_kind, step_status)` to the LoopStatus the loop should be in while
+/// sitting at that step. Callers combine this with `status_override` at the
+/// call site.
+///
+/// Returns `None` for unrecognized step kinds.
+pub fn derive_status_from_step(step_kind: &str, step_status: Option<&str>) -> Option<LoopStatus> {
+    use crate::loop_recipe::{
+        STEP_GATES_RUN, STEP_HANDOFF_WAIT, STEP_HUMAN_WAIT, STEP_LOOP_EVENT, STEP_LOOP_STATUS,
+        STEP_ROUND_NEXT, STEP_SESSION_CREATE, STEP_SESSION_PROMPT,
+    };
+
+    match step_kind {
+        STEP_SESSION_CREATE | STEP_SESSION_PROMPT | STEP_LOOP_EVENT | STEP_ROUND_NEXT => {
+            Some(LoopStatus::Running)
+        }
+        STEP_HANDOFF_WAIT => Some(LoopStatus::Observing),
+        STEP_GATES_RUN => Some(LoopStatus::Verifying),
+        STEP_HUMAN_WAIT => Some(LoopStatus::NeedsHuman),
+        STEP_LOOP_STATUS => {
+            let target = step_status.unwrap_or("observing");
+            LoopStatus::parse(target)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_status_from_step_maps_step_kinds() {
+        let cases: &[(&str, Option<&str>, Option<LoopStatus>)] = &[
+            // Active execution steps → Running
+            ("session.create", None, Some(LoopStatus::Running)),
+            ("session.prompt", None, Some(LoopStatus::Running)),
+            ("loop.event", None, Some(LoopStatus::Running)),
+            ("round.next", None, Some(LoopStatus::Running)),
+            // Waiting steps
+            ("handoff.wait", None, Some(LoopStatus::Observing)),
+            ("gates.run", None, Some(LoopStatus::Verifying)),
+            ("human.wait", None, Some(LoopStatus::NeedsHuman)),
+            // loop.status uses the step's status field
+            (
+                "loop.status",
+                Some("completed_unreviewed"),
+                Some(LoopStatus::CompletedUnreviewed),
+            ),
+            ("loop.status", Some("failed"), Some(LoopStatus::Failed)),
+            ("loop.status", Some("blocked"), Some(LoopStatus::Blocked)),
+            (
+                "loop.status",
+                Some("observing"),
+                Some(LoopStatus::Observing),
+            ),
+            ("loop.status", None, Some(LoopStatus::Observing)), // default
+            // Unknown kinds → None
+            ("unknown.step", None, None),
+            ("", None, None),
+        ];
+        for (kind, step_status, expected) in cases {
+            assert_eq!(
+                derive_status_from_step(kind, *step_status),
+                *expected,
+                "kind={kind:?}, step_status={step_status:?}"
+            );
+        }
+    }
+
+    /// Every V1-executable step kind produces a status — no silent desync.
+    #[test]
+    fn all_v1_step_kinds_produce_a_status() {
+        let v1_kinds = [
+            "session.create",
+            "session.prompt",
+            "handoff.wait",
+            "loop.status",
+            "loop.event",
+            "human.wait",
+            "round.next",
+            "gates.run",
+        ];
+        for kind in &v1_kinds {
+            assert!(
+                derive_status_from_step(kind, None).is_some(),
+                "step kind '{}' must produce a status",
+                kind
+            );
+        }
+    }
 }
