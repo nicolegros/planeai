@@ -4,6 +4,7 @@
   import { Button } from "./ui";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { RefreshCw, Play, Square, ExternalLink, Copy, CheckCircle2, XCircle, Clock, ChevronRight, ChevronDown } from "@lucide/svelte";
+  import LoopRecipeDefinition from "./LoopRecipeDefinition.svelte";
 
   interface Props {
     loopId: string;
@@ -228,6 +229,14 @@
         {/if}
       </div>
     </div>
+
+    <!-- Recipe Definition -->
+    {#if detail.recipe_snapshot}
+      <LoopRecipeDefinition
+        snapshot={detail.recipe_snapshot}
+        onOpenFile={onOpenArtifact}
+      />
+    {/if}
 
     <!-- Sessions table -->
     {#if detail.sessions.length > 0}

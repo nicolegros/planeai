@@ -1381,9 +1381,12 @@ mod tests {
         RecipeSnapshot {
             recipe_schema: "planeai.loop.recipe.v1".into(),
             recipe_id: "test-recipe".into(),
+            recipe_name: None,
+            recipe_description: None,
             recipe_source: "builtin".into(),
             recipe_path: None,
             inputs,
+            input_defs: BTreeMap::new(),
             runtime: RecipeRuntime {
                 current_step: first_step,
                 tick_count: 0,

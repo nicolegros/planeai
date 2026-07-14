@@ -1586,9 +1586,12 @@ fn recipe_tick_session_prompt_fails_when_no_sessions_exist() {
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-recipe".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "prompt_maker".into(),
             tick_count: 0,
@@ -1731,9 +1734,12 @@ fn recipe_tick_round_next_increments_round() {
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-recipe".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "next_round".into(),
             tick_count: 0,
@@ -1823,9 +1829,12 @@ fn recipe_tick_round_next_enforces_max_rounds() {
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "test-recipe".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "next_round".into(),
             tick_count: 5,
@@ -1940,9 +1949,12 @@ fn setup_maker_verifier_flow(
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "maker-verifier".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs,
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: current_step.to_string(),
             tick_count: 1,
@@ -2141,9 +2153,12 @@ fn setup_maker_verifier_flow_with_path(
     let snapshot = RecipeSnapshot {
         recipe_schema: RECIPE_SCHEMA_V1.into(),
         recipe_id: "maker-verifier".into(),
+        recipe_name: None,
+        recipe_description: None,
         recipe_source: "builtin".into(),
         recipe_path: None,
         inputs,
+        input_defs: BTreeMap::new(),
         runtime: RecipeRuntime {
             current_step: "run_gates".into(),
             tick_count: 2,

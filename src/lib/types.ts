@@ -151,6 +151,7 @@ export interface LoopRunDetail {
   events: LoopEventItem[];
   artifacts: LoopArtifactItem[];
   verifier_runs: VerifierRunItem[];
+  recipe_snapshot?: RecipeSnapshot | null;
 }
 
 export interface RecipeSummary {
@@ -173,4 +174,73 @@ export interface RecipeInputDef {
   description?: string | null;
   default?: unknown;
   options?: SelectOption[];
+}
+
+export interface RecipeSnapshot {
+  recipe_schema: string;
+  recipe_id: string;
+  recipe_name?: string | null;
+  recipe_description?: string | null;
+  recipe_source: string;
+  recipe_path?: string | null;
+  inputs: Record<string, unknown>;
+  input_defs?: Record<string, RecipeInputDef>;
+  runtime: RecipeRuntime;
+  policy: RecipeSnapshotPolicy;
+  roles: Record<string, RecipeRole>;
+  steps: RecipeStepDef[];
+  knowledge: RecipeKnowledge;
+  tools: RecipeTools;
+}
+
+export interface RecipeRuntime {
+  current_step: string;
+  tick_count: number;
+  round: number;
+  created_session_ids?: Record<string, string[]>;
+  last_error?: string | null;
+}
+
+export interface RecipeSnapshotPolicy {
+  max_rounds: number;
+  max_ticks: number;
+  max_sessions: number;
+  merge_policy: string;
+  auto_approve: boolean;
+}
+
+export interface RecipeRole {
+  provider: string;
+  mode: string;
+  isolation: string;
+  instructions?: string | null;
+}
+
+export interface RecipeStepDef {
+  id: string;
+  kind: string;
+  role?: string | null;
+  prompt?: string | null;
+  branch?: string | null;
+  from?: string | null;
+  on?: Record<string, string> | null;
+  status?: string | null;
+  next?: string | null;
+  select?: string | null;
+  gates?: RecipeGateDef[];
+}
+
+export interface RecipeGateDef {
+  name: string;
+  command: string;
+}
+
+export interface RecipeKnowledge {
+  files: string[];
+  instructions: string[];
+}
+
+export interface RecipeTools {
+  required: string[];
+  optional: string[];
 }
