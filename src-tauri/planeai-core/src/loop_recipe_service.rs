@@ -90,7 +90,7 @@ pub struct RecipeRuntime {
     /// Used by steps that block execution conditionally (e.g., `human.wait` → NeedsHuman,
     /// `round.next` at max_rounds → Blocked). Cleared when the loop resumes.
     #[serde(default)]
-    pub status_override: Option<String>,
+    pub status_override: Option<crate::loop_run::LoopStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

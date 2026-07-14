@@ -2221,8 +2221,7 @@ fn maker_verifier_gates_pass_routes_to_create_verifier() {
             "gate_command".to_string(),
             serde_json::Value::String("true".to_string()),
         );
-        let updated_json = serde_json::to_value(&snap).unwrap();
-        LoopService::update_policy_json(&conn, &loop_id, &updated_json).unwrap();
+        LoopService::persist_snapshot(&conn, &loop_id, &snap).unwrap();
     }
 
     let (output, code) = loop_tick(&conn, &loop_id);

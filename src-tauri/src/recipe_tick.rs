@@ -105,7 +105,7 @@ pub fn tick_recipe(
     // Check max_ticks
     if snapshot.runtime.tick_count >= snapshot.policy.max_ticks {
         tracing::error!(loop_id = %short_id(loop_id), tick_count = snapshot.runtime.tick_count, max_ticks = snapshot.policy.max_ticks, "tick_recipe: max_ticks exceeded, failing loop");
-        snapshot.runtime.status_override = Some("failed".to_string());
+        snapshot.runtime.status_override = Some(LoopStatus::Failed);
         let _ = save_snapshot(conn, loop_id, snapshot);
         let _ = LoopService::append_loop_event(
             conn,
@@ -223,7 +223,7 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();
     if existing_sessions.len() as u32 >= ctx.snapshot.policy.max_sessions {
-        ctx.snapshot.runtime.status_override = Some("needs_human".to_string());
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -662,12 +662,6 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     let new_status = LoopStatus::parse(status_str)
         .ok_or_else(|| format!("unknown loop status: {}", status_str))?;
 
-    // Status is derived from step.status by save_snapshot. For terminal/intervention
-    // statuses, set override so it persists even after step advancement.
-    if new_status.is_executor_terminal() || new_status.is_intervention_required() {
-        ctx.snapshot.runtime.status_override = Some(status_str.to_string());
-    }
-
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -676,9 +670,10 @@ fn exec_loop_status(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResu
     )
     .map_err(|e| format!("failed to append loop event: {e}"))?;
 
-    if !new_status.is_executor_terminal() && !new_status.is_intervention_required() {
-        advance_step(ctx.snapshot, step);
-    }
+    // Never advance: step pointer stays at loop.status, derivation reads
+    // step.status to produce the declared LoopStatus. Terminal/intervention
+    // statuses halt ticking via the guard; non-terminal statuses (observing,
+    // verifying) halt auto-advance because the step doesn't advance.
     save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
     let next_action = if new_status.is_executor_terminal() {
@@ -728,7 +723,7 @@ fn exec_loop_event(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 }
 
 fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
-    ctx.snapshot.runtime.status_override = Some("needs_human".to_string());
+    ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
     LoopService::append_loop_event(
         ctx.conn,
         ctx.loop_id,
@@ -754,7 +749,7 @@ fn exec_human_wait(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResul
 fn exec_round_next(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     // Enforce max_rounds: if we're already at the limit, set blocked
     if ctx.snapshot.runtime.round >= ctx.snapshot.policy.max_rounds {
-        ctx.snapshot.runtime.status_override = Some("blocked".to_string());
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::Blocked);
         LoopService::append_loop_event(
             ctx.conn,
             ctx.loop_id,
@@ -986,7 +981,7 @@ fn exec_gates_run(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult
             "gates did not pass but step.on has no mapping for '{}'; setting loop to needs_human",
             overall_status,
         );
-        ctx.snapshot.runtime.status_override = Some("needs_human".to_string());
+        ctx.snapshot.runtime.status_override = Some(LoopStatus::NeedsHuman);
         save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
 
         return Ok(TickResult {
@@ -1113,26 +1108,8 @@ fn save_snapshot(
     loop_id: &str,
     snapshot: &RecipeSnapshot,
 ) -> Result<(), String> {
-    let json_val =
-        serde_json::to_value(snapshot).map_err(|e| format!("failed to serialize snapshot: {e}"))?;
-
-    // Find the current step to extract kind + status for derivation
-    let current_step = find_step(&snapshot.steps, &snapshot.runtime.current_step);
-    let step_kind = current_step
-        .map(|s| s.kind.as_str())
-        .unwrap_or("unknown");
-    let step_status = current_step.and_then(|s| s.status.as_deref());
-    let status_override = snapshot.runtime.status_override.as_deref();
-
-    LoopService::update_snapshot_and_derive_status(
-        conn,
-        loop_id,
-        &json_val,
-        step_kind,
-        step_status,
-        status_override,
-    )
-    .map_err(|e| format!("failed to persist snapshot: {e}"))
+    LoopService::persist_snapshot(conn, loop_id, snapshot)
+        .map_err(|e| format!("failed to persist snapshot: {e}"))
 }
 
 /// Safe template rendering for recipe prompts using minijinja.

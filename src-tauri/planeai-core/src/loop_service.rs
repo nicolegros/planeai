@@ -7,6 +7,7 @@
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde_json::Value as JsonValue;
 
+use crate::loop_recipe_service::RecipeSnapshot;
 use crate::loop_run::*;
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -523,63 +524,61 @@ impl LoopService {
         }
     }
 
-    /// Update the resolved recipe snapshot stored in policy_json.
-    /// Wraps the raw column update with touch_loop semantics so staleness
-    /// detection and future audit hooks work correctly.
-    pub fn update_policy_json(
-        conn: &Connection,
-        id: &str,
-        policy_json: &serde_json::Value,
-    ) -> SqlResult<()> {
+    /// Persist the recipe snapshot and atomically derive + set the status column.
+    ///
+    /// This is the single choke point for snapshot persistence. Status is derived
+    /// from the current step pointer (with `status_override` taking precedence).
+    /// If the derived status differs from the current DB status, a
+    /// `status_transition` audit event is emitted.
+    pub fn persist_snapshot(conn: &Connection, id: &str, snapshot: &RecipeSnapshot) -> SqlResult<()> {
+        let json_val = serde_json::to_value(snapshot)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let json_str = json_val.to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        let json_str = policy_json.to_string();
-        let tx = conn.unchecked_transaction()?;
-        let rows = tx.execute(
-            "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
-            params![json_str, now, id],
-        )?;
-        if rows == 0 {
-            return Err(rusqlite::Error::QueryReturnedNoRows);
-        }
-        tx.commit()?;
-        Ok(())
-    }
 
-    /// Persist the updated recipe snapshot AND atomically derive + set the status
-    /// column from the current step pointer.
-    ///
-    /// This is the single choke point for snapshot persistence — by co-locating
-    /// the status derivation here, the status column can never desync from the
-    /// step pointer.
-    ///
-    /// `step_kind` and `step_status` are extracted from the current recipe step.
-    /// `status_override` is from `snapshot.runtime.status_override` (set by
-    /// blocking executors like human.wait or round.next at max_rounds).
-    pub fn update_snapshot_and_derive_status(
-        conn: &Connection,
-        id: &str,
-        policy_json: &serde_json::Value,
-        step_kind: &str,
-        step_status: Option<&str>,
-        status_override: Option<&str>,
-    ) -> SqlResult<()> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let json_str = policy_json.to_string();
+        // Resolve the effective status: override wins, then step-kind derivation
+        let current_step = snapshot.steps.iter().find(|s| s.id == snapshot.runtime.current_step);
+        let step_kind = current_step.map(|s| s.kind.as_str()).unwrap_or("unknown");
+        let step_status = current_step.and_then(|s| s.status.as_deref());
+
+        let derived = snapshot
+            .runtime
+            .status_override
+            .clone()
+            .or_else(|| derive_status_from_step(step_kind, step_status));
+
         let tx = conn.unchecked_transaction()?;
 
-        // Derive the status from the step pointer + override
-        if let Some(derived) = derive_status_from_step(step_kind, step_status, status_override) {
-            let executor_finished_at = if derived.is_executor_terminal() {
+        if let Some(ref new_status) = derived {
+            // Read current status for audit event
+            let current_status_str: Option<String> = tx
+                .query_row("SELECT status FROM loop_runs WHERE id = ?1", params![id], |row| row.get(0))
+                .ok();
+
+            let executor_finished_at = if new_status.is_executor_terminal() {
                 Some(now.clone())
             } else {
                 None
             };
             let rows = tx.execute(
                 "UPDATE loop_runs SET policy_json = ?1, status = ?2, updated_at = ?3, executor_finished_at = COALESCE(?4, executor_finished_at) WHERE id = ?5",
-                params![json_str, derived.as_str(), now, executor_finished_at, id],
+                params![json_str, new_status.as_str(), now, executor_finished_at, id],
             )?;
             if rows == 0 {
                 return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+
+            // Emit audit event if status actually changed
+            if current_status_str.as_deref() != Some(new_status.as_str()) {
+                let payload = serde_json::json!({
+                    "from": current_status_str.as_deref().unwrap_or("unknown"),
+                    "to": new_status.as_str(),
+                    "trigger": "step_derivation",
+                });
+                tx.execute(
+                    "INSERT INTO loop_events (loop_id, ts, kind, payload_json) VALUES (?1, ?2, 'status_transition', ?3)",
+                    params![id, now, payload.to_string()],
+                )?;
             }
         } else {
             // Unrecognized step kind — update snapshot only, leave status unchanged
