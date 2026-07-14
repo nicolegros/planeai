@@ -246,6 +246,26 @@ impl LoopTrigger {
             Self::MarkCleaned => "MarkCleaned",
         }
     }
+
+    /// Returns true if this trigger is a recipe-tick trigger (†) that should NOT
+    /// be fired on recipe-driven loops (status is derived from the step pointer
+    /// instead). Used as a runtime guard in `transition_in_tx`.
+    ///
+    /// Note: `RecipeSetStatus` is NOT included — it's a valid external operation
+    /// (e.g., `loop stop` marking a loop as completed_unreviewed).
+    pub fn is_recipe_tick_trigger(&self) -> bool {
+        matches!(
+            self,
+            Self::HandoffWaiting
+                | Self::HandoffConsumed
+                | Self::GatesStarted
+                | Self::GatesCompleted
+                | Self::RoundBlocked
+                | Self::SessionLimitReached
+                | Self::MaxTicksExceeded
+                | Self::HumanWaitReached
+        )
+    }
 }
 
 /// Outcome of applying a trigger to a status.

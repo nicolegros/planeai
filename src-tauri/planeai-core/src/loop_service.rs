@@ -500,6 +500,31 @@ impl LoopService {
         id: &str,
         trigger: LoopTrigger,
     ) -> Result<LoopStatus, TransitionError> {
+        // Guard: reject recipe-tick triggers (†) on recipe-driven loops.
+        // These triggers should never be fired by recipe executors — status is
+        // derived from the step pointer via persist_snapshot instead.
+        if trigger.is_recipe_tick_trigger() {
+            let has_recipe: bool = tx
+                .query_row(
+                    "SELECT policy_json IS NOT NULL FROM loop_runs WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            if has_recipe {
+                tracing::warn!(
+                    loop_id = %id,
+                    trigger = %trigger.name(),
+                    "rejected recipe-tick trigger on recipe-driven loop — \
+                     use persist_snapshot for status derivation instead"
+                );
+                return Err(TransitionError::Invalid(InvalidTransition {
+                    from: LoopStatus::Running, // placeholder — the real issue is the trigger type
+                    trigger,
+                }));
+            }
+        }
+
         // 1. Load current status
         let current_status_str: String = tx
             .query_row(
@@ -563,13 +588,12 @@ impl LoopService {
                         let derived = derive_effective_status(&snapshot);
                         if let Some(ref expected) = derived {
                             if expected != new_status {
-                                tracing::debug!(
+                                tracing::warn!(
                                     loop_id = %id,
                                     trigger = %trigger.name(),
                                     transition_status = %new_status.as_str(),
                                     derived_status = %expected.as_str(),
-                                    "transition_loop produced status that diverges from step-pointer derivation \
-                                     (expected for lifecycle triggers)"
+                                    "transition_loop status diverges from step-pointer derivation"
                                 );
                             }
                         }
@@ -629,9 +653,17 @@ impl LoopService {
                 )?;
             }
         } else {
-            // Unrecognized step kind — update snapshot only, leave status unchanged
+            // Unrecognized step kind — this means a new step kind was added without
+            // updating derive_status_from_step. Set Stale to make the problem visible
+            // rather than silently retaining whatever status was there before (desync).
+            tracing::warn!(
+                loop_id = %id,
+                current_step = %snapshot.runtime.current_step,
+                "persist_snapshot: cannot derive status from step pointer (unknown step kind); \
+                 marking loop as Stale to prevent silent desync"
+            );
             let rows = tx.execute(
-                "UPDATE loop_runs SET policy_json = ?1, updated_at = ?2 WHERE id = ?3",
+                "UPDATE loop_runs SET policy_json = ?1, status = 'stale', updated_at = ?2 WHERE id = ?3",
                 params![json_str, now, id],
             )?;
             if rows == 0 {
