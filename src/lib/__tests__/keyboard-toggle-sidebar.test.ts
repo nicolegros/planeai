@@ -9,7 +9,12 @@ describe("installKeyboardRouter toggle_sidebar focus behavior", () => {
   beforeEach(() => {
     onAction = vi.fn();
     focusTerminal();
-    cleanup = installKeyboardRouter(onAction, () => true, () => false, () => false);
+    cleanup = installKeyboardRouter(
+      onAction,
+      () => true,
+      () => false,
+      () => false,
+    );
   });
 
   afterEach(() => {

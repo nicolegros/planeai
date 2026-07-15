@@ -408,81 +408,85 @@ describe("unified sidebar logic", () => {
   });
 });
 
-  describe("selection indicator suppression when loop is selected", () => {
-    // Replicates the isActive derivation logic used by UnifiedSidebar.
-    // When a loop is selected (selectedLoopId is set), session indicators
-    // (left bar + bg-accent-bg) must be suppressed so only the loop shows as active.
+describe("selection indicator suppression when loop is selected", () => {
+  // Replicates the isActive derivation logic used by UnifiedSidebar.
+  // When a loop is selected (selectedLoopId is set), session indicators
+  // (left bar + bg-accent-bg) must be suppressed so only the loop shows as active.
 
-    function isSessionActive(sessionId: string, activeSessionId: string | null, selectedLoopId: string | null): boolean {
-      return sessionId === activeSessionId && !selectedLoopId;
-    }
+  function isSessionActive(
+    sessionId: string,
+    activeSessionId: string | null,
+    selectedLoopId: string | null,
+  ): boolean {
+    return sessionId === activeSessionId && !selectedLoopId;
+  }
 
-    function isLoopDashboardActive(loopId: string, selectedLoopId: string | null): boolean {
-      return loopId === selectedLoopId;
-    }
+  function isLoopDashboardActive(loopId: string, selectedLoopId: string | null): boolean {
+    return loopId === selectedLoopId;
+  }
 
-    it("session shows indicator when active and no loop selected", () => {
-      expect(isSessionActive("s1", "s1", null)).toBe(true);
-    });
-
-    it("session hides indicator when a loop is selected", () => {
-      expect(isSessionActive("s1", "s1", "loop-1")).toBe(false);
-    });
-
-    it("non-active session never shows indicator", () => {
-      expect(isSessionActive("s2", "s1", null)).toBe(false);
-      expect(isSessionActive("s2", "s1", "loop-1")).toBe(false);
-    });
-
-    it("loop shows indicator when it is the selected loop", () => {
-      expect(isLoopDashboardActive("loop-1", "loop-1")).toBe(true);
-    });
-
-    it("loop hides indicator when a different loop is selected", () => {
-      expect(isLoopDashboardActive("loop-1", "loop-2")).toBe(false);
-    });
-
-    it("loop hides indicator when no loop is selected", () => {
-      expect(isLoopDashboardActive("loop-1", null)).toBe(false);
-    });
-
-    it("only one indicator is visible at a time — loop selected scenario", () => {
-      const activeSessionId = "s1";
-      const selectedLoopId: string | null = "loop-1";
-
-      const sessionIndicator = isSessionActive("s1", activeSessionId, selectedLoopId);
-      const loopIndicator = isLoopDashboardActive("loop-1", selectedLoopId);
-
-      expect(sessionIndicator).toBe(false);
-      expect(loopIndicator).toBe(true);
-    });
-
-    it("only one indicator is visible at a time — session selected scenario", () => {
-      const activeSessionId = "s1";
-      const selectedLoopId: string | null = null;
-
-      const sessionIndicator = isSessionActive("s1", activeSessionId, selectedLoopId);
-      const loopIndicator = isLoopDashboardActive("loop-1", selectedLoopId);
-
-      expect(sessionIndicator).toBe(true);
-      expect(loopIndicator).toBe(false);
-    });
-
-    it("task-linked session also suppressed when loop is selected", () => {
-      // Task-linked sessions use: linked?.id === activeSessionId && !selectedLoopId
-      const linked = makeSession("s1", "p1", "PLA-1");
-      const activeSessionId = "s1";
-      const selectedLoopId: string | null = "loop-1";
-      const isActive = linked.id === activeSessionId && !selectedLoopId;
-      expect(isActive).toBe(false);
-    });
-
-    it("loop child session suppressed when loop dashboard is active", () => {
-      // Loop child sessions use same logic: childSession.id === activeSessionId && !selectedLoopId
-      const childSession = makeSession("s2", "p1", null);
-      const activeSessionId = "s2";
-      const selectedLoopId: string | null = "loop-1";
-      const isChildActive = childSession.id === activeSessionId && !selectedLoopId;
-      expect(isChildActive).toBe(false);
-    });
+  it("session shows indicator when active and no loop selected", () => {
+    expect(isSessionActive("s1", "s1", null)).toBe(true);
   });
+
+  it("session hides indicator when a loop is selected", () => {
+    expect(isSessionActive("s1", "s1", "loop-1")).toBe(false);
+  });
+
+  it("non-active session never shows indicator", () => {
+    expect(isSessionActive("s2", "s1", null)).toBe(false);
+    expect(isSessionActive("s2", "s1", "loop-1")).toBe(false);
+  });
+
+  it("loop shows indicator when it is the selected loop", () => {
+    expect(isLoopDashboardActive("loop-1", "loop-1")).toBe(true);
+  });
+
+  it("loop hides indicator when a different loop is selected", () => {
+    expect(isLoopDashboardActive("loop-1", "loop-2")).toBe(false);
+  });
+
+  it("loop hides indicator when no loop is selected", () => {
+    expect(isLoopDashboardActive("loop-1", null)).toBe(false);
+  });
+
+  it("only one indicator is visible at a time — loop selected scenario", () => {
+    const activeSessionId = "s1";
+    const selectedLoopId: string | null = "loop-1";
+
+    const sessionIndicator = isSessionActive("s1", activeSessionId, selectedLoopId);
+    const loopIndicator = isLoopDashboardActive("loop-1", selectedLoopId);
+
+    expect(sessionIndicator).toBe(false);
+    expect(loopIndicator).toBe(true);
+  });
+
+  it("only one indicator is visible at a time — session selected scenario", () => {
+    const activeSessionId = "s1";
+    const selectedLoopId: string | null = null;
+
+    const sessionIndicator = isSessionActive("s1", activeSessionId, selectedLoopId);
+    const loopIndicator = isLoopDashboardActive("loop-1", selectedLoopId);
+
+    expect(sessionIndicator).toBe(true);
+    expect(loopIndicator).toBe(false);
+  });
+
+  it("task-linked session also suppressed when loop is selected", () => {
+    // Task-linked sessions use: linked?.id === activeSessionId && !selectedLoopId
+    const linked = makeSession("s1", "p1", "PLA-1");
+    const activeSessionId = "s1";
+    const selectedLoopId: string | null = "loop-1";
+    const isActive = linked.id === activeSessionId && !selectedLoopId;
+    expect(isActive).toBe(false);
+  });
+
+  it("loop child session suppressed when loop dashboard is active", () => {
+    // Loop child sessions use same logic: childSession.id === activeSessionId && !selectedLoopId
+    const childSession = makeSession("s2", "p1", null);
+    const activeSessionId = "s2";
+    const selectedLoopId: string | null = "loop-1";
+    const isChildActive = childSession.id === activeSessionId && !selectedLoopId;
+    expect(isChildActive).toBe(false);
+  });
+});

@@ -98,29 +98,24 @@ function runDefault(): void {
   prompt = null;
   timer = null;
 
-  const taskThen =
-    hasTask && onTaskDone ? onTaskDone(sessionId).catch(() => {}) : Promise.resolve();
-
-  if (action === "archive") {
-    taskThen
-      .then(() => onArchive(sessionId))
-      .then(() =>
-        showSnackbar(hasTask ? "Task done, session archived" : "Session auto-archived", "success"),
-      )
-      .catch((e) => showSnackbar(String(e), "error"));
-  } else if (action === "destroy") {
-    taskThen
-      .then(() => onDestroy(sessionId))
+  if (hasTask && onTaskDone) {
+    // Moving a task to done causes the backend to archive the session automatically,
+    // so we must NOT call onArchive/onDestroy afterwards (the session is already gone).
+    onTaskDone(sessionId)
       .then(() =>
         showSnackbar(
-          hasTask ? "Task done, session destroyed" : "Session auto-destroyed",
+          action === "destroy" ? "Task done, session destroyed" : "Task done, session archived",
           "success",
         ),
       )
       .catch((e) => showSnackbar(String(e), "error"));
-  } else if (hasTask && onTaskDone) {
-    taskThen
-      .then(() => showSnackbar("Task marked done", "success"))
+  } else if (action === "archive") {
+    onArchive(sessionId)
+      .then(() => showSnackbar("Session auto-archived", "success"))
+      .catch((e) => showSnackbar(String(e), "error"));
+  } else if (action === "destroy") {
+    onDestroy(sessionId)
+      .then(() => showSnackbar("Session auto-destroyed", "success"))
       .catch((e) => showSnackbar(String(e), "error"));
   }
 }
