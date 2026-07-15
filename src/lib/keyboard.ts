@@ -1,7 +1,6 @@
 import {
   focusTerminal,
   getActiveZone,
-  toggleSidebar,
   toggleSessionsPanel,
   toggleTaskPanel,
 } from "./focus.svelte";
@@ -246,8 +245,6 @@ export function installKeyboardRouter(
       // Built-in focus actions
       if (action.type === "focus_terminal") {
         focusTerminal();
-      } else if (action.type === "toggle_sidebar") {
-        toggleSidebar();
       } else if (action.type === "toggle_sessions_panel") {
         toggleSessionsPanel();
       } else if (action.type === "toggle_task_panel") {
