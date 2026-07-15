@@ -338,8 +338,16 @@ export function startEventListeners(): () => void {
           sessionId: s.id,
           sessionName: s.name || s.branch,
           taskKey: s.task_key,
-          onArchive: (id) => archiveSession(sessions.find((x) => x.id === id)!),
-          onDestroy: (id) => deleteSession(sessions.find((x) => x.id === id)!),
+          onArchive: (id) => {
+            const found = sessions.find((x) => x.id === id);
+            if (found) return archiveSession(found);
+            return Promise.resolve();
+          },
+          onDestroy: (id) => {
+            const found = sessions.find((x) => x.id === id);
+            if (found) return deleteSession(found);
+            return Promise.resolve();
+          },
           onTaskDone: s.task_key
             ? async (id) => {
                 const sess = sessions.find((x) => x.id === id);

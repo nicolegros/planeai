@@ -1,9 +1,4 @@
-import {
-  focusTerminal,
-  getActiveZone,
-  toggleSessionsPanel,
-  toggleTaskPanel,
-} from "./focus.svelte";
+import { focusTerminal, getActiveZone, toggleSessionsPanel, toggleTaskPanel } from "./focus.svelte";
 
 /** True on macOS/iOS, false on Windows/Linux */
 export const IS_MAC =
