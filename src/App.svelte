@@ -5,7 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
   import type { Session, Project } from "./lib/types";
-  import { focusTerminal, refocusTerminal, focusExplorer, getActiveZone } from "./lib/focus.svelte";
+  import { focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
@@ -263,7 +263,7 @@
         if (action.type === "new_session") {
           showNewItemModal = true;
         } else if (action.type === "new_project") { showProjectForm = true; }
-        else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; }
+        else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
         else if (action.type === "jump_to_session") { loopStore.setActiveLoopId(null); orchestrator.jumpToSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
