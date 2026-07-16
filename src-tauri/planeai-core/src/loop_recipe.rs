@@ -130,6 +130,15 @@ pub struct RecipeRole {
     pub isolation: String,
     #[serde(default)]
     pub instructions: Option<String>,
+    /// When true (default), `session.create` reuses an existing session for this role
+    /// by re-prompting it instead of spawning a new one. Set to false to force a
+    /// fresh session on every iteration.
+    #[serde(default = "default_session_reuse")]
+    pub session_reuse: bool,
+}
+
+pub fn default_session_reuse() -> bool {
+    true
 }
 
 fn default_provider() -> String {
@@ -562,5 +571,40 @@ mod tests {
         "#;
         let step: RecipeStep = serde_yml::from_str(yaml).unwrap();
         assert_eq!(step.branch, None);
+    }
+
+    #[test]
+    fn role_session_reuse_defaults_to_true() {
+        let yaml = r#"
+            provider: default
+            mode: write
+            isolation: worktree
+        "#;
+        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        assert!(role.session_reuse);
+    }
+
+    #[test]
+    fn role_session_reuse_explicit_false() {
+        let yaml = r#"
+            provider: default
+            mode: write
+            isolation: worktree
+            session_reuse: false
+        "#;
+        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        assert!(!role.session_reuse);
+    }
+
+    #[test]
+    fn role_session_reuse_explicit_true() {
+        let yaml = r#"
+            provider: default
+            mode: review
+            isolation: readonly
+            session_reuse: true
+        "#;
+        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        assert!(role.session_reuse);
     }
 }

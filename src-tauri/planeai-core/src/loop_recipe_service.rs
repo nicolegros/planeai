@@ -710,6 +710,7 @@ mod tests {
                 mode: "review".to_string(),
                 isolation: "readonly".to_string(),
                 instructions: None,
+                session_reuse: true,
             },
         );
         let result = RecipeService::validate(&recipe, None);
