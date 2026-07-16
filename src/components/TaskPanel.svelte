@@ -317,26 +317,28 @@
 <!-- Modal for create/edit -->
 {#if modalMode !== null}
 <div class="fixed inset-0 z-50 flex items-center justify-center" onkeydown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={modalMode === "create" ? "Create Task" : "Edit Task"}>
-  <div class="w-[36rem] p-6 rounded-lg border border-border bg-panel shadow-lg">
-    <h2 class="text-lg font-semibold text-t1 px-5 pb-2">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
-    <TaskForm
-      mode={modalMode}
-      projects={projects.map(p => ({ id: "", name: p.name, path: p.path }))}
-      tasks={Object.values(tasksByProject).flat()}
-      initial={modalMode === "edit" && editingTask ? {
-        key: editingTask.key,
-        title: editingTask.title,
-        description: editingTask.description,
-        priority: editingTask.priority,
-        parentKey: editingTask.parent_key,
-        blockedBy: editingTask.blocked_by,
-        tags: editingTask.tags,
-        baseBranch: editingTask.base_branch,
-        projectPath: repoPathForTask(editingTask.key) ?? projects[0]?.path ?? "",
-      } : { projectPath: projects[0]?.path ?? "" }}
-      onSubmitted={() => { modalMode = null; focusTerminal(); }}
-      onCancel={() => { modalMode = null; focusTerminal(); }}
-    />
+  <div class="w-[36rem] max-h-[85vh] flex flex-col p-6 rounded-lg border border-border bg-panel shadow-lg overflow-hidden">
+    <h2 class="flex-shrink-0 text-lg font-semibold text-t1 px-5 pb-2">{modalMode === "create" ? "Create Task" : "Edit Task"}</h2>
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <TaskForm
+        mode={modalMode}
+        projects={projects.map(p => ({ id: "", name: p.name, path: p.path }))}
+        tasks={Object.values(tasksByProject).flat()}
+        initial={modalMode === "edit" && editingTask ? {
+          key: editingTask.key,
+          title: editingTask.title,
+          description: editingTask.description,
+          priority: editingTask.priority,
+          parentKey: editingTask.parent_key,
+          blockedBy: editingTask.blocked_by,
+          tags: editingTask.tags,
+          baseBranch: editingTask.base_branch,
+          projectPath: repoPathForTask(editingTask.key) ?? projects[0]?.path ?? "",
+        } : { projectPath: projects[0]?.path ?? "" }}
+        onSubmitted={() => { modalMode = null; focusTerminal(); }}
+        onCancel={() => { modalMode = null; focusTerminal(); }}
+      />
+    </div>
   </div>
 </div>
 {/if}
