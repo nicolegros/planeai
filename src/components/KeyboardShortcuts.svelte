@@ -2,6 +2,7 @@
   import { Dialog } from "./ui";
   import { IS_MAC, MOD_LABEL, MOD_ENTER_HINT } from "../lib/keyboard";
   import { getActiveZone } from "../lib/focus.svelte";
+  import { filterShortcuts } from "../lib/shortcut-filter";
 
   interface Props {
     open: boolean;
@@ -9,6 +10,8 @@
   }
 
   let { open, onOpenChange }: Props = $props();
+  let searchQuery = $state("");
+  let searchInput: HTMLInputElement | undefined = $state();
 
   const shortcuts = [
     { section: "General", items: [
@@ -108,23 +111,56 @@
       ? [sidebarShortcuts, ...shortcuts]
       : [reviewShortcuts, prPanelShortcuts, ...shortcuts]
   );
+
+  const filteredShortcuts = $derived(
+    filterShortcuts(visibleShortcuts, searchQuery)
+  );
+
+  // Reset search query when dialog closes
+  $effect(() => {
+    if (!open) {
+      searchQuery = "";
+    }
+  });
+
+  // Auto-focus the search input when dialog opens
+  $effect(() => {
+    if (open && searchInput) {
+      // Use a microtask to ensure the DOM is ready
+      queueMicrotask(() => searchInput?.focus());
+    }
+  });
 </script>
 
 <Dialog {open} {onOpenChange} title="Keyboard Shortcuts" description="List of keyboard shortcuts available in planeai." class="w-full max-w-2xl rounded-xl p-5 outline-none">
   <h2 class="text-sm font-medium text-t1 mb-4">Keyboard Shortcuts</h2>
-  <div class="grid grid-cols-2 gap-x-6 gap-y-4">
-    {#each visibleShortcuts as group}
-      <div>
-        <h3 class="text-xs font-medium text-t3 uppercase tracking-wide mb-1.5">{group.section}</h3>
-        <div class="space-y-1">
-          {#each group.items as shortcut}
-            <div class="flex items-center justify-between py-1">
-              <span class="text-sm text-t2">{shortcut.description}</span>
-              <kbd class="rounded border border-border bg-panel-hi px-1.5 py-0.5 text-xs text-t2 font-mono">{shortcut.keys}</kbd>
-            </div>
-          {/each}
+  <input
+    bind:this={searchInput}
+    bind:value={searchQuery}
+    type="text"
+    placeholder="Search shortcuts..."
+    aria-label="Search shortcuts"
+    class="mb-4 w-full rounded-md border border-border bg-panel-hi px-3 py-1.5 text-sm text-t1 placeholder:text-t3 outline-none focus:ring-1 focus:ring-accent"
+  />
+  {#if filteredShortcuts.length === 0}
+    <p class="text-sm text-t3 text-center py-6">No shortcuts found</p>
+  {:else}
+    <div class="grid grid-cols-2 gap-x-6 gap-y-4">
+      {#each filteredShortcuts as group}
+        <div>
+          {#if group.section}
+            <h3 class="text-xs font-medium text-t3 uppercase tracking-wide mb-1.5">{group.section}</h3>
+          {/if}
+          <div class="space-y-1">
+            {#each group.items as shortcut}
+              <div class="flex items-center justify-between py-1">
+                <span class="text-sm text-t2">{shortcut.description}</span>
+                <kbd class="rounded border border-border bg-panel-hi px-1.5 py-0.5 text-xs text-t2 font-mono">{shortcut.keys}</kbd>
+              </div>
+            {/each}
+          </div>
         </div>
-      </div>
-    {/each}
-  </div>
+      {/each}
+    </div>
+  {/if}
 </Dialog>
