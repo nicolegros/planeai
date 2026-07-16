@@ -426,9 +426,9 @@
   <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
     <div class="flex-1 relative p-4 pr-0 overflow-hidden">
     {#if showProjectForm}
-      <div class="absolute inset-0 flex items-center justify-center bg-scrim z-10">
-        <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); }} onCancel={() => (showProjectForm = false)} />
-      </div>
+    <FormDialog title="Add Project" onClose={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }}>
+      <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); focusTerminal(); }} onCancel={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }} />
+    </FormDialog>
     {/if}
 
     {#if showSessionForm}
@@ -509,7 +509,7 @@
         <Terminal
           sessionId={ptyKey}
           visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showPrPanel}
+          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
           exited={tab.index === 0 && session.status === "exited"}
           skipAttach={tab.index !== 0}
           onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
