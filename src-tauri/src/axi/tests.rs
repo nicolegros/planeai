@@ -2787,6 +2787,7 @@ fn setup_stale_loop_with_sessions(
                 mode: "write".into(),
                 isolation: "worktree".into(),
                 instructions: None,
+                session_reuse: true,
             },
         )]),
         steps,
@@ -3103,6 +3104,7 @@ fn handoff_refreshes_activity() {
                 mode: "write".into(),
                 isolation: "worktree".into(),
                 instructions: None,
+                session_reuse: true,
             },
         )]),
         steps,
@@ -3345,6 +3347,7 @@ fn verifier_refreshes_activity() {
                 mode: "write".into(),
                 isolation: "worktree".into(),
                 instructions: None,
+                session_reuse: true,
             },
         )]),
         steps,
@@ -3419,4 +3422,408 @@ fn completed_loop_does_not_become_stale() {
     let (output, code) = loop_tick(&conn, &loop_id);
     assert_eq!(code, 1, "output:\n{output}");
     assert!(output.contains("terminal status"), "got:\n{output}");
+}
+
+// ─── Session reuse tests ─────────────────────────────────────────────────────
+
+#[test]
+fn recipe_tick_session_create_reuses_active_session_when_session_reuse_enabled() {
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    // Create a session in the DB that will be "reused"
+    let existing_session_id = "eeeeeeee-1111-2222-3333-444444444444";
+    crate::db::create_session_with_id(
+        &conn,
+        existing_session_id,
+        &project.id,
+        "maker (test-loop)",
+        None,
+        "loop/test1234/maker-r1",
+        None,
+        Some("claude"),
+        "daemon",
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Build a snapshot with session.create step and the existing session tracked
+    let steps = vec![RecipeStep {
+        id: "create_maker".into(),
+        kind: STEP_SESSION_CREATE.into(),
+        role: Some("maker".into()),
+        prompt: Some("Implement the feature for round {{ runtime.round }}".into()),
+        branch: None,
+        from: None,
+        on: None,
+        status: None,
+        next: None,
+        select: None,
+        event_kind: None,
+        gates: vec![],
+        providers: None,
+    }];
+
+    let mut created_session_ids = BTreeMap::new();
+    created_session_ids.insert("maker".to_string(), vec![existing_session_id.to_string()]);
+
+    let mut roles = BTreeMap::new();
+    roles.insert(
+        "maker".to_string(),
+        RecipeRole {
+            provider: "default".to_string(),
+            mode: "write".to_string(),
+            isolation: "worktree".to_string(),
+            instructions: None,
+            session_reuse: true, // Enabled!
+        },
+    );
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-reuse".into(),
+        recipe_name: None,
+        recipe_description: None,
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "create_maker".into(),
+            tick_count: 0,
+            round: 2, // Simulating round 2 — session already exists from round 1
+            created_session_ids,
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
+            candidates_query_failures: 0,
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms: None,
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles,
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+    let loop_run = LoopService::create_loop(
+        &conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: project.id.clone(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-reuse"),
+            goal: "test session reuse".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
+
+    // Tick — session.create should reuse the existing session by re-prompting it.
+    // With the daemon backend, send_prompt succeeds (or is a no-op in test) since
+    // the session record exists and is active.
+    let (output, code) = loop_tick(&conn, &loop_run.id);
+
+    assert_eq!(code, 0, "expected success (reuse path), output:\n{output}");
+    assert!(
+        output.contains("reused_session"),
+        "expected reused_session in output, got:\n{output}"
+    );
+    assert!(
+        output.contains("role: maker"),
+        "expected role: maker, got:\n{output}"
+    );
+    assert!(
+        output.contains("round: \"2\""),
+        "expected round 2, got:\n{output}"
+    );
+}
+
+#[test]
+fn recipe_tick_session_create_spawns_fresh_when_session_reuse_disabled() {
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    // Create an existing session that should NOT be reused
+    let existing_session_id = "ffffffff-1111-2222-3333-444444444444";
+    crate::db::create_session_with_id(
+        &conn,
+        existing_session_id,
+        &project.id,
+        "maker (test-loop)",
+        None,
+        "loop/test5678/maker-r1",
+        None,
+        Some("claude"),
+        "daemon",
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let steps = vec![RecipeStep {
+        id: "create_maker".into(),
+        kind: STEP_SESSION_CREATE.into(),
+        role: Some("maker".into()),
+        prompt: Some("Do the thing".into()),
+        branch: None,
+        from: None,
+        on: None,
+        status: None,
+        next: None,
+        select: None,
+        event_kind: None,
+        gates: vec![],
+        providers: None,
+    }];
+
+    let mut created_session_ids = BTreeMap::new();
+    created_session_ids.insert("maker".to_string(), vec![existing_session_id.to_string()]);
+
+    let mut roles = BTreeMap::new();
+    roles.insert(
+        "maker".to_string(),
+        RecipeRole {
+            provider: "default".to_string(),
+            mode: "write".to_string(),
+            isolation: "worktree".to_string(),
+            instructions: None,
+            session_reuse: false, // Disabled! Should spawn fresh session
+        },
+    );
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-fresh".into(),
+        recipe_name: None,
+        recipe_description: None,
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "create_maker".into(),
+            tick_count: 0,
+            round: 2,
+            created_session_ids,
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
+            candidates_query_failures: 0,
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms: None,
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles,
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+    let loop_run = LoopService::create_loop(
+        &conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: project.id.clone(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-fresh"),
+            goal: "test fresh session".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
+
+    // Tick — session.create with session_reuse=false should skip the reuse logic
+    // and try to create a brand new session. This fails because /tmp/myapp is
+    // not a real git repo, but the error confirms we took the fresh-session path.
+    let (output, code) = loop_tick(&conn, &loop_run.id);
+
+    assert_eq!(code, 1, "expected failure (no git repo), output:\n{output}");
+    // The fresh-session path goes through crate::cli::create_session which fails
+    // with a git/backend error — NOT a "prompt delivery failed" error
+    assert!(
+        output.contains("session.create failed"),
+        "expected fresh-session-path error (session.create failed), got:\n{output}"
+    );
+}
+
+#[test]
+fn recipe_tick_session_create_falls_through_to_fresh_when_existing_session_inactive() {
+    use planeai_core::loop_recipe::*;
+    use planeai_core::loop_recipe_service::*;
+    use planeai_core::loop_run::LoopTrigger;
+    use planeai_core::loop_service::LoopService;
+    use std::collections::BTreeMap;
+
+    let conn = setup_db();
+    let project = crate::db::create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+
+    // Create a session and mark it as stopped (inactive)
+    let existing_session_id = "dddddddd-aaaa-bbbb-cccc-444444444444";
+    crate::db::create_session_with_id(
+        &conn,
+        existing_session_id,
+        &project.id,
+        "maker (test-loop)",
+        None,
+        "loop/testdead/maker-r1",
+        None,
+        Some("claude"),
+        "daemon",
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Mark as stopped
+    conn.execute(
+        "UPDATE sessions SET status = 'stopped' WHERE id = ?1",
+        rusqlite::params![existing_session_id],
+    )
+    .unwrap();
+
+    let steps = vec![RecipeStep {
+        id: "create_maker".into(),
+        kind: STEP_SESSION_CREATE.into(),
+        role: Some("maker".into()),
+        prompt: Some("Do the thing".into()),
+        branch: None,
+        from: None,
+        on: None,
+        status: None,
+        next: None,
+        select: None,
+        event_kind: None,
+        gates: vec![],
+        providers: None,
+    }];
+
+    let mut created_session_ids = BTreeMap::new();
+    created_session_ids.insert("maker".to_string(), vec![existing_session_id.to_string()]);
+
+    let mut roles = BTreeMap::new();
+    roles.insert(
+        "maker".to_string(),
+        RecipeRole {
+            provider: "default".to_string(),
+            mode: "write".to_string(),
+            isolation: "worktree".to_string(),
+            instructions: None,
+            session_reuse: true, // Enabled — but session is inactive, so should fall through
+        },
+    );
+
+    let snapshot = RecipeSnapshot {
+        recipe_schema: RECIPE_SCHEMA_V1.into(),
+        recipe_id: "test-inactive".into(),
+        recipe_name: None,
+        recipe_description: None,
+        recipe_source: "builtin".into(),
+        recipe_path: None,
+        inputs: BTreeMap::new(),
+        input_defs: BTreeMap::new(),
+        runtime: RecipeRuntime {
+            current_step: "create_maker".into(),
+            tick_count: 0,
+            round: 2,
+            created_session_ids,
+            last_error: None,
+            last_handoff_consumed_at: None,
+            status_override: None,
+            last_activity_at: None,
+            session_observations: BTreeMap::new(),
+            candidate_handoffs: BTreeMap::new(),
+            candidates_query_failures: 0,
+        },
+        policy: SnapshotPolicy {
+            max_rounds: 3,
+            max_ticks: 50,
+            max_sessions: 5,
+            stale_after_ms: None,
+            merge_policy: "human".into(),
+            auto_approve: true,
+        },
+        roles,
+        steps,
+        knowledge: RecipeKnowledge::default(),
+        tools: RecipeTools::default(),
+    };
+
+    let policy_json = serde_json::to_value(&snapshot).unwrap();
+
+    let loop_run = LoopService::create_loop(
+        &conn,
+        planeai_core::loop_service::CreateLoopParams {
+            project_id: project.id.clone(),
+            task_key: None,
+            created_by_session_id: None,
+            strategy: planeai_core::loop_run::LoopStrategy::new("test-inactive"),
+            goal: "test inactive fallthrough".into(),
+            max_rounds: 3,
+            policy_json: Some(policy_json),
+            budget_json: None,
+        },
+    )
+    .unwrap();
+
+    LoopService::transition_loop(&conn, &loop_run.id, LoopTrigger::Start).unwrap();
+
+    // Tick — session_reuse=true but session is stopped, so it should fall through
+    // to the fresh-session path (create_session) which fails due to no git repo.
+    let (output, code) = loop_tick(&conn, &loop_run.id);
+
+    assert_eq!(code, 1, "expected failure, output:\n{output}");
+    // Falls through to create_session because session is inactive
+    assert!(
+        output.contains("session.create failed"),
+        "expected fresh-session fallthrough error, got:\n{output}"
+    );
 }

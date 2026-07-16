@@ -258,6 +258,125 @@ pub fn tick_recipe(
 fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickResult, String> {
     let role_id = step.role.as_deref().unwrap_or("default");
 
+    // 0. Session reuse: if the role already has a session and session_reuse is
+    //    enabled, re-prompt the existing session instead of spawning a new one.
+    //    NOTE: The prompt-render-send-advance pattern here mirrors exec_session_prompt.
+    //    A shared helper could eliminate the duplication — tracked for a follow-up refactor.
+    let session_reuse = ctx
+        .snapshot
+        .roles
+        .get(role_id)
+        .map(|r| r.session_reuse)
+        .unwrap_or(planeai_core::loop_recipe::default_session_reuse());
+
+    // Only attempt reuse when a prompt is provided — without a prompt there's no
+    // work to send, and reusing silently would leave the agent idle (F1 fix).
+    let has_reuse_prompt = step.prompt.is_some();
+
+    // Vec<String> is append-ordered — last() = most recently created session for this role.
+    let existing_session_id = ctx
+        .snapshot
+        .runtime
+        .created_session_ids
+        .get(role_id)
+        .and_then(|ids| ids.last())
+        .cloned();
+
+    if session_reuse && has_reuse_prompt {
+        if let Some(session_id) = existing_session_id {
+            // Verify the session is still active before reusing
+            let session_active = crate::db::get_session(ctx.conn, &session_id)
+                .ok()
+                .flatten()
+                .map(|s| s.status == "active")
+                .unwrap_or(false);
+
+            if session_active {
+                // Render prompt and send to existing session.
+                // On send_prompt failure (e.g., session died between check and send),
+                // fall through to create a new session instead of hard-failing the loop (F2 fix).
+                // Safety: has_reuse_prompt guarantees step.prompt is Some.
+                let rendered_prompt = render_prompt(
+                    step.prompt.as_deref().expect("guarded by has_reuse_prompt"),
+                    ctx.snapshot,
+                    ctx.loop_id,
+                );
+
+                let ops = crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+                match crate::session_ops::send_prompt(ctx.conn, &session_id, &rendered_prompt, &ops)
+                {
+                    Ok(_) => {
+                        let round = ctx.snapshot.runtime.round;
+
+                        tracing::info!(
+                            loop_id = %short_id(ctx.loop_id),
+                            session_id = %short_id(&session_id),
+                            role = %role_id,
+                            round = round,
+                            "exec_session_create: reusing existing session"
+                        );
+
+                        LoopService::append_loop_event(
+                            ctx.conn,
+                            ctx.loop_id,
+                            "recipe_step_completed",
+                            &serde_json::json!({
+                                "step_id": step.id,
+                                "kind": step.kind,
+                                "session_id": session_id,
+                                "role": role_id,
+                                "round": round,
+                                "reused": true,
+                            }),
+                        )
+                        .map_err(|e| format!("failed to append loop event: {e}"))?;
+
+                        advance_step(ctx.snapshot, step);
+                        save_snapshot(ctx.conn, ctx.loop_id, ctx.snapshot)?;
+
+                        return Ok(TickResult {
+                            step_id: step.id.clone(),
+                            step_kind: step.kind.clone(),
+                            status: "observing".into(),
+                            extra: vec![field(
+                                "reused_session",
+                                Value::Object(vec![
+                                    field("id", str_val(short_id(&session_id))),
+                                    field("role", str_val(role_id)),
+                                    field("round", str_val(&round.to_string())),
+                                ]),
+                            )],
+                            next_actions: vec![format!(
+                                "wait for {} handoff, then run `planeai-cli axi loop tick {}`",
+                                role_id,
+                                short_id(ctx.loop_id)
+                            )],
+                        });
+                    }
+                    Err(e) => {
+                        // Send failed — session may have died between liveness check and send.
+                        // Fall through to create a fresh session rather than failing the loop.
+                        tracing::warn!(
+                            loop_id = %short_id(ctx.loop_id),
+                            session_id = %short_id(&session_id),
+                            role = %role_id,
+                            error = %e,
+                            "exec_session_create: reuse send_prompt failed, falling through to create"
+                        );
+                    }
+                }
+            } else {
+                // Session is not active — fall through to create a new one
+                tracing::info!(
+                    loop_id = %short_id(ctx.loop_id),
+                    session_id = %short_id(&session_id),
+                    role = %role_id,
+                    "exec_session_create: existing session not active, creating new one"
+                );
+            }
+        }
+    }
+
     // 1. Check max_sessions
     let existing_sessions =
         LoopService::list_loop_sessions(ctx.conn, ctx.loop_id).unwrap_or_default();

@@ -155,13 +155,15 @@ roles:
     provider: default
     mode: write
     isolation: worktree
+    session_reuse: true  # default — reuse the session across rounds
     instructions: |
       You implement features using TDD. Write failing tests first,
       then make them pass with minimal code.
   verifier:
     provider: default
     mode: review
-    isolation: worktree
+    isolation: readonly
+    session_reuse: false  # force a fresh session each time
     instructions: |
       You review code for correctness, style, and test coverage.
       Be critical. List concrete issues.
@@ -169,6 +171,33 @@ roles:
 
 Supported modes: `write`, `review`, `readonly`, `plan`, `triage`, `arbiter`.
 Supported isolation values: `worktree`, `project`, `readonly`.
+
+**Role fields:**
+
+| Field           | Type   | Default    | Description                                                                                                            |
+| --------------- | ------ | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `provider`      | string | `default`  | Which AI provider to use for this role                                                                                 |
+| `mode`          | string | (required) | Agent mode: `write`, `review`, `readonly`, etc.                                                                        |
+| `isolation`     | string | `worktree` | Git isolation strategy: `worktree`, `project`, or `readonly`                                                           |
+| `instructions`  | string | null       | System-level instructions injected into the agent's context                                                            |
+| `session_reuse` | bool   | `true`     | When true, `session.create` re-prompts an existing active session instead of spawning a new one on subsequent rounds   |
+
+#### Session Reuse Behavior
+
+By default (`session_reuse: true`), when a `session.create` step fires for a role that already has an active session from a previous round, the loop runner **re-prompts the existing session** instead of spawning a new one. This means:
+
+- The agent retains conversational context from prior iterations
+- No new process/worktree is created
+- Resource usage stays bounded (one session per role regardless of round count)
+
+When `session_reuse: false`, the original behavior applies: each `session.create` step spawns a fresh session.
+
+**Fallback:** If `session_reuse` is true but the existing session is no longer active (e.g., it was stopped or crashed), the runner falls through to creating a new session.
+
+**When to use `session_reuse: false`:**
+- Verifier roles that should review without memory of prior rounds
+- When you want a clean slate on each iteration (no accumulated context)
+- When parallelizing future rounds (not yet supported — reuse requires sequential access)
 
 ### policy
 
