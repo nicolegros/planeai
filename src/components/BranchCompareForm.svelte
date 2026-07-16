@@ -93,7 +93,7 @@
         <Label>Head <span class="font-mono text-[10px] px-1 rounded {fk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">h</span></Label>
         <Select items={headItems} bind:value={headValue} placeholder="Working tree" emptyText="No refs" />
       </div>
-      <div class="flex items-center justify-between pt-2 border-t border-border">
+      <div class="sticky bottom-0 bg-panel flex items-center justify-between pt-2 border-t border-border">
         <div class="flex items-center gap-2">
           {#if fk.mode === "insert"}
             <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>

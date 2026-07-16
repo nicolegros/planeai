@@ -133,34 +133,36 @@
 </script>
 
 <Dialog {open} {onOpenChange} title="Keyboard Shortcuts" description="List of keyboard shortcuts available in planeai." class="w-full max-w-2xl rounded-xl p-5 outline-none">
-  <h2 class="text-sm font-medium text-t1 mb-4">Keyboard Shortcuts</h2>
+  <h2 class="flex-shrink-0 text-sm font-medium text-t1 mb-4">Keyboard Shortcuts</h2>
   <input
     bind:this={searchInput}
     bind:value={searchQuery}
     type="text"
     placeholder="Search shortcuts..."
     aria-label="Search shortcuts"
-    class="mb-4 w-full rounded-md border border-border bg-panel-hi px-3 py-1.5 text-sm text-t1 placeholder:text-t3 outline-none focus:ring-1 focus:ring-accent"
+    class="flex-shrink-0 mb-4 w-full rounded-md border border-border bg-panel-hi px-3 py-1.5 text-sm text-t1 placeholder:text-t3 outline-none focus:ring-1 focus:ring-accent"
   />
   {#if filteredShortcuts.length === 0}
     <p class="text-sm text-t3 text-center py-6">No shortcuts found</p>
   {:else}
-    <div class="grid grid-cols-2 gap-x-6 gap-y-4">
-      {#each filteredShortcuts as group}
-        <div>
-          {#if group.section}
-            <h3 class="text-xs font-medium text-t3 uppercase tracking-wide mb-1.5">{group.section}</h3>
-          {/if}
-          <div class="space-y-1">
-            {#each group.items as shortcut}
-              <div class="flex items-center justify-between py-1">
-                <span class="text-sm text-t2">{shortcut.description}</span>
-                <kbd class="rounded border border-border bg-panel-hi px-1.5 py-0.5 text-xs text-t2 font-mono">{shortcut.keys}</kbd>
-              </div>
-            {/each}
+    <div class="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+      <div class="grid grid-cols-2 gap-x-6 gap-y-4">
+        {#each filteredShortcuts as group}
+          <div>
+            {#if group.section}
+              <h3 class="text-xs font-medium text-t3 uppercase tracking-wide mb-1.5">{group.section}</h3>
+            {/if}
+            <div class="space-y-1">
+              {#each group.items as shortcut}
+                <div class="flex items-center justify-between py-1">
+                  <span class="text-sm text-t2">{shortcut.description}</span>
+                  <kbd class="rounded border border-border bg-panel-hi px-1.5 py-0.5 text-xs text-t2 font-mono">{shortcut.keys}</kbd>
+                </div>
+              {/each}
+            </div>
           </div>
-        </div>
-      {/each}
+        {/each}
+      </div>
     </div>
   {/if}
 </Dialog>

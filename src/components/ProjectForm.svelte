@@ -116,7 +116,7 @@
     {/if}
   </div>
 
-  <div class="flex items-center justify-between pt-2 pb-4 border-t border-border mt-3">
+  <div class="sticky bottom-0 bg-panel flex items-center justify-between pt-2 pb-4 border-t border-border mt-3">
     <div class="flex items-center gap-2">
       {#if fk.mode === "insert"}
         <span class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-medium">INSERT</span>
