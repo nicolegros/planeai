@@ -108,7 +108,7 @@ pub fn connect(channel: Channel, app_dir: &Path) -> Result<IpcStream, String> {
                 std::ptr::null(),
                 OPEN_EXISTING,
                 0,
-                0,
+                std::ptr::null_mut(),
             )
         };
         if handle == INVALID_HANDLE_VALUE {
