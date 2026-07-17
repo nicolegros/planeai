@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Combobox } from "bits-ui";
+  import { ensureFirstItemHighlighted, selectFirstIfNoHighlight } from "./combobox-highlight";
 
   interface Item {
     value: string;
@@ -47,11 +48,14 @@
       clearValue();
       return;
     }
-    if (e.key === "Enter" && filtered.length === 1) {
-      e.preventDefault();
-      value = filtered[0].value;
-      onValueChange?.(value);
-      open = false;
+    if (e.key === "Enter" && open && filtered.length > 0) {
+      const applied = selectFirstIfNoHighlight(e, contentRef, filtered[0].value, (v) => {
+        value = v;
+        onValueChange?.(v);
+        open = false;
+        search = "";
+      });
+      if (applied) return;
     }
     onkeydown?.(e);
   }
@@ -74,6 +78,13 @@
     });
     ob.observe(node, { attributes: true, subtree: true, attributeFilter: ["data-highlighted"] });
     return () => { ob.disconnect(); node.getRootNode().removeEventListener("keydown", onKey, true); };
+  });
+
+  // When filtered results change or dropdown opens, ensure the first item is highlighted
+  // so the user always sees which item will be selected on Enter.
+  $effect(() => {
+    if (!open || filtered.length === 0) return;
+    ensureFirstItemHighlighted(contentRef);
   });
 </script>
 
