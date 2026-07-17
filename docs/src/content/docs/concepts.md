@@ -76,3 +76,15 @@ When you run multiple agents in parallel on the same repository, they'll conflic
 Worktrees are created automatically when you start a session with a task (or when auto-dispatch launches one). Each agent works in complete isolation: no merge conflicts, no stash juggling, no stepping on each other's changes. When the work is done, you merge the branch like any other feature branch.
 
 This is what makes true parallel development possible — three agents can work on three different features simultaneously without interference.
+
+## Loops (Experimental)
+
+> **⚠️ Experimental** — Loops are under active development. Behavior, recipe schema, and CLI commands may change between releases.
+
+Loops are declarative multi-agent workflows defined as YAML recipes. Where auto-dispatch assigns independent tasks to independent agents, loops coordinate agents that depend on each other — one builds, another reviews, a gate checks quality, and the cycle repeats until the work meets your standards.
+
+A recipe defines three things: **roles** (named agents like "maker" and "verifier"), **steps** (an ordered sequence of actions — create a session, send a prompt, wait for a handoff, run a gate), and **policies** (safety bounds like max rounds and max ticks). The loop runner executes steps one at a time, advancing only when the current step completes. Coordination between agents happens through handoffs — when an agent finishes its piece of work, it records a structured handoff artifact that the next agent picks up as context.
+
+The most common pattern is maker-verifier: one agent builds the feature, automated gates check linting and tests, then a verifier agent reviews the diff and either approves or sends feedback. planeai ships this as a builtin recipe so you can use it immediately. For anything more complex — pipeline chains or custom review workflows — you write your own recipe.
+
+Loops have bounded execution by design. Every recipe declares a maximum number of rounds and ticks, preventing runaway agents from looping forever. When a loop completes successfully, the result still requires human merge — loops produce branches, not deployments. See the [Loops guide](/planeai/guides/loops/) and [Writing Your First Loop](/planeai/tutorials/first-loop/) tutorial for details on configuring and authoring recipes.
