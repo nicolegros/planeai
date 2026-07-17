@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 // ─── Built-in recipes (embedded at compile time) ─────────────────────────────
 
 const BUILTIN_MAKER_VERIFIER: &str = include_str!("../resources/recipes/maker-verifier.yaml");
-const BUILTIN_N_CANDIDATES_ARBITER: &str =
-    include_str!("../resources/recipes/n-candidates-arbiter.yaml");
+const BUILTIN_NO_MISTAKES: &str =
+    include_str!("../resources/recipes/no-mistakes.yaml");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -154,7 +154,7 @@ impl RecipeService {
                 path: None,
             });
         }
-        if let Ok(recipe) = Self::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER) {
+        if let Ok(recipe) = Self::parse_yaml(BUILTIN_NO_MISTAKES) {
             recipes.push(DiscoveredRecipe {
                 recipe,
                 source: RecipeSource::Builtin,
@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     fn parse_builtin_n_candidates_arbiter() {
-        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER)
+        let recipe = RecipeService::parse_yaml(BUILTIN_NO_MISTAKES)
             .expect("built-in n-candidates-arbiter should parse");
         assert_eq!(recipe.schema, RECIPE_SCHEMA_V1);
         assert_eq!(recipe.id, "n-candidates-arbiter");
@@ -876,7 +876,7 @@ mod tests {
 
     #[test]
     fn validate_n_candidates_arbiter() {
-        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER).unwrap();
+        let recipe = RecipeService::parse_yaml(BUILTIN_NO_MISTAKES).unwrap();
         let result = RecipeService::validate(&recipe, None);
         assert!(result.valid, "errors: {:?}", result.errors);
     }
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn n_candidates_arbiter_snapshot_creation() {
-        let recipe = RecipeService::parse_yaml(BUILTIN_N_CANDIDATES_ARBITER).unwrap();
+        let recipe = RecipeService::parse_yaml(BUILTIN_NO_MISTAKES).unwrap();
         let discovered = DiscoveredRecipe {
             recipe,
             source: RecipeSource::Builtin,

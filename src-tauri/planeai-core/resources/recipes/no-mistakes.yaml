@@ -1,0 +1,468 @@
+schema: planeai.loop.recipe.v1
+id: no-mistakes
+name: No Mistakes
+description: >
+  Post-implementation validation pipeline: review → test → document → lint → push → PR.
+  Replicates the no-mistakes workflow natively in planeai.
+
+trigger:
+  kind: manual
+
+inputs:
+  branch:
+    type: branch
+    label: Implementation branch
+    description: The branch with committed work to validate
+    required: true
+  target_branch:
+    type: branch
+    label: PR target branch
+    description: Branch to open the PR against
+    required: false
+    default: main
+  gate_command:
+    type: text
+    label: Test command
+    description: Command to run tests (exit 0 = pass)
+    required: false
+    default: make ci
+  lint_command:
+    type: text
+    label: Lint command
+    description: Command to run linters (exit 0 = pass). Leave empty to skip.
+    required: false
+
+knowledge:
+  files:
+    - AGENTS.md
+    - CONTEXT.md
+  instructions:
+    - Infer the intent of the work from the commit history on the branch.
+    - Do not introduce unrelated changes.
+    - Keep fixes minimal and focused on the issue at hand.
+    - Every fact has one authoritative owner document. Do not create new docs surfaces for perceived gaps.
+
+tools:
+  required:
+    - git
+    - plane_sessions
+    - plane_loops
+  optional:
+    - github
+
+roles:
+  reviewer:
+    provider: default
+    mode: review
+    isolation: readonly
+    instructions: |
+      You are the reviewer agent in a no-mistakes validation pipeline.
+      Your job is to review the diff and assess quality — correctness, intent alignment,
+      edge cases, missing tests, documentation gaps, and style.
+      You must use skills available to you for review (e.g. /review, /thermo-nuclear-code-quality-review, /code-review).
+      You are a senior reviewer that wants the code quality to be the best there is.
+
+      You do NOT edit files. You only review.
+
+      For each issue found, classify its severity:
+      - error: must be fixed before merge (bugs, security, data loss)
+      - warning: should be fixed (missing tests, unclear logic, doc gaps)
+      - info: informational, no action needed
+
+      And classify its action:
+      - auto-fix: mechanical fix the gatekeeper can apply safely
+      - ask-user: challenges the author's intent or changes product behavior
+      - no-op: informational only
+
+      If all findings are info/no-op, or there are no findings, hand off with status: completed.
+      If any finding is error or warning, hand off with status: needs_human and list the findings.
+
+  gatekeeper:
+    provider: default
+    mode: write
+    isolation: project
+    instructions: |
+      You are the gatekeeper agent in a no-mistakes validation pipeline.
+      You operate directly on the implementation branch.
+
+      When fixing review findings:
+      - Fix only the specific issues listed. Do not refactor unrelated code.
+      - For auto-fix findings, apply the mechanical fix.
+      - For ask-user findings, escalate in your handoff — do not fix them yourself.
+      - Commit fixes with conventional commit messages prefixed: fix: or docs: or refactor:
+
+      When fixing test/lint failures:
+      - Fix the root cause. Do NOT skip tests or suppress errors.
+      - Commit with: fix: or test: prefix
+
+      When fixing documentation:
+      - Update only the authoritative owner document for each fact.
+      - Do not create new documentation surfaces. Prefer pointers over duplication.
+      - Commit with: docs: prefix
+
+      When pushing:
+      - Push the branch and open a draft PR with gh pr create --draft.
+
+      Do not claim completion unless you have recorded a structured handoff.
+
+policy:
+  max_rounds: 5
+  max_ticks: 50
+  max_sessions: 10 # max_rounds x 2
+  stale_after_ms: 600000
+  merge_policy: human
+
+steps:
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 0: REBASE — ensure branch is up to date with target
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: rebase
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      ## Ensure branch is up to date
+
+      1. Fetch: git fetch origin {{ inputs.target_branch | default('main') }}
+      2. Check: git merge-base --is-ancestor origin/{{ inputs.target_branch | default('main') }} HEAD
+         - If exit code 0: already up to date. Skip to handoff.
+      3. If not up to date, rebase:
+         git rebase origin/{{ inputs.target_branch | default('main') }}
+      4. If conflicts:
+         - Resolve each conflict, preserving THIS branch's intent.
+         - git add <file> && git rebase --continue
+         - Repeat until done.
+
+      Record handoff:
+      - status: completed — branch is up to date (rebase succeeded or wasn't needed).
+      - status: needs_human — conflicts too complex.
+
+      Handoff protocol:
+      1. Session id: $PLANEAI_SESSION_ID
+      2. Path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_rebase
+
+  - id: wait_for_rebase
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: create_reviewer
+      needs_human: needs_human
+      blocked: blocked
+      failed: failed
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 1: REVIEW — AI code review of the diff
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: create_reviewer
+    kind: session.create
+    role: reviewer
+    prompt: |
+      You are running inside a PlaneAI no-mistakes validation pipeline.
+
+      Loop: {{ loop_run.id }}
+      Branch: {{ inputs.branch }}
+      Target: {{ inputs.target_branch | default('main') }}
+      Round: {{ runtime.round }}
+
+      {% if runtime.last_error %}
+      Previous round — gatekeeper applied fixes for these issues:
+      {{ runtime.last_error }}
+      Verify the fixes adequately address the concerns. Do not re-report resolved issues.
+      {% endif %}
+
+      ## Your task
+
+      Review the diff between {{ inputs.target_branch | default('main') }} and {{ inputs.branch }}.
+
+      1. Run: git log --oneline {{ inputs.target_branch | default('main') }}..{{ inputs.branch }}
+      2. Run: git diff {{ inputs.target_branch | default('main') }}..{{ inputs.branch }}
+      3. Infer the user's intent from the commit messages and diff.
+
+      ## Review criteria
+
+      For each issue, report: severity (error/warning/info), file, description, action (auto-fix/ask-user/no-op).
+
+      Check for:
+      - Correctness: bugs, logic errors, off-by-one, null handling
+      - Security: injection, auth bypass, secret exposure
+      - Edge cases: error paths, empty inputs, concurrency
+      - Missing tests: new behavior without test coverage
+      - Documentation: stale docs, missing updates to CONTEXT.md/ADRs/README
+      - Style: naming, dead code, unnecessary complexity
+
+      A finding is "ask-user" when it challenges a deliberate decision the author made
+      (visible in the intent). Everything else that needs fixing is "auto-fix".
+
+      ## Handoff
+
+      Record a planeai.handoff.v1 handoff:
+      - status: approved — no error/warning findings, ready for test gates.
+      - status: completed — has error/warning findings. List each finding in the summary.
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+      5. Stop and wait after recording.
+
+  - id: wait_for_review
+    kind: handoff.wait
+    from: reviewer
+    on:
+      completed: run_tests
+      needs_human: review_rejected
+      blocked: blocked
+      failed: failed
+
+  # ─── Review rejected → gatekeeper fixes ─────────────────────────────────────
+  - id: review_rejected
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      The reviewer found issues that need fixing:
+
+      {{ runtime.last_error }}
+
+      Instructions:
+      - Fix auto-fix findings directly.
+      - For ask-user findings: do NOT fix them. Note them in your handoff summary for human review.
+      - Commit fixes with appropriate conventional commit prefixes.
+      - Record a planeai.handoff.v1 handoff with status: completed when done.
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_review_fix
+
+  - id: wait_for_review_fix
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: increment_round_after_review
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  - id: increment_round_after_review
+    kind: round.next
+    next: create_reviewer
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 2: TEST — run test command
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: run_tests
+    kind: gates.run
+    role: gatekeeper
+    gates:
+      - name: test
+        command: "{{ inputs.gate_command | default('make ci') }}"
+    on:
+      pass: run_document_check
+      fail: tests_failed
+      error: tests_failed
+
+  - id: tests_failed
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      Tests failed:
+      {{ runtime.last_error }}
+
+      Fix the root cause. Do NOT skip tests or suppress errors.
+      Commit fixes with: fix: or test: prefix.
+      Record a planeai.handoff.v1 handoff with status: completed when tests should pass.
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_test_fix
+
+  - id: wait_for_test_fix
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: increment_round_after_tests
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  - id: increment_round_after_tests
+    kind: round.next
+    next: create_reviewer
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 3: DOCUMENT — check and update documentation
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: run_document_check
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      ## Documentation check
+
+      Review the diff for documentation gaps and fix them:
+
+      1. Run: git diff {{ inputs.target_branch | default('main') }}..HEAD --name-only
+      2. For each changed file, check if related documentation needs updating.
+
+      ## Placement policy
+
+      - Every fact has exactly ONE authoritative owner document.
+      - Do not create new documentation surfaces for perceived gaps.
+      - Prefer removing stale duplicates or replacing them with pointers.
+      - README.md owns the introduction. CONTEXT.md owns architecture/domain.
+      - ADRs own design decisions. Code comments own implementation details.
+      - Do not add AGENTS.md postmortems — keep incident lessons as invariants near their owner.
+
+      ## What to check
+
+      - README: features list, install instructions, config docs if changed
+      - CONTEXT.md: domain model, architecture changes
+      - ADRs: new design decisions that should be recorded
+      - Code comments: public API changes, complex logic
+      - Type definitions: JSDoc/rustdoc for new public types
+
+      ## Action
+
+      If documentation changes are needed:
+      - Make the updates directly. Commit with: docs: prefix.
+      - Record handoff with status: completed.
+
+      If no documentation changes needed:
+      - Record handoff with status: completed and note "no doc changes needed".
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_document
+
+  - id: wait_for_document
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: run_lint
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 4: LINT — run linters (optional)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: run_lint
+    kind: gates.run
+    role: gatekeeper
+    gates:
+      - name: lint
+        command: "{{ inputs.lint_command | default('true') }}"
+    on:
+      pass: push_and_pr
+      fail: lint_failed
+      error: lint_failed
+
+  - id: lint_failed
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      Lint failed:
+      {{ runtime.last_error }}
+
+      Fix lint errors. Apply formatters if needed. Do not suppress warnings.
+      Commit with appropriate prefix.
+      Record a planeai.handoff.v1 handoff with status: completed.
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_lint_fix
+
+  - id: wait_for_lint_fix
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: increment_round_after_lint
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  - id: increment_round_after_lint
+    kind: round.next
+    next: create_reviewer
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # STEP 5: PUSH + PR — push branch and open draft PR
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: push_and_pr
+    kind: session.create
+    role: gatekeeper
+    branch: "{{ inputs.branch }}"
+    prompt: |
+      Loop: {{ loop_run.id }} | Branch: {{ inputs.branch }} | Round: {{ runtime.round }}
+
+      All checks passed — review approved, tests green, docs updated, lint clean.
+
+      1. Push: git push -u origin HEAD
+      2. Open PR:
+         gh pr create --draft --base {{ inputs.target_branch | default('main') }} --fill
+      3. Record a planeai.handoff.v1 handoff with status: completed.
+         Include the PR URL in the summary.
+
+      Handoff protocol:
+      1. Your session id: $PLANEAI_SESSION_ID
+      2. Get path: planeai-cli axi loop handoff path --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID"
+      3. Write JSON with schema planeai.handoff.v1
+      4. Record: planeai-cli axi loop handoff record --loop {{ loop_run.id }} --session "$PLANEAI_SESSION_ID" --path <handoff-path>
+    next: wait_for_push
+
+  - id: wait_for_push
+    kind: handoff.wait
+    from: gatekeeper
+    on:
+      completed: completed_unreviewed
+      blocked: blocked
+      needs_human: needs_human
+      failed: failed
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # TERMINAL STATES
+  # ═══════════════════════════════════════════════════════════════════════════════
+  - id: completed_unreviewed
+    kind: loop.status
+    status: approved
+
+  - id: blocked
+    kind: loop.status
+    status: blocked
+
+  - id: needs_human
+    kind: loop.status
+    status: needs_human
+
+  - id: failed
+    kind: loop.status
+    status: failed
+
