@@ -32,3 +32,6 @@ jobs:
       - run: pnpm test
 
       - run: pnpm exec svelte-check
+
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high

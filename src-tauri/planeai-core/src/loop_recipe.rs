@@ -368,7 +368,7 @@ mod tests {
               - value: rebase
                 label: "Rebase"
         "#;
-        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        let input: RecipeInput = yaml_serde::from_str(yaml).unwrap();
         assert!(input.required);
         assert_eq!(input.input_type, InputType::Select);
         assert_eq!(input.label, Some("Merge strategy".to_string()));
@@ -389,7 +389,7 @@ mod tests {
         let yaml = r#"
             required: true
         "#;
-        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        let input: RecipeInput = yaml_serde::from_str(yaml).unwrap();
         assert!(input.required);
         assert_eq!(input.input_type, InputType::Text);
         assert_eq!(input.label, None);
@@ -405,7 +405,7 @@ mod tests {
             label: "Draft PR"
             default: true
         "#;
-        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        let input: RecipeInput = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(input.input_type, InputType::Boolean);
         assert_eq!(input.default, Some(serde_json::Value::Bool(true)));
     }
@@ -417,7 +417,7 @@ mod tests {
             label: "Max retries"
             default: 5
         "#;
-        let input: RecipeInput = serde_yml::from_str(yaml).unwrap();
+        let input: RecipeInput = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(input.input_type, InputType::Number);
         assert_eq!(input.default, Some(serde_json::json!(5)));
     }
@@ -450,7 +450,7 @@ mod tests {
                 kind: loop.event
                 event_kind: started
         "#;
-        let recipe: LoopRecipe = serde_yml::from_str(yaml).unwrap();
+        let recipe: LoopRecipe = yaml_serde::from_str(yaml).unwrap();
         let keys: Vec<&String> = recipe.inputs.keys().collect();
         // BTreeMap sorts alphabetically
         assert_eq!(keys, vec!["branch", "gate_command", "goal"]);
@@ -555,7 +555,7 @@ mod tests {
             branch: "{{ inputs.branch }}"
             prompt: "Fix the issues"
         "#;
-        let step: RecipeStep = serde_yml::from_str(yaml).unwrap();
+        let step: RecipeStep = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(step.id, "create_gatekeeper");
         assert_eq!(step.branch, Some("{{ inputs.branch }}".to_string()));
         assert_eq!(step.role, Some("gatekeeper".to_string()));
@@ -569,7 +569,7 @@ mod tests {
             role: maker
             prompt: "Implement the feature"
         "#;
-        let step: RecipeStep = serde_yml::from_str(yaml).unwrap();
+        let step: RecipeStep = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(step.branch, None);
     }
 
@@ -580,7 +580,7 @@ mod tests {
             mode: write
             isolation: worktree
         "#;
-        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        let role: RecipeRole = yaml_serde::from_str(yaml).unwrap();
         assert!(role.session_reuse);
     }
 
@@ -592,7 +592,7 @@ mod tests {
             isolation: worktree
             session_reuse: false
         "#;
-        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        let role: RecipeRole = yaml_serde::from_str(yaml).unwrap();
         assert!(!role.session_reuse);
     }
 
@@ -604,7 +604,7 @@ mod tests {
             isolation: readonly
             session_reuse: true
         "#;
-        let role: RecipeRole = serde_yml::from_str(yaml).unwrap();
+        let role: RecipeRole = yaml_serde::from_str(yaml).unwrap();
         assert!(role.session_reuse);
     }
 }

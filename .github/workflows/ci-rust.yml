@@ -40,6 +40,11 @@ jobs:
 
       - run: cargo test
 
+      - name: Audit dependencies
+        run: |
+          cargo install cargo-audit --quiet
+          cargo audit
+
   build:
     strategy:
       fail-fast: false
