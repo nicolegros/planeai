@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 // ─── Built-in recipes (embedded at compile time) ─────────────────────────────
 
 const BUILTIN_MAKER_VERIFIER: &str = include_str!("../resources/recipes/maker-verifier.yaml");
-const BUILTIN_NO_MISTAKES: &str =
-    include_str!("../resources/recipes/no-mistakes.yaml");
+const BUILTIN_NO_MISTAKES: &str = include_str!("../resources/recipes/no-mistakes.yaml");
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
