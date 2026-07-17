@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: docs/pnpm-lock.yaml
       - run: cd docs && pnpm install && pnpm build
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/dist/
       - id: deployment
