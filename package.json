@@ -47,7 +47,7 @@
     "@tailwindcss/vite": "4.1.7",
     "@tauri-apps/cli": "2.5.0",
     "auto": "^11.3.6",
-    "jsdom": "26.1.0",
+    "jsdom": "29.1.1",
     "oxfmt": "^0.52.0",
     "oxlint": "1.74.0",
     "svelte": "5.55.9",
