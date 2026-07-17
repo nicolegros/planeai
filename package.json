@@ -28,7 +28,7 @@
     "@lucide/svelte": "^1.17.0",
     "@pierre/diffs": "1.2.9",
     "@replit/codemirror-vim": "^6.3.0",
-    "@tauri-apps/api": "2.5.0",
+    "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.2.0",
     "@tauri-apps/plugin-opener": "^2.5.4",
     "@xterm/addon-fit": "0.11.0",
