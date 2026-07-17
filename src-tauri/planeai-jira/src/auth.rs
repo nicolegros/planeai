@@ -311,15 +311,15 @@ impl JiraAuth {
 }
 
 fn generate_pkce() -> (String, String) {
-    let mut rng = rand::thread_rng();
-    let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let verifier_bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     let verifier = URL_SAFE_NO_PAD.encode(&verifier_bytes);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     (verifier, challenge)
 }
 
 fn generate_state() -> String {
-    let bytes: Vec<u8> = (0..16).map(|_| rand::thread_rng().gen()).collect();
+    let bytes: Vec<u8> = (0..16).map(|_| rand::rng().random()).collect();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
