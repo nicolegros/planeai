@@ -54,7 +54,7 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
                 .map_err(|e| Error::Storage(e.to_string()))?;
             conn.execute(
                 "UPDATE task_schema_version SET version = ?1",
-                params![i + 1],
+                params![(i + 1) as i64],
             )
             .map_err(|e| Error::Storage(e.to_string()))?;
         }
@@ -163,7 +163,7 @@ impl SqliteRepository {
             .collect();
         let rows = stmt
             .query_map(params.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
             })
             .map_err(|e| Error::Storage(e.to_string()))?;
         let mut map = HashMap::new();

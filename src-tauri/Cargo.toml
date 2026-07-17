@@ -67,7 +67,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 json_comments = "0.2"
 regex = { workspace = true }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 minijinja = { version = "2", features = ["builtins"] }

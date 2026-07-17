@@ -15,8 +15,8 @@ Top-level structure of a `.yaml` recipe file:
 
 ```yaml
 schema: planeai.loop.recipe.v1
-id: string          # unique identifier (used in CLI and DB)
-name: string        # human-readable name
+id: string # unique identifier (used in CLI and DB)
+name: string # human-readable name
 description: string # one-line summary
 
 trigger: ...
@@ -36,14 +36,14 @@ All recipes must use `schema: planeai.loop.recipe.v1`.
 
 Declares what event starts the recipe.
 
-| Kind           | Status         | Description                    |
-| -------------- | -------------- | ------------------------------ |
-| `manual`       | Executable     | User creates the run via UI/CLI |
-| `schedule`     | Future         | Cron-style schedule            |
-| `github_event` | Future         | GitHub webhook event           |
-| `task_event`   | Future         | Internal task state change     |
-| `pr_feedback`  | Future         | PR review comments received    |
-| `ci_failure`   | Future         | CI pipeline failure            |
+| Kind           | Status     | Description                     |
+| -------------- | ---------- | ------------------------------- |
+| `manual`       | Executable | User creates the run via UI/CLI |
+| `schedule`     | Future     | Cron-style schedule             |
+| `github_event` | Future     | GitHub webhook event            |
+| `task_event`   | Future     | Internal task state change      |
+| `pr_feedback`  | Future     | PR review comments received     |
+| `ci_failure`   | Future     | CI pipeline failure             |
 
 Only `manual` is executable in v1. Future kinds are recognized in the schema but rejected at runtime.
 
@@ -60,13 +60,13 @@ Parameters the user supplies when creating a loop run. A map of input name → i
 
 ### Input definition fields
 
-| Field         | Type            | Default  | Description                                   |
-| ------------- | --------------- | -------- | --------------------------------------------- |
-| `required`    | bool            | `false`  | Whether the user must supply a value          |
-| `type`        | string          | `text`   | Input widget type (see table below)           |
-| `label`       | string          | key name | Human-readable label shown in the form        |
-| `description` | string          | null     | Help text displayed below the input field     |
-| `default`     | string/bool/num | null     | Pre-filled value; type matches `type` field   |
+| Field         | Type            | Default  | Description                                     |
+| ------------- | --------------- | -------- | ----------------------------------------------- |
+| `required`    | bool            | `false`  | Whether the user must supply a value            |
+| `type`        | string          | `text`   | Input widget type (see table below)             |
+| `label`       | string          | key name | Human-readable label shown in the form          |
+| `description` | string          | null     | Help text displayed below the input field       |
+| `default`     | string/bool/num | null     | Pre-filled value; type matches `type` field     |
 | `options`     | list            | `[]`     | Choices for `select` inputs (`value` + `label`) |
 
 ### Supported input types
@@ -116,8 +116,8 @@ inputs:
 
 Files and instructions injected into agent context for every session in the loop.
 
-| Field          | Type          | Description                                    |
-| -------------- | ------------- | ---------------------------------------------- |
+| Field          | Type           | Description                                    |
+| -------------- | -------------- | ---------------------------------------------- |
 | `files`        | list\<string\> | Relative file paths to inject as context       |
 | `instructions` | list\<string\> | Free-text instructions appended to all prompts |
 
@@ -138,10 +138,10 @@ knowledge:
 
 MCP servers or CLI tools available to agents in this loop.
 
-| Field      | Type          | Description                        |
-| ---------- | ------------- | ---------------------------------- |
-| `required` | list\<string\> | Tools that must be available       |
-| `optional` | list\<string\> | Tools that may be used if present  |
+| Field      | Type           | Description                       |
+| ---------- | -------------- | --------------------------------- |
+| `required` | list\<string\> | Tools that must be available      |
+| `optional` | list\<string\> | Tools that may be used if present |
 
 ```yaml
 tools:
@@ -161,31 +161,31 @@ Named agent personas. A map of role ID → role configuration.
 
 ### Role fields
 
-| Field           | Type   | Default    | Description                                                        |
-| --------------- | ------ | ---------- | ------------------------------------------------------------------ |
-| `provider`      | string | `default`  | Which AI provider to use for this role                             |
-| `mode`          | string | (required) | Agent mode (see table below)                                       |
-| `isolation`     | string | `worktree` | Git isolation strategy (see table below)                           |
-| `instructions`  | string | null       | System-level instructions injected into the agent's context        |
+| Field           | Type   | Default    | Description                                                         |
+| --------------- | ------ | ---------- | ------------------------------------------------------------------- |
+| `provider`      | string | `default`  | Which AI provider to use for this role                              |
+| `mode`          | string | (required) | Agent mode (see table below)                                        |
+| `isolation`     | string | `worktree` | Git isolation strategy (see table below)                            |
+| `instructions`  | string | null       | System-level instructions injected into the agent's context         |
 | `session_reuse` | bool   | `true`     | Reuse existing session on subsequent rounds instead of spawning new |
 
 ### Supported modes
 
-| Mode       | Description                                           |
-| ---------- | ----------------------------------------------------- |
-| `write`    | Full read/write access to the codebase                |
-| `review`   | Read access only; produces review feedback            |
-| `readonly` | Read access only; no modifications                    |
+| Mode       | Description                                |
+| ---------- | ------------------------------------------ |
+| `write`    | Full read/write access to the codebase     |
+| `review`   | Read access only; produces review feedback |
+| `readonly` | Read access only; no modifications         |
 
 The `mode` field is a string — you can use custom values (e.g., `plan`, `triage`) as conventions in your prompts, but only `write`, `review`, and `readonly` have runtime semantics.
 
 ### Supported isolation values
 
-| Isolation  | Description                                                       |
-| ---------- | ----------------------------------------------------------------- |
-| `worktree` | Dedicated git worktree per session (full isolation)               |
-| `project`  | Works in the main project directory (shared working tree)         |
-| `readonly` | Read-only access to the project; no worktree creation             |
+| Isolation  | Description                                               |
+| ---------- | --------------------------------------------------------- |
+| `worktree` | Dedicated git worktree per session (full isolation)       |
+| `project`  | Works in the main project directory (shared working tree) |
+| `readonly` | Read-only access to the project; no worktree creation     |
 
 ### Session reuse behavior
 
@@ -220,14 +220,14 @@ roles:
 
 Loop-level constraints and resource limits.
 
-| Field            | Type    | Default  | Description                                         |
-| ---------------- | ------- | -------- | --------------------------------------------------- |
-| `max_rounds`     | integer | `3`      | Maximum iteration rounds before blocking            |
-| `max_ticks`      | integer | `50`     | Hard cap on total steps executed                    |
-| `max_sessions`   | integer | `5`      | Maximum concurrent agent sessions                   |
-| `stale_after_ms` | integer | null     | Wall-clock staleness timeout in milliseconds        |
-| `merge_policy`   | string  | `human`  | Only `human` is supported in v1                     |
-| `auto_approve`   | bool    | `true`   | Launch sessions in auto-approve (yolo) mode         |
+| Field            | Type    | Default | Description                                  |
+| ---------------- | ------- | ------- | -------------------------------------------- |
+| `max_rounds`     | integer | `3`     | Maximum iteration rounds before blocking     |
+| `max_ticks`      | integer | `50`    | Hard cap on total steps executed             |
+| `max_sessions`   | integer | `5`     | Maximum concurrent agent sessions            |
+| `stale_after_ms` | integer | null    | Wall-clock staleness timeout in milliseconds |
+| `merge_policy`   | string  | `human` | Only `human` is supported in v1              |
+| `auto_approve`   | bool    | `true`  | Launch sessions in auto-approve (yolo) mode  |
 
 ```yaml
 policy:
@@ -247,20 +247,20 @@ Ordered list of actions the loop runner executes. Each step has an `id`, a `kind
 
 ### Step fields
 
-| Field        | Type   | Description                                                                                                    |
-| ------------ | ------ | -------------------------------------------------------------------------------------------------------------- |
-| `id`         | string | Unique step identifier (required)                                                                              |
-| `kind`       | string | Step kind — see supported kinds below (required)                                                               |
-| `role`       | string | Target role for session steps                                                                                  |
-| `prompt`     | string | Message/instruction text (supports template variables)                                                         |
-| `branch`     | string | Branch override for `session.create`; supports templates. When absent, generates `loop/<id>/<role>-r<round>`   |
-| `from`       | string | Source role for `handoff.wait`                                                                                 |
-| `on`         | map    | Condition map for conditional routing (`status → step_id`)                                                     |
-| `status`     | string | Target status for `loop.status`                                                                                |
-| `next`       | string | Explicit next step ID (overrides sequential order)                                                             |
-| `select`     | string | Selection criteria for `session.prompt` (e.g., `latest`)                                                       |
-| `event_kind` | string | Event kind for `loop.event`                                                                                    |
-| `gates`      | list   | Gate declarations for `gates.run` steps                                                                        |
+| Field        | Type   | Description                                                                                                  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `id`         | string | Unique step identifier (required)                                                                            |
+| `kind`       | string | Step kind — see supported kinds below (required)                                                             |
+| `role`       | string | Target role for session steps                                                                                |
+| `prompt`     | string | Message/instruction text (supports template variables)                                                       |
+| `branch`     | string | Branch override for `session.create`; supports templates. When absent, generates `loop/<id>/<role>-r<round>` |
+| `from`       | string | Source role for `handoff.wait`                                                                               |
+| `on`         | map    | Condition map for conditional routing (`status → step_id`)                                                   |
+| `status`     | string | Target status for `loop.status`                                                                              |
+| `next`       | string | Explicit next step ID (overrides sequential order)                                                           |
+| `select`     | string | Selection criteria for `session.prompt` (e.g., `latest`)                                                     |
+| `event_kind` | string | Event kind for `loop.event`                                                                                  |
+| `gates`      | list   | Gate declarations for `gates.run` steps                                                                      |
 
 ---
 
@@ -403,10 +403,10 @@ Runs verifier gate commands and routes based on the result. Gates execute in ord
 
 **Gate object:**
 
-| Field     | Type   | Description                                        |
-| --------- | ------ | -------------------------------------------------- |
-| `name`    | string | Human-readable gate name                           |
-| `command` | string | Shell command to execute (supports templates)      |
+| Field     | Type   | Description                                   |
+| --------- | ------ | --------------------------------------------- |
+| `name`    | string | Human-readable gate name                      |
+| `command` | string | Shell command to execute (supports templates) |
 
 On failure, the gate's captured output (truncated to 100 KB) is stored in `runtime.last_error` for the retry prompt. When truncated, a reference to the full log file path is appended.
 
@@ -503,15 +503,15 @@ planeai-cli axi loop status <ID>
 planeai-cli axi loop stop <ID>
 ```
 
-| Command                          | Description                                              |
-| -------------------------------- | -------------------------------------------------------- |
-| `axi loop recipe ls`            | List recipes from all sources with ID, name, and origin  |
-| `axi loop recipe show <id>`     | Print full recipe YAML                                   |
-| `axi loop recipe validate <id>` | Check schema conformance; exits non-zero on errors       |
-| `axi loop create`               | Instantiate a run, resolve inputs, optionally start      |
-| `axi loop tick <ID>`            | Execute current step + auto-advance                      |
-| `axi loop status <ID>`          | Show run status, current step, round, tick count         |
-| `axi loop stop <ID>`            | Cancel and stop the loop                                 |
+| Command                         | Description                                             |
+| ------------------------------- | ------------------------------------------------------- |
+| `axi loop recipe ls`            | List recipes from all sources with ID, name, and origin |
+| `axi loop recipe show <id>`     | Print full recipe YAML                                  |
+| `axi loop recipe validate <id>` | Check schema conformance; exits non-zero on errors      |
+| `axi loop create`               | Instantiate a run, resolve inputs, optionally start     |
+| `axi loop tick <ID>`            | Execute current step + auto-advance                     |
+| `axi loop status <ID>`          | Show run status, current step, round, tick count        |
+| `axi loop stop <ID>`            | Cancel and stop the loop                                |
 
 `--dry-run` on `create` previews the resolved recipe and inputs without executing.
 
@@ -549,10 +549,10 @@ The builtin `no-mistakes` recipe implements a full post-implementation validatio
 
 **Roles:**
 
-| Role        | Mode   | Isolation | Description                                                |
-| ----------- | ------ | --------- | ---------------------------------------------------------- |
-| reviewer    | review | readonly  | Reviews the diff, classifies findings by severity/action   |
-| gatekeeper  | write  | project   | Applies fixes, updates docs, pushes branch, opens PR       |
+| Role       | Mode   | Isolation | Description                                              |
+| ---------- | ------ | --------- | -------------------------------------------------------- |
+| reviewer   | review | readonly  | Reviews the diff, classifies findings by severity/action |
+| gatekeeper | write  | project   | Applies fixes, updates docs, pushes branch, opens PR     |
 
 **Terminal states:**
 
