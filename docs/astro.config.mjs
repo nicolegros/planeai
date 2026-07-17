@@ -7,6 +7,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "planeai",
+      logo: {
+        src: "./src/assets/logo.png",
+        alt: "planeai",
+      },
+      customCss: ["./src/styles/custom.css"],
       social: [
         {
           icon: "github",
