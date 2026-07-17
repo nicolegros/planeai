@@ -530,7 +530,7 @@ impl RecipeService {
 
     /// Parse YAML content into a LoopRecipe.
     pub fn parse_yaml(content: &str) -> Result<LoopRecipe, String> {
-        serde_yml::from_str(content).map_err(|e| format!("YAML parse error: {}", e))
+        yaml_serde::from_str(content).map_err(|e| format!("YAML parse error: {}", e))
     }
 
     // ─── Internal helpers ────────────────────────────────────────────────────

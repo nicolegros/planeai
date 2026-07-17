@@ -9,10 +9,10 @@
 /* ── Dark mode (Starlight default = dark) ── */
 :root {
   /* Typography */
-  --sl-font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", sans-serif;
-  --sl-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
-    Consolas, monospace;
+  --sl-font:
+    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    sans-serif;
+  --sl-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   /* Colors — mapped from app .dark tokens
      Starlight gray scale: white = brightest text, black = deepest bg.

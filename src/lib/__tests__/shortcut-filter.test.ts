@@ -45,9 +45,7 @@ describe("filterShortcuts", () => {
 
   it("matches case-insensitively", () => {
     const result = filterShortcuts(sections, "COMMAND");
-    expect(result[0].items).toEqual([
-      { keys: "⌘K", description: "Command menu" },
-    ]);
+    expect(result[0].items).toEqual([{ keys: "⌘K", description: "Command menu" }]);
   });
 
   it("returns empty array when nothing matches", () => {
@@ -64,8 +62,6 @@ describe("filterShortcuts", () => {
 
   it("trims the query before matching", () => {
     const result = filterShortcuts(sections, "  command  ");
-    expect(result[0].items).toEqual([
-      { keys: "⌘K", description: "Command menu" },
-    ]);
+    expect(result[0].items).toEqual([{ keys: "⌘K", description: "Command menu" }]);
   });
 });
