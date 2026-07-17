@@ -18,6 +18,7 @@ pub fn no_window(cmd: &mut Command) -> &mut Command {
 /// Same as [`no_window`] but for `tokio::process::Command`.
 #[cfg(windows)]
 pub fn no_window_tokio(cmd: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    #[allow(unused_imports)]
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x08000000) // CREATE_NO_WINDOW
 }
