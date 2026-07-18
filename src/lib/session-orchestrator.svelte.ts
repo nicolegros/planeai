@@ -21,6 +21,7 @@ import {
   removeSession as poolRemove,
 } from "./mru.svelte";
 import { clearComments } from "./review-comments.svelte";
+import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
 import { preloadPatches } from "./diff-preload";
@@ -194,6 +195,7 @@ export async function deleteSession(s: Session): Promise<void> {
   dismissForSession(s.id);
   destroyTabState(s.id);
   clearComments(s.id);
+  destroyViewedState(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -207,6 +209,7 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   dismissForSession(s.id);
   clearComments(s.id);
+  destroyViewedState(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
   if (activeSessionId === s.id) {
