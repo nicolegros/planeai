@@ -1,5 +1,9 @@
 .PHONY: dev build bundle open test dev-bundle ci fmt lint docs install
 
+# Dummy updater signing key for local builds (not used in CI releases)
+DUMMY_SIGNING_KEY := dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5QnlHWnBkWklHc0lISUlrbDg0L29zSHR0L1NQQWovcHlsbVNRaDd3TXhxQUFBQkFBQUFBQUFBQUFBQUlBQUFBQXhTY3gvZW82clBCNUhCdWtoTkZNZEhJaVRUMkh0OVZsUzVESDdhU1JjR2ZwT3l4NlhTUEtvVnlpVjVsSFAwUDQ5aWF4QlVCUWJuRlFULy9DR1JQWC95dk04QTJNbGgvVTdRTHdiUmxrRHh1clQrWWgzdUY5bTZsQzl1OVFoYWgzVlRXK3gvajVrRzQ9Cg==
+SIGNING_ENV := TAURI_SIGNING_PRIVATE_KEY=$${TAURI_SIGNING_PRIVATE_KEY:-$(DUMMY_SIGNING_KEY)} TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}
+
 ci: install lint test ## Run lint + tests
 
 install:
@@ -28,11 +32,11 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--backend iced-alacritty
 
 build:
-	pnpm tauri build -b app
+	$(SIGNING_ENV) pnpm tauri build -b app
 
 bundle:
 	pnpm install
-	pnpm tauri build -b app
+	$(SIGNING_ENV) pnpm tauri build -b app
 	@echo "$(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
 	@echo "✅ Bundle path copied to clipboard"
 
@@ -54,7 +58,7 @@ dev-bundle:
 	sed -i '' 's/"identifier": "ca.nicolegros.planeai"/"identifier": "ca.nicolegros.planeai.$(SUFFIX)"/' src-tauri/tauri.conf.json
 	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
-	pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
+	$(SIGNING_ENV) pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app

@@ -28,6 +28,7 @@ mod symphony;
 mod template;
 #[cfg(not(windows))]
 mod tmux;
+mod updater;
 mod util;
 
 use rusqlite::Connection;
@@ -59,6 +60,8 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let menu = Menu::with_items(
                 app,
@@ -261,6 +264,9 @@ fn main() {
             let symphony_state = startup::init_symphony(app, &app_dir, &db_arc);
             app.manage(SymphonyHandle(Mutex::new(symphony_state)));
 
+            // Auto-update check (fire-and-forget on startup)
+            updater::check_for_updates(app.handle());
+
             tracing::info!("app setup complete");
 
             Ok(())
@@ -376,6 +382,7 @@ fn main() {
             tick_loop,
             stop_loop,
             delete_loop,
+            updater::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
