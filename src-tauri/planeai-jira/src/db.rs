@@ -41,7 +41,7 @@ pub fn migrate(conn: &Connection) -> Result<(), Error> {
             tx.execute_batch(sql)?;
             tx.execute(
                 "UPDATE jira_schema_version SET version = ?1",
-                params![i + 1],
+                params![(i + 1) as i64],
             )?;
             tx.commit()?;
         }

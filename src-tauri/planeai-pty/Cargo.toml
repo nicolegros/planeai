@@ -5,5 +5,5 @@ edition = "2021"
 description = "Shared PTY/session I/O infrastructure for PlaneAI. Not a terminal emulator."
 
 [dependencies]
-portable-pty = "0.8"
+portable-pty = "0.9"
 anyhow = "1"

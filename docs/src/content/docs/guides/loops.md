@@ -98,21 +98,21 @@ The maker works in a dedicated worktree branched from `main`. The verifier sees 
 
 ## Loop States
 
-| State                    | Meaning                                                    |
-| ------------------------ | ---------------------------------------------------------- |
-| `draft`                  | Loop created but not yet started                           |
-| `running`                | Actively executing steps (session creation, prompts)       |
-| `observing`              | Waiting for an agent to produce a handoff                  |
-| `verifying`              | Running gate commands (tests, lint)                        |
-| `stale`                  | No agent activity detected within `stale_after_ms`; needs intervention |
-| `completed_unreviewed`   | Loop completed successfully; human must review and merge   |
-| `approved`               | Human approved the work; ready to merge                    |
-| `blocked`                | Max rounds reached or agent declared non-completable       |
-| `needs_human`            | Agent explicitly requested human input                     |
-| `failed`                 | Unrecoverable error; loop cannot continue                  |
-| `cancelled`              | Manually cancelled by user                                 |
-| `merged`                 | Work was merged into the target branch                     |
-| `cleaned`                | Worktrees and branches cleaned up after merge or cancellation |
+| State                  | Meaning                                                                |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `draft`                | Loop created but not yet started                                       |
+| `running`              | Actively executing steps (session creation, prompts)                   |
+| `observing`            | Waiting for an agent to produce a handoff                              |
+| `verifying`            | Running gate commands (tests, lint)                                    |
+| `stale`                | No agent activity detected within `stale_after_ms`; needs intervention |
+| `completed_unreviewed` | Loop completed successfully; human must review and merge               |
+| `approved`             | Human approved the work; ready to merge                                |
+| `blocked`              | Max rounds reached or agent declared non-completable                   |
+| `needs_human`          | Agent explicitly requested human input                                 |
+| `failed`               | Unrecoverable error; loop cannot continue                              |
+| `cancelled`            | Manually cancelled by user                                             |
+| `merged`               | Work was merged into the target branch                                 |
+| `cleaned`              | Worktrees and branches cleaned up after merge or cancellation          |
 
 ## Handoffs
 
@@ -122,7 +122,7 @@ The handoff follows the `planeai.handoff.v1` schema:
 
 ```yaml
 schema: planeai.handoff.v1
-status: completed       # completed | blocked | needs_human | failed
+status: completed # completed | blocked | needs_human | failed
 summary: "Added pagination with cursor-based approach"
 files_changed: 4
 ```
@@ -153,7 +153,7 @@ steps:
   - type: gates.run
     commands:
       - make ci
-    on_fail: retry   # retry | block | fail
+    on_fail: retry # retry | block | fail
 ```
 
 ## Recipe Locations

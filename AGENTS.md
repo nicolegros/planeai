@@ -98,4 +98,3 @@ Scopes are optional but preferred: `feat(loops):`, `fix(daemon):`, `refactor(sid
 ## Documentation
 
 Keep documentation up to date with code changes. When a feature is added or modified, update the relevant docs (README.md, CONTEXT.md, ADRs) in the same commit.
-
