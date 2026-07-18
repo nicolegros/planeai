@@ -21,6 +21,7 @@
   import { hasConflicts } from "../lib/ci-checks.svelte";
   import BranchCompareForm from "./BranchCompareForm.svelte";
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
+  import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import { rebuildItemWithFullContent } from "../lib/diff-expansion";
 
   interface Props {
@@ -69,12 +70,11 @@
   // Visible line ranges per file index: ranges the cursor can occupy
   let visibleRanges: Map<number, { start: number; end: number }[]> = new Map();
 
-  // Viewed files state
-  let viewedFiles = $state<Set<string>>(new Set());
-  let patchFingerprints = new Map<string, string>();
+  // Viewed files state (persisted in module-level store across remounts)
+  let viewedFiles = $derived(getViewedFiles(sessionId));
+  let viewedVersion = $derived(getViewedVersion(sessionId));
   let allItems: CodeViewItem<ReviewComment>[] = [];
   let diffGeneration = 0;
-  let viewedVersion = 0;
 
   // Tracks files that have been expanded to full content (isPartial: false)
   let expandedFiles = new Set<string>();
@@ -174,12 +174,8 @@
     for (let i = 0; i < files.length; i++) {
       const fp = `${files[i].additions}:${files[i].deletions}:${allFileDiffs[i]?.splitLineCount ?? 0}`;
       newFingerprints.set(files[i].path, fp);
-      if (viewedFiles.has(files[i].path) && patchFingerprints.get(files[i].path) !== fp) {
-        viewedFiles.delete(files[i].path);
-        viewedFiles = new Set(viewedFiles);
-      }
     }
-    patchFingerprints = newFingerprints;
+    invalidateViewedFiles(sessionId, newFingerprints);
 
     const items: CodeViewItem<ReviewComment>[] = [];
     for (let i = 0; i < allFileDiffs.length; i++) {
@@ -444,17 +440,16 @@
   function toggleViewed(index: number, advance = false) {
     const path = files[index]?.path;
     if (!path) return;
-    const wasViewed = viewedFiles.has(path);
-    if (wasViewed) { viewedFiles.delete(path); } else { viewedFiles.add(path); }
-    viewedFiles = new Set(viewedFiles);
+    const wasViewed = isFileViewed(sessionId, path);
+    if (wasViewed) { setFileUnviewed(sessionId, path); } else { setFileViewed(sessionId, path); }
     // Update CodeView items (collapse/uncollapse viewed files)
-    viewedVersion++;
-    viewer?.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")), version: viewedVersion })));
+    const ver = getViewedVersion(sessionId);
+    viewer?.setItems(allItems.map((it) => ({ ...it, collapsed: isFileViewed(sessionId, it.id.replace("diff:", "")), version: ver })));
     // Auto-advance to next unviewed file when marking as viewed
     if (advance && !wasViewed) {
-      const next = files.findIndex((f, i) => i > index && !viewedFiles.has(f.path));
+      const next = files.findIndex((f, i) => i > index && !isFileViewed(sessionId, f.path));
       if (next !== -1) { selectFile(next); return; }
-      const wrap = files.findIndex((f) => !viewedFiles.has(f.path));
+      const wrap = files.findIndex((f) => !isFileViewed(sessionId, f.path));
       if (wrap !== -1) { selectFile(wrap); return; }
     }
   }
@@ -583,6 +578,9 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (!visible || getActiveZone() !== "terminal") return;
+    // Don't intercept shortcuts when focus is inside a modal or combobox
+    const el = document.activeElement;
+    if (el && (el.closest("[role='dialog']") || el.closest("[role='alertdialog']") || el.closest("[role='combobox']") || el.closest("dialog[open]"))) return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); sendFeedback(); return; }
     if (showCommentInput) return;
     if (showCompareForm) return;
@@ -758,6 +756,7 @@
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
   onMount(() => {
+    ensureSession(sessionId);
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("keyup", handleKeyup);
   });
