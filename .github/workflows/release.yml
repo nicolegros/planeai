@@ -113,15 +113,12 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x86_64
-            bundles: deb,appimage
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             label: windows-x86_64
-            bundles: nsis
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macos-aarch64
-            bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -182,10 +179,13 @@ jobs:
           JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: pnpm tauri build --target ${{ matrix.target }}
 
       - name: Bundle sidecar binaries into app
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           EXT=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -204,6 +204,16 @@ jobs:
               if [[ -n "$DMG_PATH" ]]; then
                 rm -f "$DMG_PATH"
                 hdiutil create -volname "planeai" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_PATH"
+              fi
+              # Re-create the updater .app.tar.gz with sidecar binaries included
+              UPDATER_BUNDLE=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.app.tar.gz" ! -name "*.sig" | head -1)
+              if [[ -n "$UPDATER_BUNDLE" ]]; then
+                rm -f "$UPDATER_BUNDLE" "${UPDATER_BUNDLE}.sig"
+                tar -czf "$UPDATER_BUNDLE" -C "$(dirname "$APP_DIR")" "$(basename "$APP_DIR")"
+                # Re-sign the updater bundle
+                if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+                  pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$UPDATER_BUNDLE"
+                fi
               fi
             fi
           fi
