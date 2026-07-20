@@ -256,7 +256,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-          merge-multiple: true
+          pattern: artifacts-*
+
+      - name: Debug artifact structure
+        run: find artifacts -type f | sort
 
       - name: Upload assets to release
         run: |
@@ -314,6 +317,8 @@ jobs:
           PLATFORM_COUNT=$(echo "$JSON" | jq '.platforms | length')
           if [ "$PLATFORM_COUNT" -eq 0 ]; then
             echo "ERROR: No updater artifacts found — latest.json would have empty platforms"
+            echo "Listing all files for debugging:"
+            find artifacts -type f
             exit 1
           fi
           echo "latest.json contains $PLATFORM_COUNT platform(s)"
