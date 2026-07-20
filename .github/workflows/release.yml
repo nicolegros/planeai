@@ -180,6 +180,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
           JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: Bundle sidecar binaries into app
@@ -242,6 +244,10 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.tar.gz.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.zip.sig
 
   publish:
     needs: [release, build]
@@ -254,8 +260,65 @@ jobs:
 
       - name: Upload assets to release
         run: |
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" -o -name "*.AppImage" \) \
+          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.tar.gz" -o -name "*.nsis.zip" \) \
             -exec gh release upload ${{ needs.release.outputs.tag }} {} \;
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Generate latest.json for updater
+        run: |
+          TAG="${{ needs.release.outputs.tag }}"
+          VERSION="${TAG#v}"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Find signature files in artifacts
+          DARWIN_SIG=$(find artifacts -name "*.app.tar.gz.sig" | head -1)
+          LINUX_SIG=$(find artifacts -name "*.AppImage.tar.gz.sig" | head -1)
+          WINDOWS_SIG=$(find artifacts -name "*.nsis.zip.sig" | head -1)
+
+          # Find updater bundles
+          DARWIN_BUNDLE=$(find artifacts -name "*.app.tar.gz" ! -name "*.sig" | head -1)
+          LINUX_BUNDLE=$(find artifacts -name "*.AppImage.tar.gz" ! -name "*.sig" | head -1)
+          WINDOWS_BUNDLE=$(find artifacts -name "*.nsis.zip" ! -name "*.sig" | head -1)
+
+          # Build JSON with jq — only include platforms that have both sig and bundle
+          BASE_URL="https://github.com/nicolegros/planeai/releases/download/$TAG"
+          JSON=$(jq -n --arg version "$VERSION" --arg pub_date "$PUB_DATE" \
+            '{version: $version, notes: "", pub_date: $pub_date, platforms: {}}')
+
+          if [ -f "$DARWIN_SIG" ] && [ -f "$DARWIN_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$DARWIN_SIG")
+            FILENAME=$(basename "$DARWIN_BUNDLE")
+            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
+              '.platforms["darwin-aarch64"] = {signature: $sig, url: $url}')
+          fi
+
+          if [ -f "$LINUX_SIG" ] && [ -f "$LINUX_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$LINUX_SIG")
+            FILENAME=$(basename "$LINUX_BUNDLE")
+            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
+              '.platforms["linux-x86_64"] = {signature: $sig, url: $url}')
+          fi
+
+          if [ -f "$WINDOWS_SIG" ] && [ -f "$WINDOWS_BUNDLE" ]; then
+            SIG_CONTENT=$(cat "$WINDOWS_SIG")
+            FILENAME=$(basename "$WINDOWS_BUNDLE")
+            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
+              '.platforms["windows-x86_64"] = {signature: $sig, url: $url}')
+          fi
+
+          echo "$JSON" > latest.json
+
+          # Validate at least one platform was found
+          PLATFORM_COUNT=$(echo "$JSON" | jq '.platforms | length')
+          if [ "$PLATFORM_COUNT" -eq 0 ]; then
+            echo "ERROR: No updater artifacts found — latest.json would have empty platforms"
+            exit 1
+          fi
+          echo "latest.json contains $PLATFORM_COUNT platform(s)"
+
+          gh release upload "$TAG" latest.json --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

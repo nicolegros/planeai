@@ -49,6 +49,8 @@
   import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
+  import UpdateToast from "./components/UpdateToast.svelte";
+  import { initUpdateListener, focusUpdateToast, getUpdateState } from "./lib/updater.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
   let showProjectForm = $state(false);
@@ -253,6 +255,7 @@
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
 
     startJiraDepartedListening();
+    initUpdateListener();
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -303,7 +306,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); }
+        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
@@ -805,3 +808,4 @@
 
 <PostMergePrompt />
 <JiraDepartedPrompt />
+<UpdateToast />

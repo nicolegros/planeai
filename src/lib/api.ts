@@ -288,3 +288,7 @@ export const loops = {
   start: (loopId: string) => invoke("start_loop", { loopId }),
   delete: (loopId: string) => invoke<string[]>("delete_loop", { loopId }),
 };
+
+export const updater = {
+  install: () => invoke<void>("install_update"),
+};
