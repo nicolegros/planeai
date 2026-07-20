@@ -34,9 +34,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - run: ./scripts/ensure-sidecars.sh
+
       - run: cargo fmt --check
 
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
       - run: cargo test
 
@@ -65,5 +67,8 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Ensure sidecar placeholders
+        shell: bash
+        run: ./scripts/ensure-sidecars.sh
       - run: cargo check
       - run: cargo test

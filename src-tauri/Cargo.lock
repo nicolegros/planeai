@@ -3307,6 +3307,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "planeai-cli-bin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "planeai",
+ "planeai-core",
+ "planeai-daemon",
+ "planeai-ipc",
+ "planeai-paths",
+ "planeai-tasks",
+ "planeai-toon",
+ "rusqlite",
+ "serde_json",
+]
+
+[[package]]
 name = "planeai-core"
 version = "0.0.0"
 dependencies = [
@@ -3344,6 +3361,14 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "planeai-daemon-bin"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "planeai-daemon",
 ]
 
 [[package]]

@@ -8,6 +8,8 @@ members = [
   "planeai-paths",
   "planeai-toon",
   "planeai-jira",
+  "crates/planeai-cli-bin",
+  "crates/planeai-daemon-bin",
 ]
 resolver = "2"
 
@@ -42,14 +44,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "planeai"
 path = "src/main.rs"
-
-[[bin]]
-name = "planeai-cli"
-path = "src/bin/cli.rs"
-
-[[bin]]
-name = "planeai-daemon"
-path = "src/bin/daemon.rs"
 
 [dependencies]
 planeai-core = { path = "planeai-core" }
