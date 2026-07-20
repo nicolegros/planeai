@@ -3311,7 +3311,7 @@ dependencies = [
  "dotenvy",
  "open",
  "planeai-tasks",
- "rand 0.9.5",
+ "rand 0.10.2",
  "reqwest",
  "rusqlite",
  "serde",
