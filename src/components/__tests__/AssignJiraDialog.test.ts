@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, unmount, tick } from "svelte";
 
 vi.mock("../../lib/api", () => ({
@@ -43,6 +43,10 @@ const projects: Project[] = [{ id: "p1", name: "myapp", path: "/tmp/myapp" }];
 let component: Record<string, unknown> | null = null;
 let mountTarget: HTMLElement | null = null;
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
   if (component) {
     unmount(component);
@@ -52,6 +56,8 @@ afterEach(() => {
     mountTarget.remove();
     mountTarget = null;
   }
+  vi.runOnlyPendingTimers();
+  vi.useRealTimers();
 });
 
 async function renderDialog(task: TaskItem = makeTask()) {
