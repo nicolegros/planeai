@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::Rng;
+use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
