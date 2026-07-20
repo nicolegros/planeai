@@ -26,7 +26,7 @@
     "@fontsource/ibm-plex-mono": "5.1.1",
     "@lezer/highlight": "^1.2.3",
     "@lucide/svelte": "^1.17.0",
-    "@pierre/diffs": "1.2.9",
+    "@pierre/diffs": "1.2.12",
     "@replit/codemirror-vim": "^6.3.0",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.1",
