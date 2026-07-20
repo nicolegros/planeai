@@ -1,0 +1,21 @@
+[package]
+name = "planeai-cli-bin"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "planeai-cli"
+path = "src/main.rs"
+
+[dependencies]
+planeai = { path = "../.." }
+planeai-core = { path = "../../planeai-core" }
+planeai-tasks = { path = "../../planeai-tasks" }
+planeai-toon = { path = "../../planeai-toon" }
+planeai-ipc = { path = "../../planeai-ipc", features = ["async"] }
+planeai-daemon = { path = "../../planeai-daemon" }
+planeai-paths = { path = "../../planeai-paths" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = { workspace = true }

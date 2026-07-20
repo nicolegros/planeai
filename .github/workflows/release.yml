@@ -94,34 +94,29 @@ jobs:
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
 
-      - name: Create draft release
-        run: |
-          gh release create ${{ steps.tag.outputs.tag }} \
-            --draft \
-            --title "${{ steps.tag.outputs.tag }}" \
-            --generate-notes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   build:
     needs: release
     environment: release
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            label: linux-x86_64
-          - os: windows-latest
+            args: '--target x86_64-unknown-linux-gnu'
+          - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            label: windows-x86_64
-          - os: macos-latest
+            args: ''
+          - platform: macos-latest
             target: aarch64-apple-darwin
-            label: macos-aarch64
-    runs-on: ${{ matrix.os }}
+            args: '--target aarch64-apple-darwin'
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.tag }}
 
       - uses: actions/setup-node@v7
         with:
@@ -129,20 +124,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: Install pnpm
         run: npm install -g pnpm
 
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Import Apple certificate
-        if: runner.os == 'macOS'
+        if: matrix.platform == 'macos-latest'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -169,8 +164,40 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri
+      # Build sidecar binaries from their separate crates and place them
+      # in src-tauri/binaries/ with the target-triple suffix that externalBin expects.
+      - name: Build sidecar binaries
+        shell: bash
         env:
+          JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
+          JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+        working-directory: src-tauri
+        run: |
+          TARGET="${{ matrix.target }}"
+          if [[ -z "$TARGET" ]]; then
+            TARGET="$(rustc --print host-tuple)"
+          fi
+          EXT=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            EXT=".exe"
+          fi
+
+          ./scripts/ensure-sidecars.sh
+          cargo build --release --target "$TARGET" \
+            -p planeai-cli-bin \
+            -p planeai-daemon-bin
+          
+          cp "target/${TARGET}/release/planeai-cli${EXT}" \
+             "binaries/planeai-cli-${TARGET}${EXT}"
+          cp "target/${TARGET}/release/planeai-daemon${EXT}" \
+             "binaries/planeai-daemon-${TARGET}${EXT}"
+          
+          echo "Sidecar binaries:"
+          ls -la binaries/
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -179,167 +206,23 @@ jobs:
           JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target ${{ matrix.target }}
-
-      - name: Bundle sidecar binaries into app
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          EXT=""
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            EXT=".exe"
-          fi
-          CLI_BIN="src-tauri/target/${{ matrix.target }}/release/planeai-cli${EXT}"
-          DAEMON_BIN="src-tauri/target/${{ matrix.target }}/release/planeai-daemon${EXT}"
-
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            APP_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.app" -type d | head -1)
-            if [[ -n "$APP_DIR" ]]; then
-              cp "$CLI_BIN" "$APP_DIR/Contents/MacOS/planeai-cli"
-              cp "$DAEMON_BIN" "$APP_DIR/Contents/MacOS/planeai-daemon"
-              # Re-create the DMG with the updated .app
-              DMG_PATH=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.dmg" | head -1)
-              if [[ -n "$DMG_PATH" ]]; then
-                rm -f "$DMG_PATH"
-                hdiutil create -volname "planeai" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG_PATH"
-              fi
-              # Re-create the updater .app.tar.gz with sidecar binaries included
-              UPDATER_BUNDLE=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.app.tar.gz" ! -name "*.sig" | head -1)
-              if [[ -n "$UPDATER_BUNDLE" ]]; then
-                rm -f "$UPDATER_BUNDLE" "${UPDATER_BUNDLE}.sig"
-                tar -czf "$UPDATER_BUNDLE" -C "$(dirname "$APP_DIR")" "$(basename "$APP_DIR")"
-                # Re-sign the updater bundle
-                if [[ -n "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
-                  pnpm tauri signer sign -k "$TAURI_SIGNING_PRIVATE_KEY" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$UPDATER_BUNDLE"
-                fi
-              fi
-            fi
-          fi
-
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # NSIS installer bundles everything from the release dir that Tauri includes,
-            # but sidecar binaries need to be next to the main exe in the bundle output.
-            NSIS_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle/nsis -type d | head -1)
-            if [[ -n "$NSIS_DIR" ]]; then
-              cp "$DAEMON_BIN" "$NSIS_DIR/planeai-daemon.exe"
-              cp "$CLI_BIN" "$NSIS_DIR/planeai-cli.exe"
-            fi
-          fi
-
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            # For .deb, binaries go in /usr/bin alongside the main binary
-            DEB_BIN_DIR=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -path "*/usr/bin" -type d | head -1)
-            if [[ -n "$DEB_BIN_DIR" ]]; then
-              cp "$CLI_BIN" "$DEB_BIN_DIR/planeai-cli"
-              cp "$DAEMON_BIN" "$DEB_BIN_DIR/planeai-daemon"
-            fi
-            # For AppImage, copy next to main binary
-            APPIMAGE_BIN=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "planeai" -type f | head -1)
-            if [[ -n "$APPIMAGE_BIN" ]]; then
-              APPIMAGE_DIR=$(dirname "$APPIMAGE_BIN")
-              cp "$CLI_BIN" "$APPIMAGE_DIR/planeai-cli"
-              cp "$DAEMON_BIN" "$APPIMAGE_DIR/planeai-daemon"
-            fi
-          fi
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
         with:
-          name: artifacts-${{ matrix.label }}
-          if-no-files-found: error
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.tar.gz.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.zip.sig
+          tagName: ${{ needs.release.outputs.tag }}
+          releaseName: ${{ needs.release.outputs.tag }}
+          releaseBody: ''
+          releaseDraft: true
+          prerelease: false
+          updaterJsonPreferNsis: true
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+
 
   publish:
     needs: [release, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          pattern: artifacts-*
-
-      - name: Debug artifact structure
-        run: find artifacts -type f | sort
-
-      - name: Upload assets to release
-        run: |
-          find artifacts -type f \( -name "*.dmg" -o -name "*.exe" -o -name "*.deb" -o -name "*.AppImage" -o -name "*.tar.gz" -o -name "*.nsis.zip" \) \
-            -exec gh release upload ${{ needs.release.outputs.tag }} {} \;
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-
-      - name: Generate latest.json for updater
-        run: |
-          TAG="${{ needs.release.outputs.tag }}"
-          VERSION="${TAG#v}"
-          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          # Find signature files in artifacts
-          DARWIN_SIG=$(find artifacts -name "*.app.tar.gz.sig" | head -1)
-          LINUX_SIG=$(find artifacts -name "*.AppImage.tar.gz.sig" | head -1)
-          WINDOWS_SIG=$(find artifacts -name "*.nsis.zip.sig" | head -1)
-
-          # Find updater bundles
-          DARWIN_BUNDLE=$(find artifacts -name "*.app.tar.gz" ! -name "*.sig" | head -1)
-          LINUX_BUNDLE=$(find artifacts -name "*.AppImage.tar.gz" ! -name "*.sig" | head -1)
-          WINDOWS_BUNDLE=$(find artifacts -name "*.nsis.zip" ! -name "*.sig" | head -1)
-
-          # Build JSON with jq — only include platforms that have both sig and bundle
-          BASE_URL="https://github.com/nicolegros/planeai/releases/download/$TAG"
-          JSON=$(jq -n --arg version "$VERSION" --arg pub_date "$PUB_DATE" \
-            '{version: $version, notes: "", pub_date: $pub_date, platforms: {}}')
-
-          if [ -f "$DARWIN_SIG" ] && [ -f "$DARWIN_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$DARWIN_SIG")
-            FILENAME=$(basename "$DARWIN_BUNDLE")
-            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
-              '.platforms["darwin-aarch64"] = {signature: $sig, url: $url}')
-          fi
-
-          if [ -f "$LINUX_SIG" ] && [ -f "$LINUX_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$LINUX_SIG")
-            FILENAME=$(basename "$LINUX_BUNDLE")
-            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
-              '.platforms["linux-x86_64"] = {signature: $sig, url: $url}')
-          fi
-
-          if [ -f "$WINDOWS_SIG" ] && [ -f "$WINDOWS_BUNDLE" ]; then
-            SIG_CONTENT=$(cat "$WINDOWS_SIG")
-            FILENAME=$(basename "$WINDOWS_BUNDLE")
-            JSON=$(echo "$JSON" | jq --arg sig "$SIG_CONTENT" --arg url "$BASE_URL/$FILENAME" \
-              '.platforms["windows-x86_64"] = {signature: $sig, url: $url}')
-          fi
-
-          echo "$JSON" > latest.json
-
-          # Validate at least one platform was found
-          PLATFORM_COUNT=$(echo "$JSON" | jq '.platforms | length')
-          if [ "$PLATFORM_COUNT" -eq 0 ]; then
-            echo "ERROR: No updater artifacts found — latest.json would have empty platforms"
-            echo "Listing all files for debugging:"
-            find artifacts -type f
-            exit 1
-          fi
-          echo "latest.json contains $PLATFORM_COUNT platform(s)"
-
-          gh release upload "$TAG" latest.json --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-
       - name: Publish release
-        run: gh release edit ${{ needs.release.outputs.tag }} --draft=false
+        run: gh release edit "${{ needs.release.outputs.tag }}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
