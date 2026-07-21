@@ -94,6 +94,15 @@ jobs:
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
 
+      - name: Create draft release
+        run: |
+          gh release create ${{ steps.tag.outputs.tag }} \
+            --draft \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     needs: release
     environment: release
