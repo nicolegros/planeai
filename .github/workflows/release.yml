@@ -57,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      release_id: ${{ steps.create_release.outputs.release_id }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -95,11 +96,14 @@ jobs:
           git push origin ${{ steps.tag.outputs.tag }}
 
       - name: Create draft release
+        id: create_release
         run: |
-          gh release create ${{ steps.tag.outputs.tag }} \
+          RELEASE_URL=$(gh release create ${{ steps.tag.outputs.tag }} \
             --draft \
             --title "${{ steps.tag.outputs.tag }}" \
-            --generate-notes
+            --generate-notes)
+          RELEASE_ID=$(gh release view ${{ steps.tag.outputs.tag }} --json databaseId --jq .databaseId)
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -216,6 +220,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.release.outputs.release_id }}
           tagName: ${{ needs.release.outputs.tag }}
           releaseName: ${{ needs.release.outputs.tag }}
           releaseBody: ''
