@@ -118,13 +118,13 @@ jobs:
         include:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            args: '--target x86_64-unknown-linux-gnu'
+            args: "--target x86_64-unknown-linux-gnu"
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            args: ''
+            args: ""
           - platform: macos-latest
             target: aarch64-apple-darwin
-            args: '--target aarch64-apple-darwin'
+            args: "--target aarch64-apple-darwin"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -199,15 +199,15 @@ jobs:
           cargo build --release --target "$TARGET" \
             -p planeai-cli-bin \
             -p planeai-daemon-bin
-          
+
           cp "target/${TARGET}/release/planeai-cli${EXT}" \
              "binaries/planeai-cli-${TARGET}${EXT}"
           cp "target/${TARGET}/release/planeai-daemon${EXT}" \
              "binaries/planeai-daemon-${TARGET}${EXT}"
-          
+
           # Clean the main planeai package so tauri-action fully rebuilds + bundles it
           cargo clean -p planeai --release --target "$TARGET"
-          
+
           echo "Sidecar binaries:"
           ls -la binaries/
 
@@ -226,13 +226,12 @@ jobs:
           releaseId: ${{ needs.release.outputs.release_id }}
           tagName: ${{ needs.release.outputs.tag }}
           releaseName: ${{ needs.release.outputs.tag }}
-          releaseBody: ''
+          releaseBody: ""
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
           tauriScript: pnpm tauri
           args: ${{ matrix.args }}
-
 
   publish:
     needs: [release, build]

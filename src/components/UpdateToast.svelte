@@ -40,40 +40,33 @@
 {#if updateState.updateAvailable && !updateState.dismissed}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- bottom-16 to stack above snackbar at bottom-4 -->
   <div
     bind:this={wrapperEl}
     role="alertdialog"
     aria-label="Application update available"
     tabindex="-1"
     onkeydown={onKeydown}
-    class="fixed bottom-4 right-4 z-[100] flex items-center gap-3 rounded-lg bg-panel px-4 py-3 shadow-lg border border-border outline-none"
+    class="fixed bottom-16 left-4 z-[100] flex items-center gap-3 rounded-lg bg-blue-600 px-4 py-3 shadow-lg outline-none"
   >
-    <div class="flex flex-col gap-0.5">
-      <p class="text-sm font-medium text-t1">
-        Update available: v{updateState.updateAvailable.version}
-      </p>
-      {#if updateState.updateAvailable.body}
-        <p class="text-xs text-t3 max-w-[200px] truncate">{updateState.updateAvailable.body}</p>
-      {/if}
-    </div>
-    <div class="flex items-center gap-2">
-      {#if updateState.installing}
-        <span class="text-xs text-t3">Installing...</span>
+    {#if updateState.installing}
+      <p class="text-sm text-white font-mono">Installing v{updateState.updateAvailable.version}…</p>
+    {:else}
+      <p class="text-sm text-white font-mono">Update available: v{updateState.updateAvailable.version}</p>
+      <span class="text-blue-200 text-sm">·</span>
+      <button
+        class="text-sm text-white/90 hover:text-white transition-colors"
+        onclick={handleInstall}
+      ><span class="underline">I</span>nstall &amp; Restart</button>
+      <button
+        class="text-sm text-white/60 hover:text-white/90 transition-colors"
+        onclick={dismiss}
+      ><span class="underline">D</span>ismiss</button>
+      {#if focused}
+        <span class="text-xs text-blue-200">I / D / Esc</span>
       {:else}
-        <button
-          class="rounded px-3 py-1.5 text-xs font-medium bg-accent text-on-accent hover:opacity-90 transition-opacity"
-          onclick={handleInstall}
-        >
-          <span class="underline">I</span>nstall &amp; Restart
-        </button>
-        <button
-          class="rounded px-2 py-1.5 text-xs text-t3 hover:text-t1 transition-colors"
-          onclick={dismiss}
-        >
-          <span class="underline">D</span>ismiss
-        </button>
+        <span class="text-xs text-blue-200">⌘U</span>
       {/if}
-    </div>
-    <p class="text-[10px] text-t3">{focused ? "I / D / Esc" : "⌘U to interact"}</p>
+    {/if}
   </div>
 {/if}
