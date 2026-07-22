@@ -294,6 +294,7 @@ fn main() {
             get_all_file_patches,
             get_combined_patch,
             detect_default_branch,
+            clone_repository,
             list_commits,
             list_files,
             read_file,
