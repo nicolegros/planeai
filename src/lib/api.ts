@@ -133,6 +133,7 @@ export const fileExplorer = {
 };
 
 export const git = {
+  cloneRepository: (url: string, path: string) => invoke<string>("clone_repository", { url, path }),
   getChangedFiles: (repoPath: string, baseBranch: string, headRef?: string | null) =>
     invoke<ChangedFile[]>("get_changed_files", { repoPath, baseBranch, headRef: headRef ?? null }),
   getFileDiff: (

@@ -121,15 +121,16 @@ The summarizer handles both backend schemas automatically and shows a unified co
 See [INTEGRATION_CONTRACT.md](./INTEGRATION_CONTRACT.md) for the full schema.
 
 Key metrics:
-| Metric | Backend | Meaning |
-|--------|---------|---------|
-| `write_latency_ms` | tauri-xterm | term.write → callback |
-| `parse_time_ms` | iced-alacritty | bytes → terminal state |
-| `frame_delta_ms` | both | time between visual frames |
-| `render_work_ms` | iced-alacritty | GPU render pass time |
-| `average_mb_per_sec` | both | throughput |
-| `frames_over_16_7ms` | both | frames exceeding 60fps budget |
-| `max_queue_depth_bytes` | both | peak backlog |
+
+| Metric                  | Backend        | Meaning                       |
+| ----------------------- | -------------- | ----------------------------- |
+| `write_latency_ms`      | tauri-xterm    | term.write → callback         |
+| `parse_time_ms`         | iced-alacritty | bytes → terminal state        |
+| `frame_delta_ms`        | both           | time between visual frames    |
+| `render_work_ms`        | iced-alacritty | GPU render pass time          |
+| `average_mb_per_sec`    | both           | throughput                    |
+| `frames_over_16_7ms`    | both           | frames exceeding 60fps budget |
+| `max_queue_depth_bytes` | both           | peak backlog                  |
 
 ## Pass/Fail Guidance
 
