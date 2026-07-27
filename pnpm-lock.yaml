@@ -38,8 +38,8 @@ importers:
         specifier: 5.3.0
         version: 5.3.0
       '@fontsource/ibm-plex-mono':
-        specifier: 5.1.1
-        version: 5.1.1
+        specifier: 5.3.0
+        version: 5.3.0
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -512,8 +512,8 @@ packages:
   '@fontsource-variable/ibm-plex-sans@5.3.0':
     resolution: {integrity: sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ==}
 
-  '@fontsource/ibm-plex-mono@5.1.1':
-    resolution: {integrity: sha512-1aayqPe/ZkD3MlvqpmOHecfA3f2B8g+fAEkgvcCd3lkPP0pS1T0xG5Zmn2EsJQqr1JURtugPUH+5NqvKyfFZMQ==}
+  '@fontsource/ibm-plex-mono@5.3.0':
+    resolution: {integrity: sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==}
 
   '@hutson/parse-repository-url@3.0.2':
     resolution: {integrity: sha512-H9XAx3hc0BQHY6l+IFSWHDySypcXsvsuLhgYLUGywmJ5pswRVQJUHpOsobnLYp2ZUaUlKiKDrgWWhosOwAEM8Q==}
@@ -4300,7 +4300,7 @@ snapshots:
 
   '@fontsource-variable/ibm-plex-sans@5.3.0': {}
 
-  '@fontsource/ibm-plex-mono@5.1.1': {}
+  '@fontsource/ibm-plex-mono@5.3.0': {}
 
   '@hutson/parse-repository-url@3.0.2': {}
 
