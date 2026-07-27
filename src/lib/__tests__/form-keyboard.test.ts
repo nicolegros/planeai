@@ -100,4 +100,38 @@ describe("createFormKeyboardController", () => {
     fk.handleKeydown(e);
     expect(e.preventDefault).not.toHaveBeenCalled();
   });
+
+  it("calls shiftToggle when shift+key is pressed and shiftToggle is defined", () => {
+    const toggle = vi.fn();
+    const shiftToggle = vi.fn();
+    const fk = createFormKeyboardController(
+      () => [{ key: "p", toggle, shiftToggle }],
+      { wrapper: () => wrapper, onDismiss },
+    );
+    fk.handleKeydown(makeKey("P", { shiftKey: true }));
+    expect(shiftToggle).toHaveBeenCalledTimes(1);
+    expect(toggle).not.toHaveBeenCalled();
+  });
+
+  it("falls back to toggle when shift+key is pressed but no shiftToggle", () => {
+    const toggle = vi.fn();
+    const fk = createFormKeyboardController(
+      () => [{ key: "p", toggle }],
+      { wrapper: () => wrapper, onDismiss },
+    );
+    fk.handleKeydown(makeKey("P", { shiftKey: true }));
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls toggle (not shiftToggle) when key pressed without shift", () => {
+    const toggle = vi.fn();
+    const shiftToggle = vi.fn();
+    const fk = createFormKeyboardController(
+      () => [{ key: "p", toggle, shiftToggle }],
+      { wrapper: () => wrapper, onDismiss },
+    );
+    fk.handleKeydown(makeKey("p"));
+    expect(toggle).toHaveBeenCalledTimes(1);
+    expect(shiftToggle).not.toHaveBeenCalled();
+  });
 });
