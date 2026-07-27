@@ -7,7 +7,7 @@
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -87,6 +87,8 @@
   const statusOrder = ["running", "needs_review", "idle", "todo", "done", "exited"];
   const statusLabels: Record<string, string> = { running: "Running", needs_review: "Needs review", idle: "Idle", todo: "To do", done: "Done", exited: "Exited" };
   const statusDotColors: Record<string, string> = { running: "bg-status-running", needs_review: "bg-status-review", idle: "bg-status-idle", todo: "bg-t3", done: "bg-status-running", exited: "bg-status-exited" };
+
+  const headerBtnClass = "h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity min-w-0";
 
   // Task status options for context menu (maps internal values to display labels)
   const STATUS_OPTIONS = [
@@ -542,17 +544,31 @@
 <aside class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}" style:width="{sidebarWidth}px">
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
-  <!-- Header: new session button -->
-  <div class="px-3 pt-3 pb-2">
+  <!-- Header: new session + new project buttons -->
+  <div class="px-3 pt-3 pb-2 flex gap-1.5">
+    {#if projects.length > 0}
+      <button
+        onclick={() => onCreateSession?.()}
+        aria-label="New session"
+        class="{headerBtnClass} flex-[3]"
+      >
+        <span class="flex items-center gap-1.5 overflow-hidden">
+          <Plus class="size-3.5 shrink-0" />
+          {#if sidebarWidth >= 220}<span class="truncate">New session</span>{/if}
+        </span>
+        {#if sidebarWidth >= 220}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}N</span>{/if}
+      </button>
+    {/if}
     <button
-      onclick={() => onCreateSession?.()}
-      class="w-full h-[32px] flex items-center justify-between px-3 rounded-lg bg-panel-hi border border-border text-t2 text-[12px] font-medium hover:opacity-80 transition-opacity"
+      onclick={() => onAddProject?.()}
+      aria-label="New project"
+      class="{headerBtnClass} {projects.length > 0 ? 'flex-[2]' : 'flex-[1]'}"
     >
-      <span class="flex items-center gap-1.5">
-        <Plus class="size-3.5" />
-        New session
+      <span class="flex items-center gap-1.5 overflow-hidden">
+        <FolderPlus class="size-3.5 shrink-0" />
+        {#if sidebarWidth >= 220 || projects.length === 0}<span class="truncate">New project</span>{/if}
       </span>
-      <span class="font-mono text-[10px] text-t3">{MOD_LABEL}N</span>
+      {#if sidebarWidth >= 220 || projects.length === 0}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>{/if}
     </button>
   </div>
 
