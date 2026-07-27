@@ -143,7 +143,7 @@
       { key: "s", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
       { key: "w", toggle: () => { useWorktree = !useWorktree; } },
       { key: "a", toggle: () => { autoApprove = !autoApprove; } },
-      { key: "p", toggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx + 1) % providerKeys.length]; } },
+      { key: "p", toggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = selectedProvider || config.default_provider; const idx = providerKeys.indexOf(current); selectedProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
       { key: "b", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
       { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='branch'] input") ?? null },
       { key: "m", toggle: () => { mode = "manual"; } },

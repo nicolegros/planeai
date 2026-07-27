@@ -17,6 +17,8 @@ export interface FieldBinding {
   ref?: () => HTMLElement | null;
   /** If true, pressing the key toggles a value instead of focusing */
   toggle?: () => void;
+  /** Called when Shift + key is pressed (e.g. reverse cycle) */
+  shiftToggle?: () => void;
 }
 
 export function createFormKeyboardController(
@@ -74,7 +76,9 @@ export function createFormKeyboardController(
     const binding = bindings().find((b) => b.key === key);
     if (binding) {
       e.preventDefault();
-      if (binding.toggle) {
+      if (e.shiftKey && binding.shiftToggle) {
+        binding.shiftToggle();
+      } else if (binding.toggle) {
         binding.toggle();
       } else if (binding.ref) {
         const el = binding.ref();
