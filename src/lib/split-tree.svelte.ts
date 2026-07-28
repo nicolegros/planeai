@@ -21,7 +21,9 @@ export interface TabEntry {
   ptyKey: string;
   label: string;
   icon: string;
+  type: "agent" | "shell" | "diff" | "editor";
   customTitle?: boolean;
+  filePath?: string;
 }
 
 export interface SplitNode {
@@ -99,6 +101,36 @@ export function getLeafById(id: string): LeafNode | null {
 export function getActiveTabEntry(leaf: LeafNode): TabEntry | null {
   if (leaf.tabs.length === 0) return null;
   return leaf.tabs.find((t) => t.ptyKey === leaf.activeTab) ?? leaf.tabs[0] ?? null;
+}
+
+/**
+ * Find a tab by ptyKey across all leaves. Returns the leaf and tab, or null.
+ */
+export function findTab(ptyKey: string): { leaf: LeafNode; tab: TabEntry } | null {
+  if (!tree) return null;
+  const leaves = collectLeaves(tree);
+  for (const leaf of leaves) {
+    const tab = leaf.tabs.find((t) => t.ptyKey === ptyKey);
+    if (tab) return { leaf, tab };
+  }
+  return null;
+}
+
+/**
+ * Focus an existing tab by ptyKey (sets it as active in its leaf + focuses that leaf).
+ * Returns true if found and focused, false if not found.
+ */
+export function focusTab(ptyKey: string): boolean {
+  const result = findTab(ptyKey);
+  if (!result) return false;
+  focusedLeafId = result.leaf.id;
+  tree = mapTree(tree!, (node) => {
+    if (node.type === "leaf" && node.id === result.leaf.id) {
+      return { ...node, activeTab: ptyKey };
+    }
+    return node;
+  });
+  return true;
 }
 
 /**

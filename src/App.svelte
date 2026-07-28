@@ -212,7 +212,7 @@
         const initialId = activeSessionId ?? sessions[0]?.id;
         if (initialId) {
           const session = sessions.find((s) => s.id === initialId);
-          splitTree.initTree([{ ptyKey: initialId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal" }]);
+          splitTree.initTree([{ ptyKey: initialId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }]);
         }
       }
     }
@@ -301,6 +301,7 @@
       ptyKey: sessionId,
       label: session?.name || session?.branch || "Agent",
       icon: session?.provider ? "bot" : "terminal",
+      type: "agent",
     };
     const focusedLeafId = splitTree.getFocusedLeafId();
     if (focusedLeafId) {
@@ -315,12 +316,13 @@
     const session = sessions.find((s) => s.id === sessionId);
     const sessionTabs = getTabs(sessionId);
     if (sessionTabs.length === 0) {
-      return [{ ptyKey: sessionId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal" }];
+      return [{ ptyKey: sessionId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }];
     }
     return sessionTabs.map((t) => ({
       ptyKey: t.index === 0 ? sessionId : `${sessionId}:${t.index}`,
       label: t.index === 0 ? (session?.name || session?.branch || "Agent") : (t.customTitle ? t.label : "Shell"),
       icon: t.index === 0 ? (session?.provider ? "bot" : "terminal") : "terminal",
+      type: (t.index === 0 ? "agent" : "shell") as "agent" | "shell",
       customTitle: t.customTitle,
     }));
   }
@@ -423,7 +425,7 @@
     const existing = splitTree.getLeafForSession(ptyKey);
     if (existing) return;
 
-    splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal" });
+    splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
     tick().then(() => refocusTerminal());
   }
 
@@ -438,7 +440,7 @@
     pty.incrementTabCount(activeSessionId);
 
     const ptyKey = `${activeSessionId}:${tabIndex}`;
-    splitTree.addSessionToLeaf(focusedLeafId, { ptyKey, label: "Shell", icon: "terminal" });
+    splitTree.addSessionToLeaf(focusedLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
     refocusTerminal();
   }
 
@@ -449,13 +451,9 @@
 
     const activeEntry = splitTree.getActiveTabEntry(leaf);
     if (!activeEntry) return;
-    const ptyKey = activeEntry.ptyKey;
 
-    // Don't close the agent tab (non-shell tab) — that would destroy the session view
-    const isShellTab = ptyKey.includes(":");
-    if (!isShellTab) {
-      // If this is the only pane, do nothing (Cmd+W on agent tab = no-op in split mode)
-      // If there are multiple panes, close the split instead (migrate tabs to sibling)
+    // Agent tabs can't be closed directly
+    if (activeEntry.type === "agent") {
       if (splitTree.getAllLeaves().length > 1) {
         splitTree.closeSplit(leaf.id);
         syncFocusedLeafToOrchestrator();
@@ -463,13 +461,20 @@
       return;
     }
 
-    // Remove shell tab from split tree (may destroy the leaf if it was the last tab)
-    splitTree.removeSessionFromLeaf(ptyKey);
+    // Diff and editor tabs — just remove from tree
+    if (activeEntry.type === "diff" || activeEntry.type === "editor") {
+      splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
+      return;
+    }
 
-    // Close shell tab in the backend
-    const [sessionId, tabIndexStr] = ptyKey.split(":");
-    const tabIndex = parseInt(tabIndexStr, 10);
-    orchestrator.closeShellTab(sessionId, tabIndex);
+    // Shell tabs — remove from tree + close backend PTY
+    splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
+    const colonIdx = activeEntry.ptyKey.indexOf(":");
+    if (colonIdx !== -1) {
+      const sessionId = activeEntry.ptyKey.slice(0, colonIdx);
+      const tabIndex = parseInt(activeEntry.ptyKey.slice(colonIdx + 1), 10);
+      if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
+    }
   }
 
   /** Navigate to the next tab in the focused split leaf. */
@@ -488,6 +493,57 @@
     const currentIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab);
     const prevIdx = (currentIdx - 1 + leaf.tabs.length) % leaf.tabs.length;
     splitTree.setLeafActiveTab(leaf.id, leaf.tabs[prevIdx].ptyKey);
+  }
+
+  /** Toggle diff tab: if it exists in the tree, focus it; otherwise add it to focused leaf. */
+  function toggleDiffInTree(): void {
+    if (!activeSessionId) return;
+    const diffPtyKey = `${activeSessionId}:diff`;
+
+    // If already open, toggle: if active focus away, if not active focus it
+    const existing = splitTree.findTab(diffPtyKey);
+    if (existing) {
+      if (existing.leaf.activeTab === diffPtyKey) {
+        // Diff is active — close it
+        splitTree.removeSessionFromLeaf(diffPtyKey);
+      } else {
+        // Diff exists but not active — focus it
+        splitTree.focusTab(diffPtyKey);
+      }
+      return;
+    }
+
+    // Add diff tab to focused leaf
+    const focusedLeafId = splitTree.getFocusedLeafId();
+    if (!focusedLeafId) return;
+    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
+      ptyKey: diffPtyKey,
+      label: "Diff",
+      icon: "git-compare",
+      type: "diff",
+    };
+    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
+  }
+
+  /** Open a file in an editor tab. If already open, focus it. */
+  function openFileInTree(sessionId: string, filePath: string): void {
+    const editorPtyKey = `${sessionId}:editor:${filePath}`;
+
+    // If already open, focus it
+    if (splitTree.focusTab(editorPtyKey)) return;
+
+    // Add editor tab to focused leaf
+    const focusedLeafId = splitTree.getFocusedLeafId();
+    if (!focusedLeafId) return;
+    const fileName = filePath.split("/").pop() ?? filePath;
+    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
+      ptyKey: editorPtyKey,
+      label: fileName,
+      icon: "file",
+      type: "editor",
+      filePath,
+    };
+    splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
   // Sync the focused leaf's active session to the orchestrator
@@ -636,7 +692,7 @@
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, -1);
           else navCycle.advance(-1);
         }
-        else if (action.type === "toggle_diff") { orchestrator.toggleDiff(); }
+        else if (action.type === "toggle_diff") { toggleDiffInTree(); }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
@@ -829,8 +885,8 @@
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
       onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}
       onCreateTask={() => { showTaskForm = true; }}
-      onToggleDiff={() => orchestrator.toggleDiff()}
-      onOpenFile={(path) => orchestrator.openFile(path)}
+      onToggleDiff={() => toggleDiffInTree()}
+      onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
       onCreatePr={openPrForm}
       onSplitVertical={() => handleSplitAction("split_vertical")}
@@ -871,21 +927,51 @@
         </div>
         {/if}
         <div class="split-leaf-content">
-          {#each leaf.tabs as tabEntry, i (tabEntry.ptyKey)}
+          {#each leaf.tabs as tabEntry (tabEntry.ptyKey)}
             {@const sessionId = ptyKeyToSessionId(tabEntry.ptyKey)}
             {@const session = sessions.find((s) => s.id === sessionId)}
             {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
-            {@const isShellTab = tabEntry.ptyKey.includes(":")}
-            {#if session && poolIsMounted(session.id)}
-              <Terminal
-                sessionId={tabEntry.ptyKey}
-                visible={isActiveInLeaf}
-                focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
-                exited={!isShellTab && session.status === "exited"}
-                skipAttach={isShellTab}
-                onAttached={() => { if (!isShellTab && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
-                onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); orchestrator.clearReviewReady(session.id); }}
-              />
+            {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
+            {#if isActiveInLeaf}
+              {#if tabEntry.type === "agent" || tabEntry.type === "shell"}
+                {#if session && poolIsMounted(session.id)}
+                  <Terminal
+                    sessionId={tabEntry.ptyKey}
+                    visible={true}
+                    focused={leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                    exited={tabEntry.type === "agent" && session.status === "exited"}
+                    skipAttach={tabEntry.type === "shell"}
+                    onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); }}
+                    onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
+                  />
+                {/if}
+              {:else if tabEntry.type === "diff"}
+                {#if session && project}
+                  {@const repoPath = session.worktree_path ?? project.path}
+                  {@const baseBranch = session.base_branch ?? "main"}
+                  <ReviewTab
+                    {repoPath}
+                    {baseBranch}
+                    visible={true}
+                    sessionId={sessionId}
+                    onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
+                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                  />
+                {/if}
+              {:else if tabEntry.type === "editor"}
+                {#if session && project}
+                  {@const editorRepoPath = session.worktree_path ?? project.path}
+                  <EditorTab
+                    repoPath={editorRepoPath}
+                    visible={true}
+                    theme={isDark() ? "vs-dark" : "vs"}
+                    onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
+                    onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
+                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                    onModifiedChange={() => {}}
+                  />
+                {/if}
+              {/if}
             {/if}
           {/each}
           {#if leaf.tabs.length === 0}
@@ -919,7 +1005,7 @@
               } else return;
             }
             loopStore.setActiveLoopId(null);
-            orchestrator.openFile(path);
+            if (activeSessionId) openFileInTree(activeSessionId, path);
           }}
         />
       </div>
@@ -1087,8 +1173,8 @@
         visible={true}
         activeFilePath={editorFileName[activeSessionId] ?? null}
         modifiedPaths={editorModified[activeSessionId] ? new Set([editorFileName[activeSessionId] ?? ""].filter(Boolean)) : new Set()}
-        onOpenFile={(path) => orchestrator.openFile(path)}
-        onPinFile={(path) => orchestrator.openFile(path)}
+        onOpenFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
+        onPinFile={(path) => { if (activeSessionId) openFileInTree(activeSessionId, path); }}
         onFocus={() => focusExplorer()}
       />
     {/if}

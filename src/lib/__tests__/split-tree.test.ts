@@ -21,6 +21,8 @@ import {
   getLeafForSession,
   getActiveTabEntry,
   updateTabLabel,
+  findTab,
+  focusTab,
   serialize,
   deserialize,
   _resetIdCounter,
@@ -28,7 +30,7 @@ import {
 import type { TabEntry } from "../split-tree.svelte";
 
 function tab(ptyKey: string, label?: string): TabEntry {
-  return { ptyKey, label: label ?? ptyKey.toUpperCase(), icon: "terminal" };
+  return { ptyKey, label: label ?? ptyKey.toUpperCase(), icon: "terminal", type: "agent" };
 }
 
 beforeEach(() => {
@@ -445,5 +447,43 @@ describe("serialize / deserialize", () => {
     expect(getTree()!.type).toBe("split");
     const leaves = getAllLeaves();
     expect(leaves.length).toBe(2);
+  });
+});
+
+describe("findTab", () => {
+  it("finds a tab across leaves", () => {
+    initTree([tab("s1")]);
+    splitFocusedLeaf("vertical");
+    addSessionToLeaf(getFocusedLeafId()!, tab("s2"));
+
+    const result = findTab("s2");
+    expect(result).not.toBeNull();
+    expect(result!.tab.ptyKey).toBe("s2");
+  });
+
+  it("returns null for unknown ptyKey", () => {
+    initTree([tab("s1")]);
+    expect(findTab("unknown")).toBeNull();
+  });
+});
+
+describe("focusTab", () => {
+  it("focuses an existing tab in another leaf", () => {
+    initTree([tab("s1")]);
+    const leftId = getFocusedLeafId()!;
+    splitFocusedLeaf("vertical");
+    const rightId = getFocusedLeafId()!;
+    addSessionToLeaf(rightId, tab("s2"));
+
+    // Focus is on right leaf, focus s1 (in left)
+    const result = focusTab("s1");
+    expect(result).toBe(true);
+    expect(getFocusedLeafId()).toBe(leftId);
+    expect(getFocusedLeaf()!.activeTab).toBe("s1");
+  });
+
+  it("returns false for unknown ptyKey", () => {
+    initTree([tab("s1")]);
+    expect(focusTab("unknown")).toBe(false);
   });
 });
