@@ -31,13 +31,14 @@
     repoPath: string;
     visible: boolean;
     theme?: string;
+    initialFile?: string;
     onClose: () => void;
     onFocusEditor: () => void;
     onFileChange?: (fileName: string) => void;
     onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, visible, theme = "vs-dark", onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
+  let { repoPath, visible, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -47,6 +48,15 @@
   let editorContainer: HTMLElement;
   let view: EditorView | null = null;
   let mounted = false;
+  let initialFileOpened = false;
+
+  // Auto-open initialFile when provided
+  $effect(() => {
+    if (initialFile && mounted && !initialFileOpened) {
+      initialFileOpened = true;
+      openFile(initialFile);
+    }
+  });
 
   // Editor-local compartments (not shared with diff renderer)
   const editorFontCompartment = new Compartment();

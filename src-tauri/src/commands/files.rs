@@ -21,6 +21,10 @@ pub async fn list_files(repo_path: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn read_file(file_path: String) -> Result<String, String> {
     let path = std::path::Path::new(&file_path);
+    // Reject path traversal attempts
+    if file_path.contains("..") {
+        return Err("Access denied: path contains '..'".to_string());
+    }
     let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {e}"))?;
     if metadata.len() > 10 * 1024 * 1024 {
         return Err("File is too large (>10MB)".to_string());
@@ -35,5 +39,9 @@ pub fn read_file(file_path: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn write_file(file_path: String, content: String) -> Result<(), String> {
+    // Reject path traversal attempts
+    if file_path.contains("..") {
+        return Err("Access denied: path contains '..'".to_string());
+    }
     std::fs::write(&file_path, &content).map_err(|e| format!("Cannot write file: {e}"))
 }

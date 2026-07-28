@@ -548,6 +548,8 @@
 
   /** Open a file in an editor tab. If already open, focus it. */
   function openFileInTree(sessionId: string, filePath: string): void {
+    // Reject traversal paths
+    if (filePath.includes("..")) return;
     const editorPtyKey = `${sessionId}:editor:${filePath}`;
 
     // If already open, focus it
@@ -990,10 +992,10 @@
                   repoPath={editorRepoPath}
                   visible={true}
                   theme={isDark() ? "vs-dark" : "vs"}
+                  initialFile={tabEntry.filePath}
                   onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
                   onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
                   onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
-                  onModifiedChange={() => {}}
                 />
               {:else}
                 <div class="flex items-center justify-center h-full text-t3 text-sm">No project associated with this session</div>
