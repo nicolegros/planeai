@@ -278,7 +278,10 @@
     const d = data as Record<string, unknown>;
     if (typeof d.focusedLeafId !== "string") return false;
     if (!d.tree || typeof d.tree !== "object") return false;
-    return isValidTreeNode(d.tree);
+    if (!isValidTreeNode(d.tree)) return false;
+    // Migrate: ensure all tabs have a type field (for trees saved before type was added)
+    migrateTreeTypes(d.tree as import("./lib/split-tree.svelte").TreeNode);
+    return true;
   }
 
   function isValidTreeNode(node: unknown): boolean {
@@ -292,6 +295,23 @@
         && isValidTreeNode(n.children[0]) && isValidTreeNode(n.children[1]);
     }
     return false;
+  }
+
+  /** Backfill type field on TabEntry for trees saved before type was introduced. */
+  function migrateTreeTypes(node: import("./lib/split-tree.svelte").TreeNode): void {
+    if (node.type === "leaf") {
+      for (const tab of node.tabs) {
+        if (!tab.type) {
+          if (tab.ptyKey.includes(":diff")) tab.type = "diff";
+          else if (tab.ptyKey.includes(":editor:")) tab.type = "editor";
+          else if (tab.ptyKey.includes(":")) tab.type = "shell";
+          else tab.type = "agent";
+        }
+      }
+    } else {
+      migrateTreeTypes(node.children[0]);
+      migrateTreeTypes(node.children[1]);
+    }
   }
 
   // When a new session is created, add it to the focused leaf
@@ -506,6 +526,7 @@
       if (existing.leaf.activeTab === diffPtyKey) {
         // Diff is active — close it
         splitTree.removeSessionFromLeaf(diffPtyKey);
+        tick().then(() => refocusTerminal());
       } else {
         // Diff exists but not active — focus it
         splitTree.focusTab(diffPtyKey);
@@ -818,6 +839,7 @@
         onDeleteLoop={(id) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === id); if (!loop) return; const hasSessions = (loopStore.getSessionsForLoop(id) ?? []).length > 0; if (hasSessions) { loopToDelete = loop; } else { deleteLoopOnly(id); } }}
         onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
         selectedLoopId={activeLoopId}
+        onToggleDiff={toggleDiffInTree}
       />
   {/if}
 
@@ -932,45 +954,49 @@
             {@const session = sessions.find((s) => s.id === sessionId)}
             {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
-            {#if isActiveInLeaf}
-              {#if tabEntry.type === "agent" || tabEntry.type === "shell"}
-                {#if session && poolIsMounted(session.id)}
-                  <Terminal
-                    sessionId={tabEntry.ptyKey}
-                    visible={true}
-                    focused={leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
-                    exited={tabEntry.type === "agent" && session.status === "exited"}
-                    skipAttach={tabEntry.type === "shell"}
-                    onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); }}
-                    onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
-                  />
-                {/if}
-              {:else if tabEntry.type === "diff"}
-                {#if session && project}
-                  {@const repoPath = session.worktree_path ?? project.path}
-                  {@const baseBranch = session.base_branch ?? "main"}
-                  <ReviewTab
-                    {repoPath}
-                    {baseBranch}
-                    visible={true}
-                    sessionId={sessionId}
-                    onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
-                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
-                  />
-                {/if}
-              {:else if tabEntry.type === "editor"}
-                {#if session && project}
-                  {@const editorRepoPath = session.worktree_path ?? project.path}
-                  <EditorTab
-                    repoPath={editorRepoPath}
-                    visible={true}
-                    theme={isDark() ? "vs-dark" : "vs"}
-                    onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
-                    onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
-                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
-                    onModifiedChange={() => {}}
-                  />
-                {/if}
+            <!-- Terminals always mount (preserving state), controlled by visible -->
+            {#if (tabEntry.type === "agent" || tabEntry.type === "shell") && session && poolIsMounted(session.id)}
+              <Terminal
+                sessionId={tabEntry.ptyKey}
+                visible={isActiveInLeaf}
+                focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                exited={tabEntry.type === "agent" && session.status === "exited"}
+                skipAttach={tabEntry.type === "shell"}
+                onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); }}
+                onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
+              />
+            {/if}
+            <!-- Diff/Editor only render when active (no persistent state to preserve) -->
+            {#if isActiveInLeaf && tabEntry.type === "diff"}
+              {#if session && project}
+                {@const repoPath = session.worktree_path ?? project.path}
+                {@const baseBranch = session.base_branch ?? "main"}
+                <ReviewTab
+                  {repoPath}
+                  {baseBranch}
+                  visible={true}
+                  sessionId={sessionId}
+                  onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
+                  onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                />
+              {:else}
+                <div class="flex items-center justify-center h-full text-t3 text-sm">No project associated with this session</div>
+              {/if}
+            {/if}
+            {#if isActiveInLeaf && tabEntry.type === "editor"}
+              {#if session && project}
+                {@const editorRepoPath = session.worktree_path ?? project.path}
+                <EditorTab
+                  repoPath={editorRepoPath}
+                  visible={true}
+                  theme={isDark() ? "vs-dark" : "vs"}
+                  onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
+                  onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
+                  onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                  onModifiedChange={() => {}}
+                />
+              {:else}
+                <div class="flex items-center justify-center h-full text-t3 text-sm">No project associated with this session</div>
               {/if}
             {/if}
           {/each}

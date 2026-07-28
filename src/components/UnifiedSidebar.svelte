@@ -44,10 +44,11 @@
     onStopLoop?: (loopId: string) => void;
     onDeleteLoop?: (loopId: string) => void;
     onDeleteLoopSession?: (session: Session, loopId: string) => void;
+    onToggleDiff?: () => void;
     selectedLoopId?: string | null;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, selectedLoopId = null }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -492,14 +493,14 @@
       else if (action.type === "rename") startRename(session);
       else if (action.type === "restart") onRestartSession(session);
       else if (action.type === "open_pr") { if (session.pr_url) openUrl(session.pr_url); }
-      else if (action.type === "review") { onSelectSession(session.id); orchestrator.toggleDiff(); }
+      else if (action.type === "review") { onSelectSession(session.id); onToggleDiff?.(); }
     } else if (current.type === "task") {
       const task = current.task;
       if (action.type === "select" || action.type === "start_session") handleTaskClick(task, current.projectPath);
       else if (action.type === "edit") taskPanelRef?.openEdit(task);
       else if (action.type === "status") moveTask(task.key, action.status);
       else if (action.type === "open_pr") { const linked = sessionForTask(task.key); if (linked?.pr_url) openUrl(linked.pr_url); }
-      else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); orchestrator.toggleDiff(); } }
+      else if (action.type === "review") { const linked = sessionForTask(task.key); if (linked) { onSelectSession(linked.id); onToggleDiff?.(); } }
       else if (action.type === "archive") { const linked = sessionForTask(task.key); if (linked) fadeOutThenAct(linked.id, () => onArchiveSession(linked)); }
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
       else if (action.type === "rename") { const linked = sessionForTask(task.key); if (linked) startRename(linked); }
@@ -879,7 +880,7 @@
           { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
         ]
       : [
-          { label: "Review", onSelect: () => { onSelectSession(menuSession.id); orchestrator.toggleDiff(); } },
+          { label: "Review", onSelect: () => { onSelectSession(menuSession.id); onToggleDiff?.(); } },
           { label: "Rename", onSelect: () => startRename(menuSession) },
           { label: "Archive", onSelect: () => fadeOutThenAct(menuSession.id, () => onArchiveSession(menuSession)) },
           { label: "Delete", danger: true, onSelect: () => fadeOutThenAct(menuSession.id, () => onDeleteSession(menuSession)) },
@@ -914,7 +915,7 @@
     onClose={() => (taskContextMenu = null)}
     items={[
       ...(linkedSession
-        ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); orchestrator.toggleDiff(); } }]
+        ? [{ label: "Review diff", onSelect: () => { onSelectSession(linkedSession.id); onToggleDiff?.(); } }]
         : []),
       { label: "Edit task", onSelect: () => taskPanelRef?.openEdit(menuTask) },
       { label: "Change status", children: statusChildren },
@@ -951,7 +952,7 @@
     y={loopSessionContextMenu.y}
     onClose={() => (loopSessionContextMenu = null)}
     items={[
-      { label: "Review", onSelect: () => { onSelectSession(loopSessionContextMenu!.session.id); orchestrator.toggleDiff(); } },
+      { label: "Review", onSelect: () => { onSelectSession(loopSessionContextMenu!.session.id); onToggleDiff?.(); } },
       { label: "Delete", danger: true, onSelect: () => { onDeleteLoopSession?.(loopSessionContextMenu!.session, loopSessionContextMenu!.loopId); loopSessionContextMenu = null; } },
     ]}
   />
