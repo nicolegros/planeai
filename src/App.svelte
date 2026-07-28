@@ -221,11 +221,15 @@
   $effect(() => {
     if (!activeSessionId) return;
     const tree = splitTree.getTree();
-    if (!tree || tree.type !== "leaf") return; // only in single-pane mode
-    // Check if the active session is already in the leaf
-    const hasActive = tree.tabs.some((ptyKey) => ptyKeyToSessionId(ptyKey) === activeSessionId);
+    if (!tree) return;
+
+    // Check if the active session is already in the tree
+    const allLeaves = splitTree.getAllLeaves();
+    const hasActive = allLeaves.some((leaf) =>
+      leaf.tabs.some((ptyKey) => ptyKeyToSessionId(ptyKey) === activeSessionId)
+    );
     if (!hasActive) {
-      // Rebuild the leaf with the new session's tabs
+      // Session changed to one not in the tree — reset to single pane with new session
       const sessionTabs = getTabs(activeSessionId);
       const allPtyKeys = sessionTabs.map((t) =>
         t.index === 0 ? activeSessionId : `${activeSessionId}:${t.index}`
