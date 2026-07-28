@@ -380,13 +380,6 @@
   function doSplit(direction: "vertical" | "horizontal"): void {
     if (!activeSessionId) return;
 
-    // On first split, ensure the tree contains all pty keys for the active session
-    const tree = splitTree.getTree();
-    if (tree && tree.type === "leaf") {
-      const entries = buildTabEntriesForSession(activeSessionId);
-      splitTree.initTree(entries, tree.activeTab || entries[0]?.ptyKey);
-    }
-
     const newLeafId = splitTree.splitFocusedLeaf(direction);
     if (!newLeafId) return;
 
@@ -807,14 +800,12 @@
     <!-- Split leaf snippet: renders a leaf pane with its own tab bar and terminal -->
     {#snippet splitLeafSnippet(leaf: LeafNode)}
       {@const leafTabs = getLeafTabInfo(leaf)}
-      {@const focusedLeafId = splitTree.getFocusedLeafId()}
-      {@const isLeafFocused = leaf.id === focusedLeafId}
       {@const activeEntry = splitTree.getActiveTabEntry(leaf)}
       {@const activeTabIdx = leaf.tabs.findIndex((t) => t.ptyKey === leaf.activeTab)}
       {@const showLeafTabBar = hasMultiplePanes}
       <div
         class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
-        class:split-leaf-focused={isLeafFocused && hasMultiplePanes}
+        class:split-leaf-focused={leaf.id === splitTree.getFocusedLeafId() && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
         onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); orchestrator.selectSession(sid); } focusTerminal(); }}
@@ -846,7 +837,7 @@
               <Terminal
                 sessionId={tabEntry.ptyKey}
                 visible={isActiveInLeaf}
-                focused={isActiveInLeaf && isLeafFocused && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                 exited={!isShellTab && session.status === "exited"}
                 skipAttach={isShellTab}
                 onAttached={() => { if (!isShellTab && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
