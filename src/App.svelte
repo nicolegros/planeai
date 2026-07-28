@@ -217,25 +217,64 @@
     }
   });
 
-  // When active session changes in single-pane mode, sync tree to show that session
+  // ─── Per-session split layout cache ────────────────────────────────────────
+  // Stores serialized split trees keyed by the "primary" session ID in that layout
+  let splitTreeCache = $state<Record<string, import("./lib/split-tree.svelte").SerializedTree>>({});
+  let lastTreeSessionId = $state<string | null>(null);
+
+  /** Get the primary session ID that a tree belongs to (from first leaf's first tab) */
+  function getTreeSessionId(): string | null {
+    const leaves = splitTree.getAllLeaves();
+    if (leaves.length === 0) return null;
+    const firstPtyKey = leaves[0].tabs[0];
+    return firstPtyKey ? ptyKeyToSessionId(firstPtyKey) : null;
+  }
+
+  // When active session changes, save current tree and restore/create for new session
   $effect(() => {
     if (!activeSessionId) return;
     const tree = splitTree.getTree();
-    if (!tree) return;
+    if (!tree) {
+      // No tree yet — initialize for this session
+      const sessionTabs = getTabs(activeSessionId);
+      const allPtyKeys = sessionTabs.map((t) =>
+        t.index === 0 ? activeSessionId : `${activeSessionId}:${t.index}`
+      );
+      splitTree.initTree(allPtyKeys.length > 0 ? allPtyKeys : [activeSessionId]);
+      lastTreeSessionId = activeSessionId;
+      return;
+    }
 
     // Check if the active session is already in the tree
     const allLeaves = splitTree.getAllLeaves();
     const hasActive = allLeaves.some((leaf) =>
       leaf.tabs.some((ptyKey) => ptyKeyToSessionId(ptyKey) === activeSessionId)
     );
-    if (!hasActive) {
-      // Session changed to one not in the tree — reset to single pane with new session
+    if (hasActive) {
+      lastTreeSessionId = activeSessionId;
+      return;
+    }
+
+    // Session changed — save current tree for the previous session
+    if (lastTreeSessionId) {
+      const serialized = splitTree.serialize();
+      if (serialized) {
+        splitTreeCache = { ...splitTreeCache, [lastTreeSessionId]: serialized };
+      }
+    }
+
+    // Restore cached tree for the new session, or create fresh
+    const cached = splitTreeCache[activeSessionId];
+    if (cached) {
+      splitTree.deserialize(cached);
+    } else {
       const sessionTabs = getTabs(activeSessionId);
       const allPtyKeys = sessionTabs.map((t) =>
         t.index === 0 ? activeSessionId : `${activeSessionId}:${t.index}`
       );
       splitTree.initTree(allPtyKeys.length > 0 ? allPtyKeys : [activeSessionId]);
     }
+    lastTreeSessionId = activeSessionId;
   });
 
   // When a new session is created, add it to the focused leaf
