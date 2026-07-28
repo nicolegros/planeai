@@ -861,15 +861,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_builtin_n_candidates_arbiter() {
+    fn parse_builtin_no_mistakes() {
         let recipe = RecipeService::parse_yaml(BUILTIN_NO_MISTAKES)
-            .expect("built-in n-candidates-arbiter should parse");
+            .expect("built-in no-mistakes should parse");
         assert_eq!(recipe.schema, RECIPE_SCHEMA_V1);
-        assert_eq!(recipe.id, "n-candidates-arbiter");
-        assert_eq!(recipe.name, "N-Candidates + Arbiter");
+        assert_eq!(recipe.id, "no-mistakes");
+        assert_eq!(recipe.name, "No Mistakes");
         assert_eq!(recipe.roles.len(), 2);
-        assert!(recipe.roles.contains_key("maker"));
-        assert!(recipe.roles.contains_key("arbiter"));
+        assert!(recipe.roles.contains_key("reviewer"));
+        assert!(recipe.roles.contains_key("gatekeeper"));
         assert!(!recipe.steps.is_empty());
     }
 
@@ -881,16 +881,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_n_candidates_arbiter_by_id() {
-        let result = RecipeService::resolve("n-candidates-arbiter", None);
+    fn resolve_no_mistakes_by_id() {
+        let result = RecipeService::resolve("no-mistakes", None);
         assert!(result.is_ok());
         let dr = result.unwrap();
-        assert_eq!(dr.recipe.id, "n-candidates-arbiter");
-        assert_eq!(dr.source, RecipeSource::Builtin);
+        assert_eq!(dr.recipe.id, "no-mistakes");
+        // Source may be User (if recipe exists in ~/.config/planeai/recipes/) or Builtin
+        assert!(
+            dr.source == RecipeSource::Builtin || dr.source == RecipeSource::User,
+            "expected Builtin or User, got {:?}",
+            dr.source
+        );
     }
 
     #[test]
-    fn n_candidates_arbiter_snapshot_creation() {
+    fn no_mistakes_snapshot_creation() {
         let recipe = RecipeService::parse_yaml(BUILTIN_NO_MISTAKES).unwrap();
         let discovered = DiscoveredRecipe {
             recipe,
@@ -899,20 +904,15 @@ mod tests {
         };
         let mut inputs = BTreeMap::new();
         inputs.insert(
-            "goal".to_string(),
-            serde_json::Value::String("implement feature X".to_string()),
-        );
-        inputs.insert(
-            "providers".to_string(),
-            serde_json::Value::String("claude,kiro,copilot".to_string()),
+            "branch".to_string(),
+            serde_json::Value::String("feat/my-feature".to_string()),
         );
 
         let snapshot = RecipeService::create_snapshot(&discovered, inputs);
-        assert_eq!(snapshot.recipe_id, "n-candidates-arbiter");
-        assert_eq!(snapshot.runtime.current_step, "create_candidates");
-        assert_eq!(snapshot.policy.max_rounds, 1);
+        assert_eq!(snapshot.recipe_id, "no-mistakes");
+        assert_eq!(snapshot.runtime.current_step, "rebase");
+        assert_eq!(snapshot.policy.max_rounds, 5);
         assert_eq!(snapshot.policy.max_sessions, 10);
-        assert_eq!(snapshot.policy.stale_after_ms, Some(900000));
-        assert!(snapshot.runtime.candidate_handoffs.is_empty());
+        assert_eq!(snapshot.policy.stale_after_ms, Some(600000));
     }
 }
