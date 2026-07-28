@@ -208,11 +208,11 @@
       splitTreeInitialized = true;
       const tree = splitTree.getTree();
       if (!tree) {
-        // Initialize with the active session or first session
         const initialId = activeSessionId ?? sessions[0]?.id;
         if (initialId) {
           const session = sessions.find((s) => s.id === initialId);
           splitTree.initTree([{ ptyKey: initialId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }]);
+          lastTreeSessionId = initialId;
         }
       }
     }
@@ -220,14 +220,15 @@
 
   // ─── Per-session split layout (DB-backed) ───────────────────────────────────
   let lastTreeSessionId = $state<string | null>(null);
-  let loadGeneration = $state(0);
+  let loadGeneration = 0; // not reactive — just a counter for staleness
 
   // When active session changes, save current tree and load/create for new session
   $effect(() => {
     if (!activeSessionId || !splitTreeInitialized) return;
+    if (activeSessionId === lastTreeSessionId) return;
+
     const tree = splitTree.getTree();
     if (!tree) {
-      // No tree yet — load from DB or initialize fresh
       loadLayoutForSession(activeSessionId);
       return;
     }
