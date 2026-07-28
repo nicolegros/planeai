@@ -303,7 +303,14 @@
       for (const tab of node.tabs) {
         if (!tab.type) {
           if (tab.ptyKey.includes(":diff")) tab.type = "diff";
-          else if (tab.ptyKey.includes(":editor:")) tab.type = "editor";
+          else if (tab.ptyKey.includes(":editor:")) {
+            tab.type = "editor";
+            // Restore filePath from ptyKey format: sessionId:editor:filePath
+            if (!tab.filePath) {
+              const editorIdx = tab.ptyKey.indexOf(":editor:");
+              if (editorIdx !== -1) tab.filePath = tab.ptyKey.slice(editorIdx + 8);
+            }
+          }
           else if (tab.ptyKey.includes(":")) tab.type = "shell";
           else tab.type = "agent";
         }
@@ -548,8 +555,8 @@
 
   /** Open a file in an editor tab. If already open, focus it. */
   function openFileInTree(sessionId: string, filePath: string): void {
-    // Reject traversal paths
-    if (filePath.includes("..")) return;
+    // Reject traversal paths (.. as path segment)
+    if (filePath.split("/").includes("..")) return;
     const editorPtyKey = `${sessionId}:editor:${filePath}`;
 
     // If already open, focus it
@@ -968,37 +975,39 @@
                 onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
               />
             {/if}
-            <!-- Diff/Editor only render when active (no persistent state to preserve) -->
-            {#if isActiveInLeaf && tabEntry.type === "diff"}
-              {#if session && project}
-                {@const repoPath = session.worktree_path ?? project.path}
-                {@const baseBranch = session.base_branch ?? "main"}
-                <ReviewTab
-                  {repoPath}
-                  {baseBranch}
-                  visible={true}
-                  sessionId={sessionId}
-                  onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
-                  onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
-                />
-              {:else}
-                <div class="flex items-center justify-center h-full text-t3 text-sm">No project associated with this session</div>
+            <!-- Diff/Editor render when active; EditorTab stays mounted to preserve state -->
+            {#if tabEntry.type === "diff"}
+              {#if isActiveInLeaf}
+                {#if session && project}
+                  {@const repoPath = session.worktree_path ?? project.path}
+                  {@const baseBranch = session.base_branch ?? "main"}
+                  <ReviewTab
+                    {repoPath}
+                    {baseBranch}
+                    visible={true}
+                    sessionId={sessionId}
+                    onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
+                    onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
+                  />
+                {:else}
+                  <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
+                {/if}
               {/if}
             {/if}
-            {#if isActiveInLeaf && tabEntry.type === "editor"}
+            {#if tabEntry.type === "editor"}
               {#if session && project}
                 {@const editorRepoPath = session.worktree_path ?? project.path}
                 <EditorTab
                   repoPath={editorRepoPath}
-                  visible={true}
+                  visible={isActiveInLeaf}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
                   onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
                   onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
                   onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
                 />
-              {:else}
-                <div class="flex items-center justify-center h-full text-t3 text-sm">No project associated with this session</div>
+              {:else if isActiveInLeaf}
+                <div class="flex items-center justify-center h-full text-t3 text-sm" role="status">No project associated with this session</div>
               {/if}
             {/if}
           {/each}

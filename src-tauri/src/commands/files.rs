@@ -19,29 +19,36 @@ pub async fn list_files(repo_path: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn read_file(file_path: String) -> Result<String, String> {
-    let path = std::path::Path::new(&file_path);
-    // Reject path traversal attempts
-    if file_path.contains("..") {
-        return Err("Access denied: path contains '..'".to_string());
-    }
-    let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {e}"))?;
-    if metadata.len() > 10 * 1024 * 1024 {
-        return Err("File is too large (>10MB)".to_string());
-    }
-    let bytes = std::fs::read(path).map_err(|e| format!("Cannot read file: {e}"))?;
-    let check_len = bytes.len().min(8192);
-    if bytes[..check_len].contains(&0) {
-        return Err("Binary file cannot be opened in the editor".to_string());
-    }
-    String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8".to_string())
+pub async fn read_file(file_path: String) -> Result<String, String> {
+    super::blocking(move || {
+        let path = std::path::Path::new(&file_path);
+        // Reject path traversal: check for ".." as a path component
+        if path.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err("Access denied: path traversal detected".to_string());
+        }
+        let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {e}"))?;
+        if metadata.len() > 10 * 1024 * 1024 {
+            return Err("File is too large (>10MB)".to_string());
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("Cannot read file: {e}"))?;
+        let check_len = bytes.len().min(8192);
+        if bytes[..check_len].contains(&0) {
+            return Err("Binary file cannot be opened in the editor".to_string());
+        }
+        String::from_utf8(bytes).map_err(|_| "File is not valid UTF-8".to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn write_file(file_path: String, content: String) -> Result<(), String> {
-    // Reject path traversal attempts
-    if file_path.contains("..") {
-        return Err("Access denied: path contains '..'".to_string());
-    }
-    std::fs::write(&file_path, &content).map_err(|e| format!("Cannot write file: {e}"))
+pub async fn write_file(file_path: String, content: String) -> Result<(), String> {
+    super::blocking(move || {
+        let path = std::path::Path::new(&file_path);
+        // Reject path traversal: check for ".." as a path component
+        if path.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err("Access denied: path traversal detected".to_string());
+        }
+        std::fs::write(path, &content).map_err(|e| format!("Cannot write file: {e}"))
+    })
+    .await
 }
