@@ -760,7 +760,7 @@
       {@const focusedLeafId = splitTree.getFocusedLeafId()}
       {@const isLeafFocused = leaf.id === focusedLeafId}
       {@const activePtyKey = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0] ?? null}
-      {@const showLeafTabBar = hasMultiplePanes || leaf.tabs.length > 1}
+      {@const showLeafTabBar = hasMultiplePanes}
       <div
         class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
         class:split-leaf-focused={isLeafFocused && hasMultiplePanes}
