@@ -217,6 +217,23 @@
     }
   });
 
+  // When active session changes in single-pane mode, sync tree to show that session
+  $effect(() => {
+    if (!activeSessionId) return;
+    const tree = splitTree.getTree();
+    if (!tree || tree.type !== "leaf") return; // only in single-pane mode
+    // Check if the active session is already in the leaf
+    const hasActive = tree.tabs.some((ptyKey) => ptyKeyToSessionId(ptyKey) === activeSessionId);
+    if (!hasActive) {
+      // Rebuild the leaf with the new session's tabs
+      const sessionTabs = getTabs(activeSessionId);
+      const allPtyKeys = sessionTabs.map((t) =>
+        t.index === 0 ? activeSessionId : `${activeSessionId}:${t.index}`
+      );
+      splitTree.initTree(allPtyKeys.length > 0 ? allPtyKeys : [activeSessionId]);
+    }
+  });
+
   // When a new session is created, add it to the focused leaf
   function addSessionToSplitTree(sessionId: string): void {
     const focusedLeafId = splitTree.getFocusedLeafId();
