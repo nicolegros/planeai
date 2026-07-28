@@ -87,7 +87,7 @@
     </div>
   {/if}
   {#if showAddButton && onAddTab}
-    <button class="flex items-center px-[11px] text-[15px] text-t3 hover:text-t2" onclick={onAddTab}>+</button>
+    <button class="flex items-center px-[11px] text-[15px] text-t3 hover:text-t2" aria-label="New tab" onclick={onAddTab}>+</button>
   {/if}
   <!-- Spacer -->
   <div class="flex-1"></div>

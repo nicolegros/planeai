@@ -220,10 +220,11 @@
 
   // ─── Per-session split layout (DB-backed) ───────────────────────────────────
   let lastTreeSessionId = $state<string | null>(null);
+  let loadGeneration = $state(0);
 
   // When active session changes, save current tree and load/create for new session
   $effect(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId || !splitTreeInitialized) return;
     const tree = splitTree.getTree();
     if (!tree) {
       // No tree yet — load from DB or initialize fresh
@@ -250,22 +251,47 @@
   });
 
   async function loadLayoutForSession(sessionId: string): Promise<void> {
+    const gen = ++loadGeneration;
     try {
       const layoutJson = await sessionsApi.getLayout(sessionId);
+      // Staleness check — if session changed while we were loading, discard
+      if (gen !== loadGeneration) return;
       if (layoutJson) {
         const data = JSON.parse(layoutJson);
-        if (data && data.tree && data.focusedLeafId) {
+        if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
           lastTreeSessionId = sessionId;
-          splitTreeInitialized = true;
           return;
         }
       }
     } catch {}
-    // No saved layout — initialize fresh
+    // Staleness check again
+    if (gen !== loadGeneration) return;
+    // No saved layout or invalid — initialize fresh
     splitTree.initTree(buildTabEntriesForSession(sessionId));
     lastTreeSessionId = sessionId;
-    splitTreeInitialized = true;
+  }
+
+  /** Validate deserialized tree structure to prevent corrupt data from crashing. */
+  function isValidSerializedTree(data: unknown): data is import("./lib/split-tree.svelte").SerializedTree {
+    if (!data || typeof data !== "object") return false;
+    const d = data as Record<string, unknown>;
+    if (typeof d.focusedLeafId !== "string") return false;
+    if (!d.tree || typeof d.tree !== "object") return false;
+    return isValidTreeNode(d.tree);
+  }
+
+  function isValidTreeNode(node: unknown): boolean {
+    if (!node || typeof node !== "object") return false;
+    const n = node as Record<string, unknown>;
+    if (n.type === "leaf") {
+      return Array.isArray(n.tabs) && typeof n.activeTab === "string";
+    }
+    if (n.type === "split") {
+      return Array.isArray(n.children) && n.children.length === 2
+        && isValidTreeNode(n.children[0]) && isValidTreeNode(n.children[1]);
+    }
+    return false;
   }
 
   // When a new session is created, add it to the focused leaf
@@ -306,14 +332,13 @@
 
   // Drag-and-drop state
   let dragSessionId = $state<string | null>(null);
-  let dragSourceLeafId = $state<string | null>(null);
 
-  function handleTabDragStart(e: DragEvent, sessionId: string, leafId: string) {
-    dragSessionId = sessionId;
-    dragSourceLeafId = leafId;
+  function handleTabDragStart(e: DragEvent, ptyKey: string, leafId: string) {
+    if (!ptyKey) { e.preventDefault(); return; }
+    dragSessionId = ptyKey;
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", sessionId);
+      e.dataTransfer.setData("text/plain", ptyKey);
     }
   }
 
@@ -321,7 +346,6 @@
     if (!dragSessionId) return;
     splitTree.moveSessionToLeaf(dragSessionId, targetLeafId, insertIndex);
     dragSessionId = null;
-    dragSourceLeafId = null;
   }
 
   function handleTabDragOver(e: DragEvent) {
@@ -385,7 +409,11 @@
 
     // Create a new shell tab within the current session
     const tabIndex = addTab(activeSessionId);
-    if (tabIndex === -1) return;
+    if (tabIndex === -1) {
+      // Undo the split — destroy the empty leaf
+      splitTree.destroyLeaf(newLeafId);
+      return;
+    }
     pty.incrementTabCount(activeSessionId);
 
     // The pty key for shell tabs is "sessionId:tabIndex"
@@ -483,7 +511,6 @@
     const data = splitTree.serialize();
     if (!data || !lastTreeSessionId) return;
     const sessionId = lastTreeSessionId;
-    sessions.length; // Track for reactivity (ensure sessions are loaded)
     sessionsApi.saveLayout(sessionId, JSON.stringify(data)).catch(() => {});
   }
 
@@ -494,6 +521,7 @@
       if (splitSaveTimeout) clearTimeout(splitSaveTimeout);
       splitSaveTimeout = setTimeout(saveSplitTreeToDb, 500);
     }
+    return () => { if (splitSaveTimeout) clearTimeout(splitSaveTimeout); };
   });
 
   // ─── Project management ─────────────────────────────────────────────────────

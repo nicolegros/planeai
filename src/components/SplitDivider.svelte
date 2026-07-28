@@ -50,6 +50,10 @@
   class="split-divider {direction === 'vertical' ? 'split-divider-vertical' : 'split-divider-horizontal'} {dragging ? 'dragging' : ''}"
   role="separator"
   aria-orientation={direction === "vertical" ? "vertical" : "horizontal"}
+  aria-valuemin={10}
+  aria-valuemax={90}
+  aria-valuenow={Math.round(currentRatio * 100)}
+  aria-label="Resize split pane"
   tabindex="0"
   onpointerdown={handlePointerDown}
   onpointermove={handlePointerMove}

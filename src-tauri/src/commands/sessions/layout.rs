@@ -9,6 +9,9 @@ pub async fn save_session_layout(
     layout_json: String,
     db_state: State<'_, DbState>,
 ) -> Result<(), String> {
+    if layout_json.len() > 1_048_576 {
+        return Err("layout too large".to_string());
+    }
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO session_layouts (session_id, layout_json, updated_at)

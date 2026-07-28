@@ -336,7 +336,7 @@ export function destroyLeaf(leafId: string): void {
   if (!parent) return;
 
   const [child0, child1] = parent.children;
-  const isFirst = child0.type === "leaf" && child0.id === leafId;
+  const isFirst = containsLeaf(child0, leafId);
   const sibling = isFirst ? child1 : child0;
 
   tree = replaceNode(tree, parent.id, sibling);
