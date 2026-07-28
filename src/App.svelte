@@ -264,58 +264,11 @@
   function handleSplitAction(actionType: string): void {
     switch (actionType) {
       case "split_vertical": {
-        const newLeafId = splitTree.splitFocusedLeaf("vertical");
-        if (newLeafId && activeSession) {
-          // Create a new raw terminal session in the active session's project
-          const project = projects.find((p) => p.id === activeSession.project_id);
-          if (project) {
-            sessionsApi.launch({
-              projectId: project.id,
-              projectName: project.name,
-              repoPath: activeSession.worktree_path ?? project.path,
-              branch: activeSession.branch,
-              isNewBranch: false,
-              name: "Shell",
-              useWorktree: false,
-              baseBranch: null,
-              autoApprove: false,
-              provider: getSettings().default_provider || "shell",
-              taskKey: null,
-              taskPrompt: null,
-            }).then((session) => {
-              orchestrator.createSession(session);
-              splitTree.addSessionToLeaf(newLeafId, session.id);
-              orchestrator.selectSession(session.id);
-            });
-          }
-        }
+        splitTree.splitFocusedLeaf("vertical");
         break;
       }
       case "split_horizontal": {
-        const newLeafId = splitTree.splitFocusedLeaf("horizontal");
-        if (newLeafId && activeSession) {
-          const project = projects.find((p) => p.id === activeSession.project_id);
-          if (project) {
-            sessionsApi.launch({
-              projectId: project.id,
-              projectName: project.name,
-              repoPath: activeSession.worktree_path ?? project.path,
-              branch: activeSession.branch,
-              isNewBranch: false,
-              name: "Shell",
-              useWorktree: false,
-              baseBranch: null,
-              autoApprove: false,
-              provider: getSettings().default_provider || "shell",
-              taskKey: null,
-              taskPrompt: null,
-            }).then((session) => {
-              orchestrator.createSession(session);
-              splitTree.addSessionToLeaf(newLeafId, session.id);
-              orchestrator.selectSession(session.id);
-            });
-          }
-        }
+        splitTree.splitFocusedLeaf("horizontal");
         break;
       }
       case "close_split": {
@@ -640,7 +593,7 @@
         {sessions}
         {taskPrefill}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); addSessionToSplitTree(session.id); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
@@ -739,7 +692,10 @@
           {/each}
           {#if leaf.tabs.length === 0}
             <div class="flex items-center justify-center h-full text-t3 text-sm">
-              Empty pane — drag a tab here or create a session
+              <div class="text-center">
+                <p>Empty pane</p>
+                <p class="mt-1 text-xs">Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create a session</p>
+              </div>
             </div>
           {/if}
         </div>
