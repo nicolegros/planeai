@@ -239,9 +239,15 @@ export function removeSessionFromLeaf(ptyKey: string): boolean {
   // Update the leaf
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leaf.id) {
-      const newActive = leaf.activeTab === ptyKey
-        ? (remainingTabs[Math.min(leaf.tabs.findIndex((t) => t.ptyKey === ptyKey), remainingTabs.length - 1)]?.ptyKey ?? "")
-        : leaf.activeTab;
+      const newActive =
+        leaf.activeTab === ptyKey
+          ? (remainingTabs[
+              Math.min(
+                leaf.tabs.findIndex((t) => t.ptyKey === ptyKey),
+                remainingTabs.length - 1,
+              )
+            ]?.ptyKey ?? "")
+          : leaf.activeTab;
       return { ...node, tabs: remainingTabs, activeTab: newActive };
     }
     return node;
@@ -288,16 +294,23 @@ export function moveSessionToLeaf(
   // Add to target
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === targetLeafId) {
-      const idx = insertIndex !== undefined ? Math.min(insertIndex, node.tabs.length) : node.tabs.length;
+      const idx =
+        insertIndex !== undefined ? Math.min(insertIndex, node.tabs.length) : node.tabs.length;
       const newTabs = [...node.tabs];
       newTabs.splice(idx, 0, tabEntry);
       return { ...node, tabs: newTabs, activeTab: tabEntry.ptyKey };
     }
     if (node.type === "leaf" && node.id === sourceLeaf.id) {
       if (sourceDestroyed) return node; // will be cleaned up below
-      const newActive = sourceLeaf.activeTab === ptyKey
-        ? (sourceTabs[Math.min(sourceLeaf.tabs.findIndex((t) => t.ptyKey === ptyKey), sourceTabs.length - 1)]?.ptyKey ?? "")
-        : sourceLeaf.activeTab;
+      const newActive =
+        sourceLeaf.activeTab === ptyKey
+          ? (sourceTabs[
+              Math.min(
+                sourceLeaf.tabs.findIndex((t) => t.ptyKey === ptyKey),
+                sourceTabs.length - 1,
+              )
+            ]?.ptyKey ?? "")
+          : sourceLeaf.activeTab;
       return { ...node, tabs: sourceTabs, activeTab: newActive };
     }
     return node;
@@ -455,10 +468,14 @@ export function getNeighborLeaf(direction: NavDirection): LeafNode | null {
     const lx = l.bounds.x + l.bounds.w / 2;
     const ly = l.bounds.y + l.bounds.h / 2;
     switch (direction) {
-      case "left": return lx < cx;
-      case "right": return lx > cx;
-      case "up": return ly < cy;
-      case "down": return ly > cy;
+      case "left":
+        return lx < cx;
+      case "right":
+        return lx > cx;
+      case "up":
+        return ly < cy;
+      case "down":
+        return ly > cy;
     }
   });
 
@@ -524,11 +541,22 @@ export function moveTabToDirection(direction: NavDirection): string | null {
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === focusedLeafId) {
       const remainingTabs = node.tabs.filter((t) => t.ptyKey !== ptyKey);
-      const newActive = remainingTabs.length > 0
-        ? (remainingTabs[Math.min(node.tabs.findIndex((t) => t.ptyKey === ptyKey), remainingTabs.length - 1)]?.ptyKey ?? "")
-        : "";
+      const newActive =
+        remainingTabs.length > 0
+          ? (remainingTabs[
+              Math.min(
+                node.tabs.findIndex((t) => t.ptyKey === ptyKey),
+                remainingTabs.length - 1,
+              )
+            ]?.ptyKey ?? "")
+          : "";
       const originalLeaf: LeafNode = { ...node, tabs: remainingTabs, activeTab: newActive };
-      const newLeaf: LeafNode = { type: "leaf", id: newLeafId, tabs: [activeEntry], activeTab: ptyKey };
+      const newLeaf: LeafNode = {
+        type: "leaf",
+        id: newLeafId,
+        tabs: [activeEntry],
+        activeTab: ptyKey,
+      };
       const split: SplitNode = {
         type: "split",
         id: splitId,
@@ -606,7 +634,10 @@ function mapTree(node: TreeNode, fn: (node: TreeNode) => TreeNode): TreeNode {
   if (node.type === "leaf") return fn(node);
   const mapped: SplitNode = {
     ...node,
-    children: [mapTree(node.children[0], fn) as TreeNode, mapTree(node.children[1], fn) as TreeNode] as [TreeNode, TreeNode],
+    children: [
+      mapTree(node.children[0], fn) as TreeNode,
+      mapTree(node.children[1], fn) as TreeNode,
+    ] as [TreeNode, TreeNode],
   };
   return fn(mapped);
 }
@@ -646,10 +677,20 @@ function collectLeavesWithBounds(node: TreeNode, bounds: Bounds): LeafWithBounds
 
   if (direction === "vertical") {
     bounds0 = { x: bounds.x, y: bounds.y, w: bounds.w * ratio, h: bounds.h };
-    bounds1 = { x: bounds.x + bounds.w * ratio, y: bounds.y, w: bounds.w * (1 - ratio), h: bounds.h };
+    bounds1 = {
+      x: bounds.x + bounds.w * ratio,
+      y: bounds.y,
+      w: bounds.w * (1 - ratio),
+      h: bounds.h,
+    };
   } else {
     bounds0 = { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h * ratio };
-    bounds1 = { x: bounds.x, y: bounds.y + bounds.h * ratio, w: bounds.w, h: bounds.h * (1 - ratio) };
+    bounds1 = {
+      x: bounds.x,
+      y: bounds.y + bounds.h * ratio,
+      w: bounds.w,
+      h: bounds.h * (1 - ratio),
+    };
   }
 
   return [...collectLeavesWithBounds(c0, bounds0), ...collectLeavesWithBounds(c1, bounds1)];

@@ -23,7 +23,10 @@ pub async fn read_file(file_path: String) -> Result<String, String> {
     super::blocking(move || {
         let path = std::path::Path::new(&file_path);
         // Reject path traversal: check for ".." as a path component
-        if path.components().any(|c| c == std::path::Component::ParentDir) {
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
             return Err("Access denied: path traversal detected".to_string());
         }
         let metadata = std::fs::metadata(path).map_err(|e| format!("Cannot read file: {e}"))?;
@@ -45,7 +48,10 @@ pub async fn write_file(file_path: String, content: String) -> Result<(), String
     super::blocking(move || {
         let path = std::path::Path::new(&file_path);
         // Reject path traversal: check for ".." as a path component
-        if path.components().any(|c| c == std::path::Component::ParentDir) {
+        if path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
             return Err("Access denied: path traversal detected".to_string());
         }
         std::fs::write(path, &content).map_err(|e| format!("Cannot write file: {e}"))
