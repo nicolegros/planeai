@@ -46,7 +46,7 @@
   import { loops as loopsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
-  import { getTabs, getActiveTabIndex } from "./lib/session-tabs.svelte";
+  import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
@@ -251,24 +251,35 @@
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   }
 
-  // Get tab info for a leaf
+  // Get tab info for a leaf (handles both session IDs and pty keys like "sessionId:tabIndex")
   function getLeafTabInfo(leaf: LeafNode): { sessionId: string; label: string; icon: string }[] {
-    return leaf.tabs.map((sessionId) => {
+    return leaf.tabs.map((ptyKey) => {
+      const sessionId = ptyKeyToSessionId(ptyKey);
+      const isShellTab = ptyKey.includes(":");
       const session = sessions.find((s) => s.id === sessionId);
+      if (isShellTab) {
+        return { sessionId: ptyKey, label: "Shell", icon: "terminal" };
+      }
       const name = session?.name || session?.branch || "Session";
-      return { sessionId, label: name, icon: "terminal" };
+      return { sessionId: ptyKey, label: name, icon: session?.provider ? "bot" : "terminal" };
     });
+  }
+
+  /** Extract the session ID from a pty key (strips ":tabIndex" suffix if present) */
+  function ptyKeyToSessionId(ptyKey: string): string {
+    const colonIdx = ptyKey.indexOf(":");
+    return colonIdx === -1 ? ptyKey : ptyKey.slice(0, colonIdx);
   }
 
   // Handle split keyboard actions
   function handleSplitAction(actionType: string): void {
     switch (actionType) {
       case "split_vertical": {
-        splitTree.splitFocusedLeaf("vertical");
+        doSplit("vertical");
         break;
       }
       case "split_horizontal": {
-        splitTree.splitFocusedLeaf("horizontal");
+        doSplit("horizontal");
         break;
       }
       case "close_split": {
@@ -288,13 +299,36 @@
     }
   }
 
+  /**
+   * Split the focused pane and open a shell tab in the new pane.
+   * Uses the existing session's shell tab mechanism ($SHELL -l).
+   */
+  function doSplit(direction: "vertical" | "horizontal"): void {
+    if (!activeSessionId) return;
+    const newLeafId = splitTree.splitFocusedLeaf(direction);
+    if (!newLeafId) return;
+
+    // Create a new shell tab within the current session
+    const tabIndex = addTab(activeSessionId);
+    if (tabIndex === -1) return;
+    pty.incrementTabCount(activeSessionId);
+
+    // The pty key for shell tabs is "sessionId:tabIndex"
+    const ptyKey = `${activeSessionId}:${tabIndex}`;
+    splitTree.addSessionToLeaf(newLeafId, ptyKey);
+    refocusTerminal();
+  }
+
   // Sync the focused leaf's active session to the orchestrator
   function syncFocusedLeafToOrchestrator(): void {
     const leaf = splitTree.getFocusedLeaf();
     if (leaf && leaf.tabs.length > 0) {
-      const activeId = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0];
-      if (activeId && activeId !== activeSessionId) {
-        orchestrator.selectSession(activeId);
+      const activePtyKey = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0];
+      if (activePtyKey) {
+        const sessionId = ptyKeyToSessionId(activePtyKey);
+        if (sessionId !== activeSessionId) {
+          orchestrator.selectSession(sessionId);
+        }
       }
     }
   }
@@ -658,13 +692,13 @@
       {@const leafTabs = getLeafTabInfo(leaf)}
       {@const focusedLeafId = splitTree.getFocusedLeafId()}
       {@const isLeafFocused = leaf.id === focusedLeafId}
-      {@const activeSessionInLeaf = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0] ?? null}
+      {@const activePtyKey = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0] ?? null}
       <div
         class="split-leaf"
         class:split-leaf-focused={isLeafFocused}
         role="group"
         aria-label="Split pane"
-        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeSessionInLeaf) orchestrator.selectSession(activeSessionInLeaf); }}
+        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activePtyKey) { const sid = ptyKeyToSessionId(activePtyKey); orchestrator.selectSession(sid); } }}
       >
         <SplitLeafTabs
           {leaf}
@@ -674,18 +708,19 @@
           onTabDragOver={handleTabDragOver}
         />
         <div class="split-leaf-content">
-          {#each leaf.tabs as sessionId, i (sessionId)}
+          {#each leaf.tabs as ptyKey, i (ptyKey)}
+            {@const sessionId = ptyKeyToSessionId(ptyKey)}
             {@const session = sessions.find((s) => s.id === sessionId)}
-            {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
             {@const isActiveInLeaf = i === leaf.activeTab}
+            {@const isShellTab = ptyKey.includes(":")}
             {#if session && poolIsMounted(session.id)}
               <Terminal
-                sessionId={session.id}
+                sessionId={ptyKey}
                 visible={isActiveInLeaf}
                 focused={isActiveInLeaf && isLeafFocused && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
-                exited={session.status === "exited"}
-                skipAttach={false}
-                onAttached={() => { if (session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
+                exited={!isShellTab && session.status === "exited"}
+                skipAttach={isShellTab}
+                onAttached={() => { if (!isShellTab && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
                 onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); orchestrator.clearReviewReady(session.id); }}
               />
             {/if}
