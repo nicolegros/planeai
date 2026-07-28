@@ -76,6 +76,9 @@
   let allItems: CodeViewItem<ReviewComment>[] = [];
   let diffGeneration = 0;
 
+  // Single-file rendering: only the selected file is displayed in CodeView
+  let allFilesReviewed = $state(false);
+
   // Tracks files that have been expanded to full content (isPartial: false)
   let expandedFiles = new Set<string>();
   // Tracks files currently being loaded for expansion (for loading UI feedback)
@@ -191,11 +194,8 @@
       });
     }
     allItems = items;
-    viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
-    computeHunkMeta(items);
-    if (items.length > 0 && viewer.getItem(currentFileId())) {
-      viewer.scrollTo({ type: "item", id: currentFileId(), align: "start" });
-    }
+    // Single-file mode: only render the currently selected file
+    renderCurrentFile();
     // Work around a race condition where the InteractionManager doesn't pick
     // up enableLineSelection on the first render frame. Bumping a version on
     // the items forces a re-render which re-runs flushManagers/syncPointerListeners.
@@ -215,8 +215,8 @@
     for (let fi = 0; fi < items.length; fi++) {
       const item = items[fi];
       if (item.type !== "diff") continue;
-      // Map item back to files[] index
-      const filesIdx = files.findIndex((f) => `diff:${f.path}` === item.id);
+      // In single-file mode, all items map to selectedIndex
+      const filesIdx = selectedIndex;
       const fileRanges: { start: number; end: number }[] = [];
       for (const hunk of item.fileDiff.hunks) {
         // Find the first changed line in this hunk
@@ -250,14 +250,9 @@
     selectionAnchor = null;
     onFileChange?.(files[index]?.path.split("/").pop() || files[index]?.path || "");
     cursorLine = snapToVisible(1, 1);
-    const id = `diff:${files[index]?.path}`;
-    if (viewer?.getItem(id)) viewer.scrollTo({ type: "item", id, align: "start" });
+    // Single-file mode: re-render CodeView with just this file
+    renderCurrentFile();
     if (diffFocus === "body") showCursor();
-    // Proactively load full file content so expand arrows appear
-    const filePath = files[index]?.path;
-    if (filePath && !expandedFiles.has(filePath)) {
-      expandFileToFull(filePath);
-    }
   }
 
   function navigateFile(index: number) {
@@ -326,7 +321,8 @@
         ? { ...it, version: (it.version ?? 0) + 1, annotations: getAnnotationsForFile(it.id.replace("diff:", "")) }
         : it,
     );
-    viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
+    // Re-render current file with updated annotations
+    renderCurrentFile();
   }
 
   /**
@@ -358,8 +354,10 @@
 
       allItems[itemIdx] = rebuilt;
       expandedFiles.add(filePath);
-      viewer.setItems(allItems.map((it) => ({ ...it, collapsed: viewedFiles.has(it.id.replace("diff:", "")) })));
-      computeHunkMeta(allItems);
+      // Re-render if this is the currently displayed file
+      if (itemIdx === selectedIndex) {
+        renderCurrentFile();
+      }
       return true;
     } catch (e) {
       console.error(`Failed to expand file ${filePath}:`, e);
@@ -367,6 +365,81 @@
     } finally {
       loadingExpansionFiles.delete(filePath);
       loadingExpansionFiles = new Set(loadingExpansionFiles);
+    }
+  }
+
+  /**
+   * Render only the currently selected file in the CodeView.
+   * This is the core of single-file display mode.
+   */
+  function renderCurrentFile() {
+    if (!viewer || allItems.length === 0) return;
+    const item = allItems[selectedIndex];
+    if (!item) return;
+    allFilesReviewed = false;
+    const viewed = viewedFiles.has(item.id.replace("diff:", ""));
+    viewer.setItems([{ ...item, collapsed: viewed }]);
+    computeHunkMeta([item]);
+    // Flush interaction managers after render
+    requestAnimationFrame(() => {
+      if (!viewer) return;
+      const rendered = viewer.getRenderedItems();
+      for (const r of rendered) {
+        r.instance.flushManagers();
+      }
+    });
+    // Proactively load full file content for the current file (enables context expansion)
+    const filePath = files[selectedIndex]?.path;
+    if (filePath && !expandedFiles.has(filePath)) {
+      expandFileToFull(filePath);
+    }
+    // Preload adjacent files
+    preloadAdjacentFiles(selectedIndex);
+  }
+
+  /**
+   * The @pierre/diffs library sets an explicit height on its inner container
+   * based on estimated line heights, which is often too short in split mode.
+   * This observer removes that constraint so the container grows to fit its
+   * actual content, letting the outer viewerRoot handle scrolling naturally.
+   */
+  let containerObserver: MutationObserver | null = null;
+  let suppressObserver = false;
+
+  function startContainerHeightFix() {
+    if (containerObserver || !viewerRoot) return;
+    const container = viewerRoot.firstElementChild as HTMLElement | null;
+    if (!container) return;
+    containerObserver = new MutationObserver(() => {
+      if (suppressObserver) return;
+      if (container.style.height) {
+        suppressObserver = true;
+        container.style.height = "";
+        suppressObserver = false;
+      }
+    });
+    containerObserver.observe(container, { attributes: true, attributeFilter: ["style"] });
+    // Also clear it immediately
+    if (container.style.height) container.style.height = "";
+  }
+
+  function stopContainerHeightFix() {
+    containerObserver?.disconnect();
+    containerObserver = null;
+  }
+
+  /**
+   * Preload full file content for adjacent files (prev and next)
+   * so that switching is instantaneous.
+   */
+  function preloadAdjacentFiles(currentIndex: number) {
+    const adjacent = [currentIndex - 1, currentIndex + 1];
+    for (const idx of adjacent) {
+      if (idx < 0 || idx >= files.length) continue;
+      const filePath = files[idx]?.path;
+      if (!filePath || expandedFiles.has(filePath)) continue;
+      // Fire-and-forget expansion for adjacent files
+      expandFileToFull(filePath);
     }
   }
 
@@ -442,45 +515,82 @@
     if (!path) return;
     const wasViewed = isFileViewed(sessionId, path);
     if (wasViewed) { setFileUnviewed(sessionId, path); } else { setFileViewed(sessionId, path); }
-    // Update CodeView items (collapse/uncollapse viewed files)
-    const ver = getViewedVersion(sessionId);
-    viewer?.setItems(allItems.map((it) => ({ ...it, collapsed: isFileViewed(sessionId, it.id.replace("diff:", "")), version: ver })));
     // Auto-advance to next unviewed file when marking as viewed
     if (advance && !wasViewed) {
       const next = files.findIndex((f, i) => i > index && !isFileViewed(sessionId, f.path));
       if (next !== -1) { selectFile(next); return; }
       const wrap = files.findIndex((f) => !isFileViewed(sessionId, f.path));
       if (wrap !== -1) { selectFile(wrap); return; }
+      // All files reviewed
+      allFilesReviewed = true;
+      return;
     }
+    // Re-render current file (collapsed state may have changed)
+    renderCurrentFile();
   }
 
   // ─── Selection ──────────────────────────────────────────────────────────────
 
   function navigateHunk(direction: 1 | -1) {
-    if (hunkPositions.length === 0) return;
-    // Find next hunk relative to current file + cursor position
+    if (hunkPositions.length === 0) {
+      // Current file has no hunks — try to cross to adjacent file
+      crossFileHunkNav(direction);
+      return;
+    }
+    // Find next hunk within current file relative to cursor position
     let targetIdx = -1;
     if (direction === 1) {
-      targetIdx = hunkPositions.findIndex((h) => h.fileIndex > selectedIndex || (h.fileIndex === selectedIndex && h.line > cursorLine));
-      if (targetIdx === -1) targetIdx = 0; // wrap
+      targetIdx = hunkPositions.findIndex((h) => h.fileIndex === selectedIndex && h.line > cursorLine);
+      if (targetIdx === -1) {
+        // No more hunks in this file — cross to next file
+        crossFileHunkNav(direction);
+        return;
+      }
     } else {
       for (let i = hunkPositions.length - 1; i >= 0; i--) {
-        if (hunkPositions[i].fileIndex < selectedIndex || (hunkPositions[i].fileIndex === selectedIndex && hunkPositions[i].line < cursorLine)) {
+        if (hunkPositions[i].fileIndex === selectedIndex && hunkPositions[i].line < cursorLine) {
           targetIdx = i;
           break;
         }
       }
-      if (targetIdx === -1) targetIdx = hunkPositions.length - 1; // wrap
+      if (targetIdx === -1) {
+        // No more hunks in this file — cross to prev file
+        crossFileHunkNav(direction);
+        return;
+      }
     }
     const target = hunkPositions[targetIdx];
-    if (target.fileIndex !== selectedIndex) {
-      selectedIndex = target.fileIndex;
-      onFileChange?.(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
-    }
     diffFocus = "body";
     cursorLine = target.line;
     selectionAnchor = null;
-    const id = `diff:${files[selectedIndex]?.path}`;
+    const id = currentFileId();
+    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "center" });
+    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
+  }
+
+  /**
+   * Cross file boundary for hunk navigation.
+   * Switches to the adjacent file and lands on the first/last hunk.
+   */
+  function crossFileHunkNav(direction: 1 | -1) {
+    const nextIdx = direction === 1
+      ? (selectedIndex < files.length - 1 ? selectedIndex + 1 : 0) // wrap
+      : (selectedIndex > 0 ? selectedIndex - 1 : files.length - 1); // wrap
+    selectedIndex = nextIdx;
+    onFileChange?.(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
+    showCommentInput = false;
+    selectionAnchor = null;
+    // Re-render the new file
+    renderCurrentFile();
+    // After render, navigate to the appropriate hunk
+    diffFocus = "body";
+    if (hunkPositions.length > 0) {
+      const target = direction === 1 ? hunkPositions[0] : hunkPositions[hunkPositions.length - 1];
+      cursorLine = target.line;
+    } else {
+      cursorLine = snapToVisible(1, 1);
+    }
+    const id = currentFileId();
     viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "center" });
     viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
   }
@@ -517,6 +627,8 @@
         selectedIndex = nextIdx;
         onFileChange?.(files[nextIdx]?.path.split("/").pop() || files[nextIdx]?.path || "");
         diffFocus = "body";
+        // Re-render with the new file
+        renderCurrentFile();
         const ranges = visibleRanges.get(nextIdx);
         if (ranges && ranges.length > 0) {
           cursorLine = dir === 1 ? ranges[0].start : ranges[ranges.length - 1].end;
@@ -584,6 +696,7 @@
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); sendFeedback(); return; }
     if (showCommentInput) return;
     if (showCompareForm) return;
+    if (allFilesReviewed) return;
 
     // Global keys (both modes)
     if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
@@ -696,8 +809,7 @@
       disableFileHeader: false,
       expandUnchanged: true,
       expansionLineCount: 20,
-      // Render all lines in each file (disable line-level virtualization)
-      // so keyboard navigation can always find and scroll to the selected line.
+      // Render all lines (disable line-level virtualization) for keyboard nav
       itemMetrics: { hunkLineCount: 100000 },
       collapsedContextThreshold: 5,
       renderHeaderMetadata(fileDiff) {
@@ -764,6 +876,7 @@
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
+    stopContainerHeightFix();
     viewer?.cleanUp();
     viewer = null;
   });
@@ -780,6 +893,8 @@
       viewer = createViewer();
       applyDiffFont();
       refresh();
+      // Start observing to fix library's incorrect height constraint
+      requestAnimationFrame(() => startContainerHeightFix());
     }
   });
 
@@ -914,6 +1029,12 @@
       <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">Loading diff…</div>
     {:else if files.length === 0}
       <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
+    {:else if allFilesReviewed}
+      <div class="absolute inset-0 flex flex-col items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">
+        <Check size={24} class="text-status-running mb-2" />
+        <span class="text-t2 text-sm font-medium">All files reviewed</span>
+        <span class="text-t3 text-xs mt-1">Select a file from the sidebar to revisit</span>
+      </div>
     {/if}
 
     <!-- Expansion loading indicator -->
@@ -965,19 +1086,4 @@
     </ul>
   </div>
 </div>
-
-{#if showCompareForm}
-  <BranchCompareForm
-    {repoPath}
-    {baseBranch}
-    currentBase={effectiveBase}
-    currentHead={effectiveHead}
-    onConfirm={(baseRef, headRef) => {
-      setComparison(sessionId, { baseRef, headRef });
-      showCompareForm = false;
-      refresh();
-    }}
-    onCancel={() => { showCompareForm = false; }}
-  />
-{/if}
 
