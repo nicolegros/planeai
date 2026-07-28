@@ -817,7 +817,7 @@
         class:split-leaf-focused={isLeafFocused && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
-        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); orchestrator.selectSession(sid); } }}
+        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); orchestrator.selectSession(sid); } focusTerminal(); }}
       >
         {#if showLeafTabBar}
         <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
