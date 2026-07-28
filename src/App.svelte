@@ -319,6 +319,40 @@
     refocusTerminal();
   }
 
+  /** Open a new shell tab in the focused split leaf. */
+  function splitNewTab(): void {
+    if (!activeSessionId) return;
+    const focusedLeafId = splitTree.getFocusedLeafId();
+    if (!focusedLeafId) return;
+
+    const tabIndex = addTab(activeSessionId);
+    if (tabIndex === -1) return;
+    pty.incrementTabCount(activeSessionId);
+
+    const ptyKey = `${activeSessionId}:${tabIndex}`;
+    splitTree.addSessionToLeaf(focusedLeafId, ptyKey);
+    refocusTerminal();
+  }
+
+  /** Close the active tab in the focused split leaf. */
+  function splitCloseTab(): void {
+    const leaf = splitTree.getFocusedLeaf();
+    if (!leaf || leaf.tabs.length === 0) return;
+
+    const ptyKey = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0];
+    if (!ptyKey) return;
+
+    // Remove from split tree (may destroy the leaf if it was the last tab)
+    splitTree.removeSessionFromLeaf(ptyKey);
+
+    // If it's a shell tab, close it in the backend too
+    if (ptyKey.includes(":")) {
+      const [sessionId, tabIndexStr] = ptyKey.split(":");
+      const tabIndex = parseInt(tabIndexStr, 10);
+      orchestrator.closeShellTab(sessionId, tabIndex);
+    }
+  }
+
   // Sync the focused leaf's active session to the orchestrator
   function syncFocusedLeafToOrchestrator(): void {
     const leaf = splitTree.getFocusedLeaf();
@@ -470,8 +504,8 @@
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { orchestrator.handleNewTab(); }
-        else if (action.type === "close_tab") { orchestrator.handleCloseTab(); }
+        else if (action.type === "new_tab") { hasSplits ? splitNewTab() : orchestrator.handleNewTab(); }
+        else if (action.type === "close_tab") { hasSplits ? splitCloseTab() : orchestrator.handleCloseTab(); }
         else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
         else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
         else if (action.type === "next_session") {
