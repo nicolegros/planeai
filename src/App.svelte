@@ -423,15 +423,25 @@
     if (!activeEntry) return;
     const ptyKey = activeEntry.ptyKey;
 
-    // Remove from split tree (may destroy the leaf if it was the last tab)
+    // Don't close the agent tab (non-shell tab) — that would destroy the session view
+    const isShellTab = ptyKey.includes(":");
+    if (!isShellTab) {
+      // If this is the only pane, do nothing (Cmd+W on agent tab = no-op in split mode)
+      // If there are multiple panes, close the split instead (migrate tabs to sibling)
+      if (splitTree.getAllLeaves().length > 1) {
+        splitTree.closeSplit(leaf.id);
+        syncFocusedLeafToOrchestrator();
+      }
+      return;
+    }
+
+    // Remove shell tab from split tree (may destroy the leaf if it was the last tab)
     splitTree.removeSessionFromLeaf(ptyKey);
 
-    // If it's a shell tab, close it in the backend too
-    if (ptyKey.includes(":")) {
-      const [sessionId, tabIndexStr] = ptyKey.split(":");
-      const tabIndex = parseInt(tabIndexStr, 10);
-      orchestrator.closeShellTab(sessionId, tabIndex);
-    }
+    // Close shell tab in the backend
+    const [sessionId, tabIndexStr] = ptyKey.split(":");
+    const tabIndex = parseInt(tabIndexStr, 10);
+    orchestrator.closeShellTab(sessionId, tabIndex);
   }
 
   /** Navigate to the next tab in the focused split leaf. */
