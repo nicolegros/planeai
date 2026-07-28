@@ -51,6 +51,10 @@
   import * as orchestrator from "./lib/session-orchestrator.svelte";
   import UpdateToast from "./components/UpdateToast.svelte";
   import { initUpdateListener, focusUpdateToast, getUpdateState } from "./lib/updater.svelte";
+  import SplitContainer from "./components/SplitContainer.svelte";
+  import SplitLeafTabs from "./components/SplitLeafTabs.svelte";
+  import * as splitTree from "./lib/split-tree.svelte";
+  import type { LeafNode } from "./lib/split-tree.svelte";
 
   // ─── UI-only state ──────────────────────────────────────────────────────────
   let showProjectForm = $state(false);
@@ -186,6 +190,200 @@
     return [...shellTabs, ...extra];
   });
 
+  // ─── Split tree ─────────────────────────────────────────────────────────────
+  const splitTreeNode = $derived(splitTree.getTree());
+  const hasSplits = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
+
+  // Initialize tree when sessions first load (single leaf with all session IDs)
+  let splitTreeInitialized = $state(false);
+
+  $effect(() => {
+    if (!splitTreeInitialized && sessions.length > 0) {
+      splitTreeInitialized = true;
+      const tree = splitTree.getTree();
+      if (!tree) {
+        // Initialize with the active session or first session
+        const initialId = activeSessionId ?? sessions[0]?.id;
+        if (initialId) {
+          splitTree.initTree([initialId]);
+        }
+      }
+    }
+  });
+
+  // When a new session is created, add it to the focused leaf
+  function addSessionToSplitTree(sessionId: string): void {
+    const focusedLeafId = splitTree.getFocusedLeafId();
+    if (focusedLeafId) {
+      splitTree.addSessionToLeaf(focusedLeafId, sessionId);
+    } else if (!splitTree.getTree()) {
+      splitTree.initTree([sessionId]);
+    }
+  }
+
+  // When a session is deleted, remove from tree
+  function removeSessionFromSplitTree(sessionId: string): void {
+    splitTree.removeSessionFromLeaf(sessionId);
+  }
+
+  // Drag-and-drop state
+  let dragSessionId = $state<string | null>(null);
+  let dragSourceLeafId = $state<string | null>(null);
+
+  function handleTabDragStart(e: DragEvent, sessionId: string, leafId: string) {
+    dragSessionId = sessionId;
+    dragSourceLeafId = leafId;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", sessionId);
+    }
+  }
+
+  function handleTabDrop(e: DragEvent, targetLeafId: string, insertIndex: number) {
+    if (!dragSessionId) return;
+    splitTree.moveSessionToLeaf(dragSessionId, targetLeafId, insertIndex);
+    dragSessionId = null;
+    dragSourceLeafId = null;
+  }
+
+  function handleTabDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  }
+
+  // Get tab info for a leaf
+  function getLeafTabInfo(leaf: LeafNode): { sessionId: string; label: string; icon: string }[] {
+    return leaf.tabs.map((sessionId) => {
+      const session = sessions.find((s) => s.id === sessionId);
+      const name = session?.name || session?.branch || "Session";
+      return { sessionId, label: name, icon: "terminal" };
+    });
+  }
+
+  // Handle split keyboard actions
+  function handleSplitAction(actionType: string): void {
+    switch (actionType) {
+      case "split_vertical": {
+        const newLeafId = splitTree.splitFocusedLeaf("vertical");
+        if (newLeafId && activeSession) {
+          // Create a new raw terminal session in the active session's project
+          const project = projects.find((p) => p.id === activeSession.project_id);
+          if (project) {
+            sessionsApi.launch({
+              projectId: project.id,
+              projectName: project.name,
+              repoPath: activeSession.worktree_path ?? project.path,
+              branch: activeSession.branch,
+              isNewBranch: false,
+              name: "Shell",
+              useWorktree: false,
+              baseBranch: null,
+              autoApprove: false,
+              provider: getSettings().default_provider || "shell",
+              taskKey: null,
+              taskPrompt: null,
+            }).then((session) => {
+              orchestrator.createSession(session);
+              splitTree.addSessionToLeaf(newLeafId, session.id);
+              orchestrator.selectSession(session.id);
+            });
+          }
+        }
+        break;
+      }
+      case "split_horizontal": {
+        const newLeafId = splitTree.splitFocusedLeaf("horizontal");
+        if (newLeafId && activeSession) {
+          const project = projects.find((p) => p.id === activeSession.project_id);
+          if (project) {
+            sessionsApi.launch({
+              projectId: project.id,
+              projectName: project.name,
+              repoPath: activeSession.worktree_path ?? project.path,
+              branch: activeSession.branch,
+              isNewBranch: false,
+              name: "Shell",
+              useWorktree: false,
+              baseBranch: null,
+              autoApprove: false,
+              provider: getSettings().default_provider || "shell",
+              taskKey: null,
+              taskPrompt: null,
+            }).then((session) => {
+              orchestrator.createSession(session);
+              splitTree.addSessionToLeaf(newLeafId, session.id);
+              orchestrator.selectSession(session.id);
+            });
+          }
+        }
+        break;
+      }
+      case "close_split": {
+        const focusedLeafId = splitTree.getFocusedLeafId();
+        if (focusedLeafId) splitTree.closeSplit(focusedLeafId);
+        syncFocusedLeafToOrchestrator();
+        break;
+      }
+      case "focus_split_left": splitTree.focusDirection("left"); syncFocusedLeafToOrchestrator(); break;
+      case "focus_split_right": splitTree.focusDirection("right"); syncFocusedLeafToOrchestrator(); break;
+      case "focus_split_up": splitTree.focusDirection("up"); syncFocusedLeafToOrchestrator(); break;
+      case "focus_split_down": splitTree.focusDirection("down"); syncFocusedLeafToOrchestrator(); break;
+      case "move_tab_left": splitTree.moveTabToDirection("left"); break;
+      case "move_tab_right": splitTree.moveTabToDirection("right"); break;
+      case "move_tab_up": splitTree.moveTabToDirection("up"); break;
+      case "move_tab_down": splitTree.moveTabToDirection("down"); break;
+    }
+  }
+
+  // Sync the focused leaf's active session to the orchestrator
+  function syncFocusedLeafToOrchestrator(): void {
+    const leaf = splitTree.getFocusedLeaf();
+    if (leaf && leaf.tabs.length > 0) {
+      const activeId = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0];
+      if (activeId && activeId !== activeSessionId) {
+        orchestrator.selectSession(activeId);
+      }
+    }
+  }
+
+  // ─── Split tree persistence ─────────────────────────────────────────────────
+  function getSplitStorageKey(): string {
+    const projectId = activeSession?.project_id ?? "default";
+    return `planeai_split_tree_${projectId}`;
+  }
+
+  function saveSplitTree(): void {
+    const data = splitTree.serialize();
+    if (data) {
+      try { localStorage.setItem(getSplitStorageKey(), JSON.stringify(data)); } catch {}
+    }
+  }
+
+  function loadSplitTree(): void {
+    try {
+      const key = getSplitStorageKey();
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && data.tree && data.focusedLeafId) {
+          splitTree.deserialize(data);
+          splitTreeInitialized = true;
+        }
+      }
+    } catch {}
+  }
+
+  // Auto-save split tree on changes (debounced)
+  let splitSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    // Access the tree to track changes
+    const _tree = splitTree.getTree();
+    if (splitTreeInitialized && _tree) {
+      if (splitSaveTimeout) clearTimeout(splitSaveTimeout);
+      splitSaveTimeout = setTimeout(saveSplitTree, 500);
+    }
+  });
+
   // ─── Project management ─────────────────────────────────────────────────────
   async function openPreferences() {
     const existing = await WebviewWindow.getByLabel("preferences");
@@ -307,6 +505,7 @@
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
         else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
+        else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => !!(activeSessionId && editorTabActive[activeSessionId]),
@@ -494,10 +693,63 @@
       onOpenFile={(path) => orchestrator.openFile(path)}
       onOpenLogViewer={logViewerEnabled ? () => { showLogViewer = true; } : undefined}
       onCreatePr={openPrForm}
+      onSplitVertical={() => handleSplitAction("split_vertical")}
+      onSplitHorizontal={() => handleSplitAction("split_horizontal")}
+      onCloseSplit={() => handleSplitAction("close_split")}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
 
+    <!-- Split leaf snippet: renders a leaf pane with its own tab bar and terminal -->
+    {#snippet splitLeafSnippet(leaf: LeafNode)}
+      {@const leafTabs = getLeafTabInfo(leaf)}
+      {@const focusedLeafId = splitTree.getFocusedLeafId()}
+      {@const isLeafFocused = leaf.id === focusedLeafId}
+      {@const activeSessionInLeaf = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0] ?? null}
+      <div
+        class="split-leaf"
+        class:split-leaf-focused={isLeafFocused}
+        role="group"
+        aria-label="Split pane"
+        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeSessionInLeaf) orchestrator.selectSession(activeSessionInLeaf); }}
+      >
+        <SplitLeafTabs
+          {leaf}
+          tabs={leafTabs}
+          onTabDragStart={handleTabDragStart}
+          onTabDrop={handleTabDrop}
+          onTabDragOver={handleTabDragOver}
+        />
+        <div class="split-leaf-content">
+          {#each leaf.tabs as sessionId, i (sessionId)}
+            {@const session = sessions.find((s) => s.id === sessionId)}
+            {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
+            {@const isActiveInLeaf = i === leaf.activeTab}
+            {#if session && poolIsMounted(session.id)}
+              <Terminal
+                sessionId={session.id}
+                visible={isActiveInLeaf}
+                focused={isActiveInLeaf && isLeafFocused && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                exited={session.status === "exited"}
+                skipAttach={false}
+                onAttached={() => { if (session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
+                onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); orchestrator.clearReviewReady(session.id); }}
+              />
+            {/if}
+          {/each}
+          {#if leaf.tabs.length === 0}
+            <div class="flex items-center justify-center h-full text-t3 text-sm">
+              Empty pane — drag a tab here or create a session
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/snippet}
+
+    <!-- Split tree rendering or flat session rendering -->
+    {#if hasSplits && splitTreeNode && !activeLoopId}
+      <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
+    {:else}
     {#each sessions as session (session.id)}
       {@const tabs = getTabs(session.id)}
       {@const activeTab = getActiveTabIndex(session.id)}
@@ -546,6 +798,7 @@
         />
       {/if}
     {/each}
+    {/if}
 
     {#if activeLoopId}
       <div class="w-full h-full bg-main">
