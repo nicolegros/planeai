@@ -3,6 +3,7 @@
   import { Bot, Terminal, GitCompare, FileCode, MessageSquare } from "@lucide/svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import type { Tab } from "../lib/session-tabs.svelte";
+  import TabStrip from "./TabStrip.svelte";
 
   interface Props {
     projectName: string | null;
@@ -33,8 +34,6 @@
   let commentCount = $derived(sessionId ? getCommentCount(sessionId) : 0);
   let isMerged = $derived(prState === "merged");
   let isDraft = $derived(prState === "draft");
-
-  const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 </script>
 
 <header
@@ -55,22 +54,7 @@
   {/if}
 
   <!-- Inline tabs -->
-  <div data-tauri-drag-region class="flex items-stretch h-[38px] flex-1" role="tablist">
-    {#each tabs as tab (tab.index)}
-      {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
-      <button
-        role="tab"
-        aria-selected={tab.index === activeTabIndex}
-        class="flex items-center gap-[7px] px-[13px] text-[12.5px] font-medium select-none border-b-2 transition-colors
-          {tab.index === activeTabIndex ? 'border-accent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
-        onclick={() => onSelectTab(tab.index)}
-      >
-        <Icon size={13} class={tab.index === activeTabIndex ? 'text-accent' : 'text-t3'} />
-        {tab.label}
-      </button>
-    {/each}
-    <button class="flex items-center px-[11px] text-[15px] text-t3 hover:text-t2" onclick={onAddTab}>+</button>
-  </div>
+  <TabStrip {tabs} {activeTabIndex} onSelectTab={onSelectTab} onAddTab={onAddTab} />
 
   <!-- Right cluster -->
   <div class="ml-auto flex items-center gap-3 shrink-0">

@@ -52,7 +52,7 @@
   import UpdateToast from "./components/UpdateToast.svelte";
   import { initUpdateListener, focusUpdateToast, getUpdateState } from "./lib/updater.svelte";
   import SplitContainer from "./components/SplitContainer.svelte";
-  import SplitLeafTabs from "./components/SplitLeafTabs.svelte";
+  import TabStrip from "./components/TabStrip.svelte";
   import * as splitTree from "./lib/split-tree.svelte";
   import type { LeafNode } from "./lib/split-tree.svelte";
 
@@ -251,9 +251,9 @@
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
   }
 
-  // Get tab info for a leaf (handles both session IDs and pty keys like "sessionId:tabIndex")
-  function getLeafTabInfo(leaf: LeafNode): { sessionId: string; label: string; icon: string }[] {
-    return leaf.tabs.map((ptyKey) => {
+  // Get tab info for a leaf — returns Tab[] compatible with TabStrip
+  function getLeafTabInfo(leaf: LeafNode): import("./lib/session-tabs.svelte").Tab[] {
+    return leaf.tabs.map((ptyKey, i) => {
       const sessionId = ptyKeyToSessionId(ptyKey);
       const isShellTab = ptyKey.includes(":");
       const session = sessions.find((s) => s.id === sessionId);
@@ -262,10 +262,10 @@
         const sessionTabList = getTabs(sessionId);
         const tabEntry = sessionTabList.find((t) => t.index === tabIndex);
         const label = tabEntry?.customTitle ? tabEntry.label : "Shell";
-        return { sessionId: ptyKey, label, icon: "terminal" };
+        return { index: i, label, icon: "terminal" };
       }
       const name = session?.name || session?.branch || "Session";
-      return { sessionId: ptyKey, label: name, icon: session?.provider ? "bot" : "terminal" };
+      return { index: i, label: name, icon: session?.provider ? "bot" : "terminal" };
     });
   }
 
@@ -751,13 +751,21 @@
         aria-label="Split pane"
         onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activePtyKey) { const sid = ptyKeyToSessionId(activePtyKey); orchestrator.selectSession(sid); } }}
       >
-        <SplitLeafTabs
-          {leaf}
-          tabs={leafTabs}
-          onTabDragStart={handleTabDragStart}
-          onTabDrop={handleTabDrop}
-          onTabDragOver={handleTabDragOver}
-        />
+        <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
+          <TabStrip
+            tabs={leafTabs}
+            activeTabIndex={leaf.activeTab}
+            showAddButton={true}
+            showCloseButton={splitTree.getAllLeaves().length > 1}
+            draggable={true}
+            onSelectTab={(i) => { splitTree.setFocusedLeaf(leaf.id); splitTree.setLeafActiveTab(leaf.id, i); }}
+            onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
+            onClose={() => splitTree.closeSplit(leaf.id)}
+            onTabDragStart={(e, tabIndex) => handleTabDragStart(e, leaf.tabs[tabIndex], leaf.id)}
+            onTabDrop={(e, insertIndex) => handleTabDrop(e, leaf.id, insertIndex)}
+            onTabDragOver={handleTabDragOver}
+          />
+        </div>
         <div class="split-leaf-content">
           {#each leaf.tabs as ptyKey, i (ptyKey)}
             {@const sessionId = ptyKeyToSessionId(ptyKey)}
