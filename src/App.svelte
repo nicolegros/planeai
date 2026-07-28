@@ -568,7 +568,7 @@
     {ciStatus}
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
-    tabs={titlebarTabs}
+    tabs={hasSplits ? [] : titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
