@@ -370,6 +370,22 @@
     }
   }
 
+  /** Navigate to the next tab in the focused split leaf. */
+  function splitNextTab(): void {
+    const leaf = splitTree.getFocusedLeaf();
+    if (!leaf || leaf.tabs.length <= 1) return;
+    const next = (leaf.activeTab + 1) % leaf.tabs.length;
+    splitTree.setLeafActiveTab(leaf.id, next);
+  }
+
+  /** Navigate to the previous tab in the focused split leaf. */
+  function splitPrevTab(): void {
+    const leaf = splitTree.getFocusedLeaf();
+    if (!leaf || leaf.tabs.length <= 1) return;
+    const prev = (leaf.activeTab - 1 + leaf.tabs.length) % leaf.tabs.length;
+    splitTree.setLeafActiveTab(leaf.id, prev);
+  }
+
   // Sync the focused leaf's active session to the orchestrator
   function syncFocusedLeafToOrchestrator(): void {
     const leaf = splitTree.getFocusedLeaf();
@@ -523,8 +539,8 @@
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
         else if (action.type === "new_tab") { hasSplits ? splitNewTab() : orchestrator.handleNewTab(); }
         else if (action.type === "close_tab") { hasSplits ? splitCloseTab() : orchestrator.handleCloseTab(); }
-        else if (action.type === "next_tab") { orchestrator.handleNextTab(); }
-        else if (action.type === "prev_tab") { orchestrator.handlePrevTab(); }
+        else if (action.type === "next_tab") { hasSplits ? splitNextTab() : orchestrator.handleNextTab(); }
+        else if (action.type === "prev_tab") { hasSplits ? splitPrevTab() : orchestrator.handlePrevTab(); }
         else if (action.type === "next_session") {
           const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
