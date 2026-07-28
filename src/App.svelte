@@ -258,7 +258,11 @@
       const isShellTab = ptyKey.includes(":");
       const session = sessions.find((s) => s.id === sessionId);
       if (isShellTab) {
-        return { sessionId: ptyKey, label: "Shell", icon: "terminal" };
+        const tabIndex = parseInt(ptyKey.split(":")[1], 10);
+        const sessionTabList = getTabs(sessionId);
+        const tabEntry = sessionTabList.find((t) => t.index === tabIndex);
+        const label = tabEntry?.customTitle ? tabEntry.label : "Shell";
+        return { sessionId: ptyKey, label, icon: "terminal" };
       }
       const name = session?.name || session?.branch || "Session";
       return { sessionId: ptyKey, label: name, icon: session?.provider ? "bot" : "terminal" };
