@@ -183,6 +183,12 @@
   // Pre-compute titlebar tabs to avoid IIFE re-evaluation on every render
   const titlebarTabs = $derived.by(() => {
     if (!activeSessionId) return [];
+    // When split tree is active with a single leaf, derive tabs from the leaf
+    const tree = splitTree.getTree();
+    if (tree && tree.type === "leaf" && tree.tabs.length > 0) {
+      return getLeafTabInfo(tree);
+    }
+    // Fallback to session-tabs store (before tree is initialized)
     const shellTabs = getTabs(activeSessionId).map(t => t.index === 0 ? { ...t, label: activeSession?.provider || getSettings().default_provider || "Agent" } : t);
     const extra: { index: number; label: string; icon?: string; modified?: boolean }[] = [];
     if (diffTabOpen[activeSessionId]) extra.push({ index: -1, label: diffFileName[activeSessionId] || "Diff", icon: "git-compare" });
@@ -636,10 +642,10 @@
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={hasMultiplePanes ? [] : titlebarTabs}
-    activeTabIndex={orchestrator.getUnifiedActiveIndex()}
+    activeTabIndex={splitTree.getTree()?.type === "leaf" ? (splitTree.getTree() as import("./lib/split-tree.svelte").LeafNode).activeTab : orchestrator.getUnifiedActiveIndex()}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
-    onSelectTab={orchestrator.selectUnifiedTab}
+    onSelectTab={(i) => { const tree = splitTree.getTree(); if (tree?.type === "leaf") splitTree.setLeafActiveTab(tree.id, i); else orchestrator.selectUnifiedTab(i); }}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
       if (i === -1) orchestrator.closeDiffTab(activeSessionId);
