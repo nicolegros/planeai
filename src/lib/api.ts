@@ -47,6 +47,10 @@ export const sessions = {
   markExited: (sessionId: string) => invoke("mark_exited", { sessionId }),
   acknowledge: (sessionId: string) => invoke("acknowledge_session", { sessionId }),
   saveMruOrder: (sessionIds: string[]) => invoke("save_mru_order", { sessionIds }),
+  saveLayout: (sessionId: string, layoutJson: string) =>
+    invoke("save_session_layout", { sessionId, layoutJson }),
+  getLayout: (sessionId: string) =>
+    invoke<string | null>("get_session_layout", { sessionId }),
 };
 
 export const projects = {
