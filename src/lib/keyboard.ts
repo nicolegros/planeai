@@ -186,16 +186,16 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "new_project" };
   }
 
-  // Mod+Option+Arrow — focus split in direction
-  if (mod && e.altKey && !e.shiftKey && !e.ctrlKey) {
+  // Mod+Shift+Arrow — focus split in direction
+  if (mod && e.shiftKey && !e.altKey && !e.ctrlKey) {
     if (e.key === "ArrowLeft") return { type: "focus_split_left" };
     if (e.key === "ArrowRight") return { type: "focus_split_right" };
     if (e.key === "ArrowUp") return { type: "focus_split_up" };
     if (e.key === "ArrowDown") return { type: "focus_split_down" };
   }
 
-  // Mod+Shift+Ctrl+Arrow — move tab to split in direction
-  if (mod && e.shiftKey && e.ctrlKey) {
+  // Mod+Option+Arrow — move tab to split in direction
+  if (mod && e.altKey && !e.shiftKey && !e.ctrlKey) {
     if (e.key === "ArrowLeft") return { type: "move_tab_left" };
     if (e.key === "ArrowRight") return { type: "move_tab_right" };
     if (e.key === "ArrowUp") return { type: "move_tab_up" };

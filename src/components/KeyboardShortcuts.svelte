@@ -47,8 +47,8 @@
       { keys: `${MOD_LABEL}D`, description: "Split vertical" },
       { keys: `${MOD_LABEL}⇧D`, description: "Split horizontal" },
       { keys: `${MOD_LABEL}⇧W`, description: "Close split" },
-      { keys: `${MOD_LABEL}⌥←→↑↓`, description: "Focus split in direction" },
-      { keys: `${MOD_LABEL}⇧⌃←→↑↓`, description: "Move tab to split in direction" },
+      { keys: `${MOD_LABEL}⇧←→↑↓`, description: "Focus split in direction" },
+      { keys: `${MOD_LABEL}⌥←→↑↓`, description: "Move pane to split in direction" },
     ]},
     { section: "Terminal", items: [
       { keys: IS_MAC ? `${MOD_LABEL}C` : `Ctrl+Shift+C`, description: "Copy selection" },
