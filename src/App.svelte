@@ -390,8 +390,13 @@
 
     // The pty key for shell tabs is "sessionId:tabIndex"
     const ptyKey = `${activeSessionId}:${tabIndex}`;
+
+    // Verify this ptyKey isn't already in the tree (defensive)
+    const existing = splitTree.getLeafForSession(ptyKey);
+    if (existing) return;
+
     splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal" });
-    refocusTerminal();
+    tick().then(() => refocusTerminal());
   }
 
   /** Open a new shell tab in the focused split leaf. */
