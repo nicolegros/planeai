@@ -352,6 +352,11 @@ diffs-container {
   border: 1px solid var(--color-border);
 }
 
+.split-leaf-single {
+  border: none;
+  border-radius: 0;
+}
+
 .split-leaf-focused {
   border-color: var(--color-accent);
 }

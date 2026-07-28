@@ -192,7 +192,7 @@
 
   // ─── Split tree ─────────────────────────────────────────────────────────────
   const splitTreeNode = $derived(splitTree.getTree());
-  const hasSplits = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
+  const hasMultiplePanes = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
 
   // Initialize tree when sessions first load (single leaf with all session IDs)
   let splitTreeInitialized = $state(false);
@@ -537,10 +537,10 @@
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
-        else if (action.type === "new_tab") { hasSplits ? splitNewTab() : orchestrator.handleNewTab(); }
-        else if (action.type === "close_tab") { hasSplits ? splitCloseTab() : orchestrator.handleCloseTab(); }
-        else if (action.type === "next_tab") { hasSplits ? splitNextTab() : orchestrator.handleNextTab(); }
-        else if (action.type === "prev_tab") { hasSplits ? splitPrevTab() : orchestrator.handlePrevTab(); }
+        else if (action.type === "new_tab") { splitNewTab(); }
+        else if (action.type === "close_tab") { splitCloseTab(); }
+        else if (action.type === "next_tab") { splitNextTab(); }
+        else if (action.type === "prev_tab") { splitPrevTab(); }
         else if (action.type === "next_session") {
           const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
           if (!navCycle.isCycling()) navCycle.startPreview(sidebarSessionOrder, currentId, 1);
@@ -635,7 +635,7 @@
     {ciStatus}
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
-    tabs={hasSplits ? [] : titlebarTabs}
+    tabs={hasMultiplePanes ? [] : titlebarTabs}
     activeTabIndex={orchestrator.getUnifiedActiveIndex()}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
@@ -760,20 +760,22 @@
       {@const focusedLeafId = splitTree.getFocusedLeafId()}
       {@const isLeafFocused = leaf.id === focusedLeafId}
       {@const activePtyKey = leaf.tabs[leaf.activeTab] ?? leaf.tabs[0] ?? null}
+      {@const showLeafTabBar = hasMultiplePanes || leaf.tabs.length > 1}
       <div
-        class="split-leaf"
-        class:split-leaf-focused={isLeafFocused}
+        class="split-leaf {hasMultiplePanes ? '' : 'split-leaf-single'}"
+        class:split-leaf-focused={isLeafFocused && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
         onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activePtyKey) { const sid = ptyKeyToSessionId(activePtyKey); orchestrator.selectSession(sid); } }}
       >
+        {#if showLeafTabBar}
         <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
           <TabStrip
             tabs={leafTabs}
             activeTabIndex={leaf.activeTab}
             showAddButton={true}
-            showCloseButton={splitTree.getAllLeaves().length > 1}
-            draggable={true}
+            showCloseButton={hasMultiplePanes}
+            draggable={hasMultiplePanes}
             onSelectTab={(i) => { splitTree.setFocusedLeaf(leaf.id); splitTree.setLeafActiveTab(leaf.id, i); }}
             onAddTab={() => { splitTree.setFocusedLeaf(leaf.id); splitNewTab(); }}
             onClose={() => splitTree.closeSplit(leaf.id)}
@@ -782,6 +784,7 @@
             onTabDragOver={handleTabDragOver}
           />
         </div>
+        {/if}
         <div class="split-leaf-content">
           {#each leaf.tabs as ptyKey, i (ptyKey)}
             {@const sessionId = ptyKeyToSessionId(ptyKey)}
@@ -812,58 +815,9 @@
       </div>
     {/snippet}
 
-    <!-- Split tree rendering or flat session rendering -->
-    {#if hasSplits && splitTreeNode && !activeLoopId}
+    <!-- Always render through split tree (single leaf = normal view) -->
+    {#if splitTreeNode && !activeLoopId}
       <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
-    {:else}
-    {#each sessions as session (session.id)}
-      {@const tabs = getTabs(session.id)}
-      {@const activeTab = getActiveTabIndex(session.id)}
-      {@const hasDiff = diffTabOpen[session.id] ?? false}
-      {@const isDiffActive = diffTabActive[session.id] ?? false}
-      {@const hasEditor = editorTabOpen[session.id] ?? false}
-      {@const isEditorActive = editorTabActive[session.id] ?? false}
-      {@const project = projects.find((p) => p.id === session.project_id)}
-      {#each tabs as tab (tab.index)}
-        {@const ptyKey = tab.index === 0 ? session.id : `${session.id}:${tab.index}`}
-        {#if poolIsMounted(session.id)}
-        <Terminal
-          sessionId={ptyKey}
-          visible={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId}
-          focused={session.id === activeSessionId && tab.index === activeTab && !isDiffActive && !isEditorActive && !activeLoopId && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
-          exited={tab.index === 0 && session.status === "exited"}
-          skipAttach={tab.index !== 0}
-          onAttached={() => { if (tab.index === 0 && session.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); }}
-          onUserInput={() => { if (agentStates[session.id]) orchestrator.clearAgentState(session.id); orchestrator.clearReviewReady(session.id); }}
-        />
-        {/if}
-      {/each}
-      {#if hasDiff && project}
-        {@const repoPath = session.worktree_path ?? project.path}
-        {@const baseBranch = session.base_branch ?? "main"}
-        <ReviewTab
-          {repoPath}
-          {baseBranch}
-          visible={session.id === activeSessionId && isDiffActive}
-          sessionId={session.id}
-          onEditFile={(filePath) => orchestrator.openFile(filePath)}
-          onFileChange={(name) => orchestrator.setDiffFileName(session.id, name)}
-        />
-      {/if}
-      {#if hasEditor && project}
-        {@const editorRepoPath = session.worktree_path ?? project.path}
-        <EditorTab
-          repoPath={editorRepoPath}
-          visible={session.id === activeSessionId && isEditorActive}
-          theme={isDark() ? "vs-dark" : "vs"}
-          onClose={() => orchestrator.closeEditorTab(session.id)}
-          onFocusEditor={() => orchestrator.focusEditorTab(session.id)}
-          onFileChange={(name) => orchestrator.setEditorFileName(session.id, name)}
-          onModifiedChange={(mod) => orchestrator.setEditorModified(session.id, mod)}
-          bind:this={editorBindRefs[session.id]}
-        />
-      {/if}
-    {/each}
     {/if}
 
     {#if activeLoopId}
