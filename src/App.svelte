@@ -309,6 +309,19 @@
    */
   function doSplit(direction: "vertical" | "horizontal"): void {
     if (!activeSessionId) return;
+
+    // On first split, ensure the tree contains all pty keys for the active session
+    const tree = splitTree.getTree();
+    if (tree && tree.type === "leaf") {
+      const sessionTabs = getTabs(activeSessionId);
+      const allPtyKeys = sessionTabs.map((t) =>
+        t.index === 0 ? activeSessionId : `${activeSessionId}:${t.index}`
+      );
+      // Re-initialize with the full set of pty keys
+      const activeTab = sessionTabs.findIndex((t) => t.index === getActiveTabIndex(activeSessionId));
+      splitTree.initTree(allPtyKeys, Math.max(0, activeTab));
+    }
+
     const newLeafId = splitTree.splitFocusedLeaf(direction);
     if (!newLeafId) return;
 
