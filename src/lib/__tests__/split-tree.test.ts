@@ -19,10 +19,17 @@ import {
   moveTabToDirection,
   getNeighborLeaf,
   getLeafForSession,
+  getActiveTabEntry,
+  updateTabLabel,
   serialize,
   deserialize,
   _resetIdCounter,
 } from "../split-tree.svelte";
+import type { TabEntry } from "../split-tree.svelte";
+
+function tab(ptyKey: string, label?: string): TabEntry {
+  return { ptyKey, label: label ?? ptyKey.toUpperCase(), icon: "terminal" };
+}
 
 beforeEach(() => {
   resetTree();
@@ -30,28 +37,30 @@ beforeEach(() => {
 });
 
 describe("initTree", () => {
-  it("creates a single leaf with given sessions", () => {
-    initTree(["s1", "s2"]);
+  it("creates a single leaf with given tabs", () => {
+    initTree([tab("s1"), tab("s2")]);
     const tree = getTree();
     expect(tree).not.toBeNull();
     expect(tree!.type).toBe("leaf");
     if (tree!.type === "leaf") {
-      expect(tree!.tabs).toEqual(["s1", "s2"]);
-      expect(tree!.activeTab).toBe(0);
+      expect(tree!.tabs).toHaveLength(2);
+      expect(tree!.tabs[0].ptyKey).toBe("s1");
+      expect(tree!.tabs[1].ptyKey).toBe("s2");
+      expect(tree!.activeTab).toBe("s1");
     }
     expect(getFocusedLeafId()).toBe(tree!.id);
   });
 
-  it("respects activeIndex parameter", () => {
-    initTree(["s1", "s2", "s3"], 2);
+  it("respects activeTab parameter", () => {
+    initTree([tab("s1"), tab("s2"), tab("s3")], "s3");
     const leaf = getFocusedLeaf();
-    expect(leaf!.activeTab).toBe(2);
+    expect(leaf!.activeTab).toBe("s3");
   });
 });
 
 describe("splitFocusedLeaf", () => {
   it("splits into a binary tree with original tabs in first child", () => {
-    initTree(["s1", "s2"]);
+    initTree([tab("s1"), tab("s2")]);
     const originalLeafId = getFocusedLeafId();
     const newLeafId = splitFocusedLeaf("vertical");
 
@@ -64,9 +73,9 @@ describe("splitFocusedLeaf", () => {
       expect(tree!.children[0].type).toBe("leaf");
       expect(tree!.children[1].type).toBe("leaf");
 
-      const first = tree!.children[0] as { type: "leaf"; id: string; tabs: string[] };
-      const second = tree!.children[1] as { type: "leaf"; id: string; tabs: string[] };
-      expect(first.tabs).toEqual(["s1", "s2"]);
+      const first = tree!.children[0] as { type: "leaf"; id: string; tabs: TabEntry[] };
+      const second = tree!.children[1] as { type: "leaf"; id: string; tabs: TabEntry[] };
+      expect(first.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s2"]);
       expect(first.id).toBe(originalLeafId);
       expect(second.tabs).toEqual([]);
       expect(second.id).toBe(newLeafId);
@@ -74,16 +83,16 @@ describe("splitFocusedLeaf", () => {
   });
 
   it("moves focus to the new leaf", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const newLeafId = splitFocusedLeaf("horizontal");
     expect(getFocusedLeafId()).toBe(newLeafId);
   });
 
   it("supports nested splits (recursive binary tree)", () => {
-    initTree(["s1"]);
-    splitFocusedLeaf("vertical"); // new leaf is focused
-    addSessionToLeaf(getFocusedLeafId()!, "s2");
-    splitFocusedLeaf("horizontal"); // split the new leaf again
+    initTree([tab("s1")]);
+    splitFocusedLeaf("vertical");
+    addSessionToLeaf(getFocusedLeafId()!, tab("s2"));
+    splitFocusedLeaf("horizontal");
 
     const leaves = getAllLeaves();
     expect(leaves.length).toBe(3);
@@ -95,34 +104,33 @@ describe("splitFocusedLeaf", () => {
 });
 
 describe("addSessionToLeaf", () => {
-  it("appends session and updates activeTab", () => {
-    initTree(["s1"]);
+  it("appends tab and updates activeTab", () => {
+    initTree([tab("s1")]);
     const leafId = getFocusedLeafId()!;
-    addSessionToLeaf(leafId, "s2");
+    addSessionToLeaf(leafId, tab("s2"));
 
     const leaf = getFocusedLeaf()!;
-    expect(leaf.tabs).toEqual(["s1", "s2"]);
-    expect(leaf.activeTab).toBe(1);
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s2"]);
+    expect(leaf.activeTab).toBe("s2");
   });
 });
 
 describe("removeSessionFromLeaf", () => {
-  it("removes session and keeps leaf alive if tabs remain", () => {
-    initTree(["s1", "s2"]);
+  it("removes tab and keeps leaf alive if tabs remain", () => {
+    initTree([tab("s1"), tab("s2")]);
     const destroyed = removeSessionFromLeaf("s1");
     expect(destroyed).toBe(false);
     const leaf = getFocusedLeaf()!;
-    expect(leaf.tabs).toEqual(["s2"]);
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s2"]);
   });
 
   it("destroys leaf when last tab is removed", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     splitFocusedLeaf("vertical");
     const emptyLeafId = getFocusedLeafId()!;
-    addSessionToLeaf(emptyLeafId, "s2");
+    addSessionToLeaf(emptyLeafId, tab("s2"));
 
     // Now we have: split -> [leaf(s1), leaf(s2)]
-    // Remove s2 — leaf should be destroyed
     setFocusedLeaf(emptyLeafId);
     const destroyed = removeSessionFromLeaf("s2");
     expect(destroyed).toBe(true);
@@ -134,43 +142,41 @@ describe("removeSessionFromLeaf", () => {
 });
 
 describe("moveSessionToLeaf", () => {
-  it("moves a session from one leaf to another", () => {
-    initTree(["s1", "s2"]);
+  it("moves a tab from one leaf to another", () => {
+    initTree([tab("s1"), tab("s2")]);
     const originalLeafId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
-    addSessionToLeaf(newLeafId, "s3");
+    addSessionToLeaf(newLeafId, tab("s3"));
 
     moveSessionToLeaf("s1", newLeafId);
 
     const leaves = getAllLeaves();
     const original = leaves.find((l) => l.id === originalLeafId)!;
     const target = leaves.find((l) => l.id === newLeafId)!;
-    expect(original.tabs).toEqual(["s2"]);
-    expect(target.tabs).toContain("s1");
-    expect(target.tabs).toContain("s3");
+    expect(original.tabs.map((t) => t.ptyKey)).toEqual(["s2"]);
+    expect(target.tabs.map((t) => t.ptyKey)).toContain("s1");
+    expect(target.tabs.map((t) => t.ptyKey)).toContain("s3");
   });
 
   it("moves at specific insertIndex", () => {
-    initTree(["s1", "s2"]);
-    const originalLeafId = getFocusedLeafId()!;
+    initTree([tab("s1"), tab("s2")]);
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
-    addSessionToLeaf(newLeafId, "s3");
-    addSessionToLeaf(newLeafId, "s4");
+    addSessionToLeaf(newLeafId, tab("s3"));
+    addSessionToLeaf(newLeafId, tab("s4"));
 
     moveSessionToLeaf("s1", newLeafId, 1);
 
     const target = getAllLeaves().find((l) => l.id === newLeafId)!;
-    expect(target.tabs).toEqual(["s3", "s1", "s4"]);
+    expect(target.tabs.map((t) => t.ptyKey)).toEqual(["s3", "s1", "s4"]);
   });
 
   it("destroys source leaf when last tab is moved out", () => {
-    initTree(["s1"]);
-    const originalLeafId = getFocusedLeafId()!;
+    initTree([tab("s1")]);
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
-    addSessionToLeaf(newLeafId, "s2");
+    addSessionToLeaf(newLeafId, tab("s2"));
 
     moveSessionToLeaf("s1", newLeafId);
 
@@ -178,33 +184,32 @@ describe("moveSessionToLeaf", () => {
     const tree = getTree();
     expect(tree!.type).toBe("leaf");
     if (tree!.type === "leaf") {
-      expect(tree!.tabs).toContain("s1");
-      expect(tree!.tabs).toContain("s2");
+      expect(tree!.tabs.map((t) => t.ptyKey)).toContain("s1");
+      expect(tree!.tabs.map((t) => t.ptyKey)).toContain("s2");
     }
   });
 });
 
 describe("closeSplit", () => {
   it("migrates tabs to sibling and destroys the split", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const originalLeafId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
-    addSessionToLeaf(newLeafId, "s2");
-    addSessionToLeaf(newLeafId, "s3");
+    addSessionToLeaf(newLeafId, tab("s2"));
+    addSessionToLeaf(newLeafId, tab("s3"));
 
-    // Close the new leaf's split — tabs migrate to sibling (original)
     closeSplit(newLeafId);
 
     const tree = getTree();
     expect(tree!.type).toBe("leaf");
     if (tree!.type === "leaf") {
-      expect(tree!.tabs).toEqual(["s1", "s2", "s3"]);
+      expect(tree!.tabs.map((t) => t.ptyKey)).toEqual(["s1", "s2", "s3"]);
     }
   });
 
   it("does nothing on root leaf", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     closeSplit(getFocusedLeafId()!);
     expect(getTree()!.type).toBe("leaf");
   });
@@ -212,7 +217,7 @@ describe("closeSplit", () => {
 
 describe("destroyLeaf", () => {
   it("collapses tree when leaf is destroyed", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
 
@@ -223,14 +228,14 @@ describe("destroyLeaf", () => {
   });
 
   it("clears tree when last leaf is destroyed", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     destroyLeaf(getFocusedLeafId()!);
     expect(getTree()).toBeNull();
     expect(getFocusedLeafId()).toBeNull();
   });
 
   it("updates focus to sibling", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const originalLeafId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
@@ -241,22 +246,23 @@ describe("destroyLeaf", () => {
 });
 
 describe("setLeafActiveTab", () => {
-  it("sets active tab index", () => {
-    initTree(["s1", "s2", "s3"]);
-    setLeafActiveTab(getFocusedLeafId()!, 2);
-    expect(getFocusedLeaf()!.activeTab).toBe(2);
+  it("sets active tab by ptyKey", () => {
+    initTree([tab("s1"), tab("s2"), tab("s3")]);
+    setLeafActiveTab(getFocusedLeafId()!, "s3");
+    expect(getFocusedLeaf()!.activeTab).toBe("s3");
   });
 
-  it("clamps to valid range", () => {
-    initTree(["s1", "s2"]);
-    setLeafActiveTab(getFocusedLeafId()!, 10);
-    expect(getFocusedLeaf()!.activeTab).toBe(1);
+  it("does nothing for unknown ptyKey", () => {
+    initTree([tab("s1"), tab("s2")]);
+    setLeafActiveTab(getFocusedLeafId()!, "unknown");
+    // activeTab stays as initialized (s1)
+    expect(getFocusedLeaf()!.activeTab).toBe("s1");
   });
 });
 
 describe("setRatio", () => {
   it("updates the split ratio", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     splitFocusedLeaf("vertical");
     const tree = getTree()!;
     if (tree.type === "split") {
@@ -269,7 +275,7 @@ describe("setRatio", () => {
   });
 
   it("clamps to [0.1, 0.9]", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     splitFocusedLeaf("vertical");
     const tree = getTree()!;
     if (tree.type === "split") {
@@ -286,9 +292,9 @@ describe("setRatio", () => {
 
 describe("spatial navigation", () => {
   it("finds right neighbor in vertical split", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const leftLeafId = getFocusedLeafId()!;
-    splitFocusedLeaf("vertical"); // new leaf is right, now focused
+    splitFocusedLeaf("vertical");
 
     setFocusedLeaf(leftLeafId);
     const neighbor = getNeighborLeaf("right");
@@ -297,18 +303,18 @@ describe("spatial navigation", () => {
   });
 
   it("finds left neighbor in vertical split", () => {
-    initTree(["s1"]);
-    splitFocusedLeaf("vertical"); // focused is right (empty)
+    initTree([tab("s1")]);
+    splitFocusedLeaf("vertical");
 
     const neighbor = getNeighborLeaf("left");
     expect(neighbor).not.toBeNull();
-    expect(neighbor!.tabs).toEqual(["s1"]);
+    expect(neighbor!.tabs.map((t) => t.ptyKey)).toEqual(["s1"]);
   });
 
   it("finds down neighbor in horizontal split", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const topLeafId = getFocusedLeafId()!;
-    splitFocusedLeaf("horizontal"); // new leaf is bottom
+    splitFocusedLeaf("horizontal");
 
     setFocusedLeaf(topLeafId);
     const neighbor = getNeighborLeaf("down");
@@ -316,13 +322,13 @@ describe("spatial navigation", () => {
   });
 
   it("returns null when no neighbor exists", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     expect(getNeighborLeaf("left")).toBeNull();
     expect(getNeighborLeaf("right")).toBeNull();
   });
 
   it("focusDirection changes focused leaf", () => {
-    initTree(["s1"]);
+    initTree([tab("s1")]);
     const leftId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const rightId = getFocusedLeafId()!;
@@ -336,58 +342,97 @@ describe("spatial navigation", () => {
 
 describe("moveTabToDirection", () => {
   it("moves tab to existing neighbor", () => {
-    initTree(["s1", "s2"]);
+    initTree([tab("s1"), tab("s2")]);
     const leftId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const rightId = getFocusedLeafId()!;
-    addSessionToLeaf(rightId, "s3");
+    addSessionToLeaf(rightId, tab("s3"));
 
     setFocusedLeaf(leftId);
-    setLeafActiveTab(leftId, 0); // s1 is active
+    setLeafActiveTab(leftId, "s1");
 
     moveTabToDirection("right");
 
     const rightLeaf = getAllLeaves().find((l) => l.id === rightId);
-    expect(rightLeaf!.tabs).toContain("s1");
+    expect(rightLeaf!.tabs.map((t) => t.ptyKey)).toContain("s1");
   });
 
   it("creates a new split when no neighbor exists", () => {
-    initTree(["s1", "s2"]);
-    setLeafActiveTab(getFocusedLeafId()!, 0);
+    initTree([tab("s1"), tab("s2")]);
+    setLeafActiveTab(getFocusedLeafId()!, "s1");
 
     const result = moveTabToDirection("right");
     expect(result).not.toBeNull();
 
     const leaves = getAllLeaves();
     expect(leaves.length).toBe(2);
-    // s1 should be in the new leaf (right)
-    const newLeaf = leaves.find((l) => l.tabs.includes("s1"));
+    const newLeaf = leaves.find((l) => l.tabs.some((t) => t.ptyKey === "s1"));
     expect(newLeaf).not.toBeNull();
-    // s2 remains in the original
-    const originalLeaf = leaves.find((l) => l.tabs.includes("s2"));
+    const originalLeaf = leaves.find((l) => l.tabs.some((t) => t.ptyKey === "s2"));
     expect(originalLeaf).not.toBeNull();
   });
 });
 
 describe("getLeafForSession", () => {
-  it("finds the leaf containing a session", () => {
-    initTree(["s1", "s2"]);
+  it("finds the leaf containing a ptyKey", () => {
+    initTree([tab("s1"), tab("s2")]);
     const leaf = getLeafForSession("s1");
     expect(leaf).not.toBeNull();
-    expect(leaf!.tabs).toContain("s1");
+    expect(leaf!.tabs.map((t) => t.ptyKey)).toContain("s1");
   });
 
-  it("returns null for unknown session", () => {
-    initTree(["s1"]);
+  it("returns null for unknown ptyKey", () => {
+    initTree([tab("s1")]);
     expect(getLeafForSession("unknown")).toBeNull();
+  });
+});
+
+describe("getActiveTabEntry", () => {
+  it("returns the active tab entry", () => {
+    initTree([tab("s1"), tab("s2")], "s2");
+    const leaf = getFocusedLeaf()!;
+    const entry = getActiveTabEntry(leaf);
+    expect(entry).not.toBeNull();
+    expect(entry!.ptyKey).toBe("s2");
+  });
+
+  it("returns first tab if activeTab not found", () => {
+    initTree([tab("s1"), tab("s2")]);
+    const leaf = getFocusedLeaf()!;
+    const entry = getActiveTabEntry(leaf);
+    expect(entry!.ptyKey).toBe("s1");
+  });
+});
+
+describe("updateTabLabel", () => {
+  it("updates the label and sets customTitle", () => {
+    initTree([tab("s1", "Shell"), tab("s2", "Shell")]);
+    updateTabLabel("s1", "vim");
+    const leaf = getFocusedLeaf()!;
+    const t = leaf.tabs.find((t) => t.ptyKey === "s1")!;
+    expect(t.label).toBe("vim");
+    expect(t.customTitle).toBe(true);
+  });
+
+  it("works across nested leaves", () => {
+    initTree([tab("s1")]);
+    splitFocusedLeaf("vertical");
+    addSessionToLeaf(getFocusedLeafId()!, tab("s2", "Shell"));
+
+    updateTabLabel("s2", "git");
+    const leaves = getAllLeaves();
+    const leaf = leaves.find((l) => l.tabs.some((t) => t.ptyKey === "s2"))!;
+    const t = leaf.tabs.find((t) => t.ptyKey === "s2")!;
+    expect(t.label).toBe("git");
+    expect(t.customTitle).toBe(true);
   });
 });
 
 describe("serialize / deserialize", () => {
   it("round-trips the tree", () => {
-    initTree(["s1", "s2"]);
+    initTree([tab("s1"), tab("s2")]);
     splitFocusedLeaf("vertical");
-    addSessionToLeaf(getFocusedLeafId()!, "s3");
+    addSessionToLeaf(getFocusedLeafId()!, tab("s3"));
 
     const data = serialize()!;
     expect(data).not.toBeNull();

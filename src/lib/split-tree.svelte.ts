@@ -2,7 +2,7 @@
  * Split Tree — binary tree model for pane splitting.
  *
  * Topology: strict binary tree. Internal nodes are splits (horizontal/vertical)
- * with exactly two children. Leaf nodes hold an ordered list of session IDs (tabs).
+ * with exactly two children. Leaf nodes hold an ordered list of TabEntry objects (tabs).
  *
  * Key behaviors:
  * - Splitting a focused leaf creates a new child split with the original tabs and an empty new leaf.
@@ -17,6 +17,13 @@
 
 export type SplitDirection = "horizontal" | "vertical";
 
+export interface TabEntry {
+  ptyKey: string;
+  label: string;
+  icon: string;
+  customTitle?: boolean;
+}
+
 export interface SplitNode {
   type: "split";
   id: string;
@@ -28,8 +35,8 @@ export interface SplitNode {
 export interface LeafNode {
   type: "leaf";
   id: string;
-  tabs: string[]; // session IDs
-  activeTab: number; // index into tabs[]
+  tabs: TabEntry[];
+  activeTab: string; // ptyKey of the active tab
 }
 
 export type TreeNode = SplitNode | LeafNode;
@@ -71,9 +78,9 @@ export function getFocusedLeaf(): LeafNode | null {
   return findLeaf(tree, focusedLeafId);
 }
 
-export function getLeafForSession(sessionId: string): LeafNode | null {
+export function getLeafForSession(ptyKey: string): LeafNode | null {
   if (!tree) return null;
-  return findLeafBySession(tree, sessionId);
+  return findLeafBySession(tree, ptyKey);
 }
 
 export function getAllLeaves(): LeafNode[] {
@@ -86,12 +93,39 @@ export function getLeafById(id: string): LeafNode | null {
   return findLeaf(tree, id);
 }
 
+// ─── Tab helpers ─────────────────────────────────────────────────────────────
+
+/** Get the active TabEntry for a leaf, or null if the leaf has no tabs. */
+export function getActiveTabEntry(leaf: LeafNode): TabEntry | null {
+  if (leaf.tabs.length === 0) return null;
+  return leaf.tabs.find((t) => t.ptyKey === leaf.activeTab) ?? leaf.tabs[0] ?? null;
+}
+
+/**
+ * Find a tab by ptyKey across all leaves and update its label.
+ * Sets customTitle=true.
+ */
+export function updateTabLabel(ptyKey: string, label: string): void {
+  if (!tree) return;
+  tree = mapTree(tree, (node) => {
+    if (node.type === "leaf") {
+      const tabIndex = node.tabs.findIndex((t) => t.ptyKey === ptyKey);
+      if (tabIndex === -1) return node;
+      const newTabs = [...node.tabs];
+      newTabs[tabIndex] = { ...newTabs[tabIndex], label, customTitle: true };
+      return { ...node, tabs: newTabs };
+    }
+    return node;
+  });
+}
+
 // ─── Initialization ──────────────────────────────────────────────────────────
 
-/** Initialize with a single leaf containing the given session IDs. */
-export function initTree(sessionIds: string[], activeIndex = 0): void {
+/** Initialize with a single leaf containing the given tab entries. */
+export function initTree(tabs: TabEntry[], activeTab?: string): void {
   const leafId = generateId();
-  tree = { type: "leaf", id: leafId, tabs: [...sessionIds], activeTab: activeIndex };
+  const activePtyKey = activeTab ?? tabs[0]?.ptyKey ?? "";
+  tree = { type: "leaf", id: leafId, tabs: [...tabs], activeTab: activePtyKey };
   focusedLeafId = leafId;
 }
 
@@ -128,7 +162,7 @@ export function splitFocusedLeaf(direction: SplitDirection): string | null {
         ratio: 0.5,
         children: [
           { ...node }, // original leaf keeps its tabs
-          { type: "leaf", id: newLeafId, tabs: [], activeTab: 0 },
+          { type: "leaf", id: newLeafId, tabs: [], activeTab: "" },
         ],
       };
       return split;
@@ -142,38 +176,40 @@ export function splitFocusedLeaf(direction: SplitDirection): string | null {
 }
 
 /**
- * Add a session to a specific leaf.
+ * Add a tab entry to a specific leaf.
  */
-export function addSessionToLeaf(leafId: string, sessionId: string): void {
+export function addSessionToLeaf(leafId: string, tab: TabEntry): void {
   if (!tree) return;
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leafId) {
-      return { ...node, tabs: [...node.tabs, sessionId], activeTab: node.tabs.length };
+      return { ...node, tabs: [...node.tabs, tab], activeTab: tab.ptyKey };
     }
     return node;
   });
 }
 
 /**
- * Remove a session from its leaf. If the leaf becomes empty, destroy it.
+ * Remove a session (by ptyKey) from its leaf. If the leaf becomes empty, destroy it.
  * Returns true if the leaf was destroyed.
  */
-export function removeSessionFromLeaf(sessionId: string): boolean {
+export function removeSessionFromLeaf(ptyKey: string): boolean {
   if (!tree) return false;
-  const leaf = findLeafBySession(tree, sessionId);
+  const leaf = findLeafBySession(tree, ptyKey);
   if (!leaf) return false;
 
-  const remainingTabs = leaf.tabs.filter((id) => id !== sessionId);
+  const remainingTabs = leaf.tabs.filter((t) => t.ptyKey !== ptyKey);
   if (remainingTabs.length === 0) {
     // Leaf is now empty — destroy it
     destroyLeaf(leaf.id);
     return true;
   }
 
-  // Update the leaf in place
+  // Update the leaf
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leaf.id) {
-      const newActive = Math.min(node.activeTab, remainingTabs.length - 1);
+      const newActive = leaf.activeTab === ptyKey
+        ? (remainingTabs[Math.min(leaf.tabs.findIndex((t) => t.ptyKey === ptyKey), remainingTabs.length - 1)]?.ptyKey ?? "")
+        : leaf.activeTab;
       return { ...node, tabs: remainingTabs, activeTab: newActive };
     }
     return node;
@@ -182,24 +218,27 @@ export function removeSessionFromLeaf(sessionId: string): boolean {
 }
 
 /**
- * Move a session from its current leaf to a target leaf at a specific index.
+ * Move a session (by ptyKey) from its current leaf to a target leaf at a specific index.
  */
 export function moveSessionToLeaf(
-  sessionId: string,
+  ptyKey: string,
   targetLeafId: string,
   insertIndex?: number,
 ): void {
   if (!tree) return;
-  const sourceLeaf = findLeafBySession(tree, sessionId);
-  if (!sourceLeaf || sourceLeaf.id === targetLeafId) {
+  const sourceLeaf = findLeafBySession(tree, ptyKey);
+  if (!sourceLeaf) return;
+
+  if (sourceLeaf.id === targetLeafId) {
     // Same leaf — just reorder
-    if (sourceLeaf && insertIndex !== undefined) {
+    if (insertIndex !== undefined) {
       tree = mapTree(tree, (node) => {
         if (node.type === "leaf" && node.id === sourceLeaf.id) {
-          const tabs = node.tabs.filter((id) => id !== sessionId);
+          const tabs = node.tabs.filter((t) => t.ptyKey !== ptyKey);
+          const tab = node.tabs.find((t) => t.ptyKey === ptyKey)!;
           const idx = Math.min(insertIndex, tabs.length);
-          tabs.splice(idx, 0, sessionId);
-          return { ...node, tabs, activeTab: idx };
+          tabs.splice(idx, 0, tab);
+          return { ...node, tabs, activeTab: tab.ptyKey };
         }
         return node;
       });
@@ -207,8 +246,11 @@ export function moveSessionToLeaf(
     return;
   }
 
+  // Find the tab entry to move
+  const tabEntry = sourceLeaf.tabs.find((t) => t.ptyKey === ptyKey)!;
+
   // Remove from source
-  const sourceTabs = sourceLeaf.tabs.filter((id) => id !== sessionId);
+  const sourceTabs = sourceLeaf.tabs.filter((t) => t.ptyKey !== ptyKey);
   const sourceDestroyed = sourceTabs.length === 0;
 
   // Add to target
@@ -216,12 +258,14 @@ export function moveSessionToLeaf(
     if (node.type === "leaf" && node.id === targetLeafId) {
       const idx = insertIndex !== undefined ? Math.min(insertIndex, node.tabs.length) : node.tabs.length;
       const newTabs = [...node.tabs];
-      newTabs.splice(idx, 0, sessionId);
-      return { ...node, tabs: newTabs, activeTab: idx };
+      newTabs.splice(idx, 0, tabEntry);
+      return { ...node, tabs: newTabs, activeTab: tabEntry.ptyKey };
     }
     if (node.type === "leaf" && node.id === sourceLeaf.id) {
       if (sourceDestroyed) return node; // will be cleaned up below
-      const newActive = Math.min(node.activeTab, sourceTabs.length - 1);
+      const newActive = sourceLeaf.activeTab === ptyKey
+        ? (sourceTabs[Math.min(sourceLeaf.tabs.findIndex((t) => t.ptyKey === ptyKey), sourceTabs.length - 1)]?.ptyKey ?? "")
+        : sourceLeaf.activeTab;
       return { ...node, tabs: sourceTabs, activeTab: newActive };
     }
     return node;
@@ -311,13 +355,32 @@ export function setFocusedLeaf(leafId: string): void {
 }
 
 /**
- * Set the active tab index on a leaf.
+ * Set the active tab on a leaf by ptyKey.
  */
-export function setLeafActiveTab(leafId: string, tabIndex: number): void {
+export function setLeafActiveTab(leafId: string, ptyKey: string): void {
   if (!tree) return;
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leafId) {
-      return { ...node, activeTab: Math.max(0, Math.min(tabIndex, node.tabs.length - 1)) };
+      // Verify the ptyKey exists in this leaf
+      const exists = node.tabs.some((t) => t.ptyKey === ptyKey);
+      if (!exists) return node;
+      return { ...node, activeTab: ptyKey };
+    }
+    return node;
+  });
+}
+
+/**
+ * Set the active tab on a leaf by numeric index (convenience for TabStrip).
+ */
+export function setLeafActiveTabByIndex(leafId: string, tabIndex: number): void {
+  if (!tree) return;
+  tree = mapTree(tree, (node) => {
+    if (node.type === "leaf" && node.id === leafId) {
+      const clamped = Math.max(0, Math.min(tabIndex, node.tabs.length - 1));
+      const tab = node.tabs[clamped];
+      if (!tab) return node;
+      return { ...node, activeTab: tab.ptyKey };
     }
     return node;
   });
@@ -406,12 +469,13 @@ export function moveTabToDirection(direction: NavDirection): string | null {
   const focusedLeaf = findLeaf(tree, focusedLeafId);
   if (!focusedLeaf || focusedLeaf.tabs.length === 0) return null;
 
-  const sessionId = focusedLeaf.tabs[focusedLeaf.activeTab];
-  if (!sessionId) return null;
+  const activeEntry = getActiveTabEntry(focusedLeaf);
+  if (!activeEntry) return null;
+  const ptyKey = activeEntry.ptyKey;
 
   const neighbor = getNeighborLeaf(direction);
   if (neighbor) {
-    moveSessionToLeaf(sessionId, neighbor.id);
+    moveSessionToLeaf(ptyKey, neighbor.id);
     return neighbor.id;
   }
 
@@ -427,8 +491,12 @@ export function moveTabToDirection(direction: NavDirection): string | null {
 
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === focusedLeafId) {
-      const originalLeaf: LeafNode = { ...node, tabs: node.tabs.filter((id) => id !== sessionId), activeTab: Math.min(node.activeTab, Math.max(0, node.tabs.length - 2)) };
-      const newLeaf: LeafNode = { type: "leaf", id: newLeafId, tabs: [sessionId], activeTab: 0 };
+      const remainingTabs = node.tabs.filter((t) => t.ptyKey !== ptyKey);
+      const newActive = remainingTabs.length > 0
+        ? (remainingTabs[Math.min(node.tabs.findIndex((t) => t.ptyKey === ptyKey), remainingTabs.length - 1)]?.ptyKey ?? "")
+        : "";
+      const originalLeaf: LeafNode = { ...node, tabs: remainingTabs, activeTab: newActive };
+      const newLeaf: LeafNode = { type: "leaf", id: newLeafId, tabs: [activeEntry], activeTab: ptyKey };
       const split: SplitNode = {
         type: "split",
         id: splitId,
@@ -470,9 +538,9 @@ function findLeaf(node: TreeNode, leafId: string): LeafNode | null {
   return findLeaf(node.children[0], leafId) ?? findLeaf(node.children[1], leafId);
 }
 
-function findLeafBySession(node: TreeNode, sessionId: string): LeafNode | null {
-  if (node.type === "leaf") return node.tabs.includes(sessionId) ? node : null;
-  return findLeafBySession(node.children[0], sessionId) ?? findLeafBySession(node.children[1], sessionId);
+function findLeafBySession(node: TreeNode, ptyKey: string): LeafNode | null {
+  if (node.type === "leaf") return node.tabs.some((t) => t.ptyKey === ptyKey) ? node : null;
+  return findLeafBySession(node.children[0], ptyKey) ?? findLeafBySession(node.children[1], ptyKey);
 }
 
 function collectLeaves(node: TreeNode): LeafNode[] {
