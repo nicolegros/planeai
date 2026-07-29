@@ -426,7 +426,7 @@
 
 <div
   bind:this={containerEl}
-  class="w-full h-full"
+  class="w-full h-full p-2"
   class:hidden={!visible}
   style="background-color: {termBg}"
 ></div>
