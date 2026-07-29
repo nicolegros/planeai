@@ -366,14 +366,22 @@
   // Remove stale tabs when sessions are deleted/archived
   $effect(() => {
     const sessionIds = new Set(sessions.map((s) => s.id));
+    // Collect stale keys first, then batch-remove. Early return lets the effect
+    // re-run with a fresh tree if the structure changed during removal.
     const allLeaves = splitTree.getAllLeaves();
+    const stalePtyKeys: string[] = [];
     for (const leaf of allLeaves) {
       for (const tab of leaf.tabs) {
         const sid = ptyKeyToSessionId(tab.ptyKey);
         if (sid && !sessionIds.has(sid)) {
-          splitTree.removeSessionFromLeaf(tab.ptyKey);
+          stalePtyKeys.push(tab.ptyKey);
         }
       }
+    }
+    if (stalePtyKeys.length > 0) {
+      // Remove one at a time — each removal may restructure the tree.
+      // The effect will re-run to handle remaining stale tabs.
+      splitTree.removeSessionFromLeaf(stalePtyKeys[0]);
     }
   });
 
