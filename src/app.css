@@ -360,13 +360,4 @@ diffs-container {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  transition: opacity 0.15s;
-}
-
-.split-leaf:not(.split-leaf-focused) .split-leaf-content {
-  opacity: 0.55;
-}
-
-.split-leaf.split-leaf-single .split-leaf-content {
-  opacity: 1;
 }
