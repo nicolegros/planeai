@@ -349,6 +349,7 @@
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           fitAndResize(true);
+          if (focused) term.focus();
         });
       });
     } else {
