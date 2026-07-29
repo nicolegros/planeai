@@ -212,6 +212,7 @@
   // ─── Per-session split layout (DB-backed) ───────────────────────────────────
   let lastTreeSessionId = $state<string | null>(null);
   let loadGeneration = 0; // not reactive — just a counter for staleness
+  let loadingLayout = false; // suppress auto-save during load
 
   // When active session changes, save current tree and load/create for new session
   $effect(() => {
@@ -243,6 +244,7 @@
   });
 
   async function loadLayoutForSession(sessionId: string): Promise<void> {
+    loadingLayout = true;
     const gen = ++loadGeneration;
     try {
       const layoutJson = await sessionsApi.getLayout(sessionId);
@@ -253,15 +255,19 @@
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
           lastTreeSessionId = sessionId;
+          loadingLayout = false;
           return;
         }
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to load layout for session", sessionId, e);
+    }
     // Staleness check again
     if (gen !== loadGeneration) return;
     // No saved layout or invalid — initialize fresh
     splitTree.initTree(buildTabEntriesForSession(sessionId));
     lastTreeSessionId = sessionId;
+    loadingLayout = false;
   }
 
   /** Validate deserialized tree structure to prevent corrupt data from crashing. */
@@ -350,6 +356,20 @@
   function removeSessionFromSplitTree(sessionId: string): void {
     splitTree.removeSessionFromLeaf(sessionId);
   }
+
+  // Remove stale tabs when sessions are deleted/archived
+  $effect(() => {
+    const sessionIds = new Set(sessions.map((s) => s.id));
+    const allLeaves = splitTree.getAllLeaves();
+    for (const leaf of allLeaves) {
+      for (const tab of leaf.tabs) {
+        const sid = ptyKeyToSessionId(tab.ptyKey);
+        if (sid && !sessionIds.has(sid)) {
+          splitTree.removeSessionFromLeaf(tab.ptyKey);
+        }
+      }
+    }
+  });
 
   // Drag-and-drop state
   let dragSessionId = $state<string | null>(null);
@@ -442,7 +462,10 @@
 
     // Verify this ptyKey isn't already in the tree (defensive)
     const existing = splitTree.getLeafForSession(ptyKey);
-    if (existing) return;
+    if (existing) {
+      splitTree.destroyLeaf(newLeafId);
+      return;
+    }
 
     splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
     // Wait for Terminal to mount + open before refocusing
@@ -552,7 +575,7 @@
   /** Open a file in an editor tab. If already open, focus it. */
   function openFileInTree(sessionId: string, filePath: string): void {
     // Reject traversal paths (.. as path segment)
-    if (filePath.split("/").includes("..")) return;
+    if (filePath.split(/[/\\]/).includes("..")) return;
     const editorPtyKey = `${sessionId}:editor:${filePath}`;
 
     // If already open, focus it
@@ -599,7 +622,7 @@
   // Auto-save split tree on changes (debounced 500ms)
   $effect(() => {
     const _tree = splitTree.getTree();
-    if (splitTreeInitialized && _tree && lastTreeSessionId) {
+    if (splitTreeInitialized && _tree && lastTreeSessionId && !loadingLayout) {
       if (splitSaveTimeout) clearTimeout(splitSaveTimeout);
       splitSaveTimeout = setTimeout(saveSplitTreeToDb, 500);
     }
@@ -730,7 +753,7 @@
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
-      () => !!(activeSessionId && editorTabActive[activeSessionId]),
+      () => { const leaf = splitTree.getFocusedLeaf(); return !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor"; },
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
     );
 
@@ -968,7 +991,7 @@
                 focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                 exited={tabEntry.type === "agent" && session.status === "exited"}
                 skipAttach={tabEntry.type === "shell"}
-                onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
                 onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
               />
             {/if}
@@ -1021,8 +1044,10 @@
     {/snippet}
 
     <!-- Always render through split tree (single leaf = normal view) -->
-    {#if splitTreeNode && !activeLoopId}
-      <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
+    {#if splitTreeNode}
+      <div class:hidden={!!activeLoopId} class="w-full h-full">
+        <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
+      </div>
     {/if}
 
     {#if activeLoopId}

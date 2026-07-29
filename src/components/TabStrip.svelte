@@ -45,7 +45,7 @@
   }
 </script>
 
-<div class="flex items-stretch h-[38px] flex-1" role="tablist">
+<div class="flex items-stretch h-[38px] flex-1" role="tablist" aria-label="Pane tabs">
   {#each tabs as tab, i (tab.index)}
     {@const Icon = TAB_ICONS[tab.icon ?? 'terminal'] ?? Terminal}
     {@const isActive = tab.index === activeTabIndex}
@@ -96,6 +96,7 @@
     <button
       class="flex items-center justify-center w-[28px] h-[28px] my-auto mr-1 rounded-[6px] text-t3 hover:text-t1 hover:bg-panel-hi transition-colors"
       title="Close split (migrate tabs to sibling)"
+      aria-label="Close split pane"
       onclick={onClose}
     >
       <X size={13} />
