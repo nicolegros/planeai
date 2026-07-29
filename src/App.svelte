@@ -854,7 +854,7 @@
   {/if}
 
   <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
-    <div class="flex-1 relative p-4 pr-0 overflow-hidden">
+    <div class="flex-1 relative overflow-hidden {hasMultiplePanes ? '' : 'p-4 pr-0'}">
     {#if showProjectForm}
     <FormDialog title="Add Project" onClose={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }}>
       <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); focusTerminal(); }} onCancel={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }} />
