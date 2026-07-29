@@ -206,15 +206,6 @@
   $effect(() => {
     if (!splitTreeInitialized && sessions.length > 0) {
       splitTreeInitialized = true;
-      const tree = splitTree.getTree();
-      if (!tree) {
-        const initialId = activeSessionId ?? sessions[0]?.id;
-        if (initialId) {
-          const session = sessions.find((s) => s.id === initialId);
-          splitTree.initTree([{ ptyKey: initialId, label: session?.name || session?.branch || "Agent", icon: session?.provider ? "bot" : "terminal", type: "agent" }]);
-          lastTreeSessionId = initialId;
-        }
-      }
     }
   });
 
@@ -854,7 +845,7 @@
   {/if}
 
   <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
-    <div class="flex-1 relative overflow-hidden {hasMultiplePanes ? '' : 'p-4 pr-0'}">
+    <div class="flex-1 relative overflow-hidden">
     {#if showProjectForm}
     <FormDialog title="Add Project" onClose={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }}>
       <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); focusTerminal(); }} onCancel={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }} />
