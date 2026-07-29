@@ -50,15 +50,15 @@ export interface SerializedTree {
 
 // ─── ID generation ───────────────────────────────────────────────────────────
 
-let nextId = 0;
+/** Maximum nesting depth for the split tree (prevents stack overflow). */
+const MAX_DEPTH = 32;
+
 function generateId(): string {
-  return `split_${Date.now()}_${nextId++}`;
+  return crypto.randomUUID();
 }
 
-/** Reset ID counter (for tests) */
-export function _resetIdCounter(): void {
-  nextId = 0;
-}
+/** No-op kept for test compatibility. */
+export function _resetIdCounter(): void {}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -191,10 +191,11 @@ export function resetTree(): void {
 
 /**
  * Split the focused leaf in the given direction.
- * Returns the ID of the new (empty) leaf, or null if no focused leaf.
+ * Returns the ID of the new (empty) leaf, or null if no focused leaf or max depth reached.
  */
 export function splitFocusedLeaf(direction: SplitDirection): string | null {
   if (!tree || !focusedLeafId) return null;
+  if (treeDepth(tree) >= MAX_DEPTH) return null;
   const newLeafId = generateId();
   const splitId = generateId();
 
@@ -582,6 +583,11 @@ export function deserialize(data: SerializedTree): void {
 }
 
 // ─── Tree Helpers (pure functions) ───────────────────────────────────────────
+
+function treeDepth(node: TreeNode): number {
+  if (node.type === "leaf") return 0;
+  return 1 + Math.max(treeDepth(node.children[0]), treeDepth(node.children[1]));
+}
 
 function findLeaf(node: TreeNode, leafId: string): LeafNode | null {
   if (node.type === "leaf") return node.id === leafId ? node : null;

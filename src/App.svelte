@@ -305,7 +305,8 @@
     return findFirstLeafId(node.children[0]);
   }
 
-  function isValidTreeNode(node: unknown): boolean {
+  function isValidTreeNode(node: unknown, depth = 0): boolean {
+    if (depth > 50) return false;
     if (!node || typeof node !== "object") return false;
     const n = node as Record<string, unknown>;
     if (typeof n.id !== "string") return false;
@@ -316,7 +317,7 @@
       return typeof n.direction === "string"
         && typeof n.ratio === "number" && n.ratio >= 0 && n.ratio <= 1
         && Array.isArray(n.children) && n.children.length === 2
-        && isValidTreeNode(n.children[0]) && isValidTreeNode(n.children[1]);
+        && isValidTreeNode(n.children[0], depth + 1) && isValidTreeNode(n.children[1], depth + 1);
     }
     return false;
   }
@@ -385,10 +386,8 @@
         }
       }
     }
-    if (stalePtyKeys.length > 0) {
-      // Remove one at a time — each removal may restructure the tree.
-      // The effect will re-run to handle remaining stale tabs.
-      splitTree.removeSessionFromLeaf(stalePtyKeys[0]);
+    for (const key of stalePtyKeys) {
+      splitTree.removeSessionFromLeaf(key);
     }
   });
 
@@ -1074,9 +1073,11 @@
     {/if}
 
     {#if activeLoopId}
+      {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
       <div class="w-full h-full bg-main">
         <LoopDashboard
           loopId={activeLoopId}
+          projectPath={loopProjectPath}
           onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}
           onOpenArtifact={(path) => {
             // If no active session, select the first session from this loop

@@ -146,7 +146,7 @@
 
     const fullPath = filePath.startsWith("/") ? filePath : `${repoPath}/${filePath}`;
     try {
-      const content = await git.readFile(fullPath);
+      const content = await git.readFile(fullPath, repoPath);
       const state = createEditorState(content, filePath);
       buffers.push({ path: filePath, content, modified: false, state });
       switchToBuffer(buffers.length - 1);
@@ -192,7 +192,7 @@
     const content = view.state.doc.toString();
     const fullPath = `${repoPath}/${activeBuffer.path}`;
     try {
-      await git.writeFile(fullPath, content);
+      await git.writeFile(fullPath, content, repoPath);
       activeBuffer.modified = false;
       activeBuffer.content = content;
       onModifiedChange?.(false);
