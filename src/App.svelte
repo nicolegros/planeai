@@ -325,23 +325,6 @@
     }
   }
 
-  // When a new session is created, add it to the focused leaf
-  function addSessionToSplitTree(sessionId: string): void {
-    const session = sessions.find((s) => s.id === sessionId);
-    const tabEntry: import("./lib/split-tree.svelte").TabEntry = {
-      ptyKey: sessionId,
-      label: session?.name || session?.branch || "Agent",
-      icon: session?.provider ? "bot" : "terminal",
-      type: "agent",
-    };
-    const focusedLeafId = splitTree.getFocusedLeafId();
-    if (focusedLeafId) {
-      splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
-    } else if (!splitTree.getTree()) {
-      splitTree.initTree([tabEntry]);
-    }
-  }
-
   /** Build TabEntry[] for a session from its current tabs in session-tabs store */
   function buildTabEntriesForSession(sessionId: string): import("./lib/split-tree.svelte").TabEntry[] {
     const session = sessions.find((s) => s.id === sessionId);
@@ -358,10 +341,7 @@
     }));
   }
 
-  // When a session is deleted, remove from tree
-  function removeSessionFromSplitTree(sessionId: string): void {
-    splitTree.removeSessionFromLeaf(sessionId);
-  }
+  // Stale tabs are cleaned up reactively by the $effect below
 
   // Remove stale tabs when sessions are deleted/archived
   $effect(() => {
@@ -900,7 +880,7 @@
         {sessions}
         {taskPrefill}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); addSessionToSplitTree(session.id); focusTerminal(); }}
+        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
