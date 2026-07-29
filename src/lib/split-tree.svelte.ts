@@ -359,7 +359,7 @@ export function closeSplit(leafId: string): void {
   tree = replaceNode(tree, parent.id, updatedSibling);
 
   // Update focus
-  if (focusedLeafId && containsLeafId(closingChild, focusedLeafId)) {
+  if (focusedLeafId && containsLeaf(closingChild, focusedLeafId)) {
     focusedLeafId = receiverLeaf?.id ?? collectLeaves(tree!)[0]?.id ?? null;
   }
 }
@@ -436,12 +436,8 @@ export function setLeafActiveTabByIndex(leafId: string, tabIndex: number): void 
 export function setRatio(splitId: string, ratio: number): void {
   if (!tree) return;
   const clamped = Math.max(0.1, Math.min(0.9, ratio));
-  tree = mapTree(tree, (node) => {
-    if (node.type === "split" && node.id === splitId) {
-      return { ...node, ratio: clamped };
-    }
-    return node;
-  });
+  const node = findSplitById(tree, splitId);
+  if (node) node.ratio = clamped;
 }
 
 // ─── Spatial Navigation ──────────────────────────────────────────────────────
@@ -613,8 +609,10 @@ function containsLeaf(node: TreeNode, leafId: string): boolean {
   return containsLeaf(node.children[0], leafId) || containsLeaf(node.children[1], leafId);
 }
 
-function containsLeafId(node: TreeNode, leafId: string): boolean {
-  return containsLeaf(node, leafId);
+function findSplitById(node: TreeNode, splitId: string): SplitNode | null {
+  if (node.type === "leaf") return null;
+  if (node.id === splitId) return node;
+  return findSplitById(node.children[0], splitId) ?? findSplitById(node.children[1], splitId);
 }
 
 function findParentSplit(node: TreeNode, childId: string): SplitNode | null {

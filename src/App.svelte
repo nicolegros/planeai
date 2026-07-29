@@ -148,9 +148,7 @@
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
   const diffTabOpen = $derived(orchestrator.getDiffTabOpen());
-  const diffTabActive = $derived(orchestrator.getDiffTabActive());
   const editorTabOpen = $derived(orchestrator.getEditorTabOpen());
-  const editorTabActive = $derived(orchestrator.getEditorTabActive());
   const diffFileName = $derived(orchestrator.getDiffFileName());
   const editorFileName = $derived(orchestrator.getEditorFileName());
   const editorModified = $derived(orchestrator.getEditorModified());
@@ -199,6 +197,14 @@
   // ─── Split tree ─────────────────────────────────────────────────────────────
   const splitTreeNode = $derived(splitTree.getTree());
   const hasMultiplePanes = $derived(splitTreeNode !== null && splitTreeNode.type === "split");
+  const titlebarActiveTabIdx = $derived.by(() => {
+    const tree = splitTree.getTree();
+    if (tree?.type === "leaf") {
+      const idx = tree.tabs.findIndex((t) => t.ptyKey === tree.activeTab);
+      return idx >= 0 ? idx : 0;
+    }
+    return orchestrator.getUnifiedActiveIndex();
+  });
 
   // Initialize tree when sessions first load (single leaf with all session IDs)
   let splitTreeInitialized = $state(false);
@@ -827,7 +833,7 @@
     hasChanges={!!activeSessionId}
     sessionId={activeSessionId}
     tabs={hasMultiplePanes ? [] : titlebarTabs}
-    activeTabIndex={(() => { const tree = splitTree.getTree(); if (tree?.type === "leaf") { const idx = tree.tabs.findIndex((t) => t.ptyKey === tree.activeTab); return idx >= 0 ? idx : 0; } return orchestrator.getUnifiedActiveIndex(); })()}
+    activeTabIndex={titlebarActiveTabIdx}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
     onSelectTab={(i) => { const tree = splitTree.getTree(); if (tree?.type === "leaf" && tree.tabs[i]) splitTree.setLeafActiveTab(tree.id, tree.tabs[i].ptyKey); else orchestrator.selectUnifiedTab(i); }}
