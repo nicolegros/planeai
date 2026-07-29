@@ -361,3 +361,9 @@ diffs-container {
   min-height: 0;
   overflow: hidden;
 }
+
+/* Terminal internal padding — gives text breathing room from edges.
+   Applied to xterm's viewport so FitAddon accounts for it correctly. */
+.xterm {
+  padding: 8px;
+}
