@@ -946,6 +946,7 @@
           <TabStrip
             tabs={leafTabs}
             activeTabIndex={activeTabIdx >= 0 ? activeTabIdx : 0}
+            focused={leaf.id === splitTree.getFocusedLeafId()}
             showAddButton={true}
             showCloseButton={hasMultiplePanes}
             draggable={hasMultiplePanes}

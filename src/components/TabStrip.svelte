@@ -9,6 +9,7 @@
   interface Props {
     tabs: Tab[];
     activeTabIndex: number;
+    focused?: boolean;
     showAddButton?: boolean;
     showCloseButton?: boolean;
     draggable?: boolean;
@@ -20,7 +21,7 @@
     onTabDragOver?: (e: DragEvent) => void;
   }
 
-  let { tabs, activeTabIndex, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver }: Props = $props();
+  let { tabs, activeTabIndex, focused = true, showAddButton = true, showCloseButton = false, draggable = false, onSelectTab, onAddTab, onClose, onTabDragStart, onTabDrop, onTabDragOver }: Props = $props();
 
   const TAB_ICONS: Record<string, typeof Bot> = { bot: Bot, "git-compare": GitCompare, file: FileCode, terminal: Terminal };
 
@@ -62,12 +63,12 @@
         role="tab"
         aria-selected={isActive}
         class="flex items-center gap-[7px] px-[13px] text-[12.5px] font-medium select-none border-b-2 transition-colors
-          {isActive ? 'border-accent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
+          {isActive && focused ? 'border-accent text-t1' : isActive ? 'border-transparent text-t1' : 'border-transparent text-t2 hover:text-t1'}"
         draggable={draggable ? "true" : undefined}
         ondragstart={draggable ? (e) => onTabDragStart?.(e, tab.index) : undefined}
         onclick={() => onSelectTab(tab.index)}
       >
-        <Icon size={13} class={isActive ? 'text-accent' : 'text-t3'} />
+        <Icon size={13} class={isActive && focused ? 'text-accent' : 'text-t3'} />
         {tab.label}
       </button>
     </div>
