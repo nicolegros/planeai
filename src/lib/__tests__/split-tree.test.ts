@@ -23,6 +23,7 @@ import {
   updateTabLabel,
   findTab,
   focusTab,
+  replaceRootLeafTabs,
   serialize,
   deserialize,
   _resetIdCounter,
@@ -485,5 +486,32 @@ describe("focusTab", () => {
   it("returns false for unknown ptyKey", () => {
     initTree([tab("s1")]);
     expect(focusTab("unknown")).toBe(false);
+  });
+});
+
+describe("replaceRootLeafTabs", () => {
+  it("replaces tabs in-place when tree is a single leaf", () => {
+    initTree([tab("s1")]);
+    const leafId = getFocusedLeafId()!;
+
+    const result = replaceRootLeafTabs([tab("s2"), tab("s3")], "s3");
+    expect(result).toBe(true);
+
+    const leaf = getFocusedLeaf()!;
+    expect(leaf.id).toBe(leafId); // same leaf identity preserved
+    expect(leaf.tabs.map((t) => t.ptyKey)).toEqual(["s2", "s3"]);
+    expect(leaf.activeTab).toBe("s3");
+  });
+
+  it("returns false when tree is a split (multi-pane)", () => {
+    initTree([tab("s1")]);
+    splitFocusedLeaf("vertical");
+
+    const result = replaceRootLeafTabs([tab("s2")]);
+    expect(result).toBe(false);
+  });
+
+  it("returns false when tree is null", () => {
+    expect(replaceRootLeafTabs([tab("s1")])).toBe(false);
   });
 });

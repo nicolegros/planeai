@@ -175,6 +175,19 @@ export function initTree(tabs: TabEntry[], activeTab?: string): void {
   focusedLeafId = leafId;
 }
 
+/**
+ * Replace the root leaf's tabs without changing the leaf identity.
+ * Used for session switching in single-pane mode to preserve mounted components.
+ * Returns true if successful, false if tree is not a single leaf.
+ */
+export function replaceRootLeafTabs(tabs: TabEntry[], activeTab?: string): boolean {
+  if (!tree || tree.type !== "leaf") return false;
+  const activePtyKey = activeTab ?? tabs[0]?.ptyKey ?? "";
+  tree.tabs = [...tabs];
+  tree.activeTab = activePtyKey;
+  return true;
+}
+
 /** Replace the entire tree (used for deserialization). */
 export function setTree(newTree: TreeNode, newFocusedLeafId: string): void {
   tree = newTree;

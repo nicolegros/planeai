@@ -271,7 +271,11 @@
     // Staleness check again
     if (gen !== loadGeneration) { loadingLayout = false; return; }
     // No saved layout or invalid - initialize fresh
-    splitTree.initTree(buildTabEntriesForSession(sessionId));
+    const entries = buildTabEntriesForSession(sessionId);
+    if (!splitTree.replaceRootLeafTabs(entries)) {
+      // Tree is a split (multi-pane) or null — must create fresh
+      splitTree.initTree(entries);
+    }
     lastTreeSessionId = sessionId;
     loadingLayout = false;
   }
@@ -1005,17 +1009,21 @@
             {@const session = sessions.find((s) => s.id === sessionId)}
             {@const isActiveInLeaf = tabEntry.ptyKey === leaf.activeTab}
             {@const project = session ? projects.find((p) => p.id === session.project_id) : null}
-            <!-- Terminals always mount (preserving state), controlled by visible -->
-            {#if (tabEntry.type === "agent" || tabEntry.type === "shell") && session && poolIsMounted(session.id)}
-              <Terminal
-                sessionId={tabEntry.ptyKey}
-                visible={isActiveInLeaf}
-                focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
-                exited={tabEntry.type === "agent" && session.status === "exited"}
-                skipAttach={tabEntry.type === "shell"}
-                onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
-                onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
-              />
+            {#if (tabEntry.type === "agent" || tabEntry.type === "shell")}
+              {#if session && poolIsMounted(session.id)}
+              <!-- Wrapper hides inactive tabs; Terminal's visible prop also pauses during loop overlay -->
+              <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
+                <Terminal
+                  sessionId={tabEntry.ptyKey}
+                  visible={isActiveInLeaf && !activeLoopId}
+                  focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  exited={tabEntry.type === "agent" && session.status === "exited"}
+                  skipAttach={tabEntry.type === "shell"}
+                  onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                  onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
+                />
+              </div>
+              {/if}
             {/if}
             <!-- Diff/Editor render when active; EditorTab stays mounted to preserve state -->
             {#if tabEntry.type === "diff"}
