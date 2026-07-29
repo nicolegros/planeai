@@ -445,7 +445,8 @@
     if (existing) return;
 
     splitTree.addSessionToLeaf(newLeafId, { ptyKey, label: "Shell", icon: "terminal", type: "shell" });
-    tick().then(() => refocusTerminal());
+    // Wait for Terminal to mount + open before refocusing
+    tick().then(() => requestAnimationFrame(() => refocusTerminal()));
   }
 
   /** Open a new shell tab in the focused split leaf. */
@@ -967,7 +968,7 @@
                 focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                 exited={tabEntry.type === "agent" && session.status === "exited"}
                 skipAttach={tabEntry.type === "shell"}
-                onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); }}
+                onAttached={() => { if (tabEntry.type === "agent" && session!.status === "exited") orchestrator.updateSessionStatus(session!.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
                 onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
               />
             {/if}
