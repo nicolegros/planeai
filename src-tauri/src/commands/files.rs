@@ -78,7 +78,11 @@ pub async fn read_file(file_path: String, repo_path: String) -> Result<String, S
 }
 
 #[tauri::command]
-pub async fn write_file(file_path: String, content: String, repo_path: String) -> Result<(), String> {
+pub async fn write_file(
+    file_path: String,
+    content: String,
+    repo_path: String,
+) -> Result<(), String> {
     super::blocking(move || {
         let validated = validate_file_path(&file_path, &repo_path)?;
         std::fs::write(&validated, &content).map_err(|e| format!("Cannot write file: {e}"))
