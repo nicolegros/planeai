@@ -217,8 +217,8 @@
 
   // ─── Per-session split layout (DB-backed) ───────────────────────────────────
   let lastTreeSessionId = $state<string | null>(null);
-  let loadGeneration = 0; // not reactive — just a counter for staleness
-  let loadingLayout = false; // suppress auto-save during load
+  let loadGeneration = 0; // not reactive - just a counter for staleness
+  let loadingLayout = $state(false); // suppress auto-save and stale-tab cleanup during load
 
   // When active session changes, save current tree and load/create for new session
   $effect(() => {
@@ -254,8 +254,8 @@
     const gen = ++loadGeneration;
     try {
       const layoutJson = await sessionsApi.getLayout(sessionId);
-      // Staleness check — if session changed while we were loading, discard
-      if (gen !== loadGeneration) return;
+      // Staleness check - if session changed while we were loading, discard
+      if (gen !== loadGeneration) { loadingLayout = false; return; }
       if (layoutJson) {
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
@@ -269,8 +269,8 @@
       console.warn("Failed to load layout for session", sessionId, e);
     }
     // Staleness check again
-    if (gen !== loadGeneration) return;
-    // No saved layout or invalid — initialize fresh
+    if (gen !== loadGeneration) { loadingLayout = false; return; }
+    // No saved layout or invalid - initialize fresh
     splitTree.initTree(buildTabEntriesForSession(sessionId));
     lastTreeSessionId = sessionId;
     loadingLayout = false;
@@ -285,17 +285,37 @@
     if (!isValidTreeNode(d.tree)) return false;
     // Migrate: ensure all tabs have a type field (for trees saved before type was added)
     migrateTreeTypes(d.tree as import("./lib/split-tree.svelte").TreeNode);
+    // Validate focusedLeafId references an existing leaf
+    if (!leafExistsInNode(d.tree as import("./lib/split-tree.svelte").TreeNode, d.focusedLeafId as string)) {
+      // Fallback to first leaf in the tree
+      const firstLeaf = findFirstLeafId(d.tree as import("./lib/split-tree.svelte").TreeNode);
+      if (!firstLeaf) return false;
+      d.focusedLeafId = firstLeaf;
+    }
     return true;
+  }
+
+  function leafExistsInNode(node: import("./lib/split-tree.svelte").TreeNode, id: string): boolean {
+    if (node.type === "leaf") return node.id === id;
+    return leafExistsInNode(node.children[0], id) || leafExistsInNode(node.children[1], id);
+  }
+
+  function findFirstLeafId(node: import("./lib/split-tree.svelte").TreeNode): string | null {
+    if (node.type === "leaf") return node.id;
+    return findFirstLeafId(node.children[0]);
   }
 
   function isValidTreeNode(node: unknown): boolean {
     if (!node || typeof node !== "object") return false;
     const n = node as Record<string, unknown>;
+    if (typeof n.id !== "string") return false;
     if (n.type === "leaf") {
       return Array.isArray(n.tabs) && typeof n.activeTab === "string";
     }
     if (n.type === "split") {
-      return Array.isArray(n.children) && n.children.length === 2
+      return typeof n.direction === "string"
+        && typeof n.ratio === "number" && n.ratio >= 0 && n.ratio <= 1
+        && Array.isArray(n.children) && n.children.length === 2
         && isValidTreeNode(n.children[0]) && isValidTreeNode(n.children[1]);
     }
     return false;
@@ -345,6 +365,7 @@
 
   // Remove stale tabs when sessions are deleted/archived
   $effect(() => {
+    if (loadingLayout) return;
     const sessionIds = new Set(sessions.map((s) => s.id));
     // Collect stale keys: tabs whose session was deleted, OR tabs that don't
     // belong to the current layout's session (cross-contamination guard)
@@ -431,10 +452,10 @@
       case "focus_split_right": splitTree.focusDirection("right"); syncFocusedLeafToOrchestrator(); break;
       case "focus_split_up": splitTree.focusDirection("up"); syncFocusedLeafToOrchestrator(); break;
       case "focus_split_down": splitTree.focusDirection("down"); syncFocusedLeafToOrchestrator(); break;
-      case "move_tab_left": splitTree.moveTabToDirection("left"); break;
-      case "move_tab_right": splitTree.moveTabToDirection("right"); break;
-      case "move_tab_up": splitTree.moveTabToDirection("up"); break;
-      case "move_tab_down": splitTree.moveTabToDirection("down"); break;
+      case "move_tab_left": splitTree.moveTabToDirection("left"); syncFocusedLeafToOrchestrator(); break;
+      case "move_tab_right": splitTree.moveTabToDirection("right"); syncFocusedLeafToOrchestrator(); break;
+      case "move_tab_up": splitTree.moveTabToDirection("up"); syncFocusedLeafToOrchestrator(); break;
+      case "move_tab_down": splitTree.moveTabToDirection("down"); syncFocusedLeafToOrchestrator(); break;
     }
   }
 
@@ -616,7 +637,9 @@
     const data = splitTree.serialize();
     if (!data || !lastTreeSessionId) return;
     const sessionId = lastTreeSessionId;
-    sessionsApi.saveLayout(sessionId, JSON.stringify(data)).catch(() => {});
+    sessionsApi.saveLayout(sessionId, JSON.stringify(data)).catch((e) => {
+      console.warn("Failed to save split layout for session", sessionId, e);
+    });
   }
 
   // Auto-save split tree on changes (debounced 500ms)

@@ -97,6 +97,20 @@ export function getLeafById(id: string): LeafNode | null {
 
 // ─── Tab helpers ─────────────────────────────────────────────────────────────
 
+/** Pick the next active tab ptyKey after removing a tab from a leaf. */
+function pickNextActive(
+  originalTabs: TabEntry[],
+  remainingTabs: TabEntry[],
+  removedKey: string,
+  currentActive: string,
+): string {
+  if (currentActive !== removedKey) return currentActive;
+  if (remainingTabs.length === 0) return "";
+  const removedIdx = originalTabs.findIndex((t) => t.ptyKey === removedKey);
+  const clampedIdx = Math.min(removedIdx, remainingTabs.length - 1);
+  return remainingTabs[clampedIdx]?.ptyKey ?? "";
+}
+
 /** Get the active TabEntry for a leaf, or null if the leaf has no tabs. */
 export function getActiveTabEntry(leaf: LeafNode): TabEntry | null {
   if (leaf.tabs.length === 0) return null;
@@ -239,15 +253,7 @@ export function removeSessionFromLeaf(ptyKey: string): boolean {
   // Update the leaf
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === leaf.id) {
-      const newActive =
-        leaf.activeTab === ptyKey
-          ? (remainingTabs[
-              Math.min(
-                leaf.tabs.findIndex((t) => t.ptyKey === ptyKey),
-                remainingTabs.length - 1,
-              )
-            ]?.ptyKey ?? "")
-          : leaf.activeTab;
+      const newActive = pickNextActive(leaf.tabs, remainingTabs, ptyKey, leaf.activeTab);
       return { ...node, tabs: remainingTabs, activeTab: newActive };
     }
     return node;
@@ -302,15 +308,7 @@ export function moveSessionToLeaf(
     }
     if (node.type === "leaf" && node.id === sourceLeaf.id) {
       if (sourceDestroyed) return node; // will be cleaned up below
-      const newActive =
-        sourceLeaf.activeTab === ptyKey
-          ? (sourceTabs[
-              Math.min(
-                sourceLeaf.tabs.findIndex((t) => t.ptyKey === ptyKey),
-                sourceTabs.length - 1,
-              )
-            ]?.ptyKey ?? "")
-          : sourceLeaf.activeTab;
+      const newActive = pickNextActive(sourceLeaf.tabs, sourceTabs, ptyKey, sourceLeaf.activeTab);
       return { ...node, tabs: sourceTabs, activeTab: newActive };
     }
     return node;
@@ -436,8 +434,12 @@ export function setLeafActiveTabByIndex(leafId: string, tabIndex: number): void 
 export function setRatio(splitId: string, ratio: number): void {
   if (!tree) return;
   const clamped = Math.max(0.1, Math.min(0.9, ratio));
-  const node = findSplitById(tree, splitId);
-  if (node) node.ratio = clamped;
+  tree = mapTree(tree, (node) => {
+    if (node.type === "split" && node.id === splitId) {
+      return { ...node, ratio: clamped };
+    }
+    return node;
+  });
 }
 
 // ─── Spatial Navigation ──────────────────────────────────────────────────────
@@ -537,15 +539,7 @@ export function moveTabToDirection(direction: NavDirection): string | null {
   tree = mapTree(tree, (node) => {
     if (node.type === "leaf" && node.id === focusedLeafId) {
       const remainingTabs = node.tabs.filter((t) => t.ptyKey !== ptyKey);
-      const newActive =
-        remainingTabs.length > 0
-          ? (remainingTabs[
-              Math.min(
-                node.tabs.findIndex((t) => t.ptyKey === ptyKey),
-                remainingTabs.length - 1,
-              )
-            ]?.ptyKey ?? "")
-          : "";
+      const newActive = pickNextActive(node.tabs, remainingTabs, ptyKey, node.activeTab);
       const originalLeaf: LeafNode = { ...node, tabs: remainingTabs, activeTab: newActive };
       const newLeaf: LeafNode = {
         type: "leaf",
@@ -607,12 +601,6 @@ function collectLeaves(node: TreeNode): LeafNode[] {
 function containsLeaf(node: TreeNode, leafId: string): boolean {
   if (node.type === "leaf") return node.id === leafId;
   return containsLeaf(node.children[0], leafId) || containsLeaf(node.children[1], leafId);
-}
-
-function findSplitById(node: TreeNode, splitId: string): SplitNode | null {
-  if (node.type === "leaf") return null;
-  if (node.id === splitId) return node;
-  return findSplitById(node.children[0], splitId) ?? findSplitById(node.children[1], splitId);
 }
 
 function findParentSplit(node: TreeNode, childId: string): SplitNode | null {
