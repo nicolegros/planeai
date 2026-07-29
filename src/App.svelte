@@ -476,6 +476,7 @@
       if (splitTree.getAllLeaves().length > 1) {
         splitTree.closeSplit(leaf.id);
         syncFocusedLeafToOrchestrator();
+        tick().then(() => refocusTerminal());
       }
       return;
     }
@@ -483,6 +484,7 @@
     // Diff and editor tabs — just remove from tree
     if (activeEntry.type === "diff" || activeEntry.type === "editor") {
       splitTree.removeSessionFromLeaf(activeEntry.ptyKey);
+      tick().then(() => refocusTerminal());
       return;
     }
 
@@ -494,6 +496,7 @@
       const tabIndex = parseInt(activeEntry.ptyKey.slice(colonIdx + 1), 10);
       if (!isNaN(tabIndex)) orchestrator.closeShellTab(sessionId, tabIndex);
     }
+    tick().then(() => refocusTerminal());
   }
 
   /** Navigate to the next tab in the focused split leaf. */
