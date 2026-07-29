@@ -346,14 +346,20 @@
   // Remove stale tabs when sessions are deleted/archived
   $effect(() => {
     const sessionIds = new Set(sessions.map((s) => s.id));
-    // Collect stale keys first, then batch-remove. Early return lets the effect
-    // re-run with a fresh tree if the structure changed during removal.
+    // Collect stale keys: tabs whose session was deleted, OR tabs that don't
+    // belong to the current layout's session (cross-contamination guard)
     const allLeaves = splitTree.getAllLeaves();
     const stalePtyKeys: string[] = [];
     for (const leaf of allLeaves) {
       for (const tab of leaf.tabs) {
         const sid = ptyKeyToSessionId(tab.ptyKey);
-        if (sid && !sessionIds.has(sid)) {
+        if (!sid) continue;
+        // Session deleted
+        if (!sessionIds.has(sid)) {
+          stalePtyKeys.push(tab.ptyKey);
+        }
+        // Session exists but belongs to a different session (cross-project contamination)
+        else if (lastTreeSessionId && sid !== lastTreeSessionId && tab.type === "agent") {
           stalePtyKeys.push(tab.ptyKey);
         }
       }
