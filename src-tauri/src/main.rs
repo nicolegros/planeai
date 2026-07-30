@@ -28,6 +28,8 @@ mod symphony;
 mod template;
 #[cfg(not(windows))]
 mod tmux;
+#[allow(dead_code)]
+mod tmux_wsl;
 mod updater;
 mod util;
 

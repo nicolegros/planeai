@@ -515,9 +515,19 @@ pub fn tmux_available() -> bool {
     })
 }
 
+/// On Windows, tmux is available through WSL when WSL is configured.
+/// We check if `wsl.exe tmux -V` succeeds.
 #[cfg(windows)]
 pub fn tmux_available() -> bool {
-    false
+    *TMUX_AVAILABLE.get_or_init(|| {
+        // Check if tmux is available inside the default WSL distro
+        let mut cmd = std::process::Command::new("wsl");
+        cmd.args(["--", "which", "tmux"]);
+        planeai_core::command::no_window(&mut cmd);
+        cmd.output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 /// Re-read config from disk. On success returns the new config; on any warning/error returns Err
