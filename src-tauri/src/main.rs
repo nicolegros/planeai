@@ -328,6 +328,8 @@ fn main() {
             refresh_config,
             get_theme_css,
             list_themes,
+            list_wsl_distros,
+            is_wsl_available,
             launch_session,
             attach_session,
             write_to_pty,
