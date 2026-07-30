@@ -22,6 +22,12 @@ pub enum PtyTarget {
     /// Spawn a command string in a local PTY (shell tabs and agent sessions).
     /// The command is wrapped in the platform shell (`bash -c` on Unix, `cmd /C` on Windows).
     Shell { command: String, cwd: String },
+    /// Spawn a command inside WSL (Windows only). The command runs in the specified distro.
+    WslShell {
+        command: String,
+        distro: String,
+        cwd: String,
+    },
     /// Attach to a daemon-managed session via data connection.
     Daemon {
         session_id: String,
@@ -133,8 +139,19 @@ impl PtyManager {
             return self.attach_daemon(&sid, socket_path, app, on_data);
         }
 
-        let (command, cwd) = match target {
-            PtyTarget::Shell { command, cwd } => (command, cwd),
+        let (command, cwd, wsl_config) = match target {
+            PtyTarget::Shell { command, cwd } => (command, cwd, None),
+            PtyTarget::WslShell {
+                command,
+                distro,
+                cwd,
+            } => {
+                let wsl = planeai_pty::WslSpawnConfig {
+                    distro,
+                    cwd: Some(cwd.clone()),
+                };
+                (command, cwd, Some(wsl))
+            }
             PtyTarget::TmuxAttach { tmux_name } => {
                 #[cfg(not(windows))]
                 {
@@ -146,7 +163,7 @@ impl PtyManager {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    (cmd, cwd)
+                    (cmd, cwd, None)
                 }
                 #[cfg(windows)]
                 {
@@ -160,7 +177,7 @@ impl PtyManager {
         let cancelled = Arc::new(AtomicBool::new(false));
         let observer = self.observer.read().unwrap().clone();
         let backend = PlaneaiPtyBackend::spawn(
-            session_id, &command, &cwd, env, app, on_data, cancelled, observer,
+            session_id, &command, &cwd, env, app, on_data, cancelled, observer, wsl_config,
         )?;
         let mut sessions = self.sessions.write().map_err(|e| e.to_string())?;
         if let Some(old) = sessions.get(session_id) {
