@@ -49,7 +49,7 @@ function onFocusChange(state: FocusState, fitAndResize: () => void) {
 
 describe("Terminal focus-on-open (PLA-235)", () => {
   let state: FocusState;
-  let fitAndResize: ReturnType<typeof vi.fn>;
+  let fitAndResize: () => void;
 
   beforeEach(() => {
     state = {
@@ -57,7 +57,7 @@ describe("Terminal focus-on-open (PLA-235)", () => {
       opened: false,
       focused: true, // new tab starts focused
     };
-    fitAndResize = vi.fn();
+    fitAndResize = vi.fn(() => {});
   });
 
   describe("opened guard prevents premature focus", () => {

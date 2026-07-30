@@ -188,8 +188,10 @@ export const git = {
   listCommits: (repoPath: string, limit: number) =>
     invoke<CommitEntry[]>("list_commits", { repoPath, limit }),
   listFiles: (repoPath: string) => invoke<string[]>("list_files", { repoPath }),
-  readFile: (filePath: string, repoPath: string) => invoke<string>("read_file", { filePath, repoPath }),
-  writeFile: (filePath: string, content: string, repoPath: string) => invoke("write_file", { filePath, content, repoPath }),
+  readFile: (filePath: string, repoPath: string) =>
+    invoke<string>("read_file", { filePath, repoPath }),
+  writeFile: (filePath: string, content: string, repoPath: string) =>
+    invoke("write_file", { filePath, content, repoPath }),
   fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
 };
 

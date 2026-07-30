@@ -17,8 +17,8 @@ function makeKey(key: string, extra: Partial<KeyboardEvent> = {}): KeyboardEvent
 describe("createFormKeyboardController", () => {
   let wrapper: HTMLDivElement;
   let titleInput: HTMLInputElement;
-  let onDismiss: ReturnType<typeof vi.fn>;
-  let toggleDraft: ReturnType<typeof vi.fn>;
+  let onDismiss: () => void;
+  let toggleDraft: () => void;
 
   beforeEach(() => {
     wrapper = document.createElement("div");
@@ -27,8 +27,8 @@ describe("createFormKeyboardController", () => {
     titleInput.setAttribute("data-field", "title");
     wrapper.appendChild(titleInput);
     document.body.appendChild(wrapper);
-    onDismiss = vi.fn();
-    toggleDraft = vi.fn();
+    onDismiss = vi.fn(() => {});
+    toggleDraft = vi.fn(() => {});
   });
 
   it("starts in normal mode", () => {
