@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { preferences } from "../lib/api";
+  import { preferences, wsl } from "../lib/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -26,6 +26,10 @@
   let staleWorktrees = $state<{ session_name: string; worktree_path: string; branch: string }[]>([]);
   let showCleanupDialog = $state(false);
   let cleanupMessage = $state("");
+
+  // WSL state
+  let wslAvailable = $state(false);
+  let wslDistros = $state<string[]>([]);
 
   async function triggerCleanupPreview() {
     cleanupMessage = "";
@@ -90,6 +94,14 @@
     });
     preferences.checkCliInstalled().then((installed) => {
       cliInstalled = installed;
+    });
+    wsl.isAvailable().then((available) => {
+      wslAvailable = available;
+      if (available) {
+        wsl.listDistros().then((distros) => {
+          wslDistros = distros;
+        });
+      }
     });
   });
 
@@ -581,6 +593,41 @@
         Changes apply to new sessions only.
       </p>
     </section>
+
+    <!-- WSL (Windows only) -->
+    {#if wslAvailable}
+    <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">WSL (Windows Subsystem for Linux)</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Run sessions inside WSL</p>
+          <p class="text-xs text-t3">Agent and shell sessions spawn inside a Linux distro via WSL.</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {(config.wsl?.enabled) ? 'bg-accent' : 'bg-panel-hi'}"
+          onclick={() => updateSettings({ wsl: { ...config.wsl, enabled: !(config.wsl?.enabled) } } as Partial<AppConfig>)}
+          role="switch"
+          aria-checked={config.wsl?.enabled ?? false}
+          aria-label="Toggle WSL mode"
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {(config.wsl?.enabled) ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
+      {#if config.wsl?.enabled}
+        <div class="space-y-1">
+          <!-- svelte-ignore a11y_label_has_associated_control -->
+          <label class="text-xs text-t2">Distro</label>
+          <Select
+            items={wslDistros.map(d => ({ value: d, label: d }))}
+            value={config.wsl?.distro ?? wslDistros[0] ?? ""}
+            onValueChange={(v) => updateSettings({ wsl: { ...config.wsl, enabled: true, distro: v } } as Partial<AppConfig>)}
+            placeholder="Select a WSL distro…"
+          />
+          <p class="text-xs text-t3">Sessions, git operations, and worktrees will use this distro.</p>
+        </div>
+      {/if}
+    </section>
+    {/if}
 
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Vim Mode</h2>
