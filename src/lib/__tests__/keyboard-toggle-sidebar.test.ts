@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { installKeyboardRouter, IS_MAC } from "../keyboard";
+import { installKeyboardRouter, IS_MAC, type KeyboardAction } from "../keyboard";
 import { setActiveZone, getActiveZone, focusTerminal } from "../focus.svelte";
 
 describe("installKeyboardRouter toggle_sidebar focus behavior", () => {
-  let onAction: ReturnType<typeof vi.fn>;
+  let onAction: (action: KeyboardAction) => void;
   let cleanup: () => void;
 
   beforeEach(() => {
-    onAction = vi.fn();
+    onAction = vi.fn((_action: KeyboardAction) => {});
     focusTerminal();
     cleanup = installKeyboardRouter(
       onAction,

@@ -143,12 +143,16 @@ describe("TaskPanel flatTaskIndex lookup", () => {
 });
 
 describe("TaskPanel move-to-done archives session", () => {
-  let onArchiveSession: ReturnType<typeof vi.fn>;
+  let onArchiveSession: (session: {
+    id: string;
+    task_key: string | null;
+    pr_url: string | null;
+  }) => void;
   let target: HTMLElement;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    onArchiveSession = vi.fn();
+    onArchiveSession = vi.fn(() => {});
     target = document.createElement("div");
     document.body.appendChild(target);
   });

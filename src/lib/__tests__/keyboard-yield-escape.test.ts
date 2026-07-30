@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { installKeyboardRouter } from "../keyboard";
+import { installKeyboardRouter, type KeyboardAction } from "../keyboard";
 import { setActiveZone } from "../focus.svelte";
 
 describe("installKeyboardRouter Escape yielding with data-form-keyboard", () => {
-  let onAction: ReturnType<typeof vi.fn>;
+  let onAction: (action: KeyboardAction) => void;
   let cleanup: () => void;
 
   beforeEach(() => {
-    onAction = vi.fn();
+    onAction = vi.fn((_action: KeyboardAction) => {});
     setActiveZone("sidebar"); // not terminal, so shouldPassEscape path isn't triggered
     cleanup = installKeyboardRouter(
       onAction,
