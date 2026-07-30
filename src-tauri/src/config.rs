@@ -58,6 +58,10 @@ pub struct Config {
     pub sound_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrations: Option<IntegrationsConfig>,
+    /// WSL (Windows Subsystem for Linux) configuration.
+    /// When enabled, sessions spawn inside the specified WSL distro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl: Option<planeai_core::wsl::WslConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -281,6 +285,7 @@ impl Default for Config {
             auto_open_review: Some(true),
             sound_enabled: Some(true),
             integrations: None,
+            wsl: None,
         }
     }
 }
