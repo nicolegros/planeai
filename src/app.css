@@ -261,7 +261,7 @@
 
 .xterm {
   height: 100%;
-  padding: 0 !important;
+  padding: 8px 12px !important;
   overflow: hidden;
 }
 
@@ -340,3 +340,27 @@ diffs-container {
 [data-tauri-drag-region] [role="presentation"] {
   -webkit-app-region: no-drag;
 }
+
+/* ─── Split pane styles ─── */
+.split-leaf {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.split-leaf-single {
+  border: none;
+  border-radius: 0;
+}
+
+.split-leaf-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Terminal internal padding — gives text breathing room from edges.
+   Applied to xterm's element so FitAddon accounts for it correctly. */

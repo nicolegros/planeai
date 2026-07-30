@@ -40,7 +40,18 @@ export type KeyboardAction =
   | { type: "refresh_tasks" }
   | { type: "open_file" }
   | { type: "save_file" }
-  | { type: "show_shortcuts" };
+  | { type: "show_shortcuts" }
+  | { type: "split_vertical" }
+  | { type: "split_horizontal" }
+  | { type: "close_split" }
+  | { type: "focus_split_left" }
+  | { type: "focus_split_right" }
+  | { type: "focus_split_up" }
+  | { type: "focus_split_down" }
+  | { type: "move_tab_left" }
+  | { type: "move_tab_right" }
+  | { type: "move_tab_up" }
+  | { type: "move_tab_down" };
 
 /**
  * Attempt to match a keyboard event to an app-level action.
@@ -110,9 +121,14 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "prev_session" };
   }
 
-  // Mod+D — toggle diff tab
+  // Mod+D — split vertical (side by side)
   if (mod && !e.shiftKey && key === "d") {
-    return { type: "toggle_diff" };
+    return { type: "split_vertical" };
+  }
+
+  // Mod+Shift+D — split horizontal (top/bottom)
+  if (mod && e.shiftKey && key === "d") {
+    return { type: "split_horizontal" };
   }
 
   // Mod+\ — toggle diff tab
@@ -170,6 +186,27 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
     return { type: "new_project" };
   }
 
+  // Mod+Shift+Arrow — focus split in direction
+  if (mod && e.shiftKey && !e.altKey && !e.ctrlKey) {
+    if (e.key === "ArrowLeft") return { type: "focus_split_left" };
+    if (e.key === "ArrowRight") return { type: "focus_split_right" };
+    if (e.key === "ArrowUp") return { type: "focus_split_up" };
+    if (e.key === "ArrowDown") return { type: "focus_split_down" };
+  }
+
+  // Mod+Option+Arrow — move tab to split in direction
+  if (mod && e.altKey && !e.shiftKey && !e.ctrlKey) {
+    if (e.key === "ArrowLeft") return { type: "move_tab_left" };
+    if (e.key === "ArrowRight") return { type: "move_tab_right" };
+    if (e.key === "ArrowUp") return { type: "move_tab_up" };
+    if (e.key === "ArrowDown") return { type: "move_tab_down" };
+  }
+
+  // Mod+Shift+W — close split
+  if (mod && e.shiftKey && key === "w") {
+    return { type: "close_split" };
+  }
+
   // Mod+N — new session
   if (mod && key === "n") {
     return { type: "new_session" };
@@ -210,6 +247,13 @@ export function installKeyboardRouter(
     "next_session",
     "prev_session",
     "open_preferences",
+    "split_vertical",
+    "split_horizontal",
+    "close_split",
+    "focus_split_left",
+    "focus_split_right",
+    "focus_split_up",
+    "focus_split_down",
   ]);
 
   function handler(e: KeyboardEvent) {

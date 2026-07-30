@@ -322,6 +322,8 @@ fn main() {
             close_tab,
             increment_tab_count,
             check_tmux_available,
+            save_session_layout,
+            get_session_layout,
             restart_session,
             archive_session,
             destroy_session,

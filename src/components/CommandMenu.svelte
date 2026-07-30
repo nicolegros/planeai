@@ -29,10 +29,13 @@
     onOpenFile?: (filePath: string) => void;
     onOpenLogViewer?: () => void;
     onCreatePr?: () => void;
+    onSplitVertical?: () => void;
+    onSplitHorizontal?: () => void;
+    onCloseSplit?: () => void;
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -482,6 +485,42 @@
                   Review Changes
                   <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧R</kbd>
                 </Command.Item>
+                {#if onSplitVertical}
+                <Command.Item
+                  value="split vertical"
+                  keywords={["split", "pane", "vertical", "side", "divide"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onSplitVertical(); close(); }}
+                >
+                  Split Vertical
+                  <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}D</kbd>
+                </Command.Item>
+                {/if}
+                {#if onSplitHorizontal}
+                <Command.Item
+                  value="split horizontal"
+                  keywords={["split", "pane", "horizontal", "top", "bottom", "divide"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onSplitHorizontal(); close(); }}
+                >
+                  Split Horizontal
+                  <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧D</kbd>
+                </Command.Item>
+                {/if}
+                {#if onCloseSplit}
+                <Command.Item
+                  value="close split"
+                  keywords={["close", "split", "pane", "merge"]}
+                  disabled={!activeSessionId}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={() => { onCloseSplit(); close(); }}
+                >
+                  Close Split
+                  <kbd class="ml-auto text-[10px] font-mono text-t3">{MOD_LABEL}⇧W</kbd>
+                </Command.Item>
+                {/if}
                 <Command.Item
                   value="pull request"
                   keywords={["pr", "pull request", "github", "link", "review", "create"]}

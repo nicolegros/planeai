@@ -8,11 +8,12 @@
 
   interface Props {
     loopId: string;
+    projectPath: string;
     onSelectSession: (sessionId: string) => void;
     onOpenArtifact?: (path: string) => void;
   }
 
-  let { loopId, onSelectSession, onOpenArtifact }: Props = $props();
+  let { loopId, projectPath, onSelectSession, onOpenArtifact }: Props = $props();
 
   let detail = $state<LoopRunDetail | null>(null);
   let loading = $state(false);
@@ -44,7 +45,7 @@
 
     verifierOutputs = { ...verifierOutputs, [vrId]: { content: null, loading: true, error: null } };
     try {
-      const raw = await git.readFile(outputPath);
+      const raw = await git.readFile(outputPath, projectPath);
       verifierOutputs = { ...verifierOutputs, [vrId]: { content: stripAnsi(raw), loading: false, error: null } };
     } catch (e) {
       verifierOutputs = { ...verifierOutputs, [vrId]: { content: null, loading: false, error: String(e) } };
@@ -240,7 +241,7 @@
         artifacts={detail.artifacts}
         onSelectSession={onSelectSession}
         onOpenFile={onOpenArtifact}
-        onLoadOutput={(path) => git.readFile(path)}
+        onLoadOutput={(path) => git.readFile(path, projectPath)}
       />
     {:else}
       <!-- Flat sections for non-recipe loops -->

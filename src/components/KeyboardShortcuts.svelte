@@ -41,7 +41,14 @@
       { keys: `${MOD_LABEL}R`, description: "Refresh tasks" },
       { keys: `${MOD_LABEL}⇧R`, description: "Open Review" },
       { keys: `${MOD_LABEL}E`, description: "Toggle file explorer" },
-      { keys: `${MOD_LABEL}D`, description: "Toggle diff" },
+      { keys: `${MOD_LABEL}\\`, description: "Toggle diff" },
+    ]},
+    { section: "Splits", items: [
+      { keys: `${MOD_LABEL}D`, description: "Split vertical" },
+      { keys: `${MOD_LABEL}⇧D`, description: "Split horizontal" },
+      { keys: `${MOD_LABEL}⇧W`, description: "Close split" },
+      { keys: `${MOD_LABEL}⇧←→↑↓`, description: "Focus split in direction" },
+      { keys: `${MOD_LABEL}⌥←→↑↓`, description: "Move pane to split in direction" },
     ]},
     { section: "Terminal", items: [
       { keys: IS_MAC ? `${MOD_LABEL}C` : `Ctrl+Shift+C`, description: "Copy selection" },
