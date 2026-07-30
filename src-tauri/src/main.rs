@@ -133,6 +133,28 @@ fn main() {
             }
             tracing::info!("config loaded");
 
+            // WSL: warm the distro in background to eliminate cold-start latency
+            if let Some(ref wsl) = cfg.wsl {
+                if wsl.enabled {
+                    let distro = wsl.distro.clone().unwrap_or_default();
+                    std::thread::spawn(move || {
+                        let start = std::time::Instant::now();
+                        match planeai_core::wsl::warm_distro(&distro) {
+                            Ok(()) => {
+                                tracing::info!(
+                                    distro = %distro,
+                                    elapsed_ms = start.elapsed().as_millis(),
+                                    "WSL distro warmed"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(distro = %distro, error = %e, "failed to warm WSL distro");
+                            }
+                        }
+                    });
+                }
+            }
+
             // Revive sessions
             #[cfg(not(windows))]
             let _ = startup::revive_sessions(
