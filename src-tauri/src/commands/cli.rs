@@ -4,7 +4,7 @@ use tauri::Manager;
 pub fn check_cli_installed() -> Result<bool, String> {
     let cli_target = std::path::Path::new("/usr/local/bin/planeai-cli");
     let daemon_target = std::path::Path::new("/usr/local/bin/planeai-daemon");
-    Ok(cli_target.exists() && daemon_target.exists())
+    Ok(is_executable(cli_target) && is_executable(daemon_target))
 }
 
 #[tauri::command]
@@ -48,6 +48,7 @@ fn symlink_binary(source: &std::path::Path, target_path: &str) -> Result<(), Str
     }
     #[cfg(unix)]
     {
+        ensure_executable(source)?;
         std::os::unix::fs::symlink(source, target)
             .map_err(|e| format!("failed to create symlink {target_path}: {e}"))
     }
@@ -58,4 +59,39 @@ fn symlink_binary(source: &std::path::Path, target_path: &str) -> Result<(), Str
             "symlink not supported on Windows for {target_path}"
         ))
     }
+}
+
+/// Ensure the file at `path` has executable permission bits set.
+#[cfg(unix)]
+fn ensure_executable(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| format!("failed to read metadata for {}: {e}", path.display()))?;
+    let mut perms = metadata.permissions();
+    let mode = perms.mode();
+    if mode & 0o111 == 0 {
+        perms.set_mode(mode | 0o111);
+        std::fs::set_permissions(path, perms).map_err(|e| {
+            format!(
+                "failed to set executable permissions on {}: {e}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Check whether the given path points to an executable file (follows symlinks).
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(meta) => meta.is_file() && (meta.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
+}
+
+#[cfg(windows)]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
 }
