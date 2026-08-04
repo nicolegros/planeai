@@ -188,6 +188,30 @@ export function replaceRootLeafTabs(tabs: TabEntry[], activeTab?: string): boole
   return true;
 }
 
+/**
+ * Switch the active session in a single-leaf tree without destroying existing tabs.
+ * Adds the new session's agent tab if not already present, sets it as active,
+ * and removes agent tabs for sessions no longer in the MRU pool.
+ * Returns true if successful, false if tree is not a single leaf.
+ */
+export function switchSession(agentTab: TabEntry, pooledSessionIds: Set<string>): boolean {
+  if (!tree || tree.type !== "leaf") return false;
+  // Add agent tab if not already in the leaf
+  const existing = tree.tabs.find((t) => t.ptyKey === agentTab.ptyKey);
+  if (!existing) {
+    // Insert at position 0 (agent tabs go first)
+    tree.tabs = [agentTab, ...tree.tabs];
+  }
+  // Set the new session as active
+  tree.activeTab = agentTab.ptyKey;
+  // Remove agent tabs for sessions no longer pooled (cleanup)
+  tree.tabs = tree.tabs.filter((t) => {
+    if (t.type !== "agent") return true; // keep shell/diff/editor tabs
+    return pooledSessionIds.has(t.ptyKey);
+  });
+  return true;
+}
+
 /** Replace the entire tree (used for deserialization). */
 export function setTree(newTree: TreeNode, newFocusedLeafId: string): void {
   tree = newTree;

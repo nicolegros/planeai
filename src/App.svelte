@@ -237,6 +237,8 @@
       leaf.tabs.some((t) => ptyKeyToSessionId(t.ptyKey) === activeSessionId)
     );
     if (hasActive) {
+      // Session is in the tree — make its agent tab active
+      splitTree.focusTab(activeSessionId);
       lastTreeSessionId = activeSessionId;
       return;
     }
@@ -255,43 +257,33 @@
     try {
       const layoutJson = await sessionsApi.getLayout(sessionId);
       // Staleness check - if session changed while we were loading, discard
-      if (gen !== loadGeneration) return;
+      if (gen !== loadGeneration) { loadingLayout = false; return; }
       if (layoutJson) {
         const data = JSON.parse(layoutJson);
         if (isValidSerializedTree(data)) {
           splitTree.deserialize(data);
-          // Ensure Svelte has flushed the new DOM structure (split containers,
-          // percentage-sized children) before terminals attempt to fit. Without
-          // this, the visibility $effect in Terminal.svelte fires against a stale
-          // or partial DOM tree, causing fitAddon.fit() to compute wrong dimensions.
-          await tick();
-          if (gen !== loadGeneration) return;
           lastTreeSessionId = sessionId;
+          loadingLayout = false;
           return;
         }
       }
-      // Staleness check again after the async getLayout call
-      if (gen !== loadGeneration) return;
-      // No saved layout or invalid - initialize fresh
-      const entries = buildTabEntriesForSession(sessionId);
-      if (!splitTree.replaceRootLeafTabs(entries)) {
-        // Tree is a split (multi-pane) or null — must create fresh
-        splitTree.initTree(entries);
-      }
-      // Ensure Svelte has flushed DOM updates before terminals attempt to fit,
-      // even for single-pane layouts — the tab identity change triggers visibility
-      // effects that need the updated DOM structure.
-      await tick();
-      if (gen !== loadGeneration) return;
-      lastTreeSessionId = sessionId;
     } catch (e) {
       console.warn("Failed to load layout for session", sessionId, e);
-    } finally {
-      // Only clear if this is still the active load (avoid clearing for a newer call)
-      if (gen === loadGeneration) {
-        loadingLayout = false;
-      }
     }
+    // Staleness check again
+    if (gen !== loadGeneration) { loadingLayout = false; return; }
+    // No saved layout or invalid — switch session in place (preserving terminals)
+    const entries = buildTabEntriesForSession(sessionId);
+    const agentEntry = entries.find((e) => e.type === "agent");
+    const pooledIds = new Set(sessions.filter((s) => poolIsMounted(s.id)).map((s) => s.id));
+    if (agentEntry && splitTree.switchSession(agentEntry, pooledIds)) {
+      // Success — tab added/activated without destroying existing terminals
+    } else if (!splitTree.replaceRootLeafTabs(entries)) {
+      // Fallback: tree is split or null — must create fresh
+      splitTree.initTree(entries);
+    }
+    lastTreeSessionId = sessionId;
+    loadingLayout = false;
   }
 
   /** Validate deserialized tree structure to prevent corrupt data from crashing. */
