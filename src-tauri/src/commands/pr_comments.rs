@@ -1,5 +1,7 @@
 use tauri::State;
 
+use planeai_core::command::augmented_path;
+
 use crate::state::DbState;
 
 use super::pr::{resolve_github_repo, resolve_session_context};
@@ -42,6 +44,7 @@ pub async fn get_pr_comments(
         jq,
     ])
     .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()

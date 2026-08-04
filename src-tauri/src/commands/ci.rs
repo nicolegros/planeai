@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use tauri::State;
 
+use planeai_core::command::augmented_path;
+
 use crate::db;
 use crate::state::DbState;
 
@@ -46,9 +48,10 @@ pub async fn get_ci_failure_logs(
 
     tracing::info!(branch = %branch, "fetching CI failure logs");
 
-    let mut cmd = tokio::process::Command::new("gh");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args(["pr", "view", &branch, "--json", "statusCheckRollup"])
         .current_dir(&cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -78,10 +81,11 @@ pub async fn get_ci_failure_logs(
     };
 
     tracing::info!(run_id = %run_id, "found failed run, fetching logs");
-    let mut log_cmd = tokio::process::Command::new("gh");
+    let mut log_cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     log_cmd
         .args(["run", "view", run_id, "--log-failed"])
         .current_dir(&cwd);
+    log_cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut log_cmd);
     let log_output = log_cmd
         .output()

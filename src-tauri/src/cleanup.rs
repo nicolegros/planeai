@@ -149,8 +149,9 @@ pub fn real_ops() -> CleanupOps {
             Err(e) => Err(e.to_string()),
         }),
         delete_branch: Box::new(|repo, branch| {
-            let mut cmd = std::process::Command::new("git");
+            let mut cmd = std::process::Command::new(crate::command::resolve("git"));
             cmd.args(["branch", "-D", branch]).current_dir(repo);
+            cmd.env("PATH", planeai_core::command::augmented_path(&[]));
             planeai_core::command::no_window(&mut cmd);
             let output = cmd
                 .output()

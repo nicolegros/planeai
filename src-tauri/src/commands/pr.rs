@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
+use planeai_core::command::augmented_path;
+
 use crate::config;
 use crate::db;
 use crate::pr;
@@ -76,8 +78,9 @@ pub(crate) fn poll_pr_for_session(
 }
 
 fn new_pr_url(cwd: &str, branch: &str, base_branch: Option<&str>) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = std::process::Command::new(crate::command::resolve("git"));
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window(&mut cmd);
     let output = cmd
         .output()
@@ -111,6 +114,7 @@ pub(super) async fn resolve_github_repo(cwd: &str) -> Result<Option<String>, Str
     }
     let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
     cmd.args(["remote", "get-url", "origin"]).current_dir(cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = match cmd.output().await {
         Ok(o) => o,
@@ -192,9 +196,10 @@ pub async fn generate_pr_defaults(
 
     // Diff stats for body
     let diff_output = {
-        let mut cmd = tokio::process::Command::new("git");
+        let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
         cmd.args(["diff", "--stat", &format!("{}...HEAD", base_ref)])
             .current_dir(&ctx.cwd);
+        cmd.env("PATH", augmented_path(&[]));
         planeai_core::command::no_window_tokio(&mut cmd);
         cmd.output()
             .await
@@ -223,9 +228,10 @@ pub async fn generate_pr_defaults(
 }
 
 async fn detect_default_branch_async(cwd: &str) -> String {
-    let mut cmd = tokio::process::Command::new("git");
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("git"));
     cmd.args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
         .current_dir(cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     cmd.output()
         .await
@@ -251,10 +257,11 @@ pub async fn create_pr(
     let ctx = resolve_session_context(&db_state, &session_id)?;
 
     // Push branch
-    let mut push_cmd = tokio::process::Command::new("git");
+    let mut push_cmd = tokio::process::Command::new(crate::command::resolve("git"));
     push_cmd
         .args(["push", "-u", "origin", &ctx.branch])
         .current_dir(&ctx.cwd);
+    push_cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut push_cmd);
     let push = push_cmd
         .output()
@@ -281,6 +288,7 @@ pub async fn create_pr(
     }
     let mut pr_cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     pr_cmd.args(&args).current_dir(&ctx.cwd);
+    pr_cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut pr_cmd);
     let pr_output = pr_cmd
         .output()
@@ -386,6 +394,7 @@ async fn get_pr_status_inner(
         "statusCheckRollup,mergeable,mergeStateStatus",
     ])
     .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -453,6 +462,7 @@ pub async fn get_allowed_merge_strategies(
         "{squash: .allow_squash_merge, merge: .allow_merge_commit, rebase: .allow_rebase_merge}",
     ])
     .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -527,6 +537,7 @@ pub async fn merge_pr(
         "--delete-branch",
     ])
     .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -633,6 +644,7 @@ pub async fn get_merge_state(
         "mergeStateStatus,reviewDecision,statusCheckRollup",
     ])
     .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()
@@ -679,6 +691,7 @@ pub async fn mark_pr_ready(
 
     let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
     cmd.args(["pr", "ready", &ctx.branch]).current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
     planeai_core::command::no_window_tokio(&mut cmd);
     let output = cmd
         .output()

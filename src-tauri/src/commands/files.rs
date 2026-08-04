@@ -1,8 +1,9 @@
 #[tauri::command]
 pub async fn list_files(repo_path: String) -> Result<Vec<String>, String> {
     super::blocking(move || {
-        let mut cmd = std::process::Command::new("git");
+        let mut cmd = std::process::Command::new(crate::command::resolve("git"));
         cmd.args(["ls-files"]).current_dir(&repo_path);
+        cmd.env("PATH", planeai_core::command::augmented_path(&[]));
         planeai_core::command::no_window(&mut cmd);
         let output = cmd
             .output()

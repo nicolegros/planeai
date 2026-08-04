@@ -116,9 +116,10 @@ impl Backend for TauriBackend {
         branch: &str,
         base: &str,
     ) -> Result<(), String> {
-        let mut cmd = std::process::Command::new("git");
+        let mut cmd = std::process::Command::new(crate::command::resolve("git"));
         cmd.args(["worktree", "add", "-b", branch, path, base])
             .current_dir(repo);
+        cmd.env("PATH", planeai_core::command::augmented_path(&[]));
         planeai_core::command::no_window(&mut cmd);
         let output = cmd.output().map_err(|e| format!("git worktree add: {e}"))?;
         if !output.status.success() {
