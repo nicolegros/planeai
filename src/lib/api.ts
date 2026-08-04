@@ -101,7 +101,7 @@ export const tasks = {
     blockedBy: string[];
     parentKey?: string | null;
     baseBranch?: string;
-  }) => invoke("create_task_item", params),
+  }) => invoke<TaskItem>("create_task_item", params),
   edit: (params: {
     repoPath: string;
     key: string;

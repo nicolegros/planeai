@@ -70,9 +70,10 @@ export async function createTask(params: {
   blockedBy: string[];
   parentKey?: string | null;
   baseBranch?: string;
-}): Promise<void> {
-  await tasksApi.create(params);
+}): Promise<TaskItem> {
+  const created = await tasksApi.create(params);
   await loadTasks(Object.keys(tasksByProject));
+  return created;
 }
 
 export async function editTask(params: {

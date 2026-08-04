@@ -862,6 +862,7 @@
     {onSelectSession}
     onArchiveSession={async (s) => { const full = sessions.find(x => x.id === s.id); if (full) fadeOutThenAct(full.id, () => onArchiveSession(full)); }}
     onSessionsChanged={onSessionsChanged}
+    onSessionCreated={(session) => { orchestrator.createSession(session); }}
   />
 </div>
 

@@ -923,9 +923,11 @@
       <TaskForm
         mode="create"
         {projects}
+        {sessions}
         tasks={taskStore.getAllTasks()}
         onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
+        onSessionCreated={(session) => { showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
       />
     </FormDialog>
     {/if}
