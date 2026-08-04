@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Manager, State};
 
+use planeai_core::command::augmented_path;
 use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 
 use crate::config;
@@ -70,9 +71,10 @@ pub async fn launch_session(
         let base_branch = base_branch.clone();
         crate::commands::blocking(move || {
             Ok(base_branch.or_else(|| {
-                let mut cmd = std::process::Command::new("git");
+                let mut cmd = std::process::Command::new(crate::command::resolve("git"));
                 cmd.args(["rev-parse", "--abbrev-ref", "HEAD"])
                     .current_dir(&repo_path);
+                cmd.env("PATH", augmented_path(&[]));
                 planeai_core::command::no_window(&mut cmd);
                 let output = cmd.output().ok()?;
                 if output.status.success() {
@@ -304,8 +306,9 @@ fn rollback_branch_creation(
             tracing::warn!(error = %e, "rollback: worktree cleanup error");
         }
     } else if is_new_branch {
-        let mut checkout_cmd = std::process::Command::new("git");
+        let mut checkout_cmd = std::process::Command::new(crate::command::resolve("git"));
         checkout_cmd.args(["checkout", "-"]).current_dir(repo_path);
+        checkout_cmd.env("PATH", augmented_path(&[]));
         planeai_core::command::no_window(&mut checkout_cmd);
         match checkout_cmd.output() {
             Ok(output) if !output.status.success() => {
@@ -321,10 +324,11 @@ fn rollback_branch_creation(
             }
             _ => {}
         }
-        let mut delete_cmd = std::process::Command::new("git");
+        let mut delete_cmd = std::process::Command::new(crate::command::resolve("git"));
         delete_cmd
             .args(["branch", "-D", branch])
             .current_dir(repo_path);
+        delete_cmd.env("PATH", augmented_path(&[]));
         planeai_core::command::no_window(&mut delete_cmd);
         match delete_cmd.output() {
             Ok(output) if !output.status.success() => {
