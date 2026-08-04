@@ -38,6 +38,13 @@
 
   const SCROLLBACK_LINES = 20_000;
   const RESIZE_DEBOUNCE_MS = 50;
+  const MAX_FIT_RETRIES = 5;
+
+  /** Check if the container element has been laid out with non-zero dimensions. */
+  function hasUsableDimensions(): boolean {
+    if (!containerEl) return false;
+    return containerEl.clientWidth > 0 && containerEl.clientHeight > 0;
+  }
 
   // ── Input write — send immediately for responsive typing ──────────────
   function queueWrite(bytes: number[]) {
@@ -46,6 +53,13 @@
 
   // ── Fit terminal and sync PTY dimensions ──────────────────────────────
   function fitAndResize(force = false) {
+    // Guard: skip fitting when the container has no usable dimensions.
+    // This happens when the terminal is being attached to a new DOM tree
+    // (e.g., after deserializing a split layout) and the browser hasn't
+    // completed the layout pass for the percentage-sized split children.
+    if (!hasUsableDimensions()) {
+      return;
+    }
     fitAddon.fit();
     const { rows, cols } = term;
     if (rows > 0 && cols > 0) {
@@ -330,28 +344,38 @@
           });
           term.loadAddon(addon);
           webglAddon = addon;
-          // Force a fresh texture atlas after loading the WebGL addon so the
-          // glyph cache is built with the correct, fully-loaded font metrics.
-          webglAddon.clearTextureAtlas();
         } catch {
           // WebGL not available, use default canvas renderer
         }
-      } else {
-        // The WebGL addon's texture atlas can become stale while the terminal
-        // is hidden (browser may evict GPU textures for off-screen canvases,
-        // or font subsystem state may shift). Clear and rebuild the atlas on
-        // every visibility restore to prevent garbled glyphs.
-        webglAddon.clearTextureAtlas();
       }
-      // Double-rAF ensures browser has fully reflowed after removing `hidden`.
-      // Then unconditionally fit + send pty.resize so the PTY always has correct
-      // dimensions — the ResizeObserver alone won't fire when only visibility changed.
+      // Wait for the browser to complete layout before fitting. When switching
+      // sessions, the split tree may create new DOM containers whose dimensions
+      // haven't been computed yet. We use double-rAF as the first attempt, and
+      // if the container still has zero dimensions (layout not yet complete),
+      // we retry up to MAX_FIT_RETRIES times.
+      let cancelled = false;
+      let attempts = 0;
+      function attemptFit() {
+        if (cancelled || !containerEl || !visible) return;
+        if (!hasUsableDimensions()) {
+          if (++attempts < MAX_FIT_RETRIES) {
+            requestAnimationFrame(attemptFit);
+            return;
+          }
+          // Give up after max retries — the container is likely genuinely hidden
+          return;
+        }
+        fitAndResize(true);
+        if (focused) term.focus();
+        // Rebuild the WebGL texture atlas after the fit to ensure glyphs
+        // are rendered at the correct cell dimensions for this container size.
+        if (webglAddon) webglAddon.clearTextureAtlas();
+      }
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          fitAndResize(true);
-          if (focused) term.focus();
-        });
+        requestAnimationFrame(attemptFit);
       });
+      // Cleanup: cancel pending retries if the effect re-runs or component unmounts
+      return () => { cancelled = true; };
     } else {
       // Invalidate cached dims so the next visibility restore always sends resize,
       // even if the container size hasn't changed.
