@@ -243,8 +243,10 @@
               taskKey: createdTask.key,
               taskPrompt: prompt,
             });
-            // Move to in_progress only after successful launch
-            await taskStore.moveTask(createdTask.key, "in_progress", repoPath);
+            // Move to in_progress — don't block session navigation on failure
+            taskStore.moveTask(createdTask.key, "in_progress", repoPath).catch(() => {
+              showSnackbar("Session started but failed to update task status.");
+            });
             onSessionCreated?.(session);
           } catch (e: any) {
             showSnackbar(`Task created but session failed: ${e}`);
@@ -268,6 +270,7 @@
       onSubmitted();
     } catch (e: any) {
       showSnackbar(e.toString());
+    } finally {
       submitting = false;
     }
   }
