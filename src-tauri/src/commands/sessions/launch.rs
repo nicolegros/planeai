@@ -96,12 +96,53 @@ pub async fn launch_session(
         let base = base_branch.as_deref().unwrap_or(DEFAULT_BASE_BRANCH);
         let short_id = uuid::Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
         let sanitized_project = sanitize_project_name(&project_name);
-        let home = config::home_dir();
-        let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
-        std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
-            .map_err(|e| format!("failed to create worktree dir: {e}"))?;
-        git::worktree_add(&repo_path, &wt_path, &branch, base)?;
-        (wt_path.clone(), Some(wt_path))
+
+        // Check if WSL is configured — worktrees go inside WSL's filesystem for performance
+        let wsl_config = {
+            let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+            cfg.wsl.clone().filter(|w| w.enabled)
+        };
+
+        if let Some(ref wsl) = wsl_config {
+            // WSL mode: create worktree inside the Linux filesystem
+            let distro = wsl.distro.as_deref().unwrap_or("");
+            let git_ctx = planeai_core::git::GitContext::wsl(distro);
+
+            // Derive Linux home directory via wsl.exe
+            let linux_home = get_wsl_home(distro)?;
+            let wt_path = format!(
+                "{linux_home}/.planeai/worktrees/{sanitized_project}/{short_id}"
+            );
+            let wt_parent = format!(
+                "{linux_home}/.planeai/worktrees/{sanitized_project}"
+            );
+
+            // Create parent directory inside WSL
+            let mkdir_output = {
+                let mut cmd = std::process::Command::new("wsl");
+                cmd.args(["-d", distro, "--", "mkdir", "-p", &wt_parent]);
+                planeai_core::command::no_window(&mut cmd);
+                cmd.output()
+                    .map_err(|e| format!("failed to create WSL worktree dir: {e}"))?
+            };
+            if !mkdir_output.status.success() {
+                return Err(format!(
+                    "failed to create WSL worktree dir: {}",
+                    String::from_utf8_lossy(&mkdir_output.stderr)
+                ));
+            }
+
+            planeai_core::git::worktree_add_in(&repo_path, &wt_path, &branch, base, &git_ctx)?;
+            (wt_path.clone(), Some(wt_path))
+        } else {
+            // Native mode: create worktree on local filesystem
+            let home = config::home_dir();
+            let wt_path = format!("{home}/.planeai/worktrees/{sanitized_project}/{short_id}");
+            std::fs::create_dir_all(std::path::Path::new(&wt_path).parent().unwrap())
+                .map_err(|e| format!("failed to create worktree dir: {e}"))?;
+            git::worktree_add(&repo_path, &wt_path, &branch, base)?;
+            (wt_path.clone(), Some(wt_path))
+        }
     } else {
         git::checkout_branch(&repo_path, &branch, is_new_branch, base_branch.as_deref())?;
         (repo_path.clone(), None)
@@ -290,6 +331,37 @@ async fn spawn_in_daemon(
         }
         Err(e) => Err(e),
     }
+}
+
+/// Get the Linux home directory for the default user in a WSL distro.
+/// Runs `wsl -d <distro> -- sh -c 'echo $HOME'` and returns the trimmed output.
+#[cfg(windows)]
+fn get_wsl_home(distro: &str) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("wsl");
+    cmd.args(["-d", distro, "--", "sh", "-c", "echo $HOME"]);
+    planeai_core::command::no_window(&mut cmd);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to get WSL home: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to get WSL home: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if home.is_empty() {
+        return Err("WSL home directory is empty".to_string());
+    }
+    Ok(home)
+}
+
+#[cfg(not(windows))]
+fn get_wsl_home(_distro: &str) -> Result<String, String> {
+    // On non-Windows, WSL is not applicable. Return the native home.
+    Ok(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
 }
 
 /// Rollback branch/worktree creation on launch failure.
