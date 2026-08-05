@@ -6,6 +6,7 @@
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
+  import { renderTemplate } from "../lib/render-template";
   import { LoaderCircle } from "@lucide/svelte";
 
   interface TaskPrefill { key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; }
@@ -90,17 +91,6 @@
   });
 
   const taskSelectItems = $derived(taskItems.map((t) => ({ value: t.key, label: `${t.key}: ${t.title}` })));
-
-  function renderTemplate(template: string, task: TaskItem): string {
-    return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
-      let val = varName === "blocked_by" ? task.blocked_by?.join(", ") ?? "" : String((task as any)[varName] ?? "");
-      if (varName === "parent_key" && !val) val = task.key;
-      if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
-      if (transform === "lower") return val.toLowerCase();
-      if (transform === "upper") return val.toUpperCase();
-      return val;
-    });
-  }
 
   function getTaskManagerTemplates() {
     return config.task_management?.templates;

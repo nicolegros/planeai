@@ -789,8 +789,7 @@
         e.preventDefault();
         e.stopImmediatePropagation();
         if (e.key === 'Escape') { showNewItemModal = false; }
-        else if (e.key === 's') { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }
-        else if (e.key === 't') { showNewItemModal = false; showTaskForm = true; }
+        else if (e.key === 's' || e.key === 't') { showNewItemModal = false; showTaskForm = true; }
         else if (e.key === 'l') { showNewItemModal = false; showLoopForm = true; }
       } else if (sessionToDelete) {
         e.preventDefault();
@@ -884,7 +883,7 @@
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
         onAddProject={() => (showProjectForm = true)}
         onOpenPreferences={openPreferences}
-        onCreateSession={() => { showNewItemModal = true; }}
+        onCreateSession={() => { showTaskForm = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
         onSelectLoop={(id) => { loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -923,9 +922,11 @@
       <TaskForm
         mode="create"
         {projects}
+        {sessions}
         tasks={taskStore.getAllTasks()}
         onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
+        onSessionCreated={(session) => { showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
       />
     </FormDialog>
     {/if}
@@ -1223,15 +1224,10 @@
             <span class="ml-auto font-mono text-[10px] text-t3 border border-border rounded-[5px] px-1.5 py-[2px]">esc</span>
           </div>
           <div class="px-2 pb-[9px] flex flex-col gap-[2px]">
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}>
-              <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">›_</span>
-              <span class="flex-1 text-[13.5px] text-t1">Session</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">s</span>
-            </button>
-            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
+            <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] bg-accent-bg" onclick={() => { showNewItemModal = false; showTaskForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">☰</span>
               <span class="flex-1 text-[13.5px] text-t1">Task</span>
-              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel-hi">t</span>
+              <span class="font-mono text-[10px] text-t2 border border-border rounded-[5px] px-1.5 py-[2px] bg-panel">t</span>
             </button>
             <button class="flex items-center gap-[11px] h-[40px] px-[11px] rounded-[9px] hover:bg-panel-hi transition-colors" onclick={() => { showNewItemModal = false; showLoopForm = true; }}>
               <span class="w-[22px] h-[22px] rounded-[7px] flex items-center justify-center font-mono text-[11px] bg-panel-hi text-t2">⟳</span>

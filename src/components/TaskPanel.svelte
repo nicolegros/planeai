@@ -17,13 +17,14 @@
     onSelectSession: (id: string) => void;
     onArchiveSession?: (session: Pick<Session, "id" | "task_key" | "pr_url">) => void | Promise<void>;
     onSessionsChanged?: () => void;
+    onSessionCreated?: (session: Session) => void;
     disableKeyboard?: boolean;
   }
 
-  let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged }: Props = $props();
+  let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onSessionCreated }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
-  const projects = $derived(projectStore.getProjects().map(p => ({ name: p.name, path: p.path })));
+  const projects = $derived(projectStore.getProjects().map(p => ({ id: p.id, name: p.name, path: p.path })));
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
@@ -322,8 +323,9 @@
     <div class="flex-1 min-h-0 overflow-y-auto">
       <TaskForm
         mode={modalMode}
-        projects={projects.map(p => ({ id: "", name: p.name, path: p.path }))}
+        projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
         tasks={Object.values(tasksByProject).flat()}
+        sessions={sessions}
         initial={modalMode === "edit" && editingTask ? {
           key: editingTask.key,
           title: editingTask.title,
@@ -337,6 +339,7 @@
         } : { projectPath: projects[0]?.path ?? "" }}
         onSubmitted={() => { modalMode = null; focusTerminal(); }}
         onCancel={() => { modalMode = null; focusTerminal(); }}
+        onSessionCreated={(session) => { onSessionCreated?.(session); }}
       />
     </div>
   </div>
