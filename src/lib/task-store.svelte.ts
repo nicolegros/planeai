@@ -72,7 +72,8 @@ export async function createTask(params: {
   baseBranch?: string;
 }): Promise<TaskItem> {
   const created = await tasksApi.create(params);
-  await loadTasks(Object.keys(tasksByProject));
+  // Refresh store in background — don't block return on refresh failure
+  loadTasks(Object.keys(tasksByProject)).catch(() => {});
   return created;
 }
 

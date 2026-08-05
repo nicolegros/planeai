@@ -6,6 +6,7 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
   import { getSettings } from "../lib/settings.svelte";
+  import { renderTemplate } from "../lib/render-template";
   import { LoaderCircle } from "@lucide/svelte";
   import * as taskStore from "../lib/task-store.svelte";
 
@@ -94,17 +95,6 @@
   );
 
   // Template rendering for prompt preview
-  function renderTemplate(template: string, task: Record<string, unknown>): string {
-    return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
-      let val = varName === "blocked_by" ? (task.blocked_by as string[] | undefined)?.join(", ") ?? "" : String(task[varName] ?? "");
-      if (varName === "parent_key" && !val) val = String(task.key ?? "");
-      if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
-      if (transform === "lower") return val.toLowerCase();
-      if (transform === "upper") return val.toUpperCase();
-      return val;
-    });
-  }
-
   // Build a preview of what the prompt will be using configured templates
   const defaultPrompt = $derived.by(() => {
     const templates = config.task_management?.templates;
@@ -206,8 +196,13 @@
         });
 
         if (startSession && selectedProject) {
-          // Move task to in_progress
-          await taskStore.moveTask(createdTask.key, "in_progress", repoPath);
+          // Validate provider
+          const provider = sessionProvider || config.default_provider;
+          if (!provider) {
+            showSnackbar("Task created, but no provider configured. Select a provider to start a session.");
+            onSubmitted();
+            return;
+          }
 
           // Build session params from templates
           const templates = config.task_management?.templates;
@@ -225,8 +220,7 @@
           const branch = sessionBranch || (templates?.branch
             ? renderTemplate(templates.branch, realTask)
             : `${createdTask.key.toLowerCase()}/${slugFromTitle}`);
-          const isNewBranch = useWorktree || !branches.some((b) => b.value === branch);
-          const provider = sessionProvider || config.default_provider;
+          const isNewBranch = !branches.some((b) => b.value === branch);
           const prompt = sessionPrompt || (templates?.prompt
             ? renderTemplate(templates.prompt, realTask)
             : (createdTask.description ? `Implement task ${createdTask.key}: ${createdTask.title}\n\n${createdTask.description}` : `Implement task ${createdTask.key}: ${createdTask.title}`));
@@ -249,6 +243,8 @@
               taskKey: createdTask.key,
               taskPrompt: prompt,
             });
+            // Move to in_progress only after successful launch
+            await taskStore.moveTask(createdTask.key, "in_progress", repoPath);
             onSessionCreated?.(session);
           } catch (e: any) {
             showSnackbar(`Task created but session failed: ${e}`);
