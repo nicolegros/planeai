@@ -73,6 +73,8 @@ impl PtyEventSink for TauriPtySink {
 /// SessionBackend implementation backed by planeai-pty's LocalPtySession.
 pub struct PlaneaiPtyBackend {
     session: LocalPtySession,
+    /// Whether this session runs inside WSL (affects shutdown behavior).
+    is_wsl: bool,
 }
 
 impl PlaneaiPtyBackend {
@@ -144,6 +146,8 @@ impl PlaneaiPtyBackend {
             tauri_sink
         };
 
+        let is_wsl = wsl.is_some();
+
         let config = LocalPtyConfig {
             session_id: 0,
             command: Some(full_command),
@@ -157,7 +161,7 @@ impl PlaneaiPtyBackend {
 
         let session =
             LocalPtySession::spawn(config, sink).map_err(|e| format!("planeai-pty spawn: {e}"))?;
-        Ok(Self { session })
+        Ok(Self { session, is_wsl })
     }
 }
 
@@ -181,6 +185,17 @@ impl SessionBackend for PlaneaiPtyBackend {
     }
 
     fn detach(&self) {
+        if self.is_wsl {
+            // Graceful WSL shutdown: send Ctrl+C to allow the Linux process tree
+            // to handle SIGINT before we kill the wsl.exe wrapper process.
+            let _ = self
+                .session
+                .write(planeai_core::wsl::graceful_shutdown_bytes());
+            // Brief pause to let the signal propagate through the WSL PTY
+            std::thread::sleep(std::time::Duration::from_millis(
+                planeai_core::wsl::GRACEFUL_SHUTDOWN_DELAY_MS,
+            ));
+        }
         let _ = self.session.kill();
     }
 }
