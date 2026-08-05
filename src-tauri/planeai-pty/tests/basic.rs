@@ -227,3 +227,36 @@ fn no_tauri_iced_dependency() {
         "planeai-pty must not depend on iced"
     );
 }
+
+// ── WSL spawn config ──
+
+#[test]
+fn config_defaults_wsl_is_none() {
+    let cfg = LocalPtyConfig::default();
+    assert!(cfg.wsl.is_none());
+}
+
+#[test]
+fn wsl_spawn_config_can_be_set() {
+    use planeai_pty::WslSpawnConfig;
+    let mut cfg = LocalPtyConfig::default();
+    cfg.wsl = Some(WslSpawnConfig {
+        distro: "Ubuntu".to_string(),
+        cwd: Some("/home/user/project".to_string()),
+    });
+    assert_eq!(cfg.wsl.as_ref().unwrap().distro, "Ubuntu");
+    assert_eq!(
+        cfg.wsl.as_ref().unwrap().cwd.as_deref(),
+        Some("/home/user/project")
+    );
+}
+
+#[test]
+fn wsl_spawn_config_cwd_optional() {
+    use planeai_pty::WslSpawnConfig;
+    let wsl = WslSpawnConfig {
+        distro: "Debian".to_string(),
+        cwd: None,
+    };
+    assert!(wsl.cwd.is_none());
+}

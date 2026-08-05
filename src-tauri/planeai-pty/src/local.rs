@@ -33,7 +33,39 @@ impl LocalPtySession {
             pixel_height: 0,
         })?;
 
-        let mut cmd = if let Some(ref prog) = config.program {
+        let mut cmd = if let Some(ref wsl) = config.wsl {
+            // WSL mode: spawn inside the configured distro via wsl.exe.
+            // The command/program/args are Linux commands — we wrap them in wsl.exe.
+            #[cfg(windows)]
+            {
+                if let Some(ref prog) = config.program {
+                    let args_refs: Vec<&str> = config.args.iter().map(|s| s.as_str()).collect();
+                    crate::platform::build_command_argv_wsl(prog, &args_refs, wsl)
+                } else if let Some(ref cmd_str) = config.command {
+                    crate::platform::build_command_wsl(cmd_str, wsl)
+                } else {
+                    crate::platform::build_login_shell_wsl(wsl)
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                // WSL is only meaningful on Windows. On other platforms, ignore
+                // the WSL config and fall through to normal spawn.
+                let _ = wsl;
+                if let Some(ref prog) = config.program {
+                    let args_refs: Vec<&str> = config.args.iter().map(|s| s.as_str()).collect();
+                    crate::platform::build_command_argv(prog, &args_refs)
+                } else if let Some(ref cmd_str) = config.command {
+                    crate::platform::build_command(cmd_str)
+                } else {
+                    let shell = config
+                        .shell
+                        .clone()
+                        .unwrap_or_else(crate::platform::default_shell);
+                    CommandBuilder::new(&shell)
+                }
+            }
+        } else if let Some(ref prog) = config.program {
             let args_refs: Vec<&str> = config.args.iter().map(|s| s.as_str()).collect();
             crate::platform::build_command_argv(prog, &args_refs)
         } else if let Some(ref cmd_str) = config.command {
@@ -45,8 +77,13 @@ impl LocalPtySession {
                 .unwrap_or_else(crate::platform::default_shell);
             CommandBuilder::new(&shell)
         };
-        if let Some(ref cwd) = config.cwd {
-            cmd.cwd(cwd);
+        // In WSL mode on Windows, the working directory is passed via --cd to wsl.exe,
+        // so we don't set cmd.cwd() (which would need a valid Windows path).
+        let skip_cwd = cfg!(windows) && config.wsl.is_some();
+        if !skip_cwd {
+            if let Some(ref cwd) = config.cwd {
+                cmd.cwd(cwd);
+            }
         }
         for (k, v) in &config.env {
             cmd.env(k, v);
