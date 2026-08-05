@@ -7,7 +7,8 @@
  * - `:lower` — lowercase
  * - `:upper` — uppercase
  */
-export function renderTemplate(template: string, context: Record<string, unknown>): string {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function renderTemplate(template: string, context: Record<string, any>): string {
   return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
     let val =
       varName === "blocked_by"
