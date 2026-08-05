@@ -90,6 +90,7 @@ async function refreshLoopSessions(runs: LoopRunSummary[]): Promise<void> {
     }
   });
 
+  console.log(`[DEBUG-lsr1] refreshLoopSessions complete`, { sessionCount: Object.keys(newMapping).length, loopIds: Object.keys(newSessions), timestamp: Date.now() });
   sessionToLoop = newMapping;
   loopSessions = newSessions;
 }
@@ -104,6 +105,7 @@ export function startLoopEventListener(getProjectIds: () => string[]): () => voi
   if (unlistenFn) return unlistenFn;
 
   const refresh = () => {
+    console.log(`[DEBUG-lsr1] loop store refresh triggered (loop-state-changed)`, { timestamp: Date.now() });
     const projectIds = getProjectIds();
     refreshAllLoops(projectIds);
   };
@@ -114,6 +116,7 @@ export function startLoopEventListener(getProjectIds: () => string[]): () => voi
     if (debounceTimer) return; // already scheduled
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
+      console.log(`[DEBUG-lsr1] loop store debounced refresh firing`, { timestamp: Date.now() });
       refresh();
     }, 2000);
   };

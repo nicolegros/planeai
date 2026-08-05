@@ -2239,15 +2239,17 @@ pub fn auto_advance_with_arc(
 ) {
     const MAX_AUTO_TICKS: usize = 10;
 
-    for _ in 0..MAX_AUTO_TICKS {
+    for i in 0..MAX_AUTO_TICKS {
         if check_human_wait_before_tick && is_human_wait_step(snapshot) {
             break;
         }
 
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: acquiring lock");
         let conn = match conn_arc.lock() {
             Ok(c) => c,
             Err(_) => break,
         };
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: lock acquired");
 
         let step_before = snapshot.runtime.current_step.clone();
 
@@ -2256,11 +2258,13 @@ pub fn auto_advance_with_arc(
         // tick_recipe → save_snapshot already persisted the snapshot with derived status
 
         if code != 0 {
+            tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: tick failed, releasing lock");
             break;
         }
 
         // If the step didn't advance, the loop is waiting for external input.
         if snapshot.runtime.current_step == step_before {
+            tracing::debug!(loop_id = %short_id(loop_id), tick = i, "[DEBUG-lsr1] auto_advance_with_arc: step didn't advance, releasing lock");
             drop(conn);
             break;
         }
@@ -2271,6 +2275,7 @@ pub fn auto_advance_with_arc(
             false
         };
 
+        tracing::debug!(loop_id = %short_id(loop_id), tick = i, should_stop, "[DEBUG-lsr1] auto_advance_with_arc: releasing lock");
         drop(conn);
 
         if should_stop {

@@ -275,7 +275,11 @@ pub fn execute_plan(plan: &SessionPlan, conn: &Connection, env: &Env) -> Result<
     .map_err(|e| e.to_string())?;
 
     if env.socket_path.exists() {
-        let _ = notify_gui(&env.socket_path, &plan.session_id);
+        tracing::debug!(session_id = %plan.session_id, "[DEBUG-lsr1] execute_plan: sending notify_gui");
+        let notify_result = notify_gui(&env.socket_path, &plan.session_id);
+        tracing::debug!(session_id = %plan.session_id, success = notify_result.is_ok(), "[DEBUG-lsr1] execute_plan: notify_gui done");
+    } else {
+        tracing::warn!(session_id = %plan.session_id, "[DEBUG-lsr1] execute_plan: socket_path does not exist, skipping notify_gui");
     }
 
     serde_json::to_string(&session).map_err(|e| e.to_string())
