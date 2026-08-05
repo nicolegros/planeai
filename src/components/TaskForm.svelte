@@ -60,6 +60,8 @@
   let sessionProvider = $state("");
   let sessionBranch = $state("");
   let sessionPrompt = $state("");
+  let useWorktree = $state(true);
+  let autoApprove = $state(true);
 
   let branches = $state<{ value: string; label: string }[]>([]);
 
@@ -125,6 +127,7 @@
 
   const fk = createFormKeyboardController(
     () => [
+      { key: "o", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='project'] input") ?? null },
       { key: "t", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
       { key: "d", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
       { key: "r", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
@@ -137,6 +140,8 @@
       ] : []),
       ...(startSession ? [
         { key: "p", toggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
+        { key: "w", toggle: () => { useWorktree = !useWorktree; } },
+        { key: "y", toggle: () => { autoApprove = !autoApprove; } },
         { key: "n", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-branch'] input") ?? null },
         { key: "i", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-prompt'] textarea") ?? null },
       ] : []),
@@ -172,7 +177,7 @@
 
           // Build session params
           const branch = sessionBranch || `${createdTask.key.toLowerCase()}/${slugFromTitle}`;
-          const isNewBranch = !branches.some((b) => b.value === branch);
+          const isNewBranch = useWorktree || !branches.some((b) => b.value === branch);
           const provider = sessionProvider || config.default_provider;
           const prompt = sessionPrompt || (formDescription ? `Implement task ${createdTask.key}: ${formTitle.trim()}\n\n${formDescription}` : `Implement task ${createdTask.key}: ${formTitle.trim()}`);
           const name = `${createdTask.key}: ${formTitle.trim()}`;
@@ -185,9 +190,9 @@
               branch,
               isNewBranch,
               name,
-              useWorktree: false,
+              useWorktree,
               baseBranch: isNewBranch ? formBaseBranch : null,
-              autoApprove: true,
+              autoApprove,
               provider,
               taskKey: createdTask.key,
               taskPrompt: prompt,
@@ -238,8 +243,8 @@
     onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
   >
     {#if mode === "create" && projects.length > 1}
-      <div class="space-y-1">
-        <Label>Project</Label>
+      <div class="space-y-1" data-field="project">
+        <Label>Project <span class="font-mono text-[10px] px-1 rounded {badge}">O</span></Label>
         <Select
           items={projects.map(p => ({ value: p.path, label: p.name }))}
           bind:value={formProjectPath}
@@ -330,6 +335,14 @@
           {:else}
             <p class="text-xs text-t3 pl-3">Provider: <span class="font-medium text-t1">{config.default_provider}</span> <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></p>
           {/if}
+
+          <!-- Worktree & Auto-approve -->
+          <div class="flex items-center gap-4 pl-3">
+            <Checkbox id="use-worktree" label="Worktree" bind:checked={useWorktree} tabindex={-1} />
+            <span class="font-mono text-[10px] px-1 rounded {badge}">W</span>
+            <Checkbox id="auto-approve" label="Auto-approve" bind:checked={autoApprove} tabindex={-1} />
+            <span class="font-mono text-[10px] px-1 rounded {badge}">Y</span>
+          </div>
 
           <!-- Branch -->
           <div class="space-y-1 pl-3" data-field="session-branch">
