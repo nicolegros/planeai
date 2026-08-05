@@ -1,0 +1,157 @@
+name: Build
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  JIRA_CLIENT_ID: dummy
+  JIRA_CLIENT_SECRET: dummy
+
+jobs:
+  build:
+    if: contains(github.event.pull_request.labels.*.name, 'preview')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: "--target x86_64-unknown-linux-gnu"
+            artifact_name: linux
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ""
+            artifact_name: windows
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+            artifact_name: macos
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build sidecar binaries
+        shell: bash
+        working-directory: src-tauri
+        run: |
+          TARGET="${{ matrix.target }}"
+          if [[ -z "$TARGET" ]]; then
+            TARGET="$(rustc --print host-tuple)"
+          fi
+          EXT=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            EXT=".exe"
+          fi
+
+          ./scripts/ensure-sidecars.sh
+          cargo build --release --target "$TARGET" \
+            -p planeai-cli-bin \
+            -p planeai-daemon-bin
+
+          cp "target/${TARGET}/release/planeai-cli${EXT}" \
+             "binaries/planeai-cli-${TARGET}${EXT}"
+          cp "target/${TARGET}/release/planeai-daemon${EXT}" \
+             "binaries/planeai-daemon-${TARGET}${EXT}"
+
+          cargo clean -p planeai --release --target "$TARGET"
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.artifact_name }}
+          retention-days: 1
+          path: |
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+
+  comment:
+    needs: build
+    if: contains(github.event.pull_request.labels.*.name, 'preview')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post download links
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = context.runId;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+
+            const { data: artifacts } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner, repo, run_id: runId
+            });
+
+            let table = '| Platform | Artifact |\n|----------|----------|\n';
+            for (const a of artifacts.artifacts) {
+              const dl = `${runUrl}/artifacts/${a.id}`;
+              const name = a.name.replace('bundle-', '');
+              table += `| ${name} | [${a.name}](${dl}) |\n`;
+            }
+
+            const body = [
+              `### 📦 Test bundles ready`,
+              ``,
+              table,
+              ``,
+              `> Unsigned builds from \`${context.sha.slice(0, 8)}\`. Artifacts expire in 24h.`,
+              `> macOS: run \`xattr -cr planeai.app\` after extracting.`,
+            ].join('\n');
+
+            // Find and update existing comment, or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: context.issue.number
+            });
+            const marker = '### 📦 Test bundles ready';
+            const existing = comments.find(c => c.body?.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: context.issue.number, body
+              });
+            }
