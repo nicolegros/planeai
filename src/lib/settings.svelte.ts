@@ -62,6 +62,11 @@ export interface IntegrationsConfig {
   jira?: JiraConfig | null;
 }
 
+export interface WslConfig {
+  enabled: boolean;
+  distro?: string | null;
+}
+
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
@@ -87,6 +92,7 @@ export interface AppConfig {
   sound_enabled?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;
   integrations?: IntegrationsConfig | null;
+  wsl?: WslConfig | null;
 }
 
 let config = $state<AppConfig>({

@@ -89,6 +89,11 @@ export const config = {
   refresh: () => invoke<AppConfig>("refresh_config"),
 };
 
+export const wsl = {
+  listDistros: () => invoke<string[]>("list_wsl_distros"),
+  isAvailable: () => invoke<boolean>("is_wsl_available"),
+};
+
 export const tasks = {
   list: (repoPath: string) => invoke<TaskItem[]>("list_task_items", { repoPath }),
   listAll: (repoPath: string) => invoke<TaskItem[]>("list_all_task_items", { repoPath }),

@@ -85,6 +85,19 @@ pub fn get_log_dir() -> String {
         .into_owned()
 }
 
+/// List available WSL distributions. Returns empty vec on non-Windows
+/// or when WSL is not available.
+#[tauri::command]
+pub fn list_wsl_distros() -> Vec<String> {
+    planeai_core::wsl::list_distros().unwrap_or_default()
+}
+
+/// Check if WSL is available on this system.
+#[tauri::command]
+pub fn is_wsl_available() -> bool {
+    planeai_core::wsl::is_available()
+}
+
 #[tauri::command]
 pub async fn list_monospace_fonts() -> Result<Vec<String>, String> {
     use font_kit::family_name::FamilyName;
