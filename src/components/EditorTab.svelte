@@ -45,10 +45,10 @@
   let vimMode = $state("NORMAL");
   let cursorLine = $state(1);
   let cursorCol = $state(1);
-  let editorContainer: HTMLElement;
+  let editorContainer = $state<HTMLElement | undefined>(undefined);
   let view: EditorView | null = null;
-  let mounted = false;
-  let initialFileOpened = false;
+  let mounted = $state(false);
+  let initialFileOpened = $state(false);
 
   // Auto-open initialFile when provided
   $effect(() => {
@@ -126,6 +126,10 @@
   }
 
   function ensureView(state: EditorState) {
+    if (!editorContainer) {
+      if (import.meta.env.DEV) console.warn("ensureView called before editorContainer is bound");
+      return;
+    }
     if (view) {
       unregisterEditor(view);
       view.destroy();
@@ -147,6 +151,8 @@
     const fullPath = filePath.startsWith("/") ? filePath : `${repoPath}/${filePath}`;
     try {
       const content = await git.readFile(fullPath, repoPath);
+      // Guard: component may have unmounted during async fetch
+      if (!editorContainer || !mounted) return;
       const state = createEditorState(content, filePath);
       buffers.push({ path: filePath, content, modified: false, state });
       switchToBuffer(buffers.length - 1);
