@@ -40,8 +40,15 @@ pub fn create_session(
 
 #[tauri::command]
 pub fn list_sessions(state: State<DbState>) -> Result<Vec<db::Session>, String> {
+    tracing::debug!("[DEBUG-lsr1] list_sessions: waiting for lock");
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::list_sessions(&conn).map_err(|e| e.to_string())
+    tracing::debug!("[DEBUG-lsr1] list_sessions: lock acquired, querying");
+    let result = db::list_sessions(&conn).map_err(|e| e.to_string());
+    tracing::debug!(
+        count = result.as_ref().map(|v| v.len()).unwrap_or(0),
+        "[DEBUG-lsr1] list_sessions: done"
+    );
+    result
 }
 
 #[tauri::command]
