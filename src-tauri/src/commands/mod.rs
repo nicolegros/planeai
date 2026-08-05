@@ -27,7 +27,8 @@ pub use loops::*;
 pub use notify::*;
 pub use pr::{
     create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,
-    get_merge_conflict_status, get_merge_state, get_pr_status, mark_pr_ready, merge_pr,
+    get_merge_conflict_status, get_merge_state, get_pr_status, link_pr_url, mark_pr_ready,
+    merge_pr,
 };
 pub use pr_comments::get_pr_comments;
 pub use projects::*;

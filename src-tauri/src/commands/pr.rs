@@ -15,6 +15,7 @@ pub(super) struct SessionContext {
     pub(super) cwd: String,
     pub(super) branch: String,
     pub(super) pr_url: Option<String>,
+    pub(super) pr_state: Option<String>,
     pub(super) task_key: Option<String>,
     pub(super) base_branch: Option<String>,
     pub(super) name: String,
@@ -36,6 +37,7 @@ pub(super) fn resolve_session_context(
         cwd,
         branch: session.branch.clone(),
         pr_url: session.pr_url.clone(),
+        pr_state: session.pr_state.clone(),
         task_key: session.task_key.clone(),
         base_branch: session.base_branch.clone(),
         name: session.name.clone(),
@@ -51,22 +53,34 @@ pub(crate) fn poll_pr_for_session(
 ) -> Result<bool, String> {
     let pr_cmd = match &cfg.pr_status {
         Some(cmd) => cmd,
-        None => return Ok(false),
+        None => {
+            tracing::debug!(session_id = %session.id, "poll_pr_for_session: no pr_status configured, skipping");
+            return Ok(false);
+        }
     };
     if !pr::is_poll_eligible(&session.status, session.pr_state.as_deref()) {
+        tracing::debug!(session_id = %session.id, status = %session.status, pr_state = ?session.pr_state, "poll_pr_for_session: not eligible");
         return Ok(false);
     }
     let cwd = match session_cwd(conn, session) {
         Some(c) => c,
-        None => return Ok(false),
+        None => {
+            tracing::debug!(session_id = %session.id, "poll_pr_for_session: cannot resolve cwd");
+            return Ok(false);
+        }
     };
+    tracing::debug!(session_id = %session.id, branch = %session.branch, cwd = %cwd, "poll_pr_for_session: checking PR status");
     let status = match pr::check_pr_status(pr_cmd, &session.branch, std::path::Path::new(&cwd))? {
         Some(s) => s,
-        None => return Ok(false),
+        None => {
+            tracing::debug!(session_id = %session.id, "poll_pr_for_session: no PR found");
+            return Ok(false);
+        }
     };
     let transition = pr::detect_transition(session.pr_state.as_deref(), &status);
     let _ = db::update_pr_state(conn, &session.id, &status.url, &status.state);
     if let Some(ref t) = transition {
+        tracing::info!(session_id = %session.id, transition = ?t, "poll_pr_for_session: PR transition detected");
         if let Some(ref task_key) = session.task_key {
             if let Ok(tm) = resolve_task_manager(cfg) {
                 let prefix = db::get_project_prefix(conn, &session.project_id);
@@ -141,13 +155,26 @@ fn fetch_pr_url_inner(
         .map_err(|e| e.to_string())?
         .ok_or("session not found")?;
     let cwd = session_cwd(conn, &session).ok_or("cannot resolve session working directory")?;
+    tracing::info!(session_id = %session_id, branch = %session.branch, cwd = %cwd, "fetch_pr_url_inner: checking for existing PR");
     let status = pr::check_pr_status(pr_cmd, &session.branch, std::path::Path::new(&cwd))?;
     match status {
         Some(s) => {
+            tracing::info!(session_id = %session_id, url = %s.url, state = %s.state, "fetch_pr_url_inner: PR found");
+            let transition = pr::detect_transition(session.pr_state.as_deref(), &s);
             let _ = db::update_pr_state(conn, session_id, &s.url, &s.state);
+            if let Some(ref t) = transition {
+                tracing::info!(session_id = %session_id, transition = ?t, "fetch_pr_url_inner: PR transition detected");
+                if let Some(ref task_key) = session.task_key {
+                    if let Ok(tm) = resolve_task_manager(cfg) {
+                        let prefix = db::get_project_prefix(conn, &session.project_id);
+                        pr::fire_pr_hook(tm, t, task_key, &prefix);
+                    }
+                }
+            }
             Ok(Some(s.url))
         }
         None => {
+            tracing::info!(session_id = %session_id, branch = %session.branch, "fetch_pr_url_inner: no PR found, generating create URL");
             let create_url = new_pr_url(&cwd, &session.branch, session.base_branch.as_deref())?;
             Ok(Some(create_url))
         }
@@ -714,6 +741,113 @@ pub async fn mark_pr_ready(
     Ok(())
 }
 
+/// Validate a GitHub PR URL format and extract owner/repo/number.
+fn parse_pr_url(url: &str) -> Result<(String, u64), String> {
+    // Accept https://github.com/{owner}/{repo}/pull/{number}[/...]
+    let url = url.trim();
+    // Strip query string and fragment
+    let url = url.split('?').next().unwrap_or(url);
+    let url = url.split('#').next().unwrap_or(url);
+    // Strip trailing slash
+    let url = url.trim_end_matches('/');
+
+    let stripped = url
+        .strip_prefix("https://github.com/")
+        .ok_or("URL must be a GitHub PR link (https://github.com/{owner}/{repo}/pull/{number})")?;
+    let parts: Vec<&str> = stripped.split('/').collect();
+    if parts.len() < 4 || parts[2] != "pull" {
+        return Err("URL must match https://github.com/{owner}/{repo}/pull/{number}".to_string());
+    }
+    let number: u64 = parts[3]
+        .parse()
+        .map_err(|_| "PR number must be a valid integer".to_string())?;
+    let repo = format!("{}/{}", parts[0], parts[1]);
+    Ok((repo, number))
+}
+
+/// Link a PR by URL: validate format, fetch state via gh, persist, fire hooks.
+#[tauri::command]
+pub async fn link_pr_url(
+    session_id: String,
+    url: String,
+    db_state: State<'_, DbState>,
+    config_state: State<'_, ConfigState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let (_repo, _number) = parse_pr_url(&url)?;
+    tracing::info!(session_id = %session_id, url = %url, "link_pr_url: validated URL");
+
+    let ctx = resolve_session_context(&db_state, &session_id)?;
+
+    // Fetch PR state via gh pr view using the URL
+    let mut cmd = tokio::process::Command::new(crate::command::resolve("gh"));
+    cmd.args(["pr", "view", &url, "--json", "state,isDraft"])
+        .current_dir(&ctx.cwd);
+    cmd.env("PATH", augmented_path(&[]));
+    planeai_core::command::no_window_tokio(&mut cmd);
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("failed to run gh: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if stderr.contains("not logged") || stderr.contains("auth login") {
+            return Err("Run `gh auth login` to authenticate".to_string());
+        }
+        return Err(format!("gh pr view failed: {stderr}"));
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GhPrState {
+        state: String,
+        is_draft: Option<bool>,
+    }
+
+    let pr_info: GhPrState = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("failed to parse PR state: {e}"))?;
+
+    let state = if pr_info.is_draft.unwrap_or(false) {
+        "draft".to_string()
+    } else {
+        pr_info.state.to_lowercase()
+    };
+
+    tracing::info!(session_id = %session_id, url = %url, state = %state, "link_pr_url: fetched PR state");
+
+    // Detect transition using already-fetched context (no second DB read)
+    let pr_status = pr::PrStatus {
+        url: url.clone(),
+        state: state.clone(),
+        is_draft: pr_info.is_draft.unwrap_or(false),
+    };
+    let transition = pr::detect_transition(ctx.pr_state.as_deref(), &pr_status);
+
+    // Persist — propagate DB errors
+    {
+        let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+        db::update_pr_state(&conn, &session_id, &url, &state)
+            .map_err(|e| format!("failed to persist PR state: {e}"))?;
+    }
+
+    // Fire hooks outside DB lock
+    if let Some(ref t) = transition {
+        tracing::info!(session_id = %session_id, transition = ?t, "link_pr_url: PR transition detected");
+        let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(ref task_key) = ctx.task_key {
+            if let Ok(tm) = resolve_task_manager(&cfg) {
+                let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+                let prefix = db::get_project_prefix(&conn, &ctx.project_id);
+                pr::fire_pr_hook(tm, t, task_key, &prefix);
+            }
+        }
+    }
+
+    let _ = app.emit("sessions-changed", ());
+    Ok(state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,5 +1148,55 @@ mod tests {
         };
         let reasons = parse_merge_block_reasons(&view);
         assert!(reasons.iter().any(|r| r.contains("Linear history")));
+    }
+
+    #[test]
+    fn parse_pr_url_valid() {
+        let (repo, number) = parse_pr_url("https://github.com/org/repo/pull/42").unwrap();
+        assert_eq!(repo, "org/repo");
+        assert_eq!(number, 42);
+    }
+
+    #[test]
+    fn parse_pr_url_with_trailing_segments() {
+        let (repo, number) = parse_pr_url("https://github.com/org/repo/pull/123/files").unwrap();
+        assert_eq!(repo, "org/repo");
+        assert_eq!(number, 123);
+    }
+
+    #[test]
+    fn parse_pr_url_with_trailing_slash() {
+        let (repo, number) = parse_pr_url("https://github.com/org/repo/pull/42/").unwrap();
+        assert_eq!(repo, "org/repo");
+        assert_eq!(number, 42);
+    }
+
+    #[test]
+    fn parse_pr_url_with_query_and_fragment() {
+        let (repo, number) =
+            parse_pr_url("https://github.com/org/repo/pull/99?diff=split#discussion_r123").unwrap();
+        assert_eq!(repo, "org/repo");
+        assert_eq!(number, 99);
+    }
+
+    #[test]
+    fn parse_pr_url_rejects_non_github() {
+        let result = parse_pr_url("https://gitlab.com/org/repo/pull/1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("GitHub PR link"));
+    }
+
+    #[test]
+    fn parse_pr_url_rejects_non_pull() {
+        let result = parse_pr_url("https://github.com/org/repo/issues/1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("{owner}/{repo}/pull/{number}"));
+    }
+
+    #[test]
+    fn parse_pr_url_rejects_non_numeric() {
+        let result = parse_pr_url("https://github.com/org/repo/pull/abc");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("valid integer"));
     }
 }

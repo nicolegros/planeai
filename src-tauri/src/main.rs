@@ -354,6 +354,7 @@ fn main() {
             merge_pr,
             mark_pr_ready,
             get_merge_state,
+            link_pr_url,
             check_cli_installed,
             install_cli,
             list_stale_worktrees,
