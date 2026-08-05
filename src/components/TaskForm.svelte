@@ -93,6 +93,40 @@
     formTitle.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9\-/]/g, "").replace(/-+$/, "")
   );
 
+  // Template rendering for prompt preview
+  function renderTemplate(template: string, task: Record<string, unknown>): string {
+    return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
+      let val = varName === "blocked_by" ? (task.blocked_by as string[] | undefined)?.join(", ") ?? "" : String(task[varName] ?? "");
+      if (varName === "parent_key" && !val) val = String(task.key ?? "");
+      if (transform === "slug") return val.toLowerCase().replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      if (transform === "lower") return val.toLowerCase();
+      if (transform === "upper") return val.toUpperCase();
+      return val;
+    });
+  }
+
+  // Build a preview of what the prompt will be using configured templates
+  const defaultPrompt = $derived.by(() => {
+    const templates = config.task_management?.templates;
+    const virtualTask = {
+      key: "TASK-?",
+      title: formTitle.trim(),
+      description: formDescription,
+      priority: formPriority,
+      blocked_by: formBlockedBy,
+      tags: formTags,
+      parent_key: formParentKey,
+      base_branch: formBaseBranch,
+      status: "todo",
+    };
+    if (templates?.prompt) {
+      return renderTemplate(templates.prompt, virtualTask);
+    }
+    return formDescription
+      ? `Implement task ${virtualTask.key}: ${virtualTask.title}\n\n${formDescription}`
+      : `Implement task ${virtualTask.key}: ${virtualTask.title}`;
+  });
+
   // Derive task items for parent_key and blocked_by comboboxes — scoped to current project
   const projectTasks = $derived.by(() => {
     const fromStore = taskStore.getTasksForProject(formProjectPath);
@@ -175,12 +209,30 @@
           // Move task to in_progress
           await taskStore.moveTask(createdTask.key, "in_progress", repoPath);
 
-          // Build session params
-          const branch = sessionBranch || `${createdTask.key.toLowerCase()}/${slugFromTitle}`;
+          // Build session params from templates
+          const templates = config.task_management?.templates;
+          const realTask = {
+            key: createdTask.key,
+            title: createdTask.title,
+            description: createdTask.description,
+            priority: createdTask.priority,
+            blocked_by: createdTask.blocked_by,
+            tags: createdTask.tags,
+            parent_key: createdTask.parent_key,
+            base_branch: createdTask.base_branch,
+            status: createdTask.status,
+          };
+          const branch = sessionBranch || (templates?.branch
+            ? renderTemplate(templates.branch, realTask)
+            : `${createdTask.key.toLowerCase()}/${slugFromTitle}`);
           const isNewBranch = useWorktree || !branches.some((b) => b.value === branch);
           const provider = sessionProvider || config.default_provider;
-          const prompt = sessionPrompt || (formDescription ? `Implement task ${createdTask.key}: ${formTitle.trim()}\n\n${formDescription}` : `Implement task ${createdTask.key}: ${formTitle.trim()}`);
-          const name = `${createdTask.key}: ${formTitle.trim()}`;
+          const prompt = sessionPrompt || (templates?.prompt
+            ? renderTemplate(templates.prompt, realTask)
+            : (createdTask.description ? `Implement task ${createdTask.key}: ${createdTask.title}\n\n${createdTask.description}` : `Implement task ${createdTask.key}: ${createdTask.title}`));
+          const name = templates?.name
+            ? renderTemplate(templates.name, realTask)
+            : `${createdTask.key}: ${formTitle.trim()}`;
 
           try {
             const session = await sessionsApi.launch({
@@ -365,12 +417,12 @@
             <Label>Initial prompt <span class="font-mono text-[10px] px-1 rounded {badge}">I</span></Label>
             <textarea
               bind:value={sessionPrompt}
-              placeholder={formDescription || "Auto-generated from task description"}
+              placeholder={defaultPrompt}
               class="w-full rounded border border-border bg-panel px-3 py-2 text-sm text-t1 placeholder:text-t3 resize-none min-h-[3rem] max-h-[30vh] overflow-y-auto focus:outline-none focus:ring-1 focus:ring-accent"
               rows="2"
               oninput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }}
             ></textarea>
-            <p class="text-[11px] text-t3">Leave empty to use the task description as prompt.</p>
+            <p class="text-[11px] text-t3">Leave empty to use the default prompt shown above.</p>
           </div>
         </div>
       {/if}
