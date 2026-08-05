@@ -158,7 +158,12 @@ export async function loadSessions(): Promise<void> {
 }
 
 export function selectSession(id: string): void {
-  console.log(`[DEBUG-lsr1] selectSession called`, { id, foundInSessions: sessions.some(s => s.id === id), sessionCount: sessions.length, timestamp: Date.now() });
+  console.log(`[DEBUG-lsr1] selectSession called`, {
+    id,
+    foundInSessions: sessions.some((s) => s.id === id),
+    sessionCount: sessions.length,
+    timestamp: Date.now(),
+  });
   activeSessionId = id;
   const session = sessions.find((s) => s.id === id);
   if (session?.status === "exited") {
@@ -328,9 +333,17 @@ export function startEventListeners(): () => void {
   // Refresh sessions when CLI creates a session
   unlisteners.push(
     listen<string>("session-created", async (event) => {
-      console.log(`[DEBUG-lsr1] session-created event received`, { sessionId: event.payload, timestamp: Date.now() });
+      console.log(`[DEBUG-lsr1] session-created event received`, {
+        sessionId: event.payload,
+        timestamp: Date.now(),
+      });
       await loadSessions();
-      console.log(`[DEBUG-lsr1] loadSessions() resolved after session-created`, { sessionId: event.payload, sessionCount: sessions.length, found: sessions.some(s => s.id === event.payload), timestamp: Date.now() });
+      console.log(`[DEBUG-lsr1] loadSessions() resolved after session-created`, {
+        sessionId: event.payload,
+        sessionCount: sessions.length,
+        found: sessions.some((s) => s.id === event.payload),
+        timestamp: Date.now(),
+      });
       touchMru(event.payload);
     }),
   );

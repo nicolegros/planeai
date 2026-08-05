@@ -401,10 +401,16 @@ fn exec_session_create(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickR
 
     // 2. Resolve role from recipe
     let role = ctx.snapshot.roles.get(role_id).cloned();
-    let provider = role
+    let provider_raw = role
         .as_ref()
         .map(|r| r.provider.clone())
         .unwrap_or_else(|| "default".to_string());
+    // Render provider through template engine so {{ inputs.x }} works
+    let provider = if provider_raw.contains("{{") {
+        render_prompt(&provider_raw, ctx.snapshot, ctx.loop_id)
+    } else {
+        provider_raw
+    };
     let isolation = role
         .as_ref()
         .map(|r| r.isolation.clone())
@@ -1756,10 +1762,16 @@ fn exec_arbiter_rank(ctx: &mut TickContext, step: &RecipeStep) -> Result<TickRes
 
     // 2. Resolve role from recipe
     let role = ctx.snapshot.roles.get(role_id).cloned();
-    let provider = role
+    let provider_raw = role
         .as_ref()
         .map(|r| r.provider.clone())
         .unwrap_or_else(|| "default".to_string());
+    // Render provider through template engine so {{ inputs.x }} works
+    let provider = if provider_raw.contains("{{") {
+        render_prompt(&provider_raw, ctx.snapshot, ctx.loop_id)
+    } else {
+        provider_raw
+    };
     let isolation = role
         .as_ref()
         .map(|r| r.isolation.clone())
@@ -2505,6 +2517,28 @@ mod tests {
         let template = "{{ inputs.gate_command | default('make ci') }}";
         let result = render_prompt(template, &snapshot, "loop-1");
         assert_eq!(result, "cargo test");
+    }
+
+    #[test]
+    fn render_prompt_provider_template_with_default() {
+        // Simulates roles.provider = "{{ inputs.provider | default('default') }}"
+        let snapshot = minimal_snapshot(vec![], BTreeMap::new());
+        let template = "{{ inputs.provider | default('default') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "default");
+    }
+
+    #[test]
+    fn render_prompt_provider_template_with_input() {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(
+            "provider".to_string(),
+            serde_json::Value::String("claude".to_string()),
+        );
+        let snapshot = minimal_snapshot(vec![], inputs);
+        let template = "{{ inputs.provider | default('default') }}";
+        let result = render_prompt(template, &snapshot, "loop-1");
+        assert_eq!(result, "claude");
     }
 
     #[test]

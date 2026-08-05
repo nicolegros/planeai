@@ -12,7 +12,7 @@ export function renderTemplate(template: string, context: Record<string, any>): 
   return template.replace(/\{(\w+)(?::(\w+))?\}/g, (_, varName, transform) => {
     let val =
       varName === "blocked_by"
-        ? (context.blocked_by as string[] | undefined)?.join(", ") ?? ""
+        ? ((context.blocked_by as string[] | undefined)?.join(", ") ?? "")
         : String(context[varName] ?? "");
     if (varName === "parent_key" && !val) val = String(context.key ?? "");
     if (transform === "slug")

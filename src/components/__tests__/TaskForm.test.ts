@@ -15,7 +15,9 @@ const mockCreateTask = vi.fn((_params?: unknown) =>
     base_branch: "main",
   }),
 );
-const mockMoveTask = vi.fn((_key?: unknown, _status?: unknown, _repoPath?: unknown) => Promise.resolve());
+const mockMoveTask = vi.fn((_key?: unknown, _status?: unknown, _repoPath?: unknown) =>
+  Promise.resolve(),
+);
 const mockLaunch = vi.fn((_params?: unknown) =>
   Promise.resolve({
     id: "sess-new",
@@ -71,7 +73,8 @@ vi.mock("../../lib/task-store.svelte", () => ({
   getAllTasks: () => [],
   isLoading: () => false,
   createTask: (params: unknown) => mockCreateTask(params),
-  moveTask: (key: unknown, status: unknown, repoPath: unknown) => mockMoveTask(key, status, repoPath),
+  moveTask: (key: unknown, status: unknown, repoPath: unknown) =>
+    mockMoveTask(key, status, repoPath),
   editTask: vi.fn(() => Promise.resolve()),
 }));
 
@@ -173,7 +176,9 @@ describe("TaskForm - Start session toggle", () => {
     flushSync();
 
     // The branch field should show the placeholder or preview text
-    const branchInput = target.querySelector("[data-field='session-branch'] input") as HTMLInputElement;
+    const branchInput = target.querySelector(
+      "[data-field='session-branch'] input",
+    ) as HTMLInputElement;
     expect(branchInput.placeholder).toContain("fix-login-redirect");
   });
 
