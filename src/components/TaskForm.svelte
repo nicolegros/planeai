@@ -127,12 +127,16 @@
     () => [
       { key: "t", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='title'] input") ?? null },
       { key: "d", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='desc'] textarea") ?? null },
-      { key: "p", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
-      { key: "r", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='parent'] input") ?? null },
+      { key: "r", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='priority'] input") ?? null },
+      { key: "a", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='parent'] input") ?? null },
       { key: "k", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='blocked'] input") ?? null },
       { key: "g", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='tags'] input") ?? null },
       { key: "b", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='base'] input") ?? null },
+      ...(mode === "create" ? [
+        { key: "s", toggle: () => { startSession = !startSession; } },
+      ] : []),
       ...(startSession ? [
+        { key: "p", toggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx + 1) % providerKeys.length]; }, shiftToggle: () => { const current = sessionProvider || config.default_provider; const idx = providerKeys.indexOf(current); sessionProvider = providerKeys[(idx - 1 + providerKeys.length) % providerKeys.length]; } },
         { key: "n", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-branch'] input") ?? null },
         { key: "i", ref: () => formWrapper?.querySelector<HTMLElement>("[data-field='session-prompt'] textarea") ?? null },
       ] : []),
@@ -262,12 +266,12 @@
     </div>
 
     <div class="space-y-1" data-field="priority">
-      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></Label>
+      <Label>Priority <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
       <input type="number" bind:value={formPriority} class="w-20 rounded border border-border bg-panel px-3 py-2 text-sm text-t1 focus:outline-none focus:ring-1 focus:ring-accent" />
     </div>
 
     <div class="space-y-1" data-field="parent">
-      <Label>Parent <span class="font-mono text-[10px] px-1 rounded {badge}">R</span></Label>
+      <Label>Parent <span class="font-mono text-[10px] px-1 rounded {badge}">A</span></Label>
       <Select
         items={parentItems}
         bind:value={formParentKey}
@@ -305,7 +309,10 @@
     <!-- Start session toggle (create mode only) -->
     {#if mode === "create"}
       <div class="border-t border-border pt-4 mt-4">
-        <Checkbox id="start-session" label="Start session immediately" bind:checked={startSession} />
+        <div class="flex items-center gap-2">
+          <Checkbox id="start-session" label="Start session immediately" bind:checked={startSession} />
+          <span class="font-mono text-[10px] px-1 rounded {badge}">S</span>
+        </div>
       </div>
 
       {#if startSession}
@@ -313,7 +320,7 @@
           <!-- Provider -->
           {#if providerKeys.length > 1}
             <div class="space-y-1 pl-3">
-              <Label>Provider</Label>
+              <Label>Provider <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></Label>
               <Select
                 items={providerKeys.map(k => ({ value: k, label: k }))}
                 bind:value={sessionProvider}
@@ -321,7 +328,7 @@
               />
             </div>
           {:else}
-            <p class="text-xs text-t3 pl-3">Provider: <span class="font-medium text-t1">{config.default_provider}</span></p>
+            <p class="text-xs text-t3 pl-3">Provider: <span class="font-medium text-t1">{config.default_provider}</span> <span class="font-mono text-[10px] px-1 rounded {badge}">P</span></p>
           {/if}
 
           <!-- Branch -->
