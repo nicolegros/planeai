@@ -1,5 +1,5 @@
-use super::branch::resolve_base_branch;
-use super::{detect_language, git_cmd};
+use super::branch::{resolve_base_branch, resolve_base_branch_in};
+use super::{detect_language, git_cmd, git_cmd_in_dir, GitContext};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ChangedFile {
@@ -50,16 +50,25 @@ pub fn get_changed_files(
     base_branch: &str,
     head_ref: Option<&str>,
 ) -> Result<Vec<ChangedFile>, String> {
-    let resolved = resolve_base_branch(repo_path, base_branch)?;
+    get_changed_files_in(repo_path, base_branch, head_ref, &GitContext::native())
+}
+
+/// Get changed files with explicit git context (supports WSL).
+pub fn get_changed_files_in(
+    repo_path: &str,
+    base_branch: &str,
+    head_ref: Option<&str>,
+    ctx: &GitContext,
+) -> Result<Vec<ChangedFile>, String> {
+    let resolved = resolve_base_branch_in(repo_path, base_branch, ctx)?;
 
     let diff_range = match head_ref {
         Some(h) => format!("{resolved}..{h}"),
         None => resolved.clone(),
     };
 
-    let output = git_cmd()
+    let output = git_cmd_in_dir(ctx, repo_path)
         .args(["diff", "--numstat", &diff_range])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -89,9 +98,8 @@ pub fn get_changed_files(
     }
 
     // Get status for each file
-    let status_output = git_cmd()
+    let status_output = git_cmd_in_dir(ctx, repo_path)
         .args(["diff", "--name-status", &diff_range])
-        .current_dir(repo_path)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -116,9 +124,8 @@ pub fn get_changed_files(
 
     // Include untracked files only when comparing to working tree (head_ref is None)
     if head_ref.is_none() {
-        let untracked_output = git_cmd()
+        let untracked_output = git_cmd_in_dir(ctx, repo_path)
             .args(["ls-files", "--others", "--exclude-standard"])
-            .current_dir(repo_path)
             .output()
             .map_err(|e| format!("failed to run git: {e}"))?;
 
@@ -128,9 +135,16 @@ pub fn get_changed_files(
                 if path.is_empty() {
                     continue;
                 }
-                let content = std::fs::read_to_string(std::path::Path::new(repo_path).join(&path))
-                    .unwrap_or_default();
-                let additions = content.lines().count() as u32;
+                // For WSL, we can't read untracked file content directly from Windows.
+                // Skip line counting for untracked files when using WSL context.
+                let additions = if ctx.wsl_distro.is_some() {
+                    0
+                } else {
+                    let content =
+                        std::fs::read_to_string(std::path::Path::new(repo_path).join(&path))
+                            .unwrap_or_default();
+                    content.lines().count() as u32
+                };
                 files.push(ChangedFile {
                     path,
                     status: "A".to_string(),
