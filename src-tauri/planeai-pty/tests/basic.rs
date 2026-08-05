@@ -239,11 +239,13 @@ fn config_defaults_wsl_is_none() {
 #[test]
 fn wsl_spawn_config_can_be_set() {
     use planeai_pty::WslSpawnConfig;
-    let mut cfg = LocalPtyConfig::default();
-    cfg.wsl = Some(WslSpawnConfig {
-        distro: "Ubuntu".to_string(),
-        cwd: Some("/home/user/project".to_string()),
-    });
+    let cfg = LocalPtyConfig {
+        wsl: Some(WslSpawnConfig {
+            distro: "Ubuntu".to_string(),
+            cwd: Some("/home/user/project".to_string()),
+        }),
+        ..Default::default()
+    };
     assert_eq!(cfg.wsl.as_ref().unwrap().distro, "Ubuntu");
     assert_eq!(
         cfg.wsl.as_ref().unwrap().cwd.as_deref(),

@@ -104,6 +104,14 @@ pub fn resolve(cmd: &str) -> String {
     cmd.to_string()
 }
 
+/// When WSL is the target environment, skip Windows-side resolution. The command
+/// will run inside the WSL distro where its own PATH handles resolution naturally.
+/// Returns the command name unchanged.
+#[allow(dead_code)]
+pub fn resolve_for_wsl(cmd: &str) -> String {
+    cmd.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
