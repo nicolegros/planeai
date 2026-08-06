@@ -172,6 +172,14 @@ pub fn restore_project(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::ProjectService::restore(conn, id)
 }
 
+pub fn hide_project(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::ProjectService::hide(conn, id)
+}
+
+pub fn unhide_project(conn: &Connection, id: &str) -> Result<()> {
+    planeai_core::services::ProjectService::unhide(conn, id)
+}
+
 pub fn delete_project(conn: &Connection, id: &str) -> Result<()> {
     planeai_core::services::ProjectService::delete(conn, id)
 }
@@ -661,6 +669,32 @@ mod tests {
             loaded.provider_session_id,
             Some("f4165541-f370-4fdd-9ccd-14b103a4f712".to_string())
         );
+    }
+
+    #[test]
+    fn test_hide_project_keeps_it_active_and_persists() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session(
+            &conn,
+            &project.id,
+            "session",
+            "planeai-myapp-abc123",
+            "main",
+            None,
+        )
+        .unwrap();
+
+        hide_project(&conn, &project.id).unwrap();
+
+        let projects = list_projects(&conn).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, project.id);
+        assert!(projects[0].hidden);
+        assert_eq!(list_sessions(&conn).unwrap().len(), 1);
+
+        unhide_project(&conn, &project.id).unwrap();
+        assert!(!list_projects(&conn).unwrap()[0].hidden);
     }
 
     #[test]

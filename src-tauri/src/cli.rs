@@ -369,6 +369,7 @@ mod tests {
             path: "/home/user/myapp".to_string(),
             status: "active".to_string(),
             prefix: "MYA".to_string(),
+            hidden: false,
         }
     }
 

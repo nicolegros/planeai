@@ -54,6 +54,8 @@ export function computeSidebarSessionOrder(
   const loopSessionSet = loopSessionIds ?? new Set<string>();
 
   for (const project of projects) {
+    if (project.hidden) continue;
+
     // Loops first (with their child sessions)
     const projectLoops = loopsByProject?.[project.id] ?? [];
     for (const loop of projectLoops) {

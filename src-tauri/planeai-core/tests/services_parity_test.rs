@@ -136,6 +136,8 @@ fn direct_backend_migrates_to_local() {
 
     migrate_project_session_schema(&conn).unwrap();
 
+    let project = ProjectService::get_by_id(&conn, "p1").unwrap().unwrap();
+    assert!(!project.hidden);
     let s = SessionService::get(&conn, "s1").unwrap().unwrap();
     assert_eq!(s.backend, "local");
 }

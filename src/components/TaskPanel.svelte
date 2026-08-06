@@ -24,7 +24,7 @@
   let { disableKeyboard = false, onPickTask, onSelectSession, onArchiveSession, onSessionsChanged, onSessionCreated }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
-  const projects = $derived(projectStore.getProjects().map(p => ({ id: p.id, name: p.name, path: p.path })));
+  const projects = $derived(projectStore.getProjects().map(p => ({ id: p.id, name: p.name, path: p.path, hidden: p.hidden })));
   const sessions = $derived(orchestrator.getSessions());
   const activeSessionId = $derived(orchestrator.getActiveSessionId());
   const agentStates = $derived(orchestrator.getAgentStates());
@@ -323,7 +323,7 @@
     <div class="flex-1 min-h-0 overflow-y-auto">
       <TaskForm
         mode={modalMode}
-        projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
+        projects={projects}
         tasks={Object.values(tasksByProject).flat()}
         sessions={sessions}
         initial={modalMode === "edit" && editingTask ? {

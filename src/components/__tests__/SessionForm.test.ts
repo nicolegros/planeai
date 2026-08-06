@@ -43,7 +43,7 @@ vi.mock("../../lib/settings.svelte", () => ({
 import SessionForm from "../SessionForm.svelte";
 
 const baseProps = {
-  projects: [{ id: "p1", name: "Project", path: "/tmp/proj" }],
+  projects: [{ id: "p1", name: "Project", path: "/tmp/proj", hidden: false }],
   sessions: [],
   onCreated: vi.fn(),
   onCancel: vi.fn(),

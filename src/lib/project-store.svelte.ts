@@ -31,6 +31,20 @@ export async function archiveProject(id: string): Promise<void> {
   projects = projects.filter((p) => p.id !== id);
 }
 
+export async function hideProject(id: string): Promise<void> {
+  await projectsApi.hide(id);
+  projects = projects.map((project) =>
+    project.id === id ? { ...project, hidden: true } : project,
+  );
+}
+
+export async function unhideProject(id: string): Promise<void> {
+  await projectsApi.unhide(id);
+  projects = projects.map((project) =>
+    project.id === id ? { ...project, hidden: false } : project,
+  );
+}
+
 export async function deleteProject(id: string): Promise<void> {
   await projectsApi.delete(id);
   removeProjectSessions(id);
