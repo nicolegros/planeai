@@ -46,6 +46,26 @@ pub fn restore_project(state: State<DbState>, id: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+pub async fn hide_project(state: State<'_, DbState>, id: String) -> Result<(), String> {
+    let conn = state.0.clone();
+    crate::commands::blocking(move || {
+        let conn = conn.lock().map_err(|e| e.to_string())?;
+        db::hide_project(&conn, &id).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn unhide_project(state: State<'_, DbState>, id: String) -> Result<(), String> {
+    let conn = state.0.clone();
+    crate::commands::blocking(move || {
+        let conn = conn.lock().map_err(|e| e.to_string())?;
+        db::unhide_project(&conn, &id).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn get_project_auto_mode(state: State<DbState>, id: String) -> Result<bool, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     conn.query_row(

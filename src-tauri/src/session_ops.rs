@@ -1429,6 +1429,7 @@ mod tests {
             path: "/tmp/myapp".to_string(),
             status: "active".to_string(),
             prefix: "MYA".to_string(),
+            hidden: false,
         }];
         let sessions = vec![db::Session {
             id: "aaaabbbb-1111-2222-3333-444455556666".to_string(),

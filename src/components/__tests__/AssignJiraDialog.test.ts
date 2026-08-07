@@ -38,7 +38,7 @@ function makeTask(overrides: Partial<TaskItem> = {}): TaskItem {
   };
 }
 
-const projects: Project[] = [{ id: "p1", name: "myapp", path: "/tmp/myapp" }];
+const projects: Project[] = [{ id: "p1", name: "myapp", path: "/tmp/myapp", hidden: false }];
 
 let component: Record<string, unknown> | null = null;
 let mountTarget: HTMLElement | null = null;

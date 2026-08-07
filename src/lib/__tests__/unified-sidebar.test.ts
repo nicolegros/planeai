@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { computeSidebarSessionOrder } from "../sidebar-session-order";
 import type { Session, TaskItem, Project } from "../types";
 
 // Test the derivation logic used by UnifiedSidebar
 
-function makeProject(id: string, name: string, path: string): Project {
-  return { id, name, path };
+function makeProject(id: string, name: string, path: string, hidden = false): Project {
+  return { id, name, path, hidden };
 }
 
 function makeSession(id: string, projectId: string, taskKey: string | null = null): Session {
@@ -65,6 +66,16 @@ function groupByStatus(items: TaskItem[]): Record<string, TaskItem[]> {
 }
 
 describe("unified sidebar logic", () => {
+  describe("hidden projects", () => {
+    it("excludes hidden project sessions from sidebar keyboard navigation", () => {
+      const visible = makeProject("p1", "visible", "/visible");
+      const hidden = makeProject("p2", "hidden", "/hidden", true);
+      const sessions = [makeSession("s1", visible.id), makeSession("s2", hidden.id)];
+
+      expect(computeSidebarSessionOrder([visible, hidden], sessions, {}, false)).toEqual(["s1"]);
+    });
+  });
+
   describe("orphan detection", () => {
     it("session with no task_key is orphan", () => {
       const sessions = [makeSession("s1", "p1", null)];

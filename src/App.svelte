@@ -958,6 +958,8 @@
       onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
       onResetTerminal={() => { if (activeSessionId) pty.write(activeSessionId, [0x0c]); }}
       onArchiveProject={async (id) => { await projectStore.archiveProject(id); }}
+      onHideProject={async (id) => { await projectStore.hideProject(id); }}
+      onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
       onDeleteProject={(id) => { const p = projects.find(x => x.id === id); if (p) projectToDelete = p; }}
       onRestoreProject={async (id) => { await projectStore.restoreProject(id); }}
       onPickTask={(task) => { taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "" }; showSessionForm = true; }}

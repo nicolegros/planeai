@@ -12,6 +12,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
+  import { showSnackbar } from "../lib/snackbar.svelte";
   import TaskPanel from "./TaskPanel.svelte";
   import JiraSidebarSection from "./JiraSidebarSection.svelte";
   import AssignJiraDialog from "./AssignJiraDialog.svelte";
@@ -200,6 +201,15 @@
     }
   });
 
+  async function hideProject(id: string) {
+    try {
+      await projectStore.hideProject(id);
+    } catch (error) {
+      console.error("Failed to hide project:", error);
+      showSnackbar("Failed to hide project.");
+    }
+  }
+
   function onContextMenu(e: MouseEvent, session: Session) { e.preventDefault(); contextMenu = { x: e.clientX, y: e.clientY, session }; }
   function onProjectContextMenu(e: MouseEvent, project: Project) { e.preventDefault(); projectContextMenu = { x: e.clientX, y: e.clientY, project }; }
   function onTaskContextMenu(e: MouseEvent, task: TaskItem, projectPath: string) { e.preventDefault(); taskContextMenu = { x: e.clientX, y: e.clientY, task, projectPath }; }
@@ -281,6 +291,7 @@
   // Filter projects based on hide_empty_projects setting
   const visibleProjects = $derived(
     projects.filter(p => {
+      if (p.hidden) return false;
       const orphans = orphansByProject.find(g => g.project.id === p.id)?.sessions ?? [];
       const tasks = tasksByProject[p.path] ?? [];
       const visibleTaskCount = tasks.filter(t => !(t.status === "done" && getSettings().hide_done_tasks)).length;
@@ -897,6 +908,7 @@
     onClose={() => (projectContextMenu = null)}
     items={[
       { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
+      { label: "Hide project", onSelect: () => hideProject(projectContextMenu!.project.id) },
       { label: "Archive project", onSelect: () => projectStore.archiveProject(projectContextMenu!.project.id) },
       { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
     ]}

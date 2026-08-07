@@ -21,6 +21,8 @@
     onDestroyArchivedSession: (id: string) => void;
     onResetTerminal: () => void;
     onArchiveProject: (id: string) => void;
+    onHideProject: (id: string) => void | Promise<void>;
+    onUnhideProject: (id: string) => void | Promise<void>;
     onDeleteProject: (id: string) => void;
     onRestoreProject: (id: string) => void;
     onPickTask: (task: TaskItem) => void;
@@ -35,7 +37,7 @@
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -43,7 +45,7 @@
   const projects = $derived(projectStore.getProjects());
 
   let archivedSessions = $state<Session[]>([]);
-  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");
+  let subMenu = $state<"none" | "archivedSessions" | "archiveProject" | "hideProject" | "unhideProject" | "deleteProject" | "restoreProject" | "pickTask" | "openFile" | "autoDispatch">("none");
   let archivedProjects = $state<Project[]>([]);
   let taskItems = $state<TaskItem[]>([]);
   let fileList = $state<string[]>([]);
@@ -74,6 +76,28 @@
 
   function openArchiveProject() {
     subMenu = "archiveProject";
+  }
+
+  function openHideProject() {
+    subMenu = "hideProject";
+  }
+
+  function openUnhideProject() {
+    subMenu = "unhideProject";
+  }
+
+  async function updateProjectVisibility(
+    id: string,
+    action: (projectId: string) => void | Promise<void>,
+    verb: "hide" | "unhide",
+  ) {
+    try {
+      await action(id);
+      close();
+    } catch (error) {
+      console.error(`Failed to ${verb} project:`, error);
+      showSnackbar(`Failed to ${verb} project.`);
+    }
   }
 
   export async function openFilePicker() {
@@ -211,6 +235,57 @@
                       onSelect={() => { onArchiveProject(project.id); close(); }}
                     >
                       {project.name}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "hideProject"}
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
+          <Command.Input
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
+            placeholder="Hide which project from the sidebar..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No visible projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects.filter(project => !project.hidden) as project (project.id)}
+                    <Command.Item
+                      value="hide {project.name}"
+                      class="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => updateProjectVisibility(project.id, onHideProject, "hide")}
+                    >
+                      {project.name}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            </Command.Viewport>
+          </Command.List>
+        </Command.Root>
+      {:else if subMenu === "unhideProject"}
+        <Command.Root class="flex flex-col" loop disablePointerSelection>
+          <Command.Input
+            class="h-[54px] w-full border-b border-border bg-transparent px-4 text-[13.5px] outline-none placeholder:text-t3"
+            placeholder="Unhide which project..."
+          />
+          <Command.List class="max-h-72 overflow-y-auto p-2">
+            <Command.Viewport>
+              <Command.Empty class="flex items-center justify-center py-6 text-[13px] text-t3">No hidden projects.</Command.Empty>
+              <Command.Group>
+                <Command.GroupItems>
+                  {#each projects.filter(project => project.hidden) as project (project.id)}
+                    <Command.Item
+                      value="unhide {project.name}"
+                      class="flex h-9 cursor-pointer items-center justify-between rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                      onSelect={() => updateProjectVisibility(project.id, onUnhideProject, "unhide")}
+                    >
+                      <span>{project.name}</span>
+                      <span class="text-xs text-accent shrink-0 ml-2">Unhide</span>
                     </Command.Item>
                   {/each}
                 </Command.GroupItems>
@@ -549,8 +624,26 @@
                   Archived sessions
                 </Command.Item>
                 <Command.Item
+                  value="hide project"
+                  keywords={["hide", "sidebar", "project"]}
+                  disabled={!projects.some(project => !project.hidden)}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openHideProject}
+                >
+                  Hide project…
+                </Command.Item>
+                <Command.Item
+                  value="unhide project"
+                  keywords={["unhide", "show", "sidebar", "project"]}
+                  disabled={!projects.some(project => project.hidden)}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  onSelect={openUnhideProject}
+                >
+                  Unhide project…
+                </Command.Item>
+                <Command.Item
                   value="archive project"
-                  keywords={["archive", "hide", "project"]}
+                  keywords={["archive", "project"]}
                   disabled={projects.length === 0}
                   class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                   onSelect={openArchiveProject}

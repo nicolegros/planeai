@@ -72,6 +72,7 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
         .execute_batch("ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 1");
     let _ =
         conn.execute_batch("ALTER TABLE projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    let _ = conn.execute_batch("ALTER TABLE projects ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN task_key TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN base_branch TEXT");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN mru_position INTEGER");
@@ -210,6 +211,7 @@ pub struct Project {
     pub path: String,
     pub status: String,
     pub prefix: String,
+    pub hidden: bool,
 }
 
 // ─── Session types (matches production db::Session) ──────────────────────────
@@ -294,7 +296,7 @@ impl ProjectService {
     pub fn ensure_project(conn: &Connection, path: &str) -> SqlResult<Project> {
         let existing: Option<Project> = conn
             .prepare(
-                "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
+                "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
             )?
             .query_row(params![path], |row| {
                 Ok(Project {
@@ -303,6 +305,7 @@ impl ProjectService {
                     path: row.get(2)?,
                     status: row.get(3)?,
                     prefix: row.get(4)?,
+                    hidden: row.get(5)?,
                 })
             })
             .ok();
@@ -328,12 +331,13 @@ impl ProjectService {
             path: path.to_string(),
             status: "active".to_string(),
             prefix,
+            hidden: false,
         })
     }
 
     pub fn list_active(conn: &Connection) -> SqlResult<Vec<Project>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'active'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'active'",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
@@ -342,6 +346,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -349,7 +354,7 @@ impl ProjectService {
 
     pub fn get_by_path(conn: &Connection, path: &str) -> SqlResult<Option<Project>> {
         conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE path = ?1 AND status = 'active'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE path = ?1 AND status = 'active'",
         )?
         .query_row(params![path], |row| {
             Ok(Project {
@@ -358,6 +363,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })
         .ok()
@@ -365,7 +371,7 @@ impl ProjectService {
     }
 
     pub fn get_by_id(conn: &Connection, id: &str) -> SqlResult<Option<Project>> {
-        conn.prepare("SELECT id, name, path, status, prefix FROM projects WHERE id = ?1")?
+        conn.prepare("SELECT id, name, path, status, prefix, hidden FROM projects WHERE id = ?1")?
             .query_row(params![id], |row| {
                 Ok(Project {
                     id: row.get(0)?,
@@ -373,6 +379,7 @@ impl ProjectService {
                     path: row.get(2)?,
                     status: row.get(3)?,
                     prefix: row.get(4)?,
+                    hidden: row.get(5)?,
                 })
             })
             .ok()
@@ -392,6 +399,7 @@ impl ProjectService {
             path: path.to_string(),
             status: "active".to_string(),
             prefix,
+            hidden: false,
         })
     }
 
@@ -409,7 +417,7 @@ impl ProjectService {
 
     pub fn list_archived(conn: &Connection) -> SqlResult<Vec<Project>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, path, status, prefix FROM projects WHERE status = 'archived'",
+            "SELECT id, name, path, status, prefix, hidden FROM projects WHERE status = 'archived'",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(Project {
@@ -418,6 +426,7 @@ impl ProjectService {
                 path: row.get(2)?,
                 status: row.get(3)?,
                 prefix: row.get(4)?,
+                hidden: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -428,6 +437,16 @@ impl ProjectService {
             "UPDATE projects SET status = 'active' WHERE id = ?1",
             params![id],
         )?;
+        Ok(())
+    }
+
+    pub fn hide(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute("UPDATE projects SET hidden = 1 WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn unhide(conn: &Connection, id: &str) -> SqlResult<()> {
+        conn.execute("UPDATE projects SET hidden = 0 WHERE id = ?1", params![id])?;
         Ok(())
     }
 

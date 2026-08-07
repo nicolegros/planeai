@@ -277,6 +277,8 @@ fn main() {
             list_archived_projects,
             archive_project,
             restore_project,
+            hide_project,
+            unhide_project,
             get_project_auto_mode,
             set_project_auto_mode,
             delete_project,

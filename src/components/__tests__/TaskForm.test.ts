@@ -82,7 +82,7 @@ import TaskForm from "../TaskForm.svelte";
 
 const baseProps = {
   mode: "create" as const,
-  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp" }],
+  projects: [{ id: "proj-1", name: "My Project", path: "/tmp/myapp", hidden: false }],
   tasks: [],
   sessions: [],
   onSubmitted: vi.fn(),

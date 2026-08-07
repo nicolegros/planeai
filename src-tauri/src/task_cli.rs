@@ -155,7 +155,8 @@ mod tests {
                 name TEXT NOT NULL,
                 path TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
-                prefix TEXT NOT NULL DEFAULT ''
+                prefix TEXT NOT NULL DEFAULT '',
+                hidden INTEGER NOT NULL DEFAULT 0
             );
             INSERT INTO projects (id, name, path, prefix) VALUES ('p1', 'planeai', '/Users/dev/planeai', 'PLA');",
         )
