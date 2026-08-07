@@ -19,3 +19,4 @@ pub mod task_cli;
 pub mod template;
 #[cfg(not(windows))]
 pub mod tmux;
+pub mod util;

@@ -20,7 +20,7 @@ pub fn resolve_prefix(
     } else {
         projects
             .iter()
-            .find(|p| cwd.starts_with(&p.path))
+            .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
             .ok_or_else(|| "could not resolve project from CWD; use --project".to_string())?
     };
     Ok(proj.prefix.clone())

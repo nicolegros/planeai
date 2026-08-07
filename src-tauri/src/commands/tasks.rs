@@ -59,7 +59,7 @@ fn resolve_repo(db_state: &State<DbState>, repo_path: &str) -> Result<SqliteRepo
     let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
     let project = projects
         .iter()
-        .find(|p| p.path == repo_path || repo_path.starts_with(&p.path))
+        .find(|p| crate::util::is_project_path_or_descendant(repo_path, &p.path))
         .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
     let prefix = project.prefix.clone();
     drop(conn);
@@ -205,7 +205,7 @@ pub async fn move_task_item(
                 let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
                 let project = projects
                     .iter()
-                    .find(|p| p.path == repo_path || repo_path.starts_with(&p.path))
+                    .find(|p| crate::util::is_project_path_or_descendant(&repo_path, &p.path))
                     .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
                 let prefix = project.prefix.clone();
                 drop(conn);
