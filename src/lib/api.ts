@@ -200,6 +200,7 @@ export const git = {
 export const pr = {
   create: (sessionId: string, title: string, body: string, baseBranch: string, draft: boolean) =>
     invoke<string>("create_pr", { sessionId, title, body, baseBranch, draft }),
+  fetchPrUrl: (sessionId: string) => invoke<string | null>("fetch_pr_url", { sessionId }),
   generateDefaults: (sessionId: string) =>
     invoke<{ title: string; body: string; base_branch: string }>("generate_pr_defaults", {
       sessionId,
@@ -218,6 +219,8 @@ export const pr = {
       sessionId,
     }),
   getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
+  linkPrUrl: (sessionId: string, url: string) =>
+    invoke<string>("link_pr_url", { sessionId, url }),
 };
 
 export const notify = {

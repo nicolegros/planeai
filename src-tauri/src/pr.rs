@@ -19,13 +19,18 @@ pub fn check_pr_status(
     branch: &str,
     cwd: &Path,
 ) -> Result<Option<PrStatus>, String> {
+    tracing::info!(branch = %branch, cwd = %cwd.display(), "check_pr_status: running pr_status command");
     let mut vars = std::collections::HashMap::new();
     vars.insert("branch", branch);
     let cmd_str = template::render(command_template, &vars);
     let output = match planeai_core::command::run_command(&cmd_str, cwd) {
         Ok(stdout) => stdout,
-        Err(planeai_core::command::CommandError::NonZeroExit { .. }) => return Ok(None),
+        Err(planeai_core::command::CommandError::NonZeroExit { .. }) => {
+            tracing::info!(branch = %branch, "check_pr_status: command exited non-zero, no PR found");
+            return Ok(None);
+        }
         Err(planeai_core::command::CommandError::SpawnFailed { command, source }) => {
+            tracing::warn!(branch = %branch, command = %command, error = %source, "check_pr_status: spawn failed");
             return Err(format!("pr_status: failed to run '{command}': {source}"));
         }
     };
@@ -35,6 +40,7 @@ pub fn check_pr_status(
     if status.is_draft {
         status.state = "draft".to_string();
     }
+    tracing::info!(branch = %branch, url = %status.url, state = %status.state, "check_pr_status: PR found");
     Ok(Some(status))
 }
 

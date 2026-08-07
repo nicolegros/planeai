@@ -82,6 +82,10 @@
   let prSubmitting = $state(false);
   let prError = $state("");
   let prFormWrapper = $state<HTMLDivElement | null>(null);
+  let prLinkUrl = $state("");
+  let prShowLinkField = $state(false);
+  let prLinking = $state(false);
+  let prRefreshing = $state(false);
 
   const prFk = createFormKeyboardController(
     () => [
@@ -89,6 +93,7 @@
       { key: "b", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-body'] textarea") ?? null },
       { key: "a", ref: () => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-base'] input") ?? null },
       { key: "d", toggle: () => { prDraft = !prDraft; } },
+      { key: "r", toggle: () => { if (!prShowLinkField) refreshPr(); } },
     ],
     { wrapper: () => prFormWrapper, onDismiss: () => { showPrForm = false; tick().then(() => refocusTerminal()); } },
   );
@@ -105,6 +110,10 @@
     if (!activeSessionId) return;
     prError = "";
     prSubmitting = false;
+    prShowLinkField = false;
+    prLinkUrl = "";
+    prLinking = false;
+    prRefreshing = false;
     try {
       const defaults = await prApi.generateDefaults(activeSessionId);
       prTitle = defaults.title;
@@ -132,6 +141,50 @@
       prSubmitting = false;
     }
   }
+
+  async function refreshPr() {
+    if (prRefreshing || !activeSessionId) return;
+    prRefreshing = true;
+    prError = "";
+    try {
+      const result = await prApi.fetchPrUrl(activeSessionId);
+      // If result is a real PR URL (contains /pull/), it was found
+      if (result && result.includes("/pull/")) {
+        showPrForm = false;
+        showPrPanel = true;
+        showSnackbar("PR linked", "success");
+        await orchestrator.loadSessions();
+      } else {
+        // No PR found — show the paste field and autofocus it
+        prShowLinkField = true;
+        tick().then(() => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-link'] input")?.focus());
+      }
+    } catch (e: any) {
+      prError = e.toString();
+      prShowLinkField = true;
+      tick().then(() => prFormWrapper?.querySelector<HTMLElement>("[data-field='pr-link'] input")?.focus());
+    } finally {
+      prRefreshing = false;
+    }
+  }
+
+  async function linkPr() {
+    if (prLinking || !activeSessionId || !prLinkUrl.trim()) return;
+    prLinking = true;
+    prError = "";
+    try {
+      await prApi.linkPrUrl(activeSessionId, prLinkUrl.trim());
+      showPrForm = false;
+      showPrPanel = true;
+      showSnackbar("PR linked", "success");
+      await orchestrator.loadSessions();
+    } catch (e: any) {
+      prError = e.toString();
+    } finally {
+      prLinking = false;
+    }
+  }
+
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
@@ -1292,6 +1345,19 @@
         <div class="flex items-center gap-4">
           <Checkbox id="pr-draft" label="Draft PR" bind:checked={prDraft} tabindex={-1} />
           <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">D</span>
+        </div>
+        <div class="border-t border-border pt-2 space-y-2">
+          <button type="button" class="text-xs text-t3 hover:text-accent transition-colors" disabled={prRefreshing} onclick={() => refreshPr()}>
+            {prRefreshing ? "Checking…" : "PR already exists? Refresh"} <span class="font-mono text-[10px] px-1 rounded {prFk.mode === 'normal' ? 'bg-accent-bg text-accent' : 'bg-panel-hi text-t3'}">R</span>
+          </button>
+          {#if prShowLinkField}
+            <div class="flex gap-2 items-center" data-field="pr-link">
+              <Input bind:value={prLinkUrl} placeholder="https://github.com/owner/repo/pull/123" aria-label="PR URL" />
+              <Button type="button" variant="primary" disabled={prLinking || !prLinkUrl.trim()} onclick={() => linkPr()}>
+                {prLinking ? "Linking…" : "Link"}
+              </Button>
+            </div>
+          {/if}
         </div>
         {#if prError}
           <p class="text-xs text-status-exited">{prError}</p>
