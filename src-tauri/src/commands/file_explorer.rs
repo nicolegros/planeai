@@ -9,6 +9,11 @@ pub fn fe_list_directory(path: String) -> Result<Vec<file_explorer::DirEntry>, S
 }
 
 #[tauri::command]
+pub fn fe_list_all_paths(root_path: String) -> Result<Vec<String>, String> {
+    file_explorer::list_all_paths(&root_path)
+}
+
+#[tauri::command]
 pub fn fe_create_file(path: String) -> Result<(), String> {
     file_explorer::create_file(&path)
 }

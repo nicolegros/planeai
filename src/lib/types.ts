@@ -47,6 +47,12 @@ export interface DirEntry {
   is_dir: boolean;
 }
 
+export interface FsChangeEvent {
+  session_id: string;
+  path: string;
+  kind: "create" | "remove" | "modify" | "rename";
+}
+
 export interface ChangedFile {
   path: string;
   status: string;

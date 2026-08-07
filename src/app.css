@@ -298,6 +298,23 @@ diffs-container {
   --diffs-light-deletion-color: #cf222e;
 }
 
+/* ── @pierre/trees theming ── */
+.file-tree-host {
+  --trees-theme-bg: var(--color-canvas);
+  --trees-theme-fg: var(--color-t1);
+  --trees-theme-fg-muted: var(--color-t2);
+  --trees-theme-selection-bg: var(--color-accent-bg);
+  --trees-theme-selection-fg: var(--color-accent);
+  --trees-theme-hover-bg: var(--color-panel-hi);
+  --trees-theme-focus-outline: var(--color-accent);
+  --trees-theme-input-bg: var(--color-panel);
+  --trees-theme-input-border: var(--color-border);
+  --trees-theme-git-added: var(--color-status-running);
+  --trees-theme-git-modified: var(--color-status-review);
+  --trees-theme-git-deleted: var(--color-status-exited);
+  --trees-theme-git-ignored: var(--color-t3);
+}
+
 /* ── Animations ── */
 @keyframes pulse-dot {
   0%,

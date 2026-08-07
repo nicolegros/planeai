@@ -1,18 +1,12 @@
 <script lang="ts">
+  import { FileTree, prepareFileTreeInput, type FileTreeDropResult, type FileTreeRenameEvent, type GitStatusEntry } from "@pierre/trees";
   import { fileExplorer } from "../lib/api";
-  import type { DirEntry } from "../lib/types";
+  import type { FsChangeEvent } from "../lib/types";
   import { listen } from "@tauri-apps/api/event";
   import { onMount, onDestroy } from "svelte";
-  import { File, Folder, FolderOpen, ChevronRight, ChevronDown } from "@lucide/svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { getSettings } from "../lib/settings.svelte";
-
-  interface TreeNode {
-    entry: DirEntry;
-    children: TreeNode[] | null; // null = not loaded, [] = loaded empty
-    expanded: boolean;
-  }
 
   interface Props {
     rootPath: string;
@@ -25,266 +19,334 @@
     onFocus: () => void;
   }
 
-  let { rootPath, sessionId, visible, activeFilePath = null, modifiedPaths = new Set(), onOpenFile, onPinFile, onFocus }: Props = $props();
+  let {
+    rootPath,
+    sessionId,
+    visible,
+    activeFilePath = null,
+    modifiedPaths = new Set(),
+    onOpenFile,
+    onPinFile,
+    onFocus,
+  }: Props = $props();
 
   let panelWidth = $state(getLayoutWidth("file-explorer", 220));
-  let tree = $state<TreeNode[]>([]);
-  let flatList = $state<TreeNode[]>([]);
-  let selectedIndex = $state(0);
-  let contextMenu = $state<{ x: number; y: number; node: TreeNode } | null>(null);
-  let renamingNode = $state<TreeNode | null>(null);
-  let renameValue = $state("");
-  let creatingIn = $state<{ parentPath: string; isDir: boolean } | null>(null);
-  let createValue = $state("");
-  let previewPath = $state<string | null>(null);
+  let treeContainer = $state<HTMLDivElement>();
+  let fileTree = $state<FileTree | null>(null);
+  let allPaths = $state<string[]>([]);
+  let contextMenu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   let unlisten: (() => void) | null = null;
   let panelEl = $state<HTMLElement>();
 
-  function flatten(nodes: TreeNode[]): TreeNode[] {
-    const result: TreeNode[] = [];
-    for (const node of nodes) {
-      result.push(node);
-      if (node.expanded && node.children) {
-        result.push(...flatten(node.children));
+  // --- Tree lifecycle ---
+
+  async function loadAllPaths(): Promise<string[]> {
+    return fileExplorer.listAllPaths(rootPath);
+  }
+
+  function createTree(paths: string[]) {
+    if (fileTree) {
+      fileTree.cleanUp();
+    }
+
+    const preparedInput = prepareFileTreeInput(paths);
+
+    fileTree = new FileTree({
+      preparedInput,
+      search: true,
+      flattenEmptyDirectories: true,
+      density: "compact",
+      icons: "standard",
+      initialExpansion: "closed",
+      onSelectionChange: handleSelectionChange,
+      renaming: {
+        onRename: handleRename,
+      },
+      dragAndDrop: {
+        onDropComplete: handleDrop,
+      },
+    });
+
+    if (treeContainer) {
+      fileTree.render({ fileTreeContainer: treeContainer });
+    }
+  }
+
+  function mountTree() {
+    if (fileTree && treeContainer) {
+      fileTree.render({ fileTreeContainer: treeContainer });
+    }
+  }
+
+  // --- Event handlers ---
+
+  function handleSelectionChange(selectedPaths: readonly string[]) {
+    for (const path of selectedPaths) {
+      // Check if it's a directory by trying to get the item
+      const item = fileTree?.getItem(path);
+      if (item && "expand" in item) {
+        // It's a directory — toggle it
+        item.toggle();
+      } else {
+        // It's a file — open it
+        onOpenFile(path);
       }
     }
-    return result;
   }
 
-  function rebuildFlat() {
-    flatList = flatten(tree);
+  async function handleRename(event: FileTreeRenameEvent) {
+    const oldAbsPath = rootPath + "/" + event.sourcePath;
+    const newAbsPath = rootPath + "/" + event.destinationPath;
+    await fileExplorer.rename(oldAbsPath, newAbsPath);
   }
 
-  async function loadChildren(path: string): Promise<TreeNode[]> {
-    const entries: DirEntry[] = await fileExplorer.listDir(path);
-    return entries.map(e => ({ entry: e, children: e.is_dir ? null : null, expanded: false }));
-  }
-
-  async function loadRoot() {
-    tree = await loadChildren(rootPath);
-    rebuildFlat();
-  }
-
-  async function toggleExpand(node: TreeNode) {
-    if (!node.entry.is_dir) return;
-    if (node.expanded) {
-      node.expanded = false;
-    } else {
-      if (node.children === null) {
-        node.children = await loadChildren(node.entry.path);
-      }
-      node.expanded = true;
-    }
-    rebuildFlat();
-  }
-
-  function relativePath(absolutePath: string): string {
-    if (absolutePath.startsWith(rootPath)) {
-      const rel = absolutePath.slice(rootPath.length);
-      return rel.startsWith("/") ? rel.slice(1) : rel;
-    }
-    return absolutePath;
-  }
-
-  function openEntry(node: TreeNode) {
-    if (node.entry.is_dir) {
-      toggleExpand(node);
-    } else {
-      const rel = relativePath(node.entry.path);
-      if (previewPath && previewPath !== rel) {
-        // Replace preview buffer
-      }
-      previewPath = rel;
-      onOpenFile(rel);
+  async function handleDrop(event: FileTreeDropResult) {
+    for (const sourcePath of event.draggedPaths) {
+      const sourceAbs = rootPath + "/" + sourcePath;
+      const targetDir = event.target.directoryPath ?? "";
+      const targetDirAbs = rootPath + "/" + targetDir;
+      const fileName = sourcePath.split("/").pop() ?? sourcePath;
+      const destAbs = targetDirAbs + "/" + fileName;
+      await fileExplorer.rename(sourceAbs, destAbs);
     }
   }
 
-  function pinEntry(node: TreeNode) {
-    if (!node.entry.is_dir) {
-      const rel = relativePath(node.entry.path);
-      previewPath = null;
-      onPinFile(rel);
-    }
-  }
+  // --- Vim keyboard navigation ---
 
-  function depth(node: TreeNode): number {
-    const rel = relativePath(node.entry.path);
-    return rel.split("/").length - 1;
-  }
-
-  // Keyboard navigation
   function handleKeydown(e: KeyboardEvent) {
-    if (renamingNode || creatingIn) return;
+    if (!fileTree) return;
     const vimMode = getSettings().vim_mode ?? true;
 
-    const isDown = e.key === "ArrowDown" || (vimMode && e.key === "j");
-    const isUp = e.key === "ArrowUp" || (vimMode && e.key === "k");
-    const isExpand = e.key === "ArrowRight" || (vimMode && e.key === "l");
-    const isCollapse = e.key === "ArrowLeft" || (vimMode && e.key === "h");
-    const isOpen = e.key === "Enter";
+    if (!vimMode) return; // Let the tree handle its own keyboard nav
 
-    if (isDown) {
+    const key = e.key;
+    if (key === "j") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, flatList.length - 1);
-    } else if (isUp) {
+      e.stopPropagation();
+      fileTree.focusNextItem();
+    } else if (key === "k") {
       e.preventDefault();
-      selectedIndex = Math.max(selectedIndex - 1, 0);
-    } else if (isExpand && flatList[selectedIndex]?.entry.is_dir) {
+      e.stopPropagation();
+      fileTree.focusPreviousItem();
+    } else if (key === "l") {
       e.preventDefault();
-      const node = flatList[selectedIndex];
-      if (!node.expanded) toggleExpand(node);
-    } else if (isCollapse && flatList[selectedIndex]?.entry.is_dir) {
-      e.preventDefault();
-      const node = flatList[selectedIndex];
-      if (node.expanded) toggleExpand(node);
-    } else if (isOpen && flatList[selectedIndex]) {
-      e.preventDefault();
-      openEntry(flatList[selectedIndex]);
-    }
-  }
-
-  // Context menu actions
-  function showContextMenu(e: MouseEvent, node: TreeNode) {
-    e.preventDefault();
-    contextMenu = { x: e.clientX, y: e.clientY, node };
-  }
-
-  function startRename(node: TreeNode) {
-    renamingNode = node;
-    renameValue = node.entry.name;
-  }
-
-  async function commitRename() {
-    if (!renamingNode) return;
-    const trimmed = renameValue.trim();
-    if (trimmed && trimmed !== renamingNode.entry.name) {
-      const parentPath = renamingNode.entry.path.replace(/\/[^/]+$/, "");
-      const newPath = parentPath + "/" + trimmed;
-      await fileExplorer.rename(renamingNode.entry.path, newPath);
-      renamingNode.entry.name = trimmed;
-      renamingNode.entry.path = newPath;
-    }
-    renamingNode = null;
-  }
-
-  async function deleteEntry(node: TreeNode) {
-    await fileExplorer.deleteToTrash(node.entry.path);
-    // Remove from parent's children
-    removeNodeFromTree(tree, node);
-    rebuildFlat();
-  }
-
-  function removeNodeFromTree(nodes: TreeNode[], target: TreeNode): boolean {
-    const idx = nodes.indexOf(target);
-    if (idx >= 0) { nodes.splice(idx, 1); return true; }
-    for (const n of nodes) {
-      if (n.children && removeNodeFromTree(n.children, target)) return true;
-    }
-    return false;
-  }
-
-  function startCreate(parentPath: string, isDir: boolean) {
-    creatingIn = { parentPath, isDir };
-    createValue = "";
-  }
-
-  async function commitCreate() {
-    if (!creatingIn) return;
-    const trimmed = createValue.trim();
-    if (trimmed) {
-      const fullPath = creatingIn.parentPath + "/" + trimmed;
-      if (creatingIn.isDir) {
-        await fileExplorer.createDir(fullPath);
-      } else {
-        await fileExplorer.createFile(fullPath);
+      e.stopPropagation();
+      const focused = fileTree.getFocusedItem();
+      if (focused && "expand" in focused) {
+        focused.expand();
       }
-      // Refresh the parent directory
-      await refreshDir(creatingIn.parentPath);
+    } else if (key === "h") {
+      e.preventDefault();
+      e.stopPropagation();
+      const focused = fileTree.getFocusedItem();
+      if (focused && "collapse" in focused) {
+        focused.collapse();
+      } else {
+        fileTree.focusParentItem();
+      }
+    } else if (key === "g" && !e.ctrlKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      fileTree.focusFirstItem();
+    } else if (key === "G") {
+      e.preventDefault();
+      e.stopPropagation();
+      fileTree.focusLastItem();
+    } else if (key === "/") {
+      e.preventDefault();
+      e.stopPropagation();
+      fileTree.openSearch();
     }
-    creatingIn = null;
   }
 
-  async function refreshDir(dirPath: string) {
-    if (dirPath === rootPath) {
-      await loadRoot();
+  // --- Double-click to pin ---
+
+  function handleDblClick(_e: MouseEvent) {
+    if (!fileTree) return;
+    const selectedPaths = fileTree.getSelectedPaths();
+    if (selectedPaths.length === 1) {
+      const item = fileTree.getItem(selectedPaths[0]);
+      if (item && !("expand" in item)) {
+        onPinFile(selectedPaths[0]);
+      }
+    }
+  }
+
+  // --- Context menu (option C: outside the tree) ---
+
+  function handleContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    if (!fileTree) return;
+    const focusedPath = fileTree.getFocusedPath();
+    if (!focusedPath) return;
+
+    const item = fileTree.getItem(focusedPath);
+    const isDir = item ? "expand" in item : false;
+    contextMenu = { x: e.clientX, y: e.clientY, path: focusedPath, isDir };
+  }
+
+  function contextMenuItems() {
+    if (!contextMenu) return [];
+    const items = [];
+    if (contextMenu.isDir) {
+      items.push({
+        label: "New file",
+        onSelect: () => createInDir(contextMenu!.path, false),
+      });
+      items.push({
+        label: "New folder",
+        onSelect: () => createInDir(contextMenu!.path, true),
+      });
+    }
+    items.push({
+      label: "Rename",
+      onSelect: () => {
+        if (fileTree && contextMenu) {
+          fileTree.startRenaming(contextMenu.path);
+        }
+      },
+    });
+    items.push({
+      label: "Delete",
+      danger: true,
+      onSelect: () => deleteEntry(contextMenu!.path),
+    });
+    return items;
+  }
+
+  async function createInDir(dirPath: string, isDir: boolean) {
+    // Use a prompt approach — create with a default name then rename
+    const absDir = rootPath + "/" + dirPath;
+    const name = isDir ? "new-folder" : "new-file";
+    const fullPath = absDir + "/" + name;
+    if (isDir) {
+      await fileExplorer.createDir(fullPath);
+    } else {
+      await fileExplorer.createFile(fullPath);
+    }
+    // Add to tree and start renaming
+    const relativePath = dirPath + "/" + name;
+    fileTree?.add(relativePath);
+    // Expand parent if not already
+    const dirItem = fileTree?.getItem(dirPath);
+    if (dirItem && "expand" in dirItem) {
+      dirItem.expand();
+    }
+    // Start renaming the new item
+    fileTree?.startRenaming(relativePath);
+  }
+
+  async function deleteEntry(path: string) {
+    const absPath = rootPath + "/" + path;
+    await fileExplorer.deleteToTrash(absPath);
+    fileTree?.remove(path);
+  }
+
+  // --- Git status sync ---
+
+  $effect(() => {
+    if (!fileTree) return;
+    if (modifiedPaths.size === 0) {
+      fileTree.setGitStatus(undefined);
       return;
     }
-    // Find node and refresh children
-    const node = findNodeByPath(tree, dirPath);
-    if (node && node.expanded) {
-      node.children = await loadChildren(dirPath);
-      rebuildFlat();
+    const entries: GitStatusEntry[] = [];
+    for (const p of modifiedPaths) {
+      entries.push({ path: p, status: "modified" });
     }
-  }
+    fileTree.setGitStatus(entries);
+  });
 
-  function findNodeByPath(nodes: TreeNode[], path: string): TreeNode | null {
-    for (const n of nodes) {
-      if (n.entry.path === path) return n;
-      if (n.children) {
-        const found = findNodeByPath(n.children, path);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
+  // --- Active file highlight via selection ---
 
-  // Filesystem watcher integration
+  $effect(() => {
+    if (!fileTree || !activeFilePath) return;
+    fileTree.scrollToPath(activeFilePath, { offset: "nearest", focus: false });
+  });
+
+  // --- Filesystem watcher integration ---
+
   async function setupWatcher() {
     await fileExplorer.watch(sessionId, rootPath);
-    const unlistenFn = await listen<{ session_id: string; path: string }>("fs-change", (event) => {
+    const unlistenFn = await listen<FsChangeEvent>("fs-change", (event) => {
       if (event.payload.session_id !== sessionId) return;
-      // Determine which directory was affected and refresh it
-      const changedPath = event.payload.path;
-      const parentDir = changedPath.replace(/\/[^/]+$/, "");
-      refreshDir(parentDir);
+      if (!fileTree) return;
+
+      const absPath = event.payload.path;
+      // Convert absolute path to relative
+      let relPath = absPath;
+      if (absPath.startsWith(rootPath)) {
+        relPath = absPath.slice(rootPath.length);
+        if (relPath.startsWith("/")) relPath = relPath.slice(1);
+      }
+
+      if (!relPath) return;
+
+      switch (event.payload.kind) {
+        case "create":
+          fileTree.add(relPath);
+          break;
+        case "remove":
+          fileTree.remove(relPath);
+          break;
+        case "rename":
+          // Rename events on macOS come as two events (old path removed, new path created)
+          // The notify crate may send the path for both — treat as create if exists
+          fileTree.add(relPath);
+          break;
+        case "modify":
+          // No structural tree change needed for modifications
+          break;
+      }
     });
     unlisten = unlistenFn;
   }
 
   async function teardownWatcher() {
-    if (unlisten) { unlisten(); unlisten = null; }
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
     await fileExplorer.unwatch(sessionId).catch(() => {});
   }
 
-  function autofocus(node: HTMLInputElement) {
-    requestAnimationFrame(() => node.focus());
-  }
+  // --- Lifecycle ---
 
   onMount(async () => {
     if (visible && rootPath) {
-      await loadRoot();
+      allPaths = await loadAllPaths();
+      createTree(allPaths);
       await setupWatcher();
     }
   });
 
   onDestroy(async () => {
     await teardownWatcher();
+    fileTree?.cleanUp();
   });
 
   $effect(() => {
-    if (visible && rootPath && tree.length === 0) {
-      loadRoot();
-      setupWatcher();
+    if (visible && rootPath && !fileTree) {
+      loadAllPaths().then((paths) => {
+        allPaths = paths;
+        createTree(paths);
+        setupWatcher();
+      });
+    }
+  });
+
+  // Mount tree when container becomes available
+  $effect(() => {
+    if (treeContainer && fileTree) {
+      mountTree();
     }
   });
 
   $effect(() => {
-    const el = panelEl;
-    if (visible && el) {
-      requestAnimationFrame(() => el.focus());
+    if (visible && panelEl) {
+      requestAnimationFrame(() => panelEl!.focus());
     }
   });
-
-  function contextMenuItems(node: TreeNode) {
-    const items = [];
-    if (node.entry.is_dir) {
-      items.push({ label: "New file", onSelect: () => startCreate(node.entry.path, false) });
-      items.push({ label: "New folder", onSelect: () => startCreate(node.entry.path, true) });
-    }
-    items.push({ label: "Rename", onSelect: () => startRename(node) });
-    items.push({ label: "Delete", danger: true, onSelect: () => deleteEntry(node) });
-    return items;
-  }
 </script>
 
 {#if visible}
@@ -305,75 +367,13 @@
     <span class="text-xs font-semibold text-t2 uppercase tracking-wider">Files</span>
   </div>
 
-  <!-- Tree -->
-  <div class="flex-1 overflow-y-auto py-1 text-sm" role="tree">
-    {#each flatList as node, i (node.entry.path)}
-      {@const indent = depth(node)}
-      {@const isSelected = i === selectedIndex}
-      {@const isActive = activeFilePath && node.entry.path.endsWith(activeFilePath)}
-      {@const isModified = modifiedPaths.has(relativePath(node.entry.path))}
-
-      {#if renamingNode === node}
-        <div class="flex items-center gap-1 px-2 py-0.5" style:padding-left="{indent * 12 + 8}px">
-          <input
-            use:autofocus
-            class="flex-1 px-1 py-0.5 rounded text-xs bg-panel-hi border border-accent outline-none"
-            bind:value={renameValue}
-            onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") { renamingNode = null; } }}
-            onblur={() => commitRename()}
-          />
-        </div>
-      {:else}
-        <button
-          class="w-full text-left flex items-center gap-1 px-2 py-0.5 cursor-pointer transition-colors
-            {isActive ? 'bg-accent-bg text-accent' : ''}
-            {isSelected ? 'ring-1 ring-inset ring-accent/50' : ''}
-            {!isActive && !isSelected ? 'text-t2 hover:bg-panel-hi' : ''}"
-          style:padding-left="{indent * 12 + 8}px"
-          onclick={() => { selectedIndex = i; openEntry(node); }}
-          ondblclick={() => pinEntry(node)}
-          oncontextmenu={(e) => showContextMenu(e, node)}
-          role="treeitem"
-          aria-selected={isSelected}
-          aria-expanded={node.entry.is_dir ? node.expanded : undefined}
-        >
-          <!-- Expand chevron for dirs -->
-          {#if node.entry.is_dir}
-            {#if node.expanded}
-              <ChevronDown class="size-3 shrink-0 text-t3" />
-              <FolderOpen class="size-3.5 shrink-0 text-t3" />
-            {:else}
-              <ChevronRight class="size-3 shrink-0 text-t3" />
-              <Folder class="size-3.5 shrink-0 text-t3" />
-            {/if}
-          {:else}
-            <span class="size-3 shrink-0"></span>
-            <File class="size-3.5 shrink-0 text-t3" />
-          {/if}
-
-          <span class="truncate {previewPath === relativePath(node.entry.path) ? 'italic' : ''}">{node.entry.name}</span>
-          {#if isModified}<span class="ml-auto shrink-0 text-yellow-400">●</span>{/if}
-        </button>
-      {/if}
-    {/each}
-
-    {#if creatingIn}
-      <div class="flex items-center gap-1 px-2 py-0.5" style:padding-left="20px">
-        {#if creatingIn.isDir}
-          <Folder class="size-3.5 shrink-0 text-t3" />
-        {:else}
-          <File class="size-3.5 shrink-0 text-t3" />
-        {/if}
-        <input
-          use:autofocus
-          class="flex-1 px-1 py-0.5 rounded text-xs bg-panel-hi border border-accent outline-none"
-          bind:value={createValue}
-          onkeydown={(e) => { if (e.key === "Enter") commitCreate(); if (e.key === "Escape") { creatingIn = null; } }}
-          onblur={() => commitCreate()}
-        />
-      </div>
-    {/if}
-  </div>
+  <!-- Tree (rendered by @pierre/trees) -->
+  <div
+    bind:this={treeContainer}
+    class="file-tree-host flex-1 overflow-hidden"
+    ondblclick={handleDblClick}
+    oncontextmenu={handleContextMenu}
+  ></div>
 </div>
 {/if}
 
@@ -382,6 +382,6 @@
     x={contextMenu.x}
     y={contextMenu.y}
     onClose={() => (contextMenu = null)}
-    items={contextMenuItems(contextMenu.node)}
+    items={contextMenuItems()}
   />
 {/if}
