@@ -9,6 +9,7 @@ pub struct CleanupContext {
     pub backend: String,
     pub tmux_name: Option<String>,
     pub worktree_path: Option<String>,
+    pub worktree_owned: bool,
     pub project_path: Option<String>,
     pub branch: Option<String>,
     pub session_id: Option<String>,
@@ -85,7 +86,7 @@ pub fn run_cleanup(ctx: &CleanupContext, ops: &CleanupOps) -> Vec<String> {
         .unwrap_or(false);
 
     if let Some(ref wt_path) = ctx.worktree_path {
-        if is_loop_managed_branch {
+        if is_loop_managed_branch && ctx.worktree_owned {
             if let Some(ref project_path) = ctx.project_path {
                 if let Err(e) = (ops.remove_worktree)(project_path, wt_path) {
                     errors.push(format!("worktree remove: {e}"));
@@ -266,6 +267,7 @@ mod tests {
             backend: "daemon".to_string(),
             tmux_name: None,
             worktree_path: None,
+            worktree_owned: false,
             project_path: None,
             branch: None,
             session_id: Some("sess-123".to_string()),
@@ -299,6 +301,7 @@ mod tests {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: None,
+            worktree_owned: false,
             project_path: None,
             branch: None,
             session_id: None,
@@ -340,6 +343,7 @@ mod tests {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
+            worktree_owned: true,
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("loop/abcd1234/test-iv".to_string()),
             session_id: None,
@@ -368,6 +372,31 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_does_not_remove_unowned_worktree() {
+        let ops = CleanupOps {
+            kill: KillOps {
+                kill_tmux: Box::new(|_| Ok(())),
+                kill_daemon_session: Box::new(|_| Ok(())),
+            },
+            remove_worktree: Box::new(|_, _| Err("must not remove worktree".to_string())),
+            remove_dir: Box::new(|_| Err("must not remove directory".to_string())),
+            delete_branch: Box::new(|_, _| Err("must not delete branch".to_string())),
+        };
+        let ctx = CleanupContext {
+            backend: "tmux".to_string(),
+            tmux_name: None,
+            worktree_path: Some("/tmp/shared-worktree".to_string()),
+            worktree_owned: false,
+            project_path: Some("/tmp/project".to_string()),
+            branch: Some("loop/shared".to_string()),
+            session_id: None,
+            tab_count: 1,
+        };
+
+        assert!(run_cleanup(&ctx, &ops).is_empty());
+    }
+
+    #[test]
     fn cleanup_collects_errors_from_failed_ops() {
         let ops = CleanupOps {
             kill: KillOps {
@@ -382,6 +411,7 @@ mod tests {
             backend: "tmux".to_string(),
             tmux_name: Some("planeai-myapp-abc".to_string()),
             worktree_path: Some("/tmp/wt/abc".to_string()),
+            worktree_owned: true,
             project_path: Some("/tmp/myapp".to_string()),
             branch: Some("loop/abcd1234/feat-x".to_string()),
             session_id: None,

@@ -161,25 +161,27 @@
     if (useWorktree) {
       if (!worktreeBranch) { error = "Enter a branch name."; submitting = false; return; }
       try {
-        const session = await sessionsApi.launch({
+        const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch: worktreeBranch, isNewBranch: true,
           name: sessionName, useWorktree: true, baseBranch, autoApprove,
           provider: selectedProvider || config.default_provider,
           taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
+        if (warning) showSnackbar(warning, "success");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     } else {
       if (!branch) { error = "Enter a branch name."; submitting = false; return; }
       try {
-        const session = await sessionsApi.launch({
+        const { session, warning } = await sessionsApi.launch({
           projectId: selectedProject.id, projectName: selectedProject.name,
           repoPath: selectedProject.path, branch, isNewBranch, name: sessionName,
           useWorktree: false, baseBranch: isNewBranch ? baseBranch : null, autoApprove,
           provider: selectedProvider || config.default_provider,
           taskKey: taskKeyParam, taskPrompt: taskPromptParam,
         });
+        if (warning) showSnackbar(warning, "success");
         onCreated(session);
       } catch (e) { error = String(e); submitting = false; }
     }
