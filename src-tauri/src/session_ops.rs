@@ -273,7 +273,7 @@ pub fn fire_task_hook(
         let projects = db::list_projects(conn).unwrap_or_default();
         let prefix = projects
             .iter()
-            .find(|p| cwd.starts_with(&p.path))
+            .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
             .map(|p| p.prefix.clone())
             .unwrap_or_default();
         if !prefix.is_empty() {
