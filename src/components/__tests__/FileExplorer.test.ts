@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
-const mockFocusFirstItem = vi.fn();
+const { mockFocusFirstItem, mockCleanUp, mockListAllPaths, mockWatch, mockUnwatch } = vi.hoisted(() => ({
+  mockFocusFirstItem: vi.fn(),
+  mockCleanUp: vi.fn(),
+  mockListAllPaths: vi.fn((rootPath: string) => Promise.resolve(
+    rootPath === "/tmp/project-b" ? ["project-b/"] : ["project-a/"],
+  )),
+  mockWatch: vi.fn(() => Promise.resolve()),
+  mockUnwatch: vi.fn(() => Promise.resolve()),
+}));
 
 vi.mock("@pierre/trees", () => {
   class FileTree {
@@ -9,7 +17,7 @@ vi.mock("@pierre/trees", () => {
 
     constructor(_options: unknown) {}
 
-    cleanUp = vi.fn();
+    cleanUp = mockCleanUp;
     focusFirstItem = mockFocusFirstItem;
     getVisibleCount = () => 1;
     getFileTreeContainer = () => this.container;
@@ -35,9 +43,9 @@ vi.mock("@pierre/trees", () => {
 
 vi.mock("../../lib/api", () => ({
   fileExplorer: {
-    listAllPaths: vi.fn(() => Promise.resolve(["src/"])),
-    watch: vi.fn(() => Promise.resolve()),
-    unwatch: vi.fn(() => Promise.resolve()),
+    listAllPaths: mockListAllPaths,
+    watch: mockWatch,
+    unwatch: mockUnwatch,
   },
 }));
 
@@ -55,10 +63,12 @@ vi.mock("../../lib/settings.svelte", () => ({
 }));
 
 import FileExplorer from "../FileExplorer.svelte";
+import FileExplorerHarness from "./FileExplorerHarness.svelte";
 
 describe("FileExplorer focus", () => {
   let target: HTMLElement;
   let component: ReturnType<typeof mount> | undefined;
+  let harness: { switchSession: (sessionId: string, rootPath: string) => void } | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,7 +77,14 @@ describe("FileExplorer focus", () => {
   });
 
   afterEach(() => {
-    if (component) unmount(component);
+    if (component) {
+      unmount(component);
+      component = undefined;
+    }
+    if (harness) {
+      unmount(harness);
+      harness = undefined;
+    }
     target.remove();
   });
 
@@ -93,5 +110,21 @@ describe("FileExplorer focus", () => {
     expect(onFocus).toHaveBeenCalled();
     expect(mockFocusFirstItem).toHaveBeenCalledTimes(1);
     expect(host?.shadowRoot?.activeElement).toBe(focusedRow);
+  });
+
+  it("reloads and rewatches the active session project without remounting", async () => {
+    harness = mount(FileExplorerHarness, { target }) as typeof harness;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockListAllPaths).toHaveBeenCalledWith("/tmp/project-a");
+    expect(mockWatch).toHaveBeenCalledWith("session-a", "/tmp/project-a");
+
+    harness?.switchSession("session-b", "/tmp/project-b");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mockUnwatch).toHaveBeenCalledWith("session-a");
+    expect(mockCleanUp).toHaveBeenCalled();
+    expect(mockListAllPaths).toHaveBeenLastCalledWith("/tmp/project-b");
+    expect(mockWatch).toHaveBeenLastCalledWith("session-b", "/tmp/project-b");
   });
 });

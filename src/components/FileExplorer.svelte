@@ -36,12 +36,13 @@
   let fileTree = $state<FileTree | null>(null);
   let allPaths = $state<string[]>([]);
   let contextMenu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
-  let unlisten: (() => void) | null = null;
+  let watcher: { sessionId: string; unlisten: () => void } | null = null;
+  let reloadVersion = 0;
 
   // --- Tree lifecycle ---
 
-  async function loadAllPaths(): Promise<string[]> {
-    return fileExplorer.listAllPaths(rootPath);
+  async function loadAllPaths(path: string): Promise<string[]> {
+    return fileExplorer.listAllPaths(path);
   }
 
   function createTree(paths: string[]) {
@@ -83,18 +84,20 @@
 
       onFocus();
       tree.focusFirstItem();
-      requestAnimationFrame(() => {
-        if (!visible || fileTree !== tree) return;
-        const focusedPath = tree.getFocusedPath();
-        const renderedRows = tree
-          .getFileTreeContainer()
-          ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-item-path]");
-        const focusedRow = focusedPath == null
-          ? undefined
-          : Array.from(renderedRows ?? []).find((row) => row.dataset.itemPath === focusedPath);
-        focusedRow?.focus();
-      });
+      requestAnimationFrame(() => focusRenderedTreeRow(tree));
     });
+  }
+
+  function focusRenderedTreeRow(tree: FileTree) {
+    if (!visible || fileTree !== tree) return;
+    const focusedPath = tree.getFocusedPath();
+    const renderedRows = tree
+      .getFileTreeContainer()
+      ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-item-path]");
+    const focusedRow = focusedPath == null
+      ? undefined
+      : Array.from(renderedRows ?? []).find((row) => row.dataset.itemPath === focusedPath);
+    focusedRow?.focus();
   }
 
   // --- Event handlers ---
@@ -180,13 +183,35 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    // Vim bindings bubble from a focused tree row. Native arrow handling stays
-    // inside @pierre/trees and gets first chance to consume those events.
+    // Vim bindings bubble from a focused tree row. Do not consume text entry
+    // from editable controls inside the tree's shadow root.
+    if (isEditableKeyboardTarget(e)) return;
     handleTreeNavigation(e, false);
+  }
+
+  function isEditableElement(target: EventTarget | null) {
+    return target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target instanceof HTMLElement && target.isContentEditable;
+  }
+
+  function isEditableKeyboardTarget(e: KeyboardEvent) {
+    if (e.composedPath().some(isEditableElement)) return true;
+    return isEditableElement(fileTree?.getFileTreeContainer()?.shadowRoot?.activeElement ?? null);
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {
     if (getActiveZone() !== "explorer") return;
+    if (e.key === "Escape" && fileTree?.isSearchOpen()) {
+      const tree = fileTree;
+      tree.closeSearch();
+      requestAnimationFrame(() => focusRenderedTreeRow(tree));
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (isEditableKeyboardTarget(e)) return;
     // Capture phase makes keyboard navigation reliable even if a shadow-DOM
     // tree row has not established the library's internal focus ownership.
     handleTreeNavigation(e, true);
@@ -299,17 +324,21 @@
 
   // --- Filesystem watcher integration ---
 
-  async function setupWatcher() {
-    await fileExplorer.watch(sessionId, rootPath);
+  async function setupWatcher(watchedSessionId: string, watchedRootPath: string, tree: FileTree, version: number) {
+    await fileExplorer.watch(watchedSessionId, watchedRootPath);
+    if (version !== reloadVersion) {
+      await fileExplorer.unwatch(watchedSessionId).catch(() => {});
+      return;
+    }
+
     const unlistenFn = await listen<FsChangeEvent>("fs-change", (event) => {
-      if (event.payload.session_id !== sessionId) return;
-      if (!fileTree) return;
+      if (event.payload.session_id !== watchedSessionId || fileTree !== tree) return;
 
       const absPath = event.payload.path;
       // Convert absolute path to relative
       let relPath = absPath;
-      if (absPath.startsWith(rootPath)) {
-        relPath = absPath.slice(rootPath.length);
+      if (absPath.startsWith(watchedRootPath)) {
+        relPath = absPath.slice(watchedRootPath.length);
         if (relPath.startsWith("/")) relPath = relPath.slice(1);
       }
 
@@ -317,30 +346,57 @@
 
       switch (event.payload.kind) {
         case "create":
-          fileTree.add(relPath);
+          tree.add(relPath);
           break;
         case "remove":
-          fileTree.remove(relPath);
+          tree.remove(relPath);
           break;
         case "rename":
           // Rename events on macOS come as two events (old path removed, new path created)
           // The notify crate may send the path for both — treat as create if exists
-          fileTree.add(relPath);
+          tree.add(relPath);
           break;
         case "modify":
           // No structural tree change needed for modifications
           break;
       }
     });
-    unlisten = unlistenFn;
+
+    if (version !== reloadVersion) {
+      unlistenFn();
+      await fileExplorer.unwatch(watchedSessionId).catch(() => {});
+      return;
+    }
+    watcher = { sessionId: watchedSessionId, unlisten: unlistenFn };
   }
 
   async function teardownWatcher() {
-    if (unlisten) {
-      unlisten();
-      unlisten = null;
-    }
-    await fileExplorer.unwatch(sessionId).catch(() => {});
+    const currentWatcher = watcher;
+    watcher = null;
+    if (!currentWatcher) return;
+    currentWatcher.unlisten();
+    await fileExplorer.unwatch(currentWatcher.sessionId).catch(() => {});
+  }
+
+  function resetTree() {
+    fileTree?.cleanUp();
+    fileTree = null;
+    allPaths = [];
+    contextMenu = null;
+  }
+
+  async function reloadTree(targetSessionId: string, targetRootPath: string, version: number) {
+    await teardownWatcher();
+    if (version !== reloadVersion) return;
+
+    resetTree();
+    const paths = await loadAllPaths(targetRootPath);
+    if (version !== reloadVersion) return;
+
+    allPaths = paths;
+    createTree(paths);
+    const tree = fileTree;
+    if (tree) await setupWatcher(targetSessionId, targetRootPath, tree, version);
   }
 
   // --- Lifecycle ---
@@ -351,18 +407,26 @@
   });
 
   onDestroy(async () => {
+    reloadVersion += 1;
     await teardownWatcher();
-    fileTree?.cleanUp();
+    resetTree();
   });
 
   $effect(() => {
-    if (visible && rootPath && !fileTree) {
-      loadAllPaths().then((paths) => {
-        allPaths = paths;
-        createTree(paths);
-        setupWatcher();
-      });
+    const targetSessionId = sessionId;
+    const targetRootPath = rootPath;
+    const version = ++reloadVersion;
+
+    if (!visible || !targetSessionId || !targetRootPath) {
+      resetTree();
+      void teardownWatcher();
+      return;
     }
+
+    void reloadTree(targetSessionId, targetRootPath, version);
+    return () => {
+      if (reloadVersion === version) reloadVersion += 1;
+    };
   });
 
   // Mount tree when container becomes available

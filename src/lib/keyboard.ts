@@ -222,6 +222,14 @@ export function matchChord(e: KeyboardEvent): KeyboardAction | null {
 
 export type ActionHandler = (action: KeyboardAction) => void;
 
+function isExplorerSearchEvent(e: KeyboardEvent): boolean {
+  if (getActiveZone() !== "explorer") return false;
+
+  return e.composedPath().some((target) =>
+    target instanceof HTMLInputElement && target.matches("[data-file-tree-search-input]"),
+  );
+}
+
 /**
  * Install the top-level keyboard router on the window.
  * Returns a cleanup function to remove the listener.
@@ -261,6 +269,12 @@ export function installKeyboardRouter(
     if (action) {
       // When editor is focused, only intercept whitelisted actions
       if (isEditorFocused?.() && !editorAllowedActions.has(action.type)) {
+        return;
+      }
+
+      // Explorer owns Escape while its shadow-DOM search input is focused;
+      // let its capture handler close search and return focus to the tree row.
+      if (action.type === "focus_terminal" && isExplorerSearchEvent(e)) {
         return;
       }
 
