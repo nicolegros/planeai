@@ -7,6 +7,7 @@
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { getSettings } from "../lib/settings.svelte";
+  import { getActiveZone } from "../lib/focus.svelte";
 
   interface Props {
     rootPath: string;
@@ -36,7 +37,6 @@
   let allPaths = $state<string[]>([]);
   let contextMenu = $state<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   let unlisten: (() => void) | null = null;
-  let panelEl = $state<HTMLElement>();
 
   // --- Tree lifecycle ---
 
@@ -67,15 +67,34 @@
       },
     });
 
-    if (treeContainer) {
-      fileTree.render({ fileTreeContainer: treeContainer });
-    }
   }
 
   function mountTree() {
     if (fileTree && treeContainer) {
       fileTree.render({ fileTreeContainer: treeContainer });
+      focusTree();
     }
+  }
+
+  function focusTree() {
+    requestAnimationFrame(() => {
+      const tree = fileTree;
+      if (!visible || !tree) return;
+
+      onFocus();
+      tree.focusFirstItem();
+      requestAnimationFrame(() => {
+        if (!visible || fileTree !== tree) return;
+        const focusedPath = tree.getFocusedPath();
+        const renderedRows = tree
+          .getFileTreeContainer()
+          ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-item-path]");
+        const focusedRow = focusedPath == null
+          ? undefined
+          : Array.from(renderedRows ?? []).find((row) => row.dataset.itemPath === focusedPath);
+        focusedRow?.focus();
+      });
+    });
   }
 
   // --- Event handlers ---
@@ -111,52 +130,66 @@
     }
   }
 
-  // --- Vim keyboard navigation ---
+  // --- Keyboard navigation ---
 
-  function handleKeydown(e: KeyboardEvent) {
-    if (!fileTree) return;
+  function handleTreeNavigation(e: KeyboardEvent, allowArrows: boolean) {
+    if (!fileTree || e.metaKey || e.ctrlKey || e.altKey) return;
     const vimMode = getSettings().vim_mode ?? true;
-
-    if (!vimMode) return; // Let the tree handle its own keyboard nav
-
     const key = e.key;
-    if (key === "j") {
-      e.preventDefault();
-      e.stopPropagation();
+    const isDown = (allowArrows && key === "ArrowDown") || (vimMode && key === "j");
+    const isUp = (allowArrows && key === "ArrowUp") || (vimMode && key === "k");
+    const isRight = (allowArrows && key === "ArrowRight") || (vimMode && key === "l");
+    const isLeft = (allowArrows && key === "ArrowLeft") || (vimMode && key === "h");
+
+    if (isDown) {
       fileTree.focusNextItem();
-    } else if (key === "k") {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (isUp) {
       fileTree.focusPreviousItem();
-    } else if (key === "l") {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (isRight) {
       const focused = fileTree.getFocusedItem();
       if (focused && "expand" in focused) {
-        focused.expand();
+        if (focused.isExpanded()) {
+          fileTree.focusNextItem();
+        } else {
+          focused.expand();
+        }
+      } else if (allowArrows) {
+        fileTree.focusNextItem();
+      } else {
+        return;
       }
-    } else if (key === "h") {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (isLeft) {
       const focused = fileTree.getFocusedItem();
-      if (focused && "collapse" in focused) {
+      if (focused && "collapse" in focused && focused.isExpanded()) {
         focused.collapse();
       } else {
         fileTree.focusParentItem();
       }
-    } else if (key === "g" && !e.ctrlKey) {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (vimMode && key === "g" && !e.shiftKey) {
       fileTree.focusFirstItem();
-    } else if (key === "G") {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (vimMode && key === "G") {
       fileTree.focusLastItem();
-    } else if (key === "/") {
-      e.preventDefault();
-      e.stopPropagation();
+    } else if (vimMode && key === "/") {
       fileTree.openSearch();
+    } else {
+      return;
     }
+
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    // Vim bindings bubble from a focused tree row. Native arrow handling stays
+    // inside @pierre/trees and gets first chance to consume those events.
+    handleTreeNavigation(e, false);
+  }
+
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (getActiveZone() !== "explorer") return;
+    // Capture phase makes keyboard navigation reliable even if a shadow-DOM
+    // tree row has not established the library's internal focus ownership.
+    handleTreeNavigation(e, true);
   }
 
   // --- Double-click to pin ---
@@ -312,12 +345,9 @@
 
   // --- Lifecycle ---
 
-  onMount(async () => {
-    if (visible && rootPath) {
-      allPaths = await loadAllPaths();
-      createTree(allPaths);
-      await setupWatcher();
-    }
+  onMount(() => {
+    window.addEventListener("keydown", handleWindowKeydown, true);
+    return () => window.removeEventListener("keydown", handleWindowKeydown, true);
   });
 
   onDestroy(async () => {
@@ -341,17 +371,10 @@
       mountTree();
     }
   });
-
-  $effect(() => {
-    if (visible && panelEl) {
-      requestAnimationFrame(() => panelEl!.focus());
-    }
-  });
 </script>
 
 {#if visible}
 <div
-  bind:this={panelEl}
   tabindex="-1"
   role="toolbar"
   aria-label="File explorer"
