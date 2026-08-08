@@ -34,6 +34,11 @@ export function focusExplorer(): void {
   activeZone = "explorer";
 }
 
+/** Toggle keyboard focus between the Explorer and terminal without changing visibility. */
+export function toggleExplorerFocus(): void {
+  activeZone = activeZone === "explorer" ? "terminal" : "explorer";
+}
+
 export function toggleSidebar(): void {
   activeZone = activeZone === "sidebar" ? "terminal" : "sidebar";
 }

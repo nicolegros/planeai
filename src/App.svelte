@@ -5,7 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
   import type { Session, Project } from "./lib/types";
-  import { focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone } from "./lib/focus.svelte";
+  import { focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
@@ -821,6 +821,11 @@
           else navCycle.advance(-1);
         }
         else if (action.type === "toggle_diff") { toggleDiffInTree(); }
+        else if (action.type === "focus_file_explorer") {
+          const wasExplorerFocused = getActiveZone() === "explorer";
+          toggleExplorerFocus();
+          if (!wasExplorerFocused) fileExplorerVisible = true;
+        }
         else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }

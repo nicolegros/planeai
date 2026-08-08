@@ -62,6 +62,7 @@ vi.mock("../../lib/settings.svelte", () => ({
   getSettings: () => ({ vim_mode: true }),
 }));
 
+import { setActiveZone } from "../../lib/focus.svelte";
 import FileExplorer from "../FileExplorer.svelte";
 import FileExplorerHarness from "./FileExplorerHarness.svelte";
 
@@ -72,6 +73,7 @@ describe("FileExplorer focus", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveZone("explorer");
     target = document.createElement("div");
     document.body.append(target);
   });
@@ -112,13 +114,15 @@ describe("FileExplorer focus", () => {
     expect(host?.shadowRoot?.activeElement).toBe(focusedRow);
   });
 
-  it("reloads and rewatches the active session project without remounting", async () => {
+  it("preserves terminal focus on session reload and restores tree focus only for Explorer", async () => {
     harness = mount(FileExplorerHarness, { target }) as typeof harness;
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(mockListAllPaths).toHaveBeenCalledWith("/tmp/project-a");
     expect(mockWatch).toHaveBeenCalledWith("session-a", "/tmp/project-a");
+    expect(mockFocusFirstItem).toHaveBeenCalledTimes(1);
 
+    setActiveZone("terminal");
     harness?.switchSession("session-b", "/tmp/project-b");
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -126,5 +130,13 @@ describe("FileExplorer focus", () => {
     expect(mockCleanUp).toHaveBeenCalled();
     expect(mockListAllPaths).toHaveBeenLastCalledWith("/tmp/project-b");
     expect(mockWatch).toHaveBeenLastCalledWith("session-b", "/tmp/project-b");
+    expect(mockFocusFirstItem).toHaveBeenCalledTimes(1);
+
+    setActiveZone("explorer");
+    harness?.switchSession("session-c", "/tmp/project-c");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Reactivating Explorer focuses the current tree, then its replacement on reload.
+    expect(mockFocusFirstItem).toHaveBeenCalledTimes(3);
   });
 });

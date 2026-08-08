@@ -73,7 +73,6 @@
   function mountTree() {
     if (fileTree && treeContainer) {
       fileTree.render({ fileTreeContainer: treeContainer });
-      focusTree();
     }
   }
 
@@ -433,6 +432,13 @@
   $effect(() => {
     if (treeContainer && fileTree) {
       mountTree();
+    }
+  });
+
+  // Focus follows explicit Explorer ownership, not every tree replacement.
+  $effect(() => {
+    if (getActiveZone() === "explorer" && treeContainer && fileTree) {
+      focusTree();
     }
   });
 </script>

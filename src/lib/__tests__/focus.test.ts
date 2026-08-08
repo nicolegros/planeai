@@ -4,6 +4,7 @@ import {
   setActiveZone,
   focusTerminal,
   focusSidebar,
+  toggleExplorerFocus,
   toggleSidebar,
 } from "../focus.svelte";
 
@@ -38,6 +39,14 @@ describe("focus zone state", () => {
     toggleSidebar();
     expect(getActiveZone()).toBe("sidebar");
     toggleSidebar();
+    expect(getActiveZone()).toBe("terminal");
+  });
+
+  it("toggleExplorerFocus switches between Explorer and terminal", () => {
+    focusTerminal();
+    toggleExplorerFocus();
+    expect(getActiveZone()).toBe("explorer");
+    toggleExplorerFocus();
     expect(getActiveZone()).toBe("terminal");
   });
 });
