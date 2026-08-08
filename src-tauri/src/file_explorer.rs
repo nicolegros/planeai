@@ -47,14 +47,9 @@ pub fn list_all_paths(root: &str) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-fn collect_paths(
-    root: &Path,
-    dir: &Path,
-    paths: &mut Vec<String>,
-) -> Result<(), std::io::Error> {
-    let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+fn collect_paths(root: &Path, dir: &Path, paths: &mut Vec<String>) -> Result<(), std::io::Error> {
+    let mut entries: Vec<std::fs::DirEntry> =
+        std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
 
     // Sort: directories first, then case-insensitive alphabetical
     entries.sort_by(|a, b| {
@@ -81,13 +76,19 @@ fn collect_paths(
         }
 
         // Use path relative to root for the canonical path
-        let rel = path
+        let mut rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .into_owned();
 
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // @pierre/trees uses a trailing slash as the canonical directory identity.
+        // Without it, the path is interpreted as a file and a second inferred
+        // directory row is created for descendants.
+        if is_dir {
+            rel.push('/');
+        }
 
         paths.push(rel.clone());
 
@@ -118,8 +119,7 @@ impl WatcherManager {
     ) -> Result<(), String> {
         let sid = session_id.to_string();
         // Track path → kind; last event kind wins when debounced
-        let pending: Arc<Mutex<HashMap<String, String>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = pending.clone();
         let sender_clone = sender.clone();
         let sid_clone = sid.clone();
@@ -397,15 +397,16 @@ mod tests {
 
         let paths = list_all_paths(root.to_str().unwrap()).unwrap();
 
-        // Directories first at each level, then files alphabetically
-        assert!(paths.contains(&"src".to_string()));
-        assert!(paths.contains(&"src/lib".to_string()));
+        // Directories carry a trailing slash because @pierre/trees uses it to
+        // distinguish them from files with the same path.
+        assert!(paths.contains(&"src/".to_string()));
+        assert!(paths.contains(&"src/lib/".to_string()));
         assert!(paths.contains(&"src/main.rs".to_string()));
         assert!(paths.contains(&"src/lib/utils.rs".to_string()));
         assert!(paths.contains(&"README.md".to_string()));
 
-        // src (dir) should come before README.md (file)
-        let src_idx = paths.iter().position(|p| p == "src").unwrap();
+        // Directories sort before files at each level.
+        let src_idx = paths.iter().position(|p| p == "src/").unwrap();
         let readme_idx = paths.iter().position(|p| p == "README.md").unwrap();
         assert!(src_idx < readme_idx);
     }
@@ -471,7 +472,10 @@ mod tests {
                 Err(_) => break,
             }
         }
-        assert!(found, "expected an event for new_file.txt with a kind field");
+        assert!(
+            found,
+            "expected an event for new_file.txt with a kind field"
+        );
 
         manager.unwatch("session-kind");
     }
