@@ -16,6 +16,11 @@ export interface Session {
   pr_state: string | null;
 }
 
+export interface LaunchResult {
+  session: Session;
+  warning: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;

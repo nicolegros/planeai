@@ -245,6 +245,41 @@ pub fn create_session_with_id(
     base_branch: Option<&str>,
     parent_session_id: Option<&str>,
 ) -> Result<Session> {
+    create_session_with_id_and_worktree_ownership(
+        conn,
+        id,
+        project_id,
+        name,
+        tmux_name,
+        branch,
+        worktree_path,
+        true,
+        provider,
+        backend,
+        auto_approve,
+        task_key,
+        base_branch,
+        parent_session_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_session_with_id_and_worktree_ownership(
+    conn: &Connection,
+    id: &str,
+    project_id: &str,
+    name: &str,
+    tmux_name: Option<&str>,
+    branch: &str,
+    worktree_path: Option<&str>,
+    worktree_owned: bool,
+    provider: Option<&str>,
+    backend: &str,
+    auto_approve: bool,
+    task_key: Option<&str>,
+    base_branch: Option<&str>,
+    parent_session_id: Option<&str>,
+) -> Result<Session> {
     let params = planeai_core::services::CreateSessionParams {
         id: id.to_string(),
         project_id: project_id.to_string(),
@@ -252,6 +287,7 @@ pub fn create_session_with_id(
         tmux_name: tmux_name.map(|s| s.to_string()),
         branch: branch.to_string(),
         worktree_path: worktree_path.map(|s| s.to_string()),
+        worktree_owned: Some(worktree_owned),
         provider: provider.map(|s| s.to_string()),
         backend: backend.to_string(),
         auto_approve,
@@ -328,6 +364,14 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<Session>> {
     Ok(planeai_core::services::SessionService::get(conn, id)?.map(record_to_session))
 }
 
+pub fn session_owns_worktree(conn: &Connection, id: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT COALESCE(worktree_owned, 1) FROM sessions WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )
+}
+
 pub fn update_pr_state(conn: &Connection, id: &str, pr_url: &str, pr_state: &str) -> Result<()> {
     planeai_core::services::SessionService::update_pr_state(conn, id, pr_url, pr_state)
 }
@@ -391,6 +435,31 @@ mod tests {
         let loaded = get_session(&conn, "sess-1").unwrap().unwrap();
         assert_eq!(loaded.backend, "daemon");
         assert!(loaded.tmux_name.is_none());
+    }
+
+    #[test]
+    fn test_reused_worktree_is_persisted_as_unowned() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        create_session_with_id_and_worktree_ownership(
+            &conn,
+            "sess-shared",
+            &project.id,
+            "shared worktree session",
+            None,
+            "feat/shared",
+            Some("/tmp/shared-worktree"),
+            false,
+            None,
+            "daemon",
+            true,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(!session_owns_worktree(&conn, "sess-shared").unwrap());
     }
 
     #[test]

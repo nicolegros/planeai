@@ -62,6 +62,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
     // Idempotent column additions
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT ''");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN worktree_path TEXT");
+    let _ = conn
+        .execute_batch("ALTER TABLE sessions ADD COLUMN worktree_owned INTEGER NOT NULL DEFAULT 1");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT");
     let _ =
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'");
@@ -148,6 +150,7 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  status TEXT NOT NULL DEFAULT 'active',
                  created_at TEXT NOT NULL,
                  worktree_path TEXT,
+                 worktree_owned INTEGER NOT NULL DEFAULT 1,
                  provider TEXT,
                  backend TEXT NOT NULL DEFAULT 'tmux',
                  provider_session_id TEXT,
@@ -161,8 +164,8 @@ pub fn migrate_project_session_schema(conn: &Connection) -> SqlResult<()> {
                  auto_dispatched INTEGER NOT NULL DEFAULT 0,
                  updated_at TEXT
              );
-             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
-                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
+             INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, updated_at)
+                 SELECT id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, provider_session_id, tab_count, auto_approve, task_key, base_branch, mru_position, pr_url, pr_state, auto_dispatched, created_at FROM sessions_old;
              DROP TABLE sessions_old;"
         )?;
     }
@@ -278,6 +281,7 @@ pub struct CreateSessionParams {
     pub tmux_name: Option<String>,
     pub branch: String,
     pub worktree_path: Option<String>,
+    pub worktree_owned: Option<bool>,
     pub provider: Option<String>,
     pub backend: String,
     pub auto_approve: bool,
@@ -498,8 +502,8 @@ impl SessionService {
     pub fn create(conn: &Connection, params: &CreateSessionParams) -> SqlResult<SessionRecord> {
         let created_at = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO sessions (id, project_id, name, tmux_name, branch, status, created_at, worktree_path, worktree_owned, provider, backend, auto_approve, task_key, base_branch, auto_dispatched, parent_session_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 params.id,
                 params.project_id,
@@ -508,6 +512,7 @@ impl SessionService {
                 params.branch,
                 created_at,
                 params.worktree_path,
+                params.worktree_owned.unwrap_or(true),
                 params.provider,
                 params.backend,
                 params.auto_approve,

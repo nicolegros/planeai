@@ -213,10 +213,12 @@ pub fn destroy(
         .flatten()
         .map(|p| p.path);
 
+    let worktree_owned = db::session_owns_worktree(conn, &session.id).unwrap_or(false);
     let ctx = CleanupContext {
         backend: session.backend.clone(),
         tmux_name: session.tmux_name.clone(),
         worktree_path: session.worktree_path.clone(),
+        worktree_owned,
         project_path: project_path.clone(),
         branch: if session.worktree_path.is_some() {
             Some(session.branch.clone())

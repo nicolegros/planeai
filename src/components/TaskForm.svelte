@@ -229,7 +229,7 @@
             : `${createdTask.key}: ${formTitle.trim()}`;
 
           try {
-            const session = await sessionsApi.launch({
+            const { session, warning } = await sessionsApi.launch({
               projectId: selectedProject.id,
               projectName: selectedProject.name,
               repoPath: selectedProject.path,
@@ -243,6 +243,7 @@
               taskKey: createdTask.key,
               taskPrompt: prompt,
             });
+            if (warning) showSnackbar(warning, "success");
             // Move to in_progress — don't block session navigation on failure
             taskStore.moveTask(createdTask.key, "in_progress", repoPath).catch(() => {
               showSnackbar("Session started but failed to update task status.");

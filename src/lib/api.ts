@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
 import type {
   Session,
+  LaunchResult,
   Project,
   TaskItem,
   DirEntry,
@@ -38,7 +39,7 @@ export const sessions = {
   list: () => invoke<Session[]>("list_sessions"),
   listArchived: () => invoke<Session[]>("list_archived_sessions"),
   launch: (params: LaunchSessionParams) =>
-    invoke<Session>("launch_session", params as unknown as Record<string, unknown>),
+    invoke<LaunchResult>("launch_session", params as unknown as Record<string, unknown>),
   destroy: (id: string) => invoke("destroy_session", { id }),
   archive: (id: string) => invoke("archive_session", { id }),
   restore: (id: string) => invoke("restore_session", { id }),
@@ -219,8 +220,7 @@ export const pr = {
       sessionId,
     }),
   getCiFailureLogs: (sessionId: string) => invoke<string>("get_ci_failure_logs", { sessionId }),
-  linkPrUrl: (sessionId: string, url: string) =>
-    invoke<string>("link_pr_url", { sessionId, url }),
+  linkPrUrl: (sessionId: string, url: string) => invoke<string>("link_pr_url", { sessionId, url }),
 };
 
 export const notify = {

@@ -110,10 +110,12 @@ pub fn delete_project(
             }
         }
         if let Some(ref wt_path) = session.worktree_path {
-            if let Some(ref proj) = project {
-                let _ = git::worktree_remove(&proj.path, wt_path);
+            if db::session_owns_worktree(&conn, &session.id).unwrap_or(false) {
+                if let Some(ref proj) = project {
+                    let _ = git::worktree_remove(&proj.path, wt_path);
+                }
+                let _ = std::fs::remove_dir_all(wt_path);
             }
-            let _ = std::fs::remove_dir_all(wt_path);
         }
     }
     db::delete_project(&conn, &id).map_err(|e| e.to_string())
