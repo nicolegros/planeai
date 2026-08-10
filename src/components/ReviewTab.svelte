@@ -8,7 +8,7 @@
   import { isDark, getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
-  import { ResizeHandle } from "./ui";
+  import { ContextMenu, ResizeHandle } from "./ui";
   import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
   import { MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { pty } from "../lib/api";
@@ -23,6 +23,8 @@
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import { rebuildItemWithFullContent } from "../lib/diff-expansion";
+  import type { MenuItem } from "./ui/ContextMenu.svelte";
+  import { commentTargetFromSelection, lockSelectionToOriginSide, selectionForContextMenu, selectionLabel, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
 
   interface Props {
     repoPath: string;
@@ -32,6 +34,11 @@
     onEditFile?: (filePath: string) => void;
     onFileChange?: (fileName: string) => void;
   }
+
+  type DiffContextMenuState =
+    | { x: number; y: number; target: "selection"; range: SelectedLineRange }
+    | { x: number; y: number; target: "context"; hunkIndex: number }
+    | { x: number; y: number; target: "comment"; comment: ReviewComment };
 
   let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange }: Props = $props();
 
@@ -58,6 +65,9 @@
   let selectionAnchor = $state<number | null>(null);
   let commentInputEl = $state<HTMLTextAreaElement | undefined>();
   let editingCommentId = $state<string | null>(null);
+  let selectedLineRange = $state<SelectedLineRange | null>(null);
+  let pointerSelectionOrigin = $state<SelectedLineRange["side"] | undefined>();
+  let diffContextMenu = $state<DiffContextMenuState | null>(null);
 
   // CodeView + Worker Pool
   let viewerRoot: HTMLElement;
@@ -116,7 +126,8 @@
     return files[selectedIndex] ? `diff:${files[selectedIndex].path}` : "";
   }
 
-  async function refresh() {
+  async function refresh(confirmDraft = true) {
+    if (confirmDraft && !prepareForNavigation("reload")) return;
     loading = true;
     try {
       await loadAllDiffs();
@@ -244,19 +255,23 @@
       .map((c) => ({ side: "additions" as const, lineNumber: c.startLine, metadata: c }));
   }
 
-  function selectFile(index: number) {
+  function selectFile(index: number): boolean {
+    if (index === selectedIndex) return true;
+    if (!prepareForNavigation("change-file")) return false;
     selectedIndex = index;
     showCommentInput = false;
     selectionAnchor = null;
+    selectedLineRange = null;
     onFileChange?.(files[index]?.path.split("/").pop() || files[index]?.path || "");
     cursorLine = snapToVisible(1, 1);
-    // Single-file mode: re-render CodeView with just this file
+    // Single-file mode: only render the selected file.
     renderCurrentFile();
     if (diffFocus === "body") showCursor();
+    return true;
   }
 
   function navigateFile(index: number) {
-    selectFile(index);
+    if (!selectFile(index)) return;
     if (diffFocus === "body") {
       cursorLine = 1;
       viewer?.setSelectedLines({ id: currentFileId(), range: { start: 1, end: 1, side: "additions" } });
@@ -272,6 +287,29 @@
     commentText = "";
     showCommentInput = true;
     requestAnimationFrame(() => commentInputEl?.focus());
+  }
+
+  function openCommentForSelection(range: SelectedLineRange) {
+    // Keep an in-progress same-file draft intact; selecting another range only
+    // changes the visual selection until the current draft is submitted/cancelled.
+    if (showCommentInput) {
+      commentInputEl?.focus();
+      return;
+    }
+    const target = commentTargetFromSelection(range);
+    openCommentInput(target.startLine, target.endLine, target.type);
+  }
+
+  function hasUnsavedCommentDraft(): boolean {
+    return showCommentInput && (editingCommentId !== null || commentText.trim().length > 0);
+  }
+
+  function prepareForNavigation(navigation: "change-file" | "reload"): boolean {
+    if (shouldConfirmDraftDiscard(hasUnsavedCommentDraft(), navigation)) {
+      if (!window.confirm("Discard the unsaved review comment?")) return false;
+    }
+    if (showCommentInput) cancelComment();
+    return true;
   }
 
   function submitComment() {
@@ -297,6 +335,7 @@
     showCommentInput = false;
     commentText = "";
     editingCommentId = null;
+    clearSelection();
   }
 
   function openEditComment(comment: ReviewComment) {
@@ -576,12 +615,8 @@
     const nextIdx = direction === 1
       ? (selectedIndex < files.length - 1 ? selectedIndex + 1 : 0) // wrap
       : (selectedIndex > 0 ? selectedIndex - 1 : files.length - 1); // wrap
-    selectedIndex = nextIdx;
-    onFileChange?.(files[selectedIndex]?.path.split("/").pop() || files[selectedIndex]?.path || "");
-    showCommentInput = false;
+    if (!selectFile(nextIdx)) return;
     selectionAnchor = null;
-    // Re-render the new file
-    renderCurrentFile();
     // After render, navigate to the appropriate hunk
     diffFocus = "body";
     if (hunkPositions.length > 0) {
@@ -676,6 +711,98 @@
     }
   }
 
+  function rangesEqual(a: SelectedLineRange | null, b: SelectedLineRange | null): boolean {
+    return a === b || (a !== null && b !== null
+      && a.start === b.start && a.end === b.end && a.side === b.side && a.endSide === b.endSide);
+  }
+
+  function syncSelectedLineRange(range: SelectedLineRange | null) {
+    selectedLineRange = range;
+    if (range) {
+      diffFocus = "body";
+      cursorLine = range.end;
+      selectionAnchor = range.start !== range.end ? range.start : null;
+    } else {
+      selectionAnchor = null;
+    }
+  }
+
+  function findLineElement(lineNumber: number, side: SelectedLineRange["side"]): HTMLElement | null {
+    const item = viewer?.getRenderedItems().find((rendered) => rendered.item.id === currentFileId());
+    const root = item?.element?.shadowRoot;
+    if (!root) return null;
+    const scope = side ? `[data-${side}] ` : "";
+    const lines = root.querySelectorAll<HTMLElement>(`${scope}[data-line="${lineNumber}"]`);
+    // Unified diffs do not always expose side wrappers, but their selected
+    // lines still carry the same data-line marker.
+    return lines[0] ?? root.querySelector<HTMLElement>(`[data-line="${lineNumber}"]`);
+  }
+
+  function clampSelectionAtCollapsedContext(range: SelectedLineRange): SelectedLineRange {
+    const start = findLineElement(range.start, range.side);
+    const end = findLineElement(range.end, range.side);
+    const parent = start?.parentElement;
+    if (!start || !end || !parent || parent !== end.parentElement) return range;
+
+    const rows = [...parent.children];
+    const startIndex = rows.indexOf(start);
+    const endIndex = rows.indexOf(end);
+    if (startIndex === -1 || endIndex === -1) return range;
+
+    const direction = endIndex >= startIndex ? 1 : -1;
+    const first = Math.min(startIndex, endIndex);
+    const last = Math.max(startIndex, endIndex);
+    const separatorIndex = rows.findIndex((row, index) =>
+      index > first && index < last && (row instanceof HTMLElement)
+      && (row.hasAttribute("data-expand-index") || row.querySelector("[data-expand-index]") !== null),
+    );
+    if (separatorIndex === -1) return range;
+
+    for (let index = separatorIndex - direction; index >= 0 && index < rows.length; index -= direction) {
+      const row = rows[index];
+      const line = row instanceof HTMLElement
+        ? (row.matches("[data-line]") ? row : row.querySelector<HTMLElement>("[data-line]"))
+        : null;
+      const lineNumber = line?.getAttribute("data-line");
+      if (lineNumber && Number.isFinite(Number(lineNumber))) {
+        return { start: range.start, end: Number(lineNumber), ...(range.side ? { side: range.side } : {}) };
+      }
+    }
+    return range;
+  }
+
+  function normalizePointerSelection(range: SelectedLineRange | null): SelectedLineRange | null {
+    if (!range) return null;
+    if (pointerSelectionOrigin && range.endSide && range.endSide !== pointerSelectionOrigin) {
+      // The opposite pane can have incompatible line numbers. Hold the last
+      // valid endpoint instead of mapping a deletion-side number to additions.
+      return selectedLineRange ?? lockSelectionToOriginSide(range, pointerSelectionOrigin);
+    }
+    return clampSelectionAtCollapsedContext(range);
+  }
+
+  function handlePointerSelectionStart(range: SelectedLineRange | null) {
+    pointerSelectionOrigin = range?.side;
+    syncSelectedLineRange(range);
+  }
+
+  function handlePointerSelectionChange(range: SelectedLineRange | null) {
+    const normalized = normalizePointerSelection(range);
+    syncSelectedLineRange(normalized);
+    if (normalized && !rangesEqual(normalized, range)) {
+      viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
+    }
+  }
+
+  function handlePointerSelectionEnd(range: SelectedLineRange | null) {
+    const normalized = normalizePointerSelection(range);
+    pointerSelectionOrigin = undefined;
+    syncSelectedLineRange(normalized);
+    if (normalized && !rangesEqual(normalized, range)) {
+      viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
+    }
+  }
+
   function toggleSelectionMode() {
     if (selectionAnchor !== null) { selectionAnchor = null; }
     else { selectionAnchor = cursorLine; }
@@ -683,6 +810,8 @@
 
   function clearSelection() {
     selectionAnchor = null;
+    selectedLineRange = null;
+    pointerSelectionOrigin = undefined;
     viewer?.setSelectedLines(null);
   }
 
@@ -787,14 +916,19 @@
     }
   }
 
-  function toggleDiffStyle() {
-    diffStyle = diffStyle === "split" ? "unified" : "split";
-    // Rebuild with new style — CodeView options are set at construction, so we recreate
+  function setDiffStyle(style: "split" | "unified") {
+    if (diffStyle === style || !prepareForNavigation("reload")) return;
+    diffStyle = style;
+    // Rebuild with new style — CodeView options are set at construction, so we recreate.
     if (viewer && viewerRoot) {
       viewer.cleanUp();
       viewer = createViewer();
-      refresh();
+      void refresh(false);
     }
+  }
+
+  function toggleDiffStyle() {
+    setDiffStyle(diffStyle === "split" ? "unified" : "split");
   }
 
   function createViewer(): CodeView<ReviewComment> {
@@ -804,6 +938,7 @@
       diffStyle,
       stickyHeaders: false,
       enableLineSelection: true,
+      enableGutterUtility: true,
       pointerEventsOnScroll: true,
       disableVirtualizationBuffers: true,
       disableFileHeader: false,
@@ -828,20 +963,47 @@
         btn.onclick = (e) => { e.stopPropagation(); toggleViewed(idx); updateBtn(); };
         return btn;
       },
+      renderGutterUtility(getHoveredLine) {
+        const button = document.createElement("button");
+        button.setAttribute("data-utility-button", "");
+        button.textContent = "+";
+        const rangeForGutterUtility = (): SelectedLineRange | null => {
+          if (selectedLineRange) return selectedLineRange;
+          const hovered = getHoveredLine();
+          if (!hovered) return null;
+          const side = (hovered as { side?: SelectedLineRange["side"] }).side;
+          return { start: hovered.lineNumber, end: hovered.lineNumber, ...(side ? { side } : {}) };
+        };
+        const updateLabel = () => {
+          const range = rangeForGutterUtility();
+          const label = range ? selectionLabel(range) : "Add review comment";
+          button.title = `${label} (⌥ drag to select text)`;
+          button.setAttribute("aria-label", label);
+        };
+        updateLabel();
+        button.onmouseenter = updateLabel;
+        button.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const range = rangeForGutterUtility();
+          if (range) openCommentForSelection(range);
+        };
+        return button;
+      },
+      onLineSelectionStart: handlePointerSelectionStart,
+      onLineSelectionChange: handlePointerSelectionChange,
+      onLineSelectionEnd: handlePointerSelectionEnd,
       onLineSelected(range) {
-        if (range) {
-          diffFocus = "body";
-          cursorLine = range.end;
-          selectionAnchor = range.start !== range.end ? range.start : null;
-        } else {
-          selectionAnchor = null;
-        }
+        syncSelectedLineRange(range);
       },
       renderAnnotation(annotation) {
         const comment = annotation.metadata as ReviewComment | undefined;
         if (!comment) return undefined;
         const el = document.createElement("div");
-        el.style.cssText = "padding:6px 10px;margin:2px 0;border-radius:4px;font-size:12px;line-height:1.4;display:flex;align-items:flex-start;gap:8px;background:var(--comment-bg,rgba(128,128,128,0.1));border:1px solid var(--comment-border,rgba(128,128,128,0.2))";
+        el.style.cssText = "padding:6px 10px;margin:2px 0;border-radius:4px;font-size:12px;line-height:1.4;display:flex;align-items:flex-start;gap:8px;cursor:pointer;background:var(--comment-bg,rgba(128,128,128,0.1));border:1px solid var(--comment-border,rgba(128,128,128,0.2))";
+        el.dataset.reviewCommentId = comment.id;
+        el.onclick = () => openEditComment(comment);
+        el.oncontextmenu = (event) => openCommentContextMenu(event, comment);
         const text = document.createElement("span");
         text.style.cssText = "flex:1;white-space:pre-wrap;word-break:break-word";
         text.textContent = comment.text;
@@ -849,11 +1011,11 @@
         edit.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:12px";
         edit.textContent = "✎";
         edit.title = "Edit comment";
-        edit.onclick = () => { openEditComment(comment); };
+        edit.onclick = (event) => { event.stopPropagation(); openEditComment(comment); };
         const del = document.createElement("button");
         del.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:14px";
         del.textContent = "×";
-        del.onclick = () => { removeComment(sessionId, comment.id); updateAnnotations(); };
+        del.onclick = (event) => { event.stopPropagation(); removeComment(sessionId, comment.id); updateAnnotations(); };
         el.appendChild(text);
         el.appendChild(edit);
         el.appendChild(del);
@@ -863,6 +1025,116 @@
     }, getWorkerPool());
     v.setup(viewerRoot);
     return v;
+  }
+
+  function openCommentContextMenu(event: MouseEvent, comment: ReviewComment) {
+    event.preventDefault();
+    event.stopPropagation();
+    diffContextMenu = { x: event.clientX, y: event.clientY, target: "comment", comment };
+  }
+
+  function selectedRangeFromEvent(event: MouseEvent): SelectedLineRange | null {
+    const path = event.composedPath();
+    let lineNumber: number | null = null;
+    let side: SelectedLineRange["side"] | undefined;
+    for (const entry of path) {
+      if (!(entry instanceof HTMLElement)) continue;
+      if (!side && entry.hasAttribute("data-additions")) side = "additions";
+      if (!side && entry.hasAttribute("data-deletions")) side = "deletions";
+      const value = entry.getAttribute("data-line") ?? entry.getAttribute("data-column-number");
+      if (value && Number.isFinite(Number(value))) lineNumber = Number(value);
+    }
+    return lineNumber === null ? null : { start: lineNumber, end: lineNumber, ...(side ? { side } : {}) };
+  }
+
+  function contextHunkFromEvent(event: MouseEvent): number | null {
+    for (const entry of event.composedPath()) {
+      if (!(entry instanceof HTMLElement)) continue;
+      const value = entry.getAttribute("data-expand-index");
+      if (value && Number.isInteger(Number(value))) return Number(value);
+    }
+    return null;
+  }
+
+  function handleViewerContextMenu(event: MouseEvent) {
+    const hunkIndex = contextHunkFromEvent(event);
+    if (hunkIndex !== null) {
+      event.preventDefault();
+      diffContextMenu = { x: event.clientX, y: event.clientY, target: "context", hunkIndex };
+      return;
+    }
+
+    const clickedRange = selectedRangeFromEvent(event);
+    if (!clickedRange) {
+      clearSelection();
+      return;
+    }
+    const range = selectionForContextMenu(selectedLineRange, clickedRange);
+    event.preventDefault();
+    syncSelectedLineRange(range);
+    viewer?.setSelectedLines({ id: currentFileId(), range }, { notify: false });
+    diffContextMenu = { x: event.clientX, y: event.clientY, target: "selection", range };
+  }
+
+  function handleViewerClick(event: MouseEvent) {
+    if (event.button !== 0) return;
+    const isInteractive = event.composedPath().some((entry) => entry instanceof HTMLElement && (
+      entry.hasAttribute("data-line")
+      || entry.hasAttribute("data-column-number")
+      || entry.hasAttribute("data-line-annotation")
+      || entry.hasAttribute("data-expand-index")
+      || entry.hasAttribute("data-utility-button")
+    ));
+    if (!isInteractive) clearSelection();
+  }
+
+  function handleNativeTextSelection(event: PointerEvent) {
+    if (!event.altKey || event.button !== 0) return;
+    // Stop the library's line-selection session before it attaches document
+    // listeners; the browser can then perform its normal text selection.
+    event.stopImmediatePropagation();
+    clearSelection();
+  }
+
+  async function expandContext(hunkIndex: number, all = false) {
+    const filePath = files[selectedIndex]?.path;
+    if (!filePath || !(await expandFileToFull(filePath))) return;
+    const rendered = viewer?.getRenderedItems().find((item) => item.item.id === currentFileId());
+    const item = viewer?.getItem(currentFileId());
+    if (!rendered || rendered.type !== "diff" || !item || item.type !== "diff") return;
+    if (all) {
+      // The renderer also uses the hunk-count index for trailing collapsed
+      // context, so include it in addition to every concrete hunk.
+      for (let index = 0; index <= item.fileDiff.hunks.length; index++) {
+        rendered.instance.expandHunk(index, "both", Number.POSITIVE_INFINITY);
+      }
+    } else {
+      rendered.instance.expandHunk(hunkIndex, "both");
+    }
+  }
+
+  function diffContextMenuItems(menu: DiffContextMenuState): MenuItem[] {
+    if (menu.target === "comment") {
+      return [
+        { label: "Edit comment", onSelect: () => openEditComment(menu.comment) },
+        { label: "Delete comment", danger: true, onSelect: () => { removeComment(sessionId, menu.comment.id); updateAnnotations(); } },
+      ];
+    }
+    if (menu.target === "context") {
+      return [
+        { label: "Expand context block", onSelect: () => { void expandContext(menu.hunkIndex); } },
+        { label: "Expand all context in file", onSelect: () => { void expandContext(menu.hunkIndex, true); } },
+      ];
+    }
+
+    const comment = getComments(sessionId).find((candidate) =>
+      candidate.filePath === files[selectedIndex]?.path
+      && candidate.startLine <= menu.range.end && candidate.endLine >= menu.range.start,
+    );
+    return [
+      { label: selectionLabel(menu.range), onSelect: () => openCommentForSelection(menu.range) },
+      ...(comment ? [{ label: "Edit comment", onSelect: () => openEditComment(comment) }] : []),
+    ];
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -876,6 +1148,9 @@
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
+    viewerRoot?.removeEventListener("pointerdown", handleNativeTextSelection, true);
+    viewerRoot?.removeEventListener("click", handleViewerClick);
+    viewerRoot?.removeEventListener("contextmenu", handleViewerContextMenu);
     stopContainerHeightFix();
     viewer?.cleanUp();
     viewer = null;
@@ -891,8 +1166,11 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
+      viewerRoot.addEventListener("pointerdown", handleNativeTextSelection, true);
+      viewerRoot.addEventListener("click", handleViewerClick);
+      viewerRoot.addEventListener("contextmenu", handleViewerContextMenu);
       applyDiffFont();
-      refresh();
+      void refresh();
       // Start observing to fix library's incorrect height constraint
       requestAnimationFrame(() => startContainerHeightFix());
     }
@@ -961,11 +1239,11 @@
         {formatComparison(comparison)}
       </button>
       <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5">
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "unified"; toggleDiffStyle(); }}>Unified</button>
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => { diffStyle = "split"; toggleDiffStyle(); }}>Split</button>
+        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("unified")}>Unified</button>
+        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("split")}>Split</button>
       </div>
       {#if files.length > 0}
-        <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded">c Comment</span>
+        <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded" title="Option-drag to select and copy text instead of review lines">c Comment · ⌥ drag: select text</span>
       {/if}
       {#if totalCount > 0}
         <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}>{#if sendingFeedback}<LoaderCircle size={12} class="animate-spin" />{:else}<Send size={12} />{/if}<span class="ml-1">Send ({totalCount})</span></Button>
@@ -988,9 +1266,10 @@
         currentBase={effectiveBase}
         currentHead={effectiveHead}
         onConfirm={(baseRef, headRef) => {
+          if (!prepareForNavigation("reload")) return;
           setComparison(sessionId, { baseRef, headRef });
           showCompareForm = false;
-          refresh();
+          void refresh(false);
         }}
         onCancel={() => { showCompareForm = false; }}
       />
@@ -1011,11 +1290,13 @@
     {#if diffStyle === "split" && currentFileComments.length > 0 && !showCommentInput}
       <div class="absolute top-[42px] left-0 right-0 z-10 border-b border-border bg-chrome max-h-[200px] overflow-y-auto">
         {#each currentFileComments as comment (comment.id)}
-          <div class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0">
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0 cursor-pointer" onclick={() => openEditComment(comment)} oncontextmenu={(event) => openCommentContextMenu(event, comment)}>
             <span class="shrink-0 text-[10px] text-t3 font-mono pt-0.5">{comment.type === "hunk" ? `L${comment.startLine}–${comment.endLine}` : `L${comment.startLine}`}</span>
             <span class="flex-1 text-[12px] text-t1 whitespace-pre-wrap break-words">{comment.text}</span>
-            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} title="Edit">✎</button>
-            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={() => { removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
+            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={(event) => { event.stopPropagation(); openEditComment(comment); }} title="Edit">✎</button>
+            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={(event) => { event.stopPropagation(); removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
           </div>
         {/each}
       </div>
@@ -1086,4 +1367,13 @@
     </ul>
   </div>
 </div>
+
+{#if diffContextMenu}
+  <ContextMenu
+    x={diffContextMenu.x}
+    y={diffContextMenu.y}
+    items={diffContextMenuItems(diffContextMenu)}
+    onClose={() => (diffContextMenu = null)}
+  />
+{/if}
 
