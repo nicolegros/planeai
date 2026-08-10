@@ -107,14 +107,15 @@ describe("FileExplorer focus", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.waitFor(() => {
+      const host = target.querySelector<HTMLElement>(".file-tree-host");
+      const focusedRow = host?.shadowRoot?.querySelector<HTMLElement>('[data-item-path="src/"]');
 
-    const host = target.querySelector<HTMLElement>(".file-tree-host");
-    const focusedRow = host?.shadowRoot?.querySelector<HTMLElement>('[data-item-path="src/"]');
-
-    expect(onFocus).toHaveBeenCalled();
-    expect(mockFocusFirstItem).toHaveBeenCalledTimes(1);
-    expect(host?.shadowRoot?.activeElement).toBe(focusedRow);
+      expect(onFocus).toHaveBeenCalledTimes(1);
+      expect(mockFocusFirstItem).toHaveBeenCalledTimes(1);
+      expect(focusedRow).toBeDefined();
+      expect(host?.shadowRoot?.activeElement).toBe(focusedRow);
+    });
   });
 
   it("preserves terminal focus on session reload and restores tree focus only for Explorer", async () => {
