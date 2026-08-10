@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getActiveZone } from "../lib/focus.svelte";
+  import { getActiveZone, getExplorerReturnZone } from "../lib/focus.svelte";
   import { getDiffTabActive } from "../lib/tab-layout.svelte";
   import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -8,11 +8,18 @@
     { k: `${MOD_LABEL}K`, l: "Command" },
     { k: `${MOD_LABEL}N`, l: "New" },
     { k: `${MOD_LABEL}B`, l: "Sidebar" },
+    { k: `${MOD_LABEL}E`, l: "Files" },
     { k: "⌃⇥", l: "Switch" },
     { k: `${MOD_LABEL}1–9`, l: "Jump" },
     { k: `${MOD_LABEL}\\`, l: "Diff" },
     { k: `${MOD_LABEL}⇧P`, l: "PR" },
   ];
+
+  let explorerHints = $derived(TERMINAL_HINTS.map((hint) =>
+    hint.k === `${MOD_LABEL}E`
+      ? { ...hint, l: getExplorerReturnZone() === "editor" ? "Editor" : "Terminal" }
+      : hint,
+  ));
 
   const SIDEBAR_HINTS = [
     { k: "↑↓", l: "Navigate" },
@@ -42,7 +49,14 @@
     return sid ? (getDiffTabActive()[sid] ?? false) : false;
   })());
 
-  let hints = $derived(isDiffActive ? DIFF_HINTS : getActiveZone() === "sidebar" ? SIDEBAR_HINTS : TERMINAL_HINTS);
+  let activeZone = $derived(getActiveZone());
+  let hints = $derived(activeZone === "explorer"
+    ? explorerHints
+    : isDiffActive
+      ? DIFF_HINTS
+      : activeZone === "sidebar"
+        ? SIDEBAR_HINTS
+        : TERMINAL_HINTS);
 </script>
 
 <div class="flex items-center gap-[18px] h-[34px] px-4 border-t border-border bg-chrome shrink-0">

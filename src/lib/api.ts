@@ -130,6 +130,7 @@ export const tasks = {
 
 export const fileExplorer = {
   listDir: (path: string) => invoke<DirEntry[]>("fe_list_directory", { path }),
+  listAllPaths: (rootPath: string) => invoke<string[]>("fe_list_all_paths", { rootPath }),
   rename: (oldPath: string, newPath: string) => invoke("fe_rename_entry", { oldPath, newPath }),
   deleteToTrash: (path: string) => invoke("fe_delete_to_trash", { path }),
   createDir: (path: string) => invoke("fe_create_directory", { path }),
