@@ -1,13 +1,56 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPointerSelectionRange,
   commentTargetFromSelection,
+  gutterActionAnchor,
   lockSelectionToOriginSide,
+  pointerSelectionMode,
   selectionForContextMenu,
   selectionLabel,
+  shouldClearSelectionAfterClick,
   shouldConfirmDraftDiscard,
 } from "../diff-review-mouse";
 
 describe("diff review mouse interaction policy", () => {
+  it("extends code-body drags from their initial line instead of replacing them with each endpoint", () => {
+    expect(
+      buildPointerSelectionRange(
+        { start: 4, end: 4, side: "additions" },
+        { start: 9, end: 9, side: "additions" },
+      ),
+    ).toEqual({ start: 4, end: 9, side: "additions" });
+    expect(
+      buildPointerSelectionRange(
+        { start: 10, end: 10, side: "deletions" },
+        { start: 7, end: 7, side: "additions" },
+      ),
+    ).toEqual({ start: 10, end: 7, side: "deletions", endSide: "additions" });
+  });
+
+  it("preserves a completed body-drag selection against its trailing click", () => {
+    expect(
+      shouldClearSelectionAfterClick({ isInteractive: false, preserveCompletedBodyDrag: true }),
+    ).toBe(false);
+    expect(
+      shouldClearSelectionAfterClick({ isInteractive: false, preserveCompletedBodyDrag: false }),
+    ).toBe(true);
+    expect(
+      shouldClearSelectionAfterClick({ isInteractive: true, preserveCompletedBodyDrag: false }),
+    ).toBe(false);
+  });
+
+  it("uses visual line selection for ordinary code-body drags but preserves Option-drag text selection", () => {
+    expect(pointerSelectionMode({ primaryButton: true, isCodeLine: true, altKey: false })).toBe(
+      "line",
+    );
+    expect(pointerSelectionMode({ primaryButton: true, isCodeLine: true, altKey: true })).toBe(
+      "text",
+    );
+    expect(pointerSelectionMode({ primaryButton: true, isCodeLine: false, altKey: false })).toBe(
+      "ignore",
+    );
+  });
+
   it("uses the existing side-agnostic line comment model for a selected range", () => {
     expect(commentTargetFromSelection({ start: 12, end: 8, side: "deletions" })).toEqual({
       startLine: 8,
@@ -29,6 +72,21 @@ describe("diff review mouse interaction policy", () => {
       end: 9,
       side: "additions",
     });
+  });
+
+  it("anchors the gutter action to the lower visual endpoint for either drag direction", () => {
+    expect(
+      gutterActionAnchor(
+        { left: 40, right: 64, top: 80, bottom: 100 },
+        { left: 40, right: 64, top: 140, bottom: 160 },
+      ),
+    ).toEqual({ left: 64, top: 140 });
+    expect(
+      gutterActionAnchor(
+        { left: 40, right: 64, top: 140, bottom: 160 },
+        { left: 40, right: 64, top: 80, bottom: 100 },
+      ),
+    ).toEqual({ left: 64, top: 140 });
   });
 
   it("preserves same-file drafts but requires confirmation before changing files or rebuilding", () => {

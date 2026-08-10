@@ -24,7 +24,7 @@
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import { rebuildItemWithFullContent } from "../lib/diff-expansion";
   import type { MenuItem } from "./ui/ContextMenu.svelte";
-  import { commentTargetFromSelection, lockSelectionToOriginSide, selectionForContextMenu, selectionLabel, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
+  import { buildPointerSelectionRange, commentTargetFromSelection, gutterActionAnchor, lockSelectionToOriginSide, pointerSelectionMode, selectionForContextMenu, selectionLabel, shouldClearSelectionAfterClick, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
 
   interface Props {
     repoPath: string;
@@ -67,6 +67,12 @@
   let editingCommentId = $state<string | null>(null);
   let selectedLineRange = $state<SelectedLineRange | null>(null);
   let pointerSelectionOrigin = $state<SelectedLineRange["side"] | undefined>();
+  let bodySelectionPointerId = $state<number | undefined>();
+  let bodySelectionAnchor = $state<SelectedLineRange | undefined>();
+  let preserveCompletedBodyDragClick = false;
+  let bodyDragClickResetTimer: ReturnType<typeof setTimeout> | undefined;
+  let gutterActionPosition = $state<{ left: number; top: number } | null>(null);
+  let gutterActionPositionFrame: number | undefined;
   let diffContextMenu = $state<DiffContextMenuState | null>(null);
 
   // CodeView + Worker Pool
@@ -216,6 +222,7 @@
       for (const r of rendered) {
         r.instance.flushManagers();
       }
+      scheduleGutterActionPosition();
     });
   }
 
@@ -426,6 +433,7 @@
       for (const r of rendered) {
         r.instance.flushManagers();
       }
+      scheduleGutterActionPosition();
     });
     // Proactively load full file content for the current file (enables context expansion)
     const filePath = files[selectedIndex]?.path;
@@ -725,6 +733,7 @@
     } else {
       selectionAnchor = null;
     }
+    scheduleGutterActionPosition();
   }
 
   function findLineElement(lineNumber: number, side: SelectedLineRange["side"]): HTMLElement | null {
@@ -771,6 +780,42 @@
     return range;
   }
 
+  function findLineNumberElement(lineNumber: number, side: SelectedLineRange["side"]): HTMLElement | null {
+    const item = viewer?.getRenderedItems().find((rendered) => rendered.item.id === currentFileId());
+    const root = item?.element?.shadowRoot;
+    if (!root) return null;
+    const scope = side ? `[data-${side}] ` : "";
+    const numbers = root.querySelectorAll<HTMLElement>(`${scope}[data-column-number="${lineNumber}"]`);
+    return numbers[0] ?? root.querySelector<HTMLElement>(`[data-column-number="${lineNumber}"]`);
+  }
+
+  function updateGutterActionPosition() {
+    gutterActionPositionFrame = undefined;
+    const range = selectedLineRange;
+    if (!range) {
+      gutterActionPosition = null;
+      return;
+    }
+    const start = findLineNumberElement(range.start, range.side);
+    const end = findLineNumberElement(range.end, range.endSide ?? range.side);
+    if (!start || !end) {
+      gutterActionPosition = null;
+      return;
+    }
+    const startRect = start.getBoundingClientRect();
+    const endRect = end.getBoundingClientRect();
+    if (startRect.width === 0 || endRect.width === 0) {
+      gutterActionPosition = null;
+      return;
+    }
+    gutterActionPosition = gutterActionAnchor(startRect, endRect);
+  }
+
+  function scheduleGutterActionPosition() {
+    if (gutterActionPositionFrame !== undefined) cancelAnimationFrame(gutterActionPositionFrame);
+    gutterActionPositionFrame = requestAnimationFrame(updateGutterActionPosition);
+  }
+
   function normalizePointerSelection(range: SelectedLineRange | null): SelectedLineRange | null {
     if (!range) return null;
     if (pointerSelectionOrigin && range.endSide && range.endSide !== pointerSelectionOrigin) {
@@ -809,8 +854,7 @@
   }
 
   function clearSelection() {
-    selectionAnchor = null;
-    selectedLineRange = null;
+    syncSelectedLineRange(null);
     pointerSelectionOrigin = undefined;
     viewer?.setSelectedLines(null);
   }
@@ -938,7 +982,6 @@
       diffStyle,
       stickyHeaders: false,
       enableLineSelection: true,
-      enableGutterUtility: true,
       pointerEventsOnScroll: true,
       disableVirtualizationBuffers: true,
       disableFileHeader: false,
@@ -962,33 +1005,6 @@
         updateBtn();
         btn.onclick = (e) => { e.stopPropagation(); toggleViewed(idx); updateBtn(); };
         return btn;
-      },
-      renderGutterUtility(getHoveredLine) {
-        const button = document.createElement("button");
-        button.setAttribute("data-utility-button", "");
-        button.textContent = "+";
-        const rangeForGutterUtility = (): SelectedLineRange | null => {
-          if (selectedLineRange) return selectedLineRange;
-          const hovered = getHoveredLine();
-          if (!hovered) return null;
-          const side = (hovered as { side?: SelectedLineRange["side"] }).side;
-          return { start: hovered.lineNumber, end: hovered.lineNumber, ...(side ? { side } : {}) };
-        };
-        const updateLabel = () => {
-          const range = rangeForGutterUtility();
-          const label = range ? selectionLabel(range) : "Add review comment";
-          button.title = `${label} (⌥ drag to select text)`;
-          button.setAttribute("aria-label", label);
-        };
-        updateLabel();
-        button.onmouseenter = updateLabel;
-        button.onclick = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          const range = rangeForGutterUtility();
-          if (range) openCommentForSelection(range);
-        };
-        return button;
       },
       onLineSelectionStart: handlePointerSelectionStart,
       onLineSelectionChange: handlePointerSelectionChange,
@@ -1078,6 +1094,12 @@
 
   function handleViewerClick(event: MouseEvent) {
     if (event.button !== 0) return;
+    const preserveCompletedBodyDrag = preserveCompletedBodyDragClick;
+    preserveCompletedBodyDragClick = false;
+    if (bodyDragClickResetTimer !== undefined) {
+      clearTimeout(bodyDragClickResetTimer);
+      bodyDragClickResetTimer = undefined;
+    }
     const isInteractive = event.composedPath().some((entry) => entry instanceof HTMLElement && (
       entry.hasAttribute("data-line")
       || entry.hasAttribute("data-column-number")
@@ -1085,15 +1107,107 @@
       || entry.hasAttribute("data-expand-index")
       || entry.hasAttribute("data-utility-button")
     ));
-    if (!isInteractive) clearSelection();
+    if (shouldClearSelectionAfterClick({ isInteractive, preserveCompletedBodyDrag })) clearSelection();
   }
 
-  function handleNativeTextSelection(event: PointerEvent) {
-    if (!event.altKey || event.button !== 0) return;
-    // Stop the library's line-selection session before it attaches document
-    // listeners; the browser can then perform its normal text selection.
+  function preserveBodyDragSelectionThroughTrailingClick() {
+    preserveCompletedBodyDragClick = true;
+    if (bodyDragClickResetTimer !== undefined) clearTimeout(bodyDragClickResetTimer);
+    bodyDragClickResetTimer = setTimeout(() => {
+      preserveCompletedBodyDragClick = false;
+      bodyDragClickResetTimer = undefined;
+    }, 50);
+  }
+
+  function codeLineRangeFromPointerEvent(event: PointerEvent): SelectedLineRange | null {
+    let isCodeLine = false;
+    for (const entry of event.composedPath()) {
+      if (!(entry instanceof HTMLElement)) continue;
+      if (
+        entry.hasAttribute("data-column-number")
+        || entry.hasAttribute("data-utility-button")
+        || entry.hasAttribute("data-line-annotation")
+        || entry.hasAttribute("data-expand-index")
+      ) {
+        return null;
+      }
+      if (entry.hasAttribute("data-line")) isCodeLine = true;
+    }
+    return isCodeLine ? selectedRangeFromEvent(event) : null;
+  }
+
+  function applyBodyPointerSelection(endpoint: SelectedLineRange) {
+    const range = bodySelectionAnchor
+      ? buildPointerSelectionRange(bodySelectionAnchor, endpoint)
+      : endpoint;
+    const normalized = normalizePointerSelection(range);
+    if (!normalized) return;
+    syncSelectedLineRange(normalized);
+    viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
+  }
+
+  function stopBodyPointerSelection() {
+    document.removeEventListener("pointermove", handleBodyPointerMove, true);
+    document.removeEventListener("pointerup", handleBodyPointerUp, true);
+    document.removeEventListener("pointercancel", handleBodyPointerCancel, true);
+    bodySelectionPointerId = undefined;
+    bodySelectionAnchor = undefined;
+  }
+
+  function handleBodyPointerMove(event: PointerEvent) {
+    if (event.pointerId !== bodySelectionPointerId) return;
+    event.preventDefault();
+    const range = codeLineRangeFromPointerEvent(event);
+    if (range) applyBodyPointerSelection(range);
+  }
+
+  function finishBodyPointerSelection(event: PointerEvent) {
+    if (event.pointerId !== bodySelectionPointerId) return;
+    event.preventDefault();
+    const range = codeLineRangeFromPointerEvent(event);
+    if (range) applyBodyPointerSelection(range);
+    preserveBodyDragSelectionThroughTrailingClick();
+    pointerSelectionOrigin = undefined;
+    stopBodyPointerSelection();
+  }
+
+  function handleBodyPointerUp(event: PointerEvent) {
+    finishBodyPointerSelection(event);
+  }
+
+  function handleBodyPointerCancel(event: PointerEvent) {
+    finishBodyPointerSelection(event);
+  }
+
+  function handleViewerPointerDown(event: PointerEvent) {
+    if (event.pointerType !== "mouse") return;
+    const range = codeLineRangeFromPointerEvent(event);
+    const mode = pointerSelectionMode({
+      primaryButton: event.button === 0,
+      isCodeLine: range !== null,
+      altKey: event.altKey,
+    });
+    if (mode === "ignore" || range === null) return;
+    if (mode === "text") {
+      // Stop the library's line-selection session before it attaches document
+      // listeners; the browser can then perform its normal text selection.
+      event.stopImmediatePropagation();
+      clearSelection();
+      return;
+    }
+
+    // @pierre/diffs starts line selection from the number gutter only. Claim
+    // ordinary code-body drags here so they match visual-mode line selection.
+    event.preventDefault();
     event.stopImmediatePropagation();
-    clearSelection();
+    window.getSelection()?.removeAllRanges();
+    pointerSelectionOrigin = range.side;
+    bodySelectionAnchor = range;
+    applyBodyPointerSelection(range);
+    bodySelectionPointerId = event.pointerId;
+    document.addEventListener("pointermove", handleBodyPointerMove, true);
+    document.addEventListener("pointerup", handleBodyPointerUp, true);
+    document.addEventListener("pointercancel", handleBodyPointerCancel, true);
   }
 
   async function expandContext(hunkIndex: number, all = false) {
@@ -1143,12 +1257,18 @@
     ensureSession(sessionId);
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("keyup", handleKeyup);
+    window.addEventListener("resize", scheduleGutterActionPosition);
   });
 
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("keyup", handleKeyup);
-    viewerRoot?.removeEventListener("pointerdown", handleNativeTextSelection, true);
+    window.removeEventListener("resize", scheduleGutterActionPosition);
+    viewerRoot?.removeEventListener("pointerdown", handleViewerPointerDown, true);
+    viewerRoot?.removeEventListener("scroll", scheduleGutterActionPosition, true);
+    stopBodyPointerSelection();
+    if (bodyDragClickResetTimer !== undefined) clearTimeout(bodyDragClickResetTimer);
+    if (gutterActionPositionFrame !== undefined) cancelAnimationFrame(gutterActionPositionFrame);
     viewerRoot?.removeEventListener("click", handleViewerClick);
     viewerRoot?.removeEventListener("contextmenu", handleViewerContextMenu);
     stopContainerHeightFix();
@@ -1166,7 +1286,8 @@
     if (visible && !mounted && viewerRoot) {
       mounted = true;
       viewer = createViewer();
-      viewerRoot.addEventListener("pointerdown", handleNativeTextSelection, true);
+      viewerRoot.addEventListener("pointerdown", handleViewerPointerDown, true);
+      viewerRoot.addEventListener("scroll", scheduleGutterActionPosition, true);
       viewerRoot.addEventListener("click", handleViewerClick);
       viewerRoot.addEventListener("contextmenu", handleViewerContextMenu);
       applyDiffFont();
@@ -1304,6 +1425,23 @@
 
     <!-- CodeView container -->
     <div bind:this={viewerRoot} class="absolute inset-0 overflow-auto" style:top="{contentTop}px"></div>
+
+    {#if selectedLineRange && gutterActionPosition && !showCommentInput}
+      <button
+        type="button"
+        data-utility-button
+        class="fixed z-30 flex size-5 -translate-x-full items-center justify-center rounded bg-accent text-[15px] leading-none text-on-accent shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-accent"
+        style="left:{gutterActionPosition.left}px;top:{gutterActionPosition.top}px"
+        title={selectionLabel(selectedLineRange)}
+        aria-label={selectionLabel(selectedLineRange)}
+        onpointerdown={(event) => event.stopPropagation()}
+        onclick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (selectedLineRange) openCommentForSelection(selectedLineRange);
+        }}
+      >+</button>
+    {/if}
 
     <!-- Loading states -->
     {#if loading}

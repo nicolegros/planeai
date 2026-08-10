@@ -2,7 +2,7 @@
 
 Run this in a development build with a session that has a multi-file diff, several hunks, and at least one collapsed unchanged-context separator.
 
-1. Open **Review**, select a changed line, then drag across multiple lines. Verify the selected range is highlighted in both **Split** and **Unified** views. Repeat after switching files, refreshing (`r`), and toggling the view mode.
+1. Open **Review**, start on **code text** in a changed line (not the line-number gutter), then drag across multiple lines. Verify the selected range is highlighted rather than browser text-selected in both **Split** and **Unified** views. Repeat after switching files, refreshing (`r`), and toggling the view mode.
 2. In split view, start a drag on either pane and cross the center gutter. Verify the visual selection remains on the pane where the drag began. Drag across a collapsed context separator and verify the range stops at that separator.
 3. Confirm the `+` gutter control appears at the selection endpoint. Click it, enter a comment, submit it, and verify the comment is attached to the selected line/range. Select a deleted-side line and verify it follows the same existing comment behavior as keyboard selection.
 4. Right-click a line/range and verify the app context menu offers **Comment on line(s)**; where an annotation overlaps, verify it also offers **Edit comment**. Verify a right-click outside code clears the selection.

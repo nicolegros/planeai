@@ -2,6 +2,67 @@ import type { SelectedLineRange } from "@pierre/diffs";
 
 export type DraftNavigation = "same-file" | "change-file" | "reload";
 
+export interface PointerSelectionInput {
+  primaryButton: boolean;
+  isCodeLine: boolean;
+  altKey: boolean;
+}
+
+/**
+ * Code-body drags need application-managed selection because @pierre/diffs
+ * reserves its built-in line-selection session for line-number gutters.
+ */
+export function pointerSelectionMode({
+  primaryButton,
+  isCodeLine,
+  altKey,
+}: PointerSelectionInput): "line" | "text" | "ignore" {
+  if (!primaryButton || !isCodeLine) return "ignore";
+  return altKey ? "text" : "line";
+}
+
+/** Build the current visual range from the pointer-down anchor and drag endpoint. */
+export function buildPointerSelectionRange(
+  anchor: SelectedLineRange,
+  endpoint: SelectedLineRange,
+): SelectedLineRange {
+  return {
+    start: anchor.start,
+    end: endpoint.end,
+    ...(anchor.side ? { side: anchor.side } : {}),
+    ...(anchor.side !== endpoint.side && endpoint.side ? { endSide: endpoint.side } : {}),
+  };
+}
+
+export interface ClickSelectionInput {
+  isInteractive: boolean;
+  preserveCompletedBodyDrag: boolean;
+}
+
+/** A completed body drag owns its trailing click; blank-space clicks still clear selection. */
+export function shouldClearSelectionAfterClick({
+  isInteractive,
+  preserveCompletedBodyDrag,
+}: ClickSelectionInput): boolean {
+  return !isInteractive && !preserveCompletedBodyDrag;
+}
+
+export interface GutterActionRect {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** Place the action on the lower visual endpoint, regardless of drag direction. */
+export function gutterActionAnchor(
+  start: GutterActionRect,
+  end: GutterActionRect,
+): Pick<GutterActionRect, "left" | "top"> {
+  const endpoint = start.top >= end.top ? start : end;
+  return { left: endpoint.right, top: endpoint.top };
+}
+
 export interface CommentLineTarget {
   startLine: number;
   endLine: number;
