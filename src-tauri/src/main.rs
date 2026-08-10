@@ -338,6 +338,7 @@ fn main() {
             fire_task_notify_hook,
             list_jira_tasks,
             fe_list_directory,
+            fe_list_all_paths,
             fe_create_file,
             fe_create_directory,
             fe_rename_entry,

@@ -27,6 +27,7 @@
     "@lezer/highlight": "^1.2.3",
     "@lucide/svelte": "^1.28.0",
     "@pierre/diffs": "1.2.12",
+    "@pierre/trees": "1.0.0-beta.6",
     "@replit/codemirror-vim": "^6.3.0",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
@@ -58,16 +59,5 @@
     "vite": "6.4.3",
     "vitest": "4.1.10"
   },
-  "packageManager": "pnpm@10.28.2",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "@tailwindcss/oxide"
-    ],
-    "overrides": {
-      "brace-expansion": ">=5.0.9",
-      "postcss": ">=8.5.18",
-      "undici": ">=8.9.0"
-    }
-  }
+  "packageManager": "pnpm@10.28.2"
 }
