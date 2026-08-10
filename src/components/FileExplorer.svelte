@@ -79,7 +79,7 @@
   function focusTree() {
     requestAnimationFrame(() => {
       const tree = fileTree;
-      if (!visible || !tree) return;
+      if (!visible || !tree || tree.isSearchOpen()) return;
 
       onFocus();
       tree.focusFirstItem();
@@ -88,7 +88,7 @@
   }
 
   function focusRenderedTreeRow(tree: FileTree) {
-    if (!visible || fileTree !== tree) return;
+    if (!visible || fileTree !== tree || tree.isSearchOpen()) return;
     const focusedPath = tree.getFocusedPath();
     const renderedRows = tree
       .getFileTreeContainer()

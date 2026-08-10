@@ -16,15 +16,33 @@ const { mockFocusFirstItem, mockCleanUp, mockListAllPaths, mockWatch, mockUnwatc
 vi.mock("@pierre/trees", () => {
   class FileTree {
     private container: HTMLElement | undefined;
+    private searchOpen = false;
 
     constructor(_options: unknown) {}
 
     cleanUp = mockCleanUp;
-    focusFirstItem = mockFocusFirstItem;
+    focusFirstItem = () => {
+      mockFocusFirstItem();
+      this.container?.shadowRoot?.querySelector<HTMLElement>("[data-item-path]")?.focus();
+    };
     getVisibleCount = () => 1;
     getFileTreeContainer = () => this.container;
     getFocusedPath = () => "src/";
+    isSearchOpen = () => this.searchOpen;
     setGitStatus = vi.fn();
+
+    openSearch = () => {
+      if (!this.container) return;
+      this.searchOpen = true;
+      const shadowRoot = this.container.shadowRoot!;
+      let input = shadowRoot.querySelector<HTMLInputElement>("[data-file-tree-search-input]");
+      if (!input) {
+        input = document.createElement("input");
+        input.dataset.fileTreeSearchInput = "true";
+        shadowRoot.append(input);
+      }
+      input.focus();
+    };
 
     render = ({ fileTreeContainer }: { fileTreeContainer: HTMLElement }) => {
       this.container = fileTreeContainer;
@@ -82,6 +100,7 @@ describe("FileExplorer focus", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     if (component) {
       unmount(component);
       component = undefined;
@@ -116,6 +135,51 @@ describe("FileExplorer focus", () => {
       expect(focusedRow).toBeDefined();
       expect(host?.shadowRoot?.activeElement).toBe(focusedRow);
     });
+  });
+
+  it("does not let delayed initial tree focus override active search", async () => {
+    const animationFrames: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      }),
+    );
+
+    component = mount(FileExplorer, {
+      target,
+      props: {
+        rootPath: "/tmp/project",
+        sessionId: "session-1",
+        visible: true,
+        onFocus: vi.fn(),
+        onOpenFile: vi.fn(),
+        onPinFile: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => expect(animationFrames.length).toBeGreaterThan(0));
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "/",
+      }),
+    );
+
+    const host = target.querySelector<HTMLElement>(".file-tree-host");
+    const searchInput = host?.shadowRoot?.querySelector<HTMLInputElement>(
+      "[data-file-tree-search-input]",
+    );
+    expect(searchInput).toBeDefined();
+    expect(host?.shadowRoot?.activeElement).toBe(searchInput);
+
+    animationFrames.shift()?.(0);
+
+    expect(mockFocusFirstItem).not.toHaveBeenCalled();
+    expect(host?.shadowRoot?.activeElement).toBe(searchInput);
   });
 
   it("preserves terminal focus on session reload and restores tree focus only for Explorer", async () => {
