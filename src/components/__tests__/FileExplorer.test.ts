@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
-const { mockFocusFirstItem, mockCleanUp, mockListAllPaths, mockWatch, mockUnwatch } = vi.hoisted(() => ({
-  mockFocusFirstItem: vi.fn(),
-  mockCleanUp: vi.fn(),
-  mockListAllPaths: vi.fn((rootPath: string) => Promise.resolve(
-    rootPath === "/tmp/project-b" ? ["project-b/"] : ["project-a/"],
-  )),
-  mockWatch: vi.fn(() => Promise.resolve()),
-  mockUnwatch: vi.fn(() => Promise.resolve()),
-}));
+const { mockFocusFirstItem, mockCleanUp, mockListAllPaths, mockWatch, mockUnwatch } = vi.hoisted(
+  () => ({
+    mockFocusFirstItem: vi.fn(),
+    mockCleanUp: vi.fn(),
+    mockListAllPaths: vi.fn((rootPath: string) =>
+      Promise.resolve(rootPath === "/tmp/project-b" ? ["project-b/"] : ["project-a/"]),
+    ),
+    mockWatch: vi.fn(() => Promise.resolve()),
+    mockUnwatch: vi.fn(() => Promise.resolve()),
+  }),
+);
 
 vi.mock("@pierre/trees", () => {
   class FileTree {
@@ -26,7 +28,8 @@ vi.mock("@pierre/trees", () => {
 
     render = ({ fileTreeContainer }: { fileTreeContainer: HTMLElement }) => {
       this.container = fileTreeContainer;
-      const shadowRoot = fileTreeContainer.shadowRoot ?? fileTreeContainer.attachShadow({ mode: "open" });
+      const shadowRoot =
+        fileTreeContainer.shadowRoot ?? fileTreeContainer.attachShadow({ mode: "open" });
       if (shadowRoot.querySelector('[data-item-focused="true"]')) return;
 
       const row = document.createElement("button");

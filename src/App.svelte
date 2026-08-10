@@ -5,7 +5,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
   import type { Session, Project } from "./lib/types";
-  import { focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
+  import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
@@ -826,7 +826,11 @@
           toggleExplorerFocus();
           if (!wasExplorerFocused) fileExplorerVisible = true;
         }
-        else if (action.type === "toggle_file_explorer") { fileExplorerVisible = !fileExplorerVisible; if (fileExplorerVisible) focusExplorer(); else focusTerminal(); }
+        else if (action.type === "toggle_file_explorer") {
+          fileExplorerVisible = !fileExplorerVisible;
+          if (fileExplorerVisible) focusExplorer();
+          else if (getActiveZone() === "explorer") toggleExplorerFocus();
+        }
         else if (action.type === "toggle_task_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "toggle_sessions_panel") { if (!sidebarVisible) sidebarVisible = true; }
         else if (action.type === "refresh_tasks") { if (!sidebarVisible) sidebarVisible = true; taskStore.refresh(projects.map((p) => p.path)); }
@@ -837,7 +841,10 @@
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
-      () => { const leaf = splitTree.getFocusedLeaf(); return !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor"; },
+      () => {
+        const leaf = splitTree.getFocusedLeaf();
+        return getActiveZone() === "editor" && !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor";
+      },
       () => !!document.activeElement?.closest('[data-form-keyboard]'),
     );
 
@@ -1113,8 +1120,9 @@
                   visible={isActiveInLeaf}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
+                  focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "editor"}
                   onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
-                  onFocusEditor={() => splitTree.focusTab(tabEntry.ptyKey)}
+                  onFocusEditor={() => { splitTree.focusTab(tabEntry.ptyKey); focusEditor(); }}
                   onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
                 />
               {:else if isActiveInLeaf}

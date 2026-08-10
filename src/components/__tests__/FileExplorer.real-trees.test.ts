@@ -67,15 +67,19 @@ describe("FileExplorer real Trees focus", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    window.dispatchEvent(new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "/",
-    }));
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "/",
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const host = target.querySelector<HTMLElement>(".file-tree-host");
-    const searchInput = host?.shadowRoot?.querySelector<HTMLInputElement>("[data-file-tree-search-input]");
+    const searchInput = host?.shadowRoot?.querySelector<HTMLInputElement>(
+      "[data-file-tree-search-input]",
+    );
     expect(searchInput).toBeDefined();
     expect(host?.shadowRoot?.activeElement).toBe(searchInput);
 
@@ -101,8 +105,14 @@ describe("FileExplorer real Trees focus", () => {
 
     expect(mockFocusTerminal).not.toHaveBeenCalled();
     expect(escapeEvent.defaultPrevented).toBe(true);
-    expect(host?.shadowRoot?.querySelector("[data-file-tree-search-container]")?.getAttribute("data-open")).toBe("false");
-    expect(host?.shadowRoot?.activeElement).toBe(host?.shadowRoot?.querySelector('[data-item-focused="true"]'));
+    expect(
+      host?.shadowRoot
+        ?.querySelector("[data-file-tree-search-container]")
+        ?.getAttribute("data-open"),
+    ).toBe("false");
+    expect(host?.shadowRoot?.activeElement).toBe(
+      host?.shadowRoot?.querySelector('[data-item-focused="true"]'),
+    );
   });
 
   it("gives the rendered tree row focus so it receives ArrowRight", async () => {
@@ -127,11 +137,13 @@ describe("FileExplorer real Trees focus", () => {
     expect(focusedRow).toBeDefined();
     expect(shadowRoot?.activeElement).toBe(focusedRow);
 
-    window.dispatchEvent(new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: "ArrowRight",
-    }));
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "ArrowRight",
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(shadowRoot?.querySelector('[data-item-path="src/index.ts"]')).not.toBeNull();

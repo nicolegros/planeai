@@ -1,11 +1,18 @@
-export type FocusZone = "terminal" | "sidebar" | "explorer" | "none";
+export type FocusZone = "terminal" | "sidebar" | "editor" | "explorer" | "none";
 export type SidebarSubZone = "sessions" | "tasks";
 
+type ExplorerReturnZone = "terminal" | "editor";
+
 let activeZone = $state<FocusZone>("terminal");
+let explorerReturnZone = $state<ExplorerReturnZone>("terminal");
 let sidebarSubZone = $state<SidebarSubZone>("sessions");
 
 export function getActiveZone(): FocusZone {
   return activeZone;
+}
+
+export function getExplorerReturnZone(): ExplorerReturnZone {
+  return explorerReturnZone;
 }
 
 export function getSidebarSubZone(): SidebarSubZone {
@@ -30,13 +37,24 @@ export function focusSidebar(): void {
   activeZone = "sidebar";
 }
 
+export function focusEditor(): void {
+  activeZone = "editor";
+}
+
 export function focusExplorer(): void {
+  if (activeZone !== "explorer") {
+    explorerReturnZone = activeZone === "editor" ? "editor" : "terminal";
+  }
   activeZone = "explorer";
 }
 
-/** Toggle keyboard focus between the Explorer and terminal without changing visibility. */
+/** Toggle keyboard focus between Explorer and the zone that opened it. */
 export function toggleExplorerFocus(): void {
-  activeZone = activeZone === "explorer" ? "terminal" : "explorer";
+  if (activeZone === "explorer") {
+    activeZone = explorerReturnZone;
+  } else {
+    focusExplorer();
+  }
 }
 
 export function toggleSidebar(): void {

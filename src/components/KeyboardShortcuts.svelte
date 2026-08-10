@@ -40,7 +40,7 @@
       { keys: `${MOD_LABEL}⇧T`, description: "Focus tasks panel" },
       { keys: `${MOD_LABEL}R`, description: "Refresh tasks" },
       { keys: `${MOD_LABEL}⇧R`, description: "Open Review" },
-      { keys: `${MOD_LABEL}E`, description: "Toggle Explorer / terminal focus" },
+      { keys: `${MOD_LABEL}E`, description: "Toggle Explorer / prior pane focus" },
       { keys: `${MOD_LABEL}⇧E`, description: "Toggle file explorer" },
       { keys: `${MOD_LABEL}\\`, description: "Toggle diff" },
     ]},

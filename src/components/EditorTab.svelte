@@ -30,6 +30,7 @@
   interface Props {
     repoPath: string;
     visible: boolean;
+    focused?: boolean;
     theme?: string;
     initialFile?: string;
     onClose: () => void;
@@ -38,7 +39,7 @@
     onModifiedChange?: (modified: boolean) => void;
   }
 
-  let { repoPath, visible, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
+  let { repoPath, visible, focused = false, theme = "vs-dark", initialFile, onClose, onFocusEditor, onFileChange, onModifiedChange }: Props = $props();
 
   let buffers = $state<Buffer[]>([]);
   let activeIndex = $state(-1);
@@ -73,6 +74,11 @@
     return EditorState.create({
       doc: content,
       extensions: [
+        EditorView.domEventHandlers({
+          focus: () => {
+            onFocusEditor();
+          },
+        }),
         Prec.highest(keymap.of([
           { key: "Mod-t", run: () => false },
           { key: "Mod-w", run: () => false },
@@ -266,6 +272,12 @@
 
   $effect(() => {
     if (visible && view) {
+      view.focus();
+    }
+  });
+
+  $effect(() => {
+    if (focused && view) {
       view.focus();
     }
   });

@@ -80,7 +80,7 @@ fn collect_paths(root: &Path, dir: &Path, paths: &mut Vec<String>) -> Result<(),
             .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
-            .into_owned();
+            .replace(std::path::MAIN_SEPARATOR, "/");
 
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         // @pierre/trees uses a trailing slash as the canonical directory identity.
@@ -404,6 +404,10 @@ mod tests {
         assert!(paths.contains(&"src/main.rs".to_string()));
         assert!(paths.contains(&"src/lib/utils.rs".to_string()));
         assert!(paths.contains(&"README.md".to_string()));
+        assert!(
+            paths.iter().all(|path| !path.contains('\\')),
+            "tree paths must use forward slashes on every platform: {paths:?}"
+        );
 
         // Directories sort before files at each level.
         let src_idx = paths.iter().position(|p| p == "src/").unwrap();

@@ -1,4 +1,10 @@
-import { focusTerminal, getActiveZone, toggleSessionsPanel, toggleTaskPanel } from "./focus.svelte";
+import {
+  focusTerminal,
+  getActiveZone,
+  toggleExplorerFocus,
+  toggleSessionsPanel,
+  toggleTaskPanel,
+} from "./focus.svelte";
 
 /** True on macOS/iOS, false on Windows/Linux */
 export const IS_MAC =
@@ -226,9 +232,12 @@ export type ActionHandler = (action: KeyboardAction) => void;
 function isExplorerSearchEvent(e: KeyboardEvent): boolean {
   if (getActiveZone() !== "explorer") return false;
 
-  return e.composedPath().some((target) =>
-    target instanceof HTMLInputElement && target.matches("[data-file-tree-search-input]"),
-  );
+  return e
+    .composedPath()
+    .some(
+      (target) =>
+        target instanceof HTMLInputElement && target.matches("[data-file-tree-search-input]"),
+    );
 }
 
 /**
@@ -269,8 +278,13 @@ export function installKeyboardRouter(
   function handler(e: KeyboardEvent) {
     const action = matchChord(e);
     if (action) {
-      // When editor is focused, only intercept whitelisted actions
-      if (isEditorFocused?.() && !editorAllowedActions.has(action.type)) {
+      // Only filter editor shortcuts while CodeMirror actually owns focus.
+      // An editor tab can remain active underneath another focused pane such as Explorer.
+      if (
+        getActiveZone() === "editor" &&
+        isEditorFocused?.() &&
+        !editorAllowedActions.has(action.type)
+      ) {
         return;
       }
 
@@ -299,7 +313,8 @@ export function installKeyboardRouter(
 
       // Built-in focus actions
       if (action.type === "focus_terminal") {
-        focusTerminal();
+        if (getActiveZone() === "explorer") toggleExplorerFocus();
+        else focusTerminal();
       } else if (action.type === "toggle_sessions_panel") {
         toggleSessionsPanel();
       } else if (action.type === "toggle_task_panel") {

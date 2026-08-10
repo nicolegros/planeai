@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { installKeyboardRouter, type KeyboardAction } from "../keyboard";
-import { setActiveZone } from "../focus.svelte";
+import { focusEditor, focusExplorer, getActiveZone, setActiveZone } from "../focus.svelte";
 
 describe("installKeyboardRouter Escape yielding with data-form-keyboard", () => {
   let onAction: (action: KeyboardAction) => void;
@@ -46,5 +46,32 @@ describe("installKeyboardRouter Escape yielding with data-form-keyboard", () => 
     window.dispatchEvent(event);
 
     expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+  });
+
+  it("restores the editor origin when Escape leaves Explorer", () => {
+    focusEditor();
+    focusExplorer();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+    expect(getActiveZone()).toBe("editor");
+  });
+
+  it("does not let an active editor tab suppress Escape from Explorer", () => {
+    cleanup();
+    cleanup = installKeyboardRouter(
+      onAction,
+      () => true,
+      () => true,
+      () => false,
+    );
+    focusEditor();
+    focusExplorer();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(onAction).toHaveBeenCalledWith({ type: "focus_terminal" });
+    expect(getActiveZone()).toBe("editor");
   });
 });
