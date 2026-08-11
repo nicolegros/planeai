@@ -29,12 +29,12 @@ cp .env.example .env
 
 | Variable             | Required | Description                                                    |
 | -------------------- | -------- | -------------------------------------------------------------- |
-| `JIRA_CLIENT_ID`     | No\*     | Atlassian 3LO client ID for the bundled Jira plugin            |
+| `JIRA_CLIENT_ID`     | No\*     | Atlassian 3LO client ID used for Jira OAuth development        |
 | `JIRA_CLIENT_SECRET` | No\*     | Atlassian 3LO secret; provide locally only and never commit it |
 
 \* The build succeeds without these (placeholder values are used), but Jira OAuth will not work at runtime. For `cargo test` and `cargo clippy`, dummy values are passed automatically by the Makefile.
 
-Jira is a deliberate bundled-plugin exception (ADR-0011): release artifacts compile both values, so the secret is extractable and must not be treated as confidential. PlaneAI release engineering owns the Atlassian registration and rotates `JIRA_CLIENT_ID`/`JIRA_CLIENT_SECRET` through protected GitHub Actions release secrets and a new application release.
+Jira OAuth application credentials are managed by PlaneAI release engineering. Release builds receive `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` through protected GitHub Actions secrets; rotation is published in a new application release (ADR-0011).
 
 ## Development
 

@@ -236,17 +236,17 @@ Optional Jira Cloud integration that syncs issues into planeai's task board and 
 
 ### Build-time env vars
 
-| Variable             | Required | Description                                                             |
-| -------------------- | -------- | ----------------------------------------------------------------------- |
-| `JIRA_CLIENT_ID`     | Yes\*    | Atlassian 3LO client ID for the bundled Jira plugin                     |
-| `JIRA_CLIENT_SECRET` | Yes\*    | Extractable Atlassian 3LO client secret injected into release artifacts |
+| Variable             | Required | Description                                                |
+| -------------------- | -------- | ---------------------------------------------------------- |
+| `JIRA_CLIENT_ID`     | Yes\*    | Atlassian 3LO client ID used for Jira OAuth release builds |
+| `JIRA_CLIENT_SECRET` | Yes\*    | Atlassian 3LO secret supplied to Jira OAuth release builds |
 
 \* Build succeeds without them (placeholder values used) but OAuth will not work at runtime.
 
 ### Policy
 
 - Jira is entirely optional. Absent `integrations.jira` config means the feature is inactive.
-- Jira is an explicit bundled-plugin OAuth exception (ADR-0011). The 3LO client secret is compiled into the desktop artifact and must not be treated as confidential.
+- Jira OAuth uses the release-managed Atlassian 3LO registration described in ADR-0011.
 - The Atlassian registration permits only `http://localhost:19287/callback` and the `read:jira-work`, `write:jira-work`, and `offline_access` scopes.
 - PlaneAI release engineering owns registration and rotation. Protected GitHub Actions `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` secrets are updated before publishing a new release.
 - Auth tokens are stored in the app data directory (file-based, `0600` permissions on Unix). A rejected refresh clears only the refresh token and cloud ID; settings, sources, cached issues, and task links are retained for reconnect.

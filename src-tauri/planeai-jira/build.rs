@@ -1,9 +1,8 @@
 use std::io::Write;
 
 fn main() {
-    // Jira is an explicit bundled-plugin exception (ADR-0011): these 3LO
-    // credentials are compiled into release artifacts and are extractable.
-    // They must not be treated as confidential application secrets.
+    // Jira OAuth uses release-managed 3LO credentials (ADR-0011). Keep
+    // release values in protected CI and never commit local development values.
     // Load .env from repo root
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let repo_root = std::path::Path::new(&manifest_dir)

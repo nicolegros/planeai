@@ -236,10 +236,6 @@ Jira integration uses Atlassian OAuth 2.0 (3LO) with PKCE. Connect via **Prefere
 
 If Atlassian rejects or revokes a refresh token, PlaneAI clears only those OAuth values and shows **Connect to Jira** again. Your Jira site, sources, cached issues, and task links remain intact.
 
-:::note
-Jira is a bundled-plugin exception (ADR-0011). Release artifacts include the Atlassian 3LO client ID and secret, so the secret is extractable rather than confidential. PlaneAI release engineering owns the registration and rotates the protected GitHub Actions release secrets through a new release. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` environment variables (see `.env.example`); without them the build succeeds but OAuth will not work at runtime.
-:::
-
 #### Departed issues
 
 When a synced issue no longer matches its source JQL (e.g., it was reassigned or moved to another project), planeai marks it as "departed" and shows a prompt asking whether to mark the local task as done or dismiss it.
