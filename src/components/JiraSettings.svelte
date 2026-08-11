@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { jira } from "../lib/api";
   import { getSettings, updateSettings, type JiraConfig, type JiraSyncSource, type IntegrationsConfig } from "../lib/settings.svelte";
@@ -21,12 +22,20 @@
     { value: "done", label: "done" },
   ];
 
-  onMount(async () => {
+  async function refreshStatus(showErrors = true) {
     try {
       status = await jira.status();
     } catch (e) {
-      showSnackbar(String(e));
+      if (showErrors) showSnackbar(String(e));
     }
+  }
+
+  onMount(() => {
+    void refreshStatus();
+    // The backend emits this when an invalid refresh token clears OAuth state, including
+    // failures reached through writeback. Refresh status without polling token storage.
+    const unlisten = listen("jira-connection-state-changed", () => void refreshStatus(false));
+    return () => { unlisten.then((fn) => fn()); };
   });
 
   function saveJira(patch: Partial<JiraConfig>) {

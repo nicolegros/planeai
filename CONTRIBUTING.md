@@ -27,12 +27,14 @@ Copy `.env.example` to `.env` and fill in the values:
 cp .env.example .env
 ```
 
-| Variable             | Required | Description                                  |
-| -------------------- | -------- | -------------------------------------------- |
-| `JIRA_CLIENT_ID`     | No\*     | OAuth 2.0 client ID for Jira integration     |
-| `JIRA_CLIENT_SECRET` | No\*     | OAuth 2.0 client secret for Jira integration |
+| Variable             | Required | Description                                                    |
+| -------------------- | -------- | -------------------------------------------------------------- |
+| `JIRA_CLIENT_ID`     | No\*     | Atlassian 3LO client ID for the bundled Jira plugin            |
+| `JIRA_CLIENT_SECRET` | No\*     | Atlassian 3LO secret; provide locally only and never commit it |
 
 \* The build succeeds without these (placeholder values are used), but Jira OAuth will not work at runtime. For `cargo test` and `cargo clippy`, dummy values are passed automatically by the Makefile.
+
+Jira is a deliberate bundled-plugin exception (ADR-0011): release artifacts compile both values, so the secret is extractable and must not be treated as confidential. PlaneAI release engineering owns the Atlassian registration and rotates `JIRA_CLIENT_ID`/`JIRA_CLIENT_SECRET` through protected GitHub Actions release secrets and a new application release.
 
 ## Development
 

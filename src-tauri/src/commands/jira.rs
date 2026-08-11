@@ -80,8 +80,15 @@ pub async fn jira_sync_now(
 
     let jira_config = get_jira_config(&config_state)?;
 
-    let _ = state.activate(&jira_config, app);
-    let sync = state.sync.clone().ok_or("jira not connected")?;
+    // Keep the background loop's cancellation token registered with JiraAuth. Replacing an
+    // already-active sync here would leave the old loop running after an invalid refresh token.
+    let sync = match state.sync.clone() {
+        Some(sync) => sync,
+        None => {
+            state.activate(&jira_config, app)?;
+            state.sync.clone().ok_or("jira sync not initialized")?
+        }
+    };
     drop(guard);
 
     sync.sync_now().await.map_err(|e| e.to_string())
@@ -93,12 +100,14 @@ pub async fn jira_status(
     jira: State<'_, JiraHandle>,
     config_state: State<'_, ConfigState>,
 ) -> Result<JiraStatusResponse, String> {
-    let guard = jira.0.lock().await;
-
-    let connected = guard
-        .as_ref()
-        .map(|s| s.auth.is_connected())
-        .unwrap_or(false);
+    let auth = {
+        let guard = jira.0.lock().await;
+        guard.as_ref().map(|state| state.auth.clone())
+    };
+    let connected = match auth {
+        Some(auth) => crate::commands::blocking(move || Ok(auth.is_connected())).await?,
+        None => false,
+    };
 
     let site = config_state.0.lock().ok().and_then(|cfg| {
         cfg.integrations

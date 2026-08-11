@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 include!(concat!(env!("OUT_DIR"), "/oauth_credentials.rs"));
@@ -34,6 +35,10 @@ pub enum Error {
     UrlParse(#[from] url::ParseError),
     #[error("Timed out waiting for browser callback")]
     Timeout,
+    #[error("OAuth token request failed: {0}")]
+    TokenRequestFailed(String),
+    #[error("OAuth refresh token was rejected; reconnect to Jira")]
+    RefreshTokenRejected,
 }
 
 /// Abstraction over secret storage (OS keychain in production, in-memory for tests).
@@ -87,11 +92,18 @@ struct TokenState {
     expires_at: std::time::Instant,
 }
 
+type ConnectionStateListener = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
     expires_in: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenErrorResponse {
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,10 +115,13 @@ struct AccessibleResource {
 pub struct JiraAuth {
     site: String,
     token_state: Mutex<Option<TokenState>>,
+    refresh_lock: Mutex<()>,
     store: Box<dyn TokenStore>,
     client: Client,
     token_url: String,
     resources_url: String,
+    sync_cancellation: std::sync::Mutex<Option<CancellationToken>>,
+    connection_state_listener: std::sync::Mutex<Option<ConnectionStateListener>>,
 }
 
 impl JiraAuth {
@@ -118,10 +133,13 @@ impl JiraAuth {
         Self {
             site: site.to_string(),
             token_state: Mutex::new(None),
+            refresh_lock: Mutex::new(()),
             store,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
+            sync_cancellation: std::sync::Mutex::new(None),
+            connection_state_listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -135,10 +153,13 @@ impl JiraAuth {
         Self {
             site: site.to_string(),
             token_state: Mutex::new(None),
+            refresh_lock: Mutex::new(()),
             store,
             client: Client::new(),
             token_url,
             resources_url,
+            sync_cancellation: std::sync::Mutex::new(None),
+            connection_state_listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -156,10 +177,28 @@ impl JiraAuth {
         Self {
             site: "https://test.atlassian.net".to_string(),
             token_state: Mutex::new(token_state),
+            refresh_lock: Mutex::new(()),
             store: Box::new(store),
             client: Client::new(),
             token_url,
             resources_url: String::new(),
+            sync_cancellation: std::sync::Mutex::new(None),
+            connection_state_listener: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Associate the current background sync loop with this authentication state.
+    /// A rejected refresh token cancels that loop so the app can show reconnect-required.
+    pub fn set_sync_cancellation(&self, cancellation: CancellationToken) {
+        if let Ok(mut current) = self.sync_cancellation.lock() {
+            *current = Some(cancellation);
+        }
+    }
+
+    /// Notify the host application after OAuth connection state changes.
+    pub fn set_connection_state_listener(&self, listener: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut current) = self.connection_state_listener.lock() {
+            *current = Some(listener);
         }
     }
 
@@ -197,22 +236,53 @@ impl JiraAuth {
     }
 
     pub async fn disconnect(&self) -> Result<(), Error> {
+        self.clear_connection().await
+    }
+
+    /// Remove OAuth connection state without touching Jira settings, cache, or task links.
+    async fn clear_connection(&self) -> Result<(), Error> {
         self.store.delete("refresh_token")?;
         self.store.delete("cloud_id")?;
         *self.token_state.lock().await = None;
+
+        if let Ok(mut cancellation) = self.sync_cancellation.lock() {
+            if let Some(cancellation) = cancellation.take() {
+                cancellation.cancel();
+            }
+        }
+        if let Some(listener) = self
+            .connection_state_listener
+            .lock()
+            .ok()
+            .and_then(|listener| listener.clone())
+        {
+            listener();
+        }
+
         Ok(())
     }
 
     pub async fn access_token(&self) -> Result<String, Error> {
-        {
-            let state = self.token_state.lock().await;
-            if let Some(ts) = state.as_ref() {
-                if ts.expires_at > std::time::Instant::now() + Duration::from_secs(60) {
-                    return Ok(ts.access_token.clone());
-                }
-            }
+        if let Some(token) = self.valid_cached_token().await {
+            return Ok(token);
         }
+
+        // Refresh-token rotation invalidates the previous token. Serialize refreshes and
+        // recheck the cache after acquiring the lock so concurrent callers share one grant.
+        let _refresh = self.refresh_lock.lock().await;
+        if let Some(token) = self.valid_cached_token().await {
+            return Ok(token);
+        }
+
         self.refresh().await
+    }
+
+    async fn valid_cached_token(&self) -> Option<String> {
+        let state = self.token_state.lock().await;
+        state.as_ref().and_then(|token| {
+            (token.expires_at > std::time::Instant::now() + Duration::from_secs(60))
+                .then(|| token.access_token.clone())
+        })
     }
 
     /// Clear the cached token so the next access_token() call triggers a refresh.
@@ -238,15 +308,14 @@ impl JiraAuth {
             "refresh_token": refresh_token,
         });
 
-        let resp = self
-            .client
-            .post(&self.token_url)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<TokenResponse>()
-            .await?;
+        let response = self.client.post(&self.token_url).json(&body).send().await?;
+        let resp = match decode_token_response(response).await {
+            Err(Error::TokenRequestFailed(error)) if error == "invalid_grant" => {
+                self.clear_connection().await?;
+                return Err(Error::RefreshTokenRejected);
+            }
+            result => result?,
+        };
 
         self.store_tokens(&resp).await?;
         Ok(resp.access_token)
@@ -267,15 +336,8 @@ impl JiraAuth {
             "code_verifier": verifier,
         });
 
-        self.client
-            .post(&self.token_url)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<TokenResponse>()
-            .await
-            .map_err(Error::from)
+        let response = self.client.post(&self.token_url).json(&body).send().await?;
+        decode_token_response(response).await
     }
 
     async fn fetch_cloud_id(&self, access_token: &str) -> Result<String, Error> {
@@ -308,6 +370,28 @@ impl JiraAuth {
         *self.token_state.lock().await = Some(ts);
         Ok(())
     }
+}
+
+async fn decode_token_response(response: reqwest::Response) -> Result<TokenResponse, Error> {
+    if response.status().is_success() {
+        return response.json::<TokenResponse>().await.map_err(Error::from);
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let error = serde_json::from_str::<TokenErrorResponse>(&body)
+        .ok()
+        .and_then(|response| response.error)
+        .filter(|error| !error.is_empty())
+        .unwrap_or_else(|| {
+            if body.is_empty() {
+                status.to_string()
+            } else {
+                body
+            }
+        });
+
+    Err(Error::TokenRequestFailed(error))
 }
 
 fn generate_pkce() -> (String, String) {
@@ -533,6 +617,79 @@ mod tests {
 
         // Verify new refresh token was stored
         assert_eq!(auth.store.get("refresh_token").unwrap(), "new_refresh");
+    }
+
+    #[tokio::test]
+    async fn concurrent_access_token_calls_share_one_refresh() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("refresh_token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "refreshed_access",
+                "refresh_token": "new_refresh",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let store = MemStore::new();
+        store.set("refresh_token", "old_refresh").unwrap();
+        let auth = JiraAuth::with_test_config(
+            "https://mysite.atlassian.net",
+            Box::new(store),
+            format!("{}/oauth/token", mock_server.uri()),
+            String::new(),
+        );
+
+        let (first, second) = tokio::join!(auth.access_token(), auth.access_token());
+        assert_eq!(first.unwrap(), "refreshed_access");
+        assert_eq!(second.unwrap(), "refreshed_access");
+        mock_server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn rejected_refresh_clears_connection_for_reconnect() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("refresh_token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_grant"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let store = MemStore::with_entries(vec![
+            ("refresh_token", "revoked_refresh"),
+            ("cloud_id", "cloud-123"),
+        ]);
+        let auth = JiraAuth::with_test_config(
+            "https://mysite.atlassian.net",
+            Box::new(store),
+            format!("{}/oauth/token", mock_server.uri()),
+            String::new(),
+        );
+
+        let cancellation = CancellationToken::new();
+        auth.set_sync_cancellation(cancellation.clone());
+        let state_changed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state_changed_listener = state_changed.clone();
+        auth.set_connection_state_listener(std::sync::Arc::new(move || {
+            state_changed_listener.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        assert!(matches!(
+            auth.access_token().await,
+            Err(Error::RefreshTokenRejected)
+        ));
+        assert!(!auth.is_connected());
+        assert!(auth.cloud_id().is_err());
+        assert!(cancellation.is_cancelled());
+        assert!(state_changed.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]

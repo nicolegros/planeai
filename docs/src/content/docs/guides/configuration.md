@@ -232,10 +232,12 @@ planeai can sync issues from Jira Cloud into the local task board and write stat
 
 #### Authentication
 
-Jira integration uses OAuth 2.0 with PKCE. Connect via **Preferences → Jira → Connect to Jira**, which opens the Atlassian consent screen in your browser. Tokens are stored locally in the app data directory.
+Jira integration uses Atlassian OAuth 2.0 (3LO) with PKCE. Connect via **Preferences → Jira → Connect to Jira**, which opens the Atlassian consent screen in your browser. It uses the fixed callback `http://localhost:19287/callback` and requests only `read:jira-work`, `write:jira-work`, and `offline_access`. Refresh tokens and the selected cloud ID are stored locally in the app data directory.
+
+If Atlassian rejects or revokes a refresh token, PlaneAI clears only those OAuth values and shows **Connect to Jira** again. Your Jira site, sources, cached issues, and task links remain intact.
 
 :::note
-Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` environment variables (see `.env.example`). Without them the build succeeds but OAuth will not work at runtime.
+Jira is a bundled-plugin exception (ADR-0011). Release artifacts include the Atlassian 3LO client ID and secret, so the secret is extractable rather than confidential. PlaneAI release engineering owns the registration and rotates the protected GitHub Actions release secrets through a new release. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` environment variables (see `.env.example`); without them the build succeeds but OAuth will not work at runtime.
 :::
 
 #### Departed issues

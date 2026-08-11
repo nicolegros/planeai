@@ -74,6 +74,7 @@ impl JiraState {
             listener,
         )));
         self.writeback = Some(Arc::new(JiraWriteback::new(client)));
+        self.auth.set_sync_cancellation(cancel.clone());
         self.cancel = Some(cancel.clone());
         Ok(cancel)
     }
@@ -133,6 +134,12 @@ pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
     let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
     let token_dir = planeai_paths::app_data_dir().join("jira-tokens");
     let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
+    let connection_state_app = app.clone();
+    auth.set_connection_state_listener(Arc::new(move || {
+        if let Err(error) = connection_state_app.emit("jira-connection-state-changed", ()) {
+            tracing::warn!(error = %error, "failed to emit Jira connection state change");
+        }
+    }));
 
     let db_path = planeai_paths::db_path();
     let conn = match Connection::open(&db_path) {
