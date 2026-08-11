@@ -92,6 +92,15 @@ export function lockSelectionToOriginSide(
   return { start: range.start, end: range.end, side: originSide };
 }
 
+/** Compare an existing comment with a visual selection after normalizing drag direction. */
+export function commentRangeOverlapsSelection(
+  comment: Pick<CommentLineTarget, "startLine" | "endLine">,
+  selection: SelectedLineRange,
+): boolean {
+  const target = commentTargetFromSelection(selection);
+  return comment.startLine <= target.endLine && comment.endLine >= target.startLine;
+}
+
 /**
  * Same-file line selection must not destroy an in-progress draft. File
  * changes and diff rebuilds need an explicit discard decision.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPointerSelectionRange,
+  commentRangeOverlapsSelection,
   commentTargetFromSelection,
   gutterActionAnchor,
   lockSelectionToOriginSide,
@@ -62,6 +63,21 @@ describe("diff review mouse interaction policy", () => {
       endLine: 4,
       type: "line",
     });
+  });
+
+  it("detects comment overlap for selected ranges in either drag direction", () => {
+    expect(
+      commentRangeOverlapsSelection(
+        { startLine: 8, endLine: 10 },
+        { start: 12, end: 9, side: "additions" },
+      ),
+    ).toBe(true);
+    expect(
+      commentRangeOverlapsSelection(
+        { startLine: 1, endLine: 4 },
+        { start: 12, end: 9, side: "additions" },
+      ),
+    ).toBe(false);
   });
 
   it("locks split-diff drags to their origin side after crossing the gutter", () => {

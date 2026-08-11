@@ -24,7 +24,8 @@
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import { rebuildItemWithFullContent } from "../lib/diff-expansion";
   import type { MenuItem } from "./ui/ContextMenu.svelte";
-  import { buildPointerSelectionRange, commentTargetFromSelection, gutterActionAnchor, lockSelectionToOriginSide, pointerSelectionMode, selectionForContextMenu, selectionLabel, shouldClearSelectionAfterClick, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
+  import { buildPointerSelectionRange, commentRangeOverlapsSelection, commentTargetFromSelection, gutterActionAnchor, lockSelectionToOriginSide, pointerSelectionMode, selectionForContextMenu, selectionLabel, shouldClearSelectionAfterClick, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
+  import { renderCommentAnnotation } from "../lib/comment-annotation";
 
   interface Props {
     repoPath: string;
@@ -134,6 +135,7 @@
 
   async function refresh(confirmDraft = true) {
     if (confirmDraft && !prepareForNavigation("reload")) return;
+    clearSelection();
     loading = true;
     try {
       await loadAllDiffs();
@@ -346,6 +348,11 @@
   }
 
   function openEditComment(comment: ReviewComment) {
+    if (showCommentInput && editingCommentId === comment.id) {
+      commentInputEl?.focus();
+      return;
+    }
+    if (!prepareForNavigation("change-file")) return;
     commentStartLine = comment.startLine;
     commentEndLine = comment.endLine;
     commentType = comment.type;
@@ -1015,27 +1022,15 @@
       renderAnnotation(annotation) {
         const comment = annotation.metadata as ReviewComment | undefined;
         if (!comment) return undefined;
-        const el = document.createElement("div");
-        el.style.cssText = "padding:6px 10px;margin:2px 0;border-radius:4px;font-size:12px;line-height:1.4;display:flex;align-items:flex-start;gap:8px;cursor:pointer;background:var(--comment-bg,rgba(128,128,128,0.1));border:1px solid var(--comment-border,rgba(128,128,128,0.2))";
-        el.dataset.reviewCommentId = comment.id;
-        el.onclick = () => openEditComment(comment);
-        el.oncontextmenu = (event) => openCommentContextMenu(event, comment);
-        const text = document.createElement("span");
-        text.style.cssText = "flex:1;white-space:pre-wrap;word-break:break-word";
-        text.textContent = comment.text;
-        const edit = document.createElement("button");
-        edit.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:12px";
-        edit.textContent = "✎";
-        edit.title = "Edit comment";
-        edit.onclick = (event) => { event.stopPropagation(); openEditComment(comment); };
-        const del = document.createElement("button");
-        del.style.cssText = "background:none;border:none;cursor:pointer;padding:2px;color:#888;font-size:14px";
-        del.textContent = "×";
-        del.onclick = (event) => { event.stopPropagation(); removeComment(sessionId, comment.id); updateAnnotations(); };
-        el.appendChild(text);
-        el.appendChild(edit);
-        el.appendChild(del);
-        return el;
+        return renderCommentAnnotation(comment, {
+          onOpen: () => openEditComment(comment),
+          onEdit: () => openEditComment(comment),
+          onDelete: () => {
+            removeComment(sessionId, comment.id);
+            updateAnnotations();
+          },
+          onContextMenu: (event) => openCommentContextMenu(event, comment),
+        });
       },
       layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
     }, getWorkerPool());
@@ -1243,7 +1238,7 @@
 
     const comment = getComments(sessionId).find((candidate) =>
       candidate.filePath === files[selectedIndex]?.path
-      && candidate.startLine <= menu.range.end && candidate.endLine >= menu.range.start,
+      && commentRangeOverlapsSelection(candidate, menu.range),
     );
     return [
       { label: selectionLabel(menu.range), onSelect: () => openCommentForSelection(menu.range) },
@@ -1411,13 +1406,22 @@
     {#if diffStyle === "split" && currentFileComments.length > 0 && !showCommentInput}
       <div class="absolute top-[42px] left-0 right-0 z-10 border-b border-border bg-chrome max-h-[200px] overflow-y-auto">
         {#each currentFileComments as comment (comment.id)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0 cursor-pointer" onclick={() => openEditComment(comment)} oncontextmenu={(event) => openCommentContextMenu(event, comment)}>
-            <span class="shrink-0 text-[10px] text-t3 font-mono pt-0.5">{comment.type === "hunk" ? `L${comment.startLine}–${comment.endLine}` : `L${comment.startLine}`}</span>
-            <span class="flex-1 text-[12px] text-t1 whitespace-pre-wrap break-words">{comment.text}</span>
-            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={(event) => { event.stopPropagation(); openEditComment(comment); }} title="Edit">✎</button>
-            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={(event) => { event.stopPropagation(); removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
+          <div
+            class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0"
+            role="group"
+            aria-label="Review comment"
+            oncontextmenu={(event) => openCommentContextMenu(event, comment)}
+          >
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-start gap-2 text-left"
+              onclick={() => openEditComment(comment)}
+            >
+              <span class="shrink-0 text-[10px] text-t3 font-mono pt-0.5">{comment.type === "hunk" ? `L${comment.startLine}–${comment.endLine}` : `L${comment.startLine}`}</span>
+              <span class="text-[12px] text-t1 whitespace-pre-wrap break-words">{comment.text}</span>
+            </button>
+            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} title="Edit">✎</button>
+            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={() => { removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
           </div>
         {/each}
       </div>
