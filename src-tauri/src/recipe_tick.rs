@@ -2153,11 +2153,20 @@ fn render_prompt_inner(
     loop_id: &str,
     candidates_context: Option<&str>,
 ) -> String {
-    use minijinja::{context, Environment};
+    use minijinja::{context, escape_formatter, value::ValueKind, Environment};
 
     let mut env = Environment::new();
     // Disable auto-escaping (templates produce plain text, not HTML)
     env.set_auto_escape_callback(|_| minijinja::AutoEscape::None);
+    // Recipe inputs are JSON values; retain their lowercase JSON boolean representation.
+    env.set_formatter(|out, state, value| {
+        if value.kind() == ValueKind::Bool {
+            out.write_str(if value.is_true() { "true" } else { "false" })?;
+            Ok(())
+        } else {
+            escape_formatter(out, state, value)
+        }
+    });
 
     if let Err(e) = env.add_template("prompt", template) {
         tracing::warn!(error = %e, "recipe template parse failed; using raw template");
