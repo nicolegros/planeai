@@ -49,7 +49,7 @@
     "@tauri-apps/cli": "2.11.4",
     "@typescript/typescript6": "6.0.2",
     "auto": "^11.3.6",
-    "jsdom": "30.0.0",
+    "jsdom": "30.0.1",
     "oxfmt": "^0.62.0",
     "oxlint": "1.77.0",
     "svelte": "5.56.8",
