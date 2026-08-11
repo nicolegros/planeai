@@ -8,8 +8,9 @@
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
-  import { Palette, Bot, ListTodo, Settings, Cable, RefreshCw } from "@lucide/svelte";
+  import { Palette, Bot, ListTodo, Settings, Cable, RefreshCw, Puzzle } from "@lucide/svelte";
   import JiraSettings from "./JiraSettings.svelte";
+  import PluginManager from "./PluginManager.svelte";
 
   const config = $derived(getSettings());
   let fontItems = $state<{ value: string; label: string }[]>([]);
@@ -223,7 +224,7 @@
 
 <div class="h-screen flex flex-col overflow-hidden bg-panel">
   <nav class="flex justify-center gap-1 border-b border-border px-8 pt-4">
-    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Integrations", icon: Cable}, {name: "More", icon: Settings}] as tab (tab.name)}
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Integrations", icon: Cable}, {name: "Plugins", icon: Puzzle}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
         class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-accent text-accent' : 'border-transparent text-t3 hover:text-t1'}"
         onclick={() => activeTab = tab.name}
@@ -545,6 +546,10 @@
 
     {#if activeTab === "Integrations"}
     <JiraSettings />
+    {/if}
+
+    {#if activeTab === "Plugins"}
+    <PluginManager />
     {/if}
 
     {#if activeTab === "More"}

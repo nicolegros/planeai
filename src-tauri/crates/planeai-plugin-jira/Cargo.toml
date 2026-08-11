@@ -1,0 +1,13 @@
+[package]
+name = "planeai-plugin-jira"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "planeai-plugin-jira"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

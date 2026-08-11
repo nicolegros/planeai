@@ -10,6 +10,7 @@ members = [
   "planeai-jira",
   "crates/planeai-cli-bin",
   "crates/planeai-daemon-bin",
+  "crates/planeai-plugin-jira",
 ]
 resolver = "2"
 
@@ -23,6 +24,7 @@ tokio = { version = "1", features = [
   "rt-multi-thread",
   "time",
   "io-util",
+  "io-std",
   "net",
 ] }
 tokio-util = "0.7"

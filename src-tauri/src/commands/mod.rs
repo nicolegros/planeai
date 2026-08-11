@@ -8,6 +8,7 @@ pub mod git;
 pub mod jira;
 pub mod loops;
 pub mod notify;
+pub mod plugins;
 pub mod pr;
 pub mod pr_comments;
 pub mod projects;
@@ -25,6 +26,7 @@ pub use git::*;
 pub use jira::*;
 pub use loops::*;
 pub use notify::*;
+pub use plugins::*;
 pub use pr::{
     create_pr, fetch_pr_url, generate_pr_defaults, get_allowed_merge_strategies, get_ci_checks,
     get_merge_conflict_status, get_merge_state, get_pr_status, link_pr_url, mark_pr_ready,

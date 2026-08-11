@@ -16,7 +16,7 @@ fi
 
 mkdir -p binaries
 
-for bin in planeai-cli planeai-daemon; do
+for bin in planeai-cli planeai-daemon planeai-plugin-jira; do
   path="binaries/${bin}-${TARGET}${EXT}"
   if [[ ! -f "$path" ]]; then
     touch "$path"

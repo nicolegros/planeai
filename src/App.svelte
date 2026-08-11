@@ -42,8 +42,9 @@
   import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
+  import PluginWorkspaceHost from "./components/PluginWorkspaceHost.svelte";
   import * as loopStore from "./lib/loop-store.svelte";
-  import { loops as loopsApi } from "./lib/api";
+  import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
   import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
@@ -71,6 +72,8 @@
   let quitDirectCount = $state(0);
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
+  let activePluginId = $state<string | null>(null);
+  let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
 
   // PR form state
   let showPrForm = $state(false);
@@ -209,6 +212,7 @@
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
+  const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
   const ciStatus = $derived.by(() => {
@@ -745,6 +749,24 @@
     loopStore.refreshAllLoops(projects.map(p => p.id));
   }
 
+  // ─── Plugin workspace ─────────────────────────────────────────────────────
+
+  async function refreshPlugins() {
+    try {
+      pluginInventory = await pluginsApi.list();
+    } catch (error) {
+      console.warn("Failed to load plugin inventory", error);
+    }
+  }
+
+  async function openPluginPage(pluginId: string) {
+    await refreshPlugins();
+    if (pluginInventory.some((plugin) => plugin.id === pluginId)) {
+      loopStore.setActiveLoopId(null);
+      activePluginId = pluginId;
+    }
+  }
+
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
   /** Valid IDs for MRU cycling — includes session IDs + loop:<id> entries. */
@@ -767,6 +789,7 @@
     });
     orchestrator.loadSessions();
     loadSettings().then(() => loadTheme());
+    void refreshPlugins();
 
     const cleanupEvents = orchestrator.startEventListeners();
     const cleanupSymphony = orchestrator.startSymphonyPolling();
@@ -775,6 +798,14 @@
     const cleanupLoopListener = loopStore.startLoopEventListener(() => projectStore.getProjects().map((p) => p.id));
     const unlistenSettings = listen("settings-changed", () => { loadSettings().then(() => loadTheme()); });
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
+    const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
+      pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
+      if (activePluginId === event.payload.id && event.payload.state !== "running") activePluginId = null;
+    });
+    const unlistenPluginPage = listen<string>("plugin-page-open", (event) => { void openPluginPage(event.payload); });
+    const unlistenPluginPageClose = listen<string>("plugin-page-close", (event) => {
+      if (activePluginId === event.payload) activePluginId = null;
+    });
 
     startJiraDepartedListening();
     initUpdateListener();
@@ -902,7 +933,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginPage.then((fn) => fn()); unlistenPluginPageClose.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -938,7 +969,7 @@
   {#if sidebarVisible}
       <UnifiedSidebar
         {renamingSessionId}
-        onSelectSession={(id) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(id); }}
+        onSelectSession={(id) => { activePluginId = null; loopStore.setActiveLoopId(null); orchestrator.selectSession(id); }}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
         onRestartSession={(s) => orchestrator.restartSession(s)}
@@ -950,7 +981,7 @@
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showTaskForm = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        onSelectLoop={(id) => { loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
+        onSelectLoop={(id) => { activePluginId = null; loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -1144,12 +1175,26 @@
 
     <!-- Always render through split tree (single leaf = normal view) -->
     {#if splitTreeNode}
-      <div class:hidden={!!activeLoopId} class="w-full h-full">
+      <div class:hidden={!!activeLoopId || !!activePluginId} class="w-full h-full">
         <SplitContainer node={splitTreeNode} renderLeaf={splitLeafSnippet} />
       </div>
     {/if}
 
-    {#if activeLoopId}
+    {#if activePluginId}
+      <div class="w-full h-full bg-main">
+        <div class="flex items-center gap-3 border-b border-border px-4 py-2">
+          <button class="text-xs text-t2 hover:text-t1" onclick={() => { activePluginId = null; }}>← Back to workspace</button>
+          <span class="text-sm font-medium text-t1">{activePlugin?.name ?? "Plugin"}</span>
+        </div>
+        {#if activePlugin}
+          <div class="h-[calc(100%-41px)]"><PluginWorkspaceHost plugin={activePlugin} /></div>
+        {:else}
+          <div class="flex h-[calc(100%-41px)] items-center justify-center text-sm text-t3">Plugin is no longer available.</div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeLoopId && !activePluginId}
       {@const loopProjectPath = (() => { const loops = projects.flatMap(p => loopStore.getLoopsForProject(p.id)); const loop = loops.find(l => l.id === activeLoopId); return loop ? (projects.find(p => p.id === loop.project_id)?.path ?? "") : ""; })()}
       <div class="w-full h-full bg-main">
         <LoopDashboard
@@ -1171,7 +1216,7 @@
       </div>
     {/if}
 
-    {#if sessions.length === 0 && !showProjectForm && !showSessionForm && !activeLoopId}
+    {#if sessions.length === 0 && !showProjectForm && !showSessionForm && !activeLoopId && !activePluginId}
       <div class="flex items-center justify-center h-full">
         <p class="text-t2">No active session. Press <kbd class="rounded border border-border px-1.5 py-0.5 text-xs font-mono">{MOD_LABEL}N</kbd> to create one.</p>
       </div>

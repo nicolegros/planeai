@@ -15,6 +15,7 @@ mod logging;
 mod notify;
 mod output_observer;
 mod paths;
+mod plugins;
 mod pr;
 mod pty;
 mod pty_planeai_core_adapter;
@@ -118,6 +119,19 @@ fn main() {
             db::migrate(&conn).expect("failed to run migrations");
             planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
             planeai_jira::db::migrate(&conn).expect("failed to run jira migrations");
+            plugins::migrate(&conn).expect("failed to run plugin runtime migrations");
+            let bundled_plugins =
+                plugins::bundled_manifests().expect("invalid bundled plugin manifest");
+            plugins::sync_inventory(&conn, &bundled_plugins)
+                .expect("failed to persist bundled plugin inventory");
+            let interrupted_plugins = plugins::reconcile_interrupted_runs(&conn)
+                .expect("failed to reconcile plugin runtime state");
+            if interrupted_plugins > 0 {
+                tracing::warn!(
+                    count = interrupted_plugins,
+                    "reconciled interrupted plugin runtimes"
+                );
+            }
             tracing::info!("database initialized");
 
             // Config: migrate from DB if needed, then load
@@ -220,6 +234,10 @@ fn main() {
 
             let db_arc = Arc::new(Mutex::new(conn));
             app.manage(DbState(db_arc.clone()));
+            app.manage(plugins::PluginRuntimeHandle::new(
+                db_arc.clone(),
+                app.handle().clone(),
+            ));
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -381,6 +399,11 @@ fn main() {
             jira_status,
             assign_jira_task,
             mark_jira_task_done,
+            list_plugins,
+            enable_plugin,
+            disable_plugin,
+            reload_plugin,
+            jira_plugin_status,
             list_loop_runs,
             get_loop_run_detail,
             list_loop_recipes,
