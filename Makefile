@@ -32,7 +32,19 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--backend iced-alacritty
 
 sidecars:
-	node scripts/build-sidecars.mjs
+	cd src-tauri && ./scripts/ensure-sidecars.sh
+	cd src-tauri && \
+	TARGET="$${TAURI_ENV_TARGET_TRIPLE:-$$(rustc --print host-tuple)}"; \
+	EXT=""; case "$$TARGET" in *windows*) EXT=".exe";; esac; \
+	cargo build --release --target "$$TARGET" \
+		-p planeai-cli-bin \
+		-p planeai-daemon-bin \
+		-p planeai-plugin-jira; \
+	for binary in planeai-cli planeai-daemon planeai-plugin-jira; do \
+		cp "target/$$TARGET/release/$$binary$$EXT" "binaries/$$binary-$$TARGET$$EXT"; \
+	done; \
+	if [ "$$EXT" != ".exe" ]; then chmod +x binaries/planeai-cli-"$$TARGET" binaries/planeai-daemon-"$$TARGET" binaries/planeai-plugin-jira-"$$TARGET"; fi
+	cd src-tauri && cargo build -p planeai-plugin-jira
 
 build: sidecars
 	$(SIGNING_ENV) pnpm exec tauri build -b app
