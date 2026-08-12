@@ -74,6 +74,34 @@ export interface CiCheck {
   url: string | null;
 }
 
+// ─── Plugin runtime types ───────────────────────────────────────────────────
+
+export type PluginSourceKind = "builtin" | "local";
+export type PluginRuntimeState = "disabled" | "starting" | "running" | "stopping" | "error";
+
+export interface PluginInventory {
+  id: string;
+  name: string;
+  version: string;
+  host_api_version: string;
+  source_kind: PluginSourceKind;
+  backend_entrypoint: string;
+  ui_entrypoint: string | null;
+  enabled: boolean;
+  state: PluginRuntimeState;
+  last_error: string | null;
+  log_path: string | null;
+}
+
+export interface JiraPluginStatus {
+  plugin_id: string;
+  plugin_name: string;
+  plugin_version: string;
+  host_api_version: string;
+  runtime_state: PluginRuntimeState;
+  last_error: string | null;
+}
+
 export interface CommitEntry {
   sha: string;
   short_sha: string;

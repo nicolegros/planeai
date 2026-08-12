@@ -14,6 +14,8 @@ import type {
   JiraStatus,
   SyncResult,
   JiraTasksResponse,
+  PluginInventory,
+  JiraPluginStatus,
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
@@ -241,6 +243,14 @@ export const jira = {
   listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
   assign: (jiraTaskKey: string, projectId: string) =>
     invoke<TaskItem>("assign_jira_task", { jiraTaskKey, projectId }),
+};
+
+export const plugins = {
+  list: () => invoke<PluginInventory[]>("list_plugins"),
+  enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
+  disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
+  reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
+  jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
 };
 
 export const preferences = {

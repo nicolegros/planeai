@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/build-sidecars.mjs --run-tauri",
     "run:build": "./src-tauri/target/release/planeai",
     "lint": "oxlint",
     "fmt": "oxfmt --ignore-path .oxfmtignore",

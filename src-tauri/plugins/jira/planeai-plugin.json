@@ -1,0 +1,10 @@
+{
+  "schema": "planeai.plugin.v1",
+  "id": "jira",
+  "name": "Jira",
+  "version": "0.1.0",
+  "host_api_version": "planeai.plugin-host.v1",
+  "source_kind": "builtin",
+  "backend_entrypoint": "planeai-plugin-jira",
+  "ui_entrypoint": "jira-status"
+}

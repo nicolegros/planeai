@@ -3419,6 +3419,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "planeai-plugin-jira"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "planeai-pty"
 version = "0.1.0"
 dependencies = [

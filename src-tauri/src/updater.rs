@@ -1,5 +1,7 @@
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
+
+use crate::plugins::PluginRuntimeHandle;
 
 #[derive(Clone, serde::Serialize)]
 struct UpdateAvailablePayload {
@@ -34,7 +36,10 @@ async fn do_check(app: &AppHandle) -> anyhow::Result<()> {
 }
 
 #[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
+pub async fn install_update(
+    app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
     let update = app
         .updater()
         .map_err(|e| e.to_string())?
@@ -43,9 +48,25 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let update = update.ok_or_else(|| "No update available".to_string())?;
-    update
-        .download_and_install(|_, _| {}, || {})
+    let bytes = update
+        .download(|_, _| {}, || {})
         .await
         .map_err(|e| e.to_string())?;
+    if !runtime.0.begin_shutdown() {
+        return Err("plugin runtime is already shutting down".to_string());
+    }
+    let enabled_plugin_ids = match runtime.0.shutdown_for_update().await {
+        Ok(plugin_ids) => plugin_ids,
+        Err(error) => return Err(error),
+    };
+    let install_result =
+        crate::commands::blocking(move || update.install(bytes).map_err(|e| e.to_string())).await;
+    if let Err(error) = install_result {
+        runtime
+            .0
+            .restore_after_failed_update(&enabled_plugin_ids)
+            .await;
+        return Err(error);
+    }
     app.restart();
 }
