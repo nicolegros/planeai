@@ -21,6 +21,7 @@ lint: ## Check formatting and clippy
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev: sidecars
+	cd src-tauri && cargo build -p planeai-plugin-jira
 	RUST_LOG=planeai=debug pnpm exec tauri dev
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
@@ -32,7 +33,7 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--backend iced-alacritty
 
 sidecars:
-	node scripts/build-sidecars.mjs
+	cd src-tauri && ./scripts/ensure-sidecars.sh
 
 build: sidecars
 	$(SIGNING_ENV) pnpm exec tauri build -b app

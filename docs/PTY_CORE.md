@@ -57,10 +57,10 @@ Set the `PLANEAI_LOCAL_PTY_CORE` environment variable:
 
 ```bash
 # Legacy (default) — uses existing production pty.rs code path
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=legacy make dev
 
 # planeai-pty — uses the shared crate via the adapter
-PLANEAI_LOCAL_PTY_CORE=planeai-pty pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=planeai-pty make dev
 ```
 
 The app logs which mode is active at startup:
@@ -102,7 +102,7 @@ Example:
 ```bash
 PLANEAI_LOCAL_PTY_CORE=planeai-pty \
 PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
-pnpm tauri dev
+make dev
 ```
 
 ## Metadata sidecar schema

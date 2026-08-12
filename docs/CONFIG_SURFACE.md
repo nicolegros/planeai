@@ -132,13 +132,13 @@ Use env vars to control PTY implementation:
 
 ```bash
 # Roll back daemon PTY to legacy
-PLANEAI_DAEMON_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_DAEMON_PTY_CORE=legacy make dev
 
 # Use modern planeai-pty for daemon sessions
-PLANEAI_DAEMON_PTY_CORE=planeai-pty pnpm tauri dev
+PLANEAI_DAEMON_PTY_CORE=planeai-pty make dev
 
 # Roll back local PTY to legacy
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=legacy make dev
 ```
 
 ### Resolution order

@@ -56,7 +56,7 @@ Themes are plain CSS files in `~/.config/planeai/themes/`. See the [theming guid
 
 ```bash
 pnpm install
-pnpm tauri dev
+make dev
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for prerequisites, testing, and contribution guidelines.
