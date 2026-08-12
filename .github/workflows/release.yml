@@ -190,26 +190,7 @@ jobs:
           if [[ -z "$TARGET" ]]; then
             TARGET="$(rustc --print host-tuple)"
           fi
-          EXT=""
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            EXT=".exe"
-          fi
-
-          ./scripts/ensure-sidecars.sh
-          cargo build --release --target "$TARGET" \
-            -p planeai-cli-bin \
-            -p planeai-daemon-bin \
-            -p planeai-plugin-jira
-
-          cp "target/${TARGET}/release/planeai-cli${EXT}" \
-             "binaries/planeai-cli-${TARGET}${EXT}"
-          cp "target/${TARGET}/release/planeai-daemon${EXT}" \
-             "binaries/planeai-daemon-${TARGET}${EXT}"
-          cp "target/${TARGET}/release/planeai-plugin-jira${EXT}" \
-             "binaries/planeai-plugin-jira-${TARGET}${EXT}"
-          chmod +x "binaries/planeai-cli-${TARGET}${EXT}" \
-            "binaries/planeai-daemon-${TARGET}${EXT}" \
-            "binaries/planeai-plugin-jira-${TARGET}${EXT}"
+          TAURI_ENV_TARGET_TRIPLE="$TARGET" ./scripts/ensure-sidecars.sh
 
           # Clean the main planeai package so tauri-action fully rebuilds + bundles it
           cargo clean -p planeai --release --target "$TARGET"

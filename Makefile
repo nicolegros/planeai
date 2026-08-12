@@ -21,6 +21,7 @@ lint: ## Check formatting and clippy
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev: sidecars
+	cd src-tauri && cargo build -p planeai-plugin-jira
 	RUST_LOG=planeai=debug pnpm exec tauri dev
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
@@ -32,20 +33,7 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--backend iced-alacritty
 
 sidecars:
-	cd src-tauri && \
-	set -e; \
-	TARGET="$${TAURI_ENV_TARGET_TRIPLE:-$$(rustc --print host-tuple)}"; \
-	TAURI_ENV_TARGET_TRIPLE="$$TARGET" ./scripts/ensure-sidecars.sh; \
-	EXT=""; case "$$TARGET" in *windows*) EXT=".exe";; esac; \
-	cargo build --release --target "$$TARGET" \
-		-p planeai-cli-bin \
-		-p planeai-daemon-bin \
-		-p planeai-plugin-jira; \
-	for binary in planeai-cli planeai-daemon planeai-plugin-jira; do \
-		cp "target/$$TARGET/release/$$binary$$EXT" "binaries/$$binary-$$TARGET$$EXT"; \
-	done; \
-	if [ "$$EXT" != ".exe" ]; then chmod +x binaries/planeai-cli-"$$TARGET" binaries/planeai-daemon-"$$TARGET" binaries/planeai-plugin-jira-"$$TARGET"; fi
-	cd src-tauri && cargo build -p planeai-plugin-jira
+	cd src-tauri && ./scripts/ensure-sidecars.sh
 
 build: sidecars
 	$(SIGNING_ENV) pnpm exec tauri build -b app
