@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{timeout, Duration};
@@ -16,6 +17,8 @@ use crate::commands;
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
 const JIRA_PLUGIN_ID: &str = "jira";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
 
@@ -193,7 +196,11 @@ pub fn encode_json_rpc_line(id: u64, method: &str, params: Value) -> Result<Stri
         params,
     })
     .map_err(|e| format!("failed to encode JSON-RPC request: {e}"))?;
-    Ok(format!("{value}\n"))
+    let frame = format!("{value}\n");
+    if frame.len() > MAX_RPC_FRAME_BYTES as usize {
+        return Err("plugin JSON-RPC request exceeded the frame limit".to_string());
+    }
+    Ok(frame)
 }
 
 fn decode_json_rpc_response(line: &str, expected_id: u64) -> Result<Value, String> {
@@ -381,7 +388,10 @@ impl PluginRuntimeHandle {
         Self(Arc::new(PluginRuntimeSupervisor {
             db,
             app,
-            processes: AsyncMutex::new(HashMap::new()),
+            processes: Arc::new(AsyncMutex::new(HashMap::new())),
+            lifecycle: Arc::new(AsyncMutex::new(())),
+            shutting_down: AtomicBool::new(false),
+            exit_permitted: AtomicBool::new(false),
         }))
     }
 }
@@ -389,13 +399,16 @@ impl PluginRuntimeHandle {
 pub struct PluginRuntimeSupervisor {
     db: Arc<Mutex<Connection>>,
     app: AppHandle,
-    processes: AsyncMutex<HashMap<String, Arc<AsyncMutex<RuntimeProcess>>>>,
+    processes: Arc<AsyncMutex<HashMap<String, Arc<AsyncMutex<RuntimeProcess>>>>>,
+    lifecycle: Arc<AsyncMutex<()>>,
+    shutting_down: AtomicBool,
+    exit_permitted: AtomicBool,
 }
 
 struct RuntimeProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: Lines<BufReader<ChildStdout>>,
+    stdout: BufReader<ChildStdout>,
     next_request_id: u64,
 }
 
@@ -413,12 +426,22 @@ impl RuntimeProcess {
             .await
             .map_err(|e| format!("failed to flush plugin JSON-RPC request: {e}"))?;
 
-        let line = timeout(RPC_TIMEOUT, self.stdout.next_line())
-            .await
-            .map_err(|_| format!("plugin RPC {method} timed out"))?
-            .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?
-            .ok_or_else(|| "plugin process closed stdout unexpectedly".to_string())?;
-        decode_json_rpc_response(&line, request_id)
+        let mut bytes = Vec::new();
+        let bytes_read = timeout(
+            RPC_TIMEOUT,
+            (&mut self.stdout)
+                .take(MAX_RPC_FRAME_BYTES)
+                .read_until(b'\n', &mut bytes),
+        )
+        .await
+        .map_err(|_| format!("plugin RPC {method} timed out"))?
+        .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?;
+        if bytes_read == 0 {
+            return Err("plugin process closed stdout unexpectedly".to_string());
+        }
+        let frame = String::from_utf8(bytes)
+            .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))?;
+        decode_json_rpc_frame(&frame, request_id)
     }
 
     fn exited(&mut self) -> Result<Option<String>, String> {
@@ -437,14 +460,13 @@ impl RuntimeProcess {
             Ok(Err(e)) => Err(format!("failed waiting for plugin shutdown: {e}")),
             Err(_) => {
                 self.child
-                    .kill()
-                    .await
+                    .start_kill()
                     .map_err(|e| format!("plugin did not stop and could not be killed: {e}"))?;
-                self.child
-                    .wait()
-                    .await
-                    .map_err(|e| format!("failed waiting for killed plugin: {e}"))?;
-                Ok(())
+                match timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(format!("failed waiting for killed plugin: {e}")),
+                    Err(_) => Err("plugin did not exit after being killed".to_string()),
+                }
             }
         }
     }
@@ -502,7 +524,96 @@ impl PluginRuntimeSupervisor {
             .await
     }
 
+    pub fn begin_shutdown(&self) -> bool {
+        self.shutting_down
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    pub fn permit_exit(&self) {
+        self.exit_permitted.store(true, Ordering::Release);
+    }
+
+    pub fn exit_is_permitted(&self) -> bool {
+        self.exit_permitted.load(Ordering::Acquire)
+    }
+
+    pub async fn shutdown_all(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.shutdown_all_inner().await;
+    }
+
+    pub async fn shutdown_for_update(&self) -> Result<Vec<String>, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let enabled_plugin_ids = match self.list().await {
+            Ok(inventory) => inventory
+                .into_iter()
+                .filter(|plugin| plugin.enabled)
+                .map(|plugin| plugin.id)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                self.shutting_down.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let plugin_ids = self
+            .processes
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for plugin_id in plugin_ids {
+            if let Err(error) = self.disable_inner(&plugin_id).await {
+                tracing::warn!(plugin_id, %error, "failed to stop plugin runtime before update");
+                self.restore_after_failed_update_inner(&enabled_plugin_ids)
+                    .await;
+                return Err(format!(
+                    "failed to stop plugin runtime before update: {error}"
+                ));
+            }
+        }
+        Ok(enabled_plugin_ids)
+    }
+
+    pub async fn restore_after_failed_update(&self, plugin_ids: &[String]) {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.restore_after_failed_update_inner(plugin_ids).await;
+    }
+
+    async fn restore_after_failed_update_inner(&self, plugin_ids: &[String]) {
+        self.shutting_down.store(false, Ordering::Release);
+        for plugin_id in plugin_ids {
+            if let Err(error) = self.enable_inner(plugin_id).await {
+                tracing::warn!(plugin_id, %error, "failed to restore plugin runtime after update install failure");
+            }
+        }
+    }
+
+    async fn shutdown_all_inner(&self) {
+        let plugin_ids = self
+            .processes
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for plugin_id in plugin_ids {
+            if let Err(error) = self.disable_inner(&plugin_id).await {
+                tracing::warn!(plugin_id, %error, "failed to stop plugin runtime during shutdown");
+            }
+        }
+    }
+
     pub async fn enable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("plugin runtime is shutting down".to_string());
+        }
+        self.enable_inner(plugin_id).await
+    }
+
+    async fn enable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         let manifest = bundled_manifest(plugin_id)?;
         let app = self.app.clone();
         let entrypoint = manifest.backend_entrypoint.clone();
@@ -573,15 +684,40 @@ impl PluginRuntimeSupervisor {
         };
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
-        self.processes.lock().await.insert(id.clone(), process);
-        self.update_state(&id, true, PluginRuntimeState::Running, None)
-            .await?;
+        if let Err(error) = self
+            .update_state(&id, true, PluginRuntimeState::Running, None)
+            .await
+        {
+            if let Err(stop_error) = stop_process(process).await {
+                tracing::warn!(plugin_id = %id, %stop_error, "failed to stop plugin after startup persistence failure");
+            }
+            if let Err(recovery_error) = self
+                .update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
+                .await
+            {
+                tracing::warn!(plugin_id = %id, %recovery_error, "failed to record plugin startup persistence failure");
+            }
+            return Err(error);
+        }
+        self.processes
+            .lock()
+            .await
+            .insert(id.clone(), process.clone());
+        self.monitor_process(id.clone(), process);
         self.inventory(&id)
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found after startup: {id}"))
     }
 
     pub async fn disable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("plugin runtime is shutting down".to_string());
+        }
+        self.disable_inner(plugin_id).await
+    }
+
+    async fn disable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
         bundled_manifest(plugin_id)?;
         let inventory = self
             .inventory(plugin_id)
@@ -619,14 +755,60 @@ impl PluginRuntimeSupervisor {
     }
 
     pub async fn reload(&self, plugin_id: &str) -> Result<PluginInventory, String> {
-        self.disable(plugin_id).await?;
-        self.enable(plugin_id).await
+        let _lifecycle = self.lifecycle.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("plugin runtime is shutting down".to_string());
+        }
+        self.disable_inner(plugin_id).await?;
+        self.enable_inner(plugin_id).await
+    }
+
+    fn monitor_process(&self, plugin_id: String, process: Arc<AsyncMutex<RuntimeProcess>>) {
+        let db = self.db.clone();
+        let app = self.app.clone();
+        let processes = self.processes.clone();
+        let lifecycle = self.lifecycle.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(PROCESS_MONITOR_INTERVAL).await;
+                let outcome = {
+                    let mut runtime = process.lock().await;
+                    runtime.exited()
+                };
+                let (error, stop_process_after_removal) = match outcome {
+                    Ok(Some(error)) => (error, false),
+                    Ok(None) => continue,
+                    Err(error) => (error, true),
+                };
+
+                let _lifecycle = lifecycle.lock().await;
+                let owns_process = {
+                    let mut active_processes = processes.lock().await;
+                    remove_current_process(&mut active_processes, &plugin_id, &process)
+                };
+                if !owns_process {
+                    return;
+                }
+                if stop_process_after_removal {
+                    if let Err(stop_error) = stop_process(process.clone()).await {
+                        tracing::warn!(plugin_id, %stop_error, "failed to stop unhealthy plugin runtime");
+                    }
+                }
+                if let Err(update_error) =
+                    record_monitored_process_failure(db, app, plugin_id.clone(), error).await
+                {
+                    tracing::warn!(plugin_id, %update_error, "failed to record plugin runtime exit");
+                }
+                return;
+            }
+        });
     }
 
     pub async fn jira_status(&self, plugin_id: &str) -> Result<JiraPluginStatus, String> {
         if plugin_id != JIRA_PLUGIN_ID {
             return Err(format!("plugin does not expose jira.status: {plugin_id}"));
         }
+        let _lifecycle = self.lifecycle.lock().await;
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -695,6 +877,13 @@ impl PluginRuntimeSupervisor {
     }
 }
 
+fn decode_json_rpc_frame(frame: &str, request_id: u64) -> Result<Value, String> {
+    let line = frame
+        .strip_suffix('\n')
+        .ok_or_else(|| "plugin JSON-RPC response was not newline terminated".to_string())?;
+    decode_json_rpc_response(line, request_id)
+}
+
 fn status_from_inventory(inventory: &PluginInventory) -> JiraPluginStatus {
     JiraPluginStatus {
         plugin_id: inventory.id.clone(),
@@ -724,7 +913,8 @@ async fn spawn_runtime(binary: &Path, log_path: &Path) -> Result<RuntimeProcess,
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
     planeai_core::command::no_window_tokio(&mut command);
     let mut child = command
         .spawn()
@@ -743,7 +933,7 @@ async fn spawn_runtime(binary: &Path, log_path: &Path) -> Result<RuntimeProcess,
     Ok(RuntimeProcess {
         child,
         stdin,
-        stdout: BufReader::new(stdout).lines(),
+        stdout: BufReader::new(stdout),
         next_request_id: 0,
     })
 }
@@ -770,6 +960,72 @@ async fn stop_process(process: Arc<AsyncMutex<RuntimeProcess>>) -> Result<(), St
     runtime.stop().await
 }
 
+fn remove_current_process<T>(
+    processes: &mut HashMap<String, Arc<T>>,
+    plugin_id: &str,
+    expected: &Arc<T>,
+) -> bool {
+    match processes.get(plugin_id) {
+        Some(current) if Arc::ptr_eq(current, expected) => processes.remove(plugin_id).is_some(),
+        _ => false,
+    }
+}
+
+async fn record_monitored_process_failure(
+    db: Arc<Mutex<Connection>>,
+    app: AppHandle,
+    plugin_id: String,
+    error: String,
+) -> Result<(), String> {
+    let update_id = plugin_id.clone();
+    let inventory = commands::blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        set_state(
+            &conn,
+            &update_id,
+            false,
+            PluginRuntimeState::Error,
+            Some(&error),
+        )?;
+        get_inventory(&conn, &update_id).map_err(|e| e.to_string())
+    })
+    .await?
+    .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+    if let Err(emit_error) = app.emit("plugin-runtime-changed", inventory) {
+        tracing::warn!(plugin_id, %emit_error, "failed to emit plugin runtime update");
+    }
+    Ok(())
+}
+
+fn packaged_linux_sidecar_path(resource_dir: &Path, binary_name: &str) -> Option<PathBuf> {
+    let lib_dir = resource_dir.parent()?;
+    let usr_dir = lib_dir.parent()?;
+    (lib_dir.file_name()? == "lib" && usr_dir.file_name()? == "usr")
+        .then(|| usr_dir.join("bin").join(binary_name))
+}
+
+fn packaged_windows_sidecar_path(
+    resource_dir: &Path,
+    executable: &Path,
+    binary_name: &str,
+) -> Option<PathBuf> {
+    let executable_dir = executable.parent()?;
+    (resource_dir.file_name()? == "resources" && resource_dir.parent()? == executable_dir)
+        .then(|| executable_dir.join(binary_name))
+}
+
+fn is_packaged_macos_binary_dir(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "MacOS")
+        && path.parent().is_some_and(|contents_dir| {
+            contents_dir
+                .file_name()
+                .is_some_and(|name| name == "Contents")
+                && contents_dir
+                    .parent()
+                    .is_some_and(|app_dir| app_dir.extension().is_some_and(|ext| ext == "app"))
+        })
+}
+
 fn resolve_trusted_binary(app: &AppHandle, entrypoint: &str) -> Result<PathBuf, String> {
     use tauri::Manager as _;
     if entrypoint != JIRA_BACKEND_ENTRYPOINT {
@@ -784,6 +1040,34 @@ fn resolve_trusted_binary(app: &AppHandle, entrypoint: &str) -> Result<PathBuf, 
         let bundled = resource_dir.join(&binary_name);
         if bundled.is_file() {
             return Ok(bundled);
+        }
+        if cfg!(target_os = "linux") {
+            if let Some(bundled) = packaged_linux_sidecar_path(&resource_dir, &binary_name) {
+                if bundled.is_file() {
+                    return Ok(bundled);
+                }
+            }
+        }
+        if cfg!(target_os = "windows") {
+            if let Ok(executable) = std::env::current_exe() {
+                if let Some(bundled) =
+                    packaged_windows_sidecar_path(&resource_dir, &executable, &binary_name)
+                {
+                    if bundled.is_file() {
+                        return Ok(bundled);
+                    }
+                }
+            }
+        }
+    }
+    if cfg!(target_os = "macos") {
+        if let Ok(executable) = std::env::current_exe() {
+            if let Some(macos_dir) = executable.parent() {
+                let bundled = macos_dir.join(&binary_name);
+                if is_packaged_macos_binary_dir(macos_dir) && bundled.is_file() {
+                    return Ok(bundled);
+                }
+            }
         }
     }
     if cfg!(debug_assertions) {
@@ -892,15 +1176,86 @@ mod tests {
     }
 
     #[test]
+    fn derives_linux_packaged_sidecar_paths_from_resource_directories() {
+        assert_eq!(
+            packaged_linux_sidecar_path(Path::new("/usr/lib/planeai"), "planeai-plugin-jira"),
+            Some(PathBuf::from("/usr/bin/planeai-plugin-jira"))
+        );
+        assert_eq!(
+            packaged_linux_sidecar_path(Path::new("/tmp/resources"), "planeai-plugin-jira"),
+            None
+        );
+    }
+
+    #[test]
+    fn derives_windows_packaged_sidecar_paths_from_resource_directories() {
+        let executable = Path::new("/Program Files/planeai/planeai.exe");
+        assert_eq!(
+            packaged_windows_sidecar_path(
+                Path::new("/Program Files/planeai/resources"),
+                executable,
+                "planeai-plugin-jira.exe"
+            ),
+            Some(PathBuf::from(
+                "/Program Files/planeai/planeai-plugin-jira.exe"
+            ))
+        );
+        assert_eq!(
+            packaged_windows_sidecar_path(
+                Path::new("/tmp/resources"),
+                executable,
+                "planeai-plugin-jira.exe"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn recognizes_only_packaged_macos_binary_directories() {
+        assert!(is_packaged_macos_binary_dir(Path::new(
+            "/Applications/planeai.app/Contents/MacOS"
+        )));
+        assert!(!is_packaged_macos_binary_dir(Path::new(
+            "/tmp/planeai/target/release"
+        )));
+    }
+
+    #[test]
+    fn process_monitor_does_not_remove_a_replacement_runtime() {
+        let original = Arc::new(());
+        let replacement = Arc::new(());
+        let mut processes = HashMap::from([("jira".to_string(), replacement.clone())]);
+
+        assert!(!remove_current_process(&mut processes, "jira", &original));
+        assert!(Arc::ptr_eq(processes.get("jira").unwrap(), &replacement));
+        assert!(remove_current_process(&mut processes, "jira", &replacement));
+        assert!(processes.is_empty());
+    }
+
+    #[test]
     fn json_rpc_uses_newline_frames_and_validates_responses() {
         let frame = encode_json_rpc_line(7, "jira.status", Value::Null).unwrap();
         assert!(frame.ends_with('\n'));
-        let value = decode_json_rpc_response(r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#, 7)
-            .unwrap();
+        assert!(
+            encode_json_rpc_line(7, &"x".repeat(MAX_RPC_FRAME_BYTES as usize), Value::Null)
+                .unwrap_err()
+                .contains("exceeded")
+        );
+        let value = decode_json_rpc_frame(
+            r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}
+"#,
+            7,
+        )
+        .unwrap();
         assert_eq!(value["ok"], true);
         assert!(decode_json_rpc_response("not json", 7)
             .unwrap_err()
             .contains("malformed"));
+        assert!(
+            decode_json_rpc_frame(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#, 7)
+                .unwrap_err()
+                .contains("newline terminated")
+        );
         assert!(
             decode_json_rpc_response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#, 7)
                 .unwrap_err()

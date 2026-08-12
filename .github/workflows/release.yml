@@ -207,6 +207,9 @@ jobs:
              "binaries/planeai-daemon-${TARGET}${EXT}"
           cp "target/${TARGET}/release/planeai-plugin-jira${EXT}" \
              "binaries/planeai-plugin-jira-${TARGET}${EXT}"
+          chmod +x "binaries/planeai-cli-${TARGET}${EXT}" \
+            "binaries/planeai-daemon-${TARGET}${EXT}" \
+            "binaries/planeai-plugin-jira-${TARGET}${EXT}"
 
           # Clean the main planeai package so tauri-action fully rebuilds + bundles it
           cargo clean -p planeai --release --target "$TARGET"
@@ -233,7 +236,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
-          tauriScript: pnpm tauri
+          tauriScript: pnpm exec tauri
           args: ${{ matrix.args }}
 
   publish:

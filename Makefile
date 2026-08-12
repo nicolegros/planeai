@@ -20,9 +20,8 @@ lint: ## Check formatting and clippy
 	cd src-tauri && cargo fmt --all -- --check
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-dev:
-	cd src-tauri && ./scripts/ensure-sidecars.sh
-	RUST_LOG=planeai=debug pnpm tauri dev --release
+dev: sidecars
+	RUST_LOG=planeai=debug pnpm exec tauri dev
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 	cd src-tauri && \
@@ -32,14 +31,14 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 		--planeai-workflow \
 		--backend iced-alacritty
 
-build:
-	cd src-tauri && ./scripts/ensure-sidecars.sh
-	$(SIGNING_ENV) pnpm tauri build -b app
+sidecars:
+	node scripts/build-sidecars.mjs
 
-bundle:
-	pnpm install
-	cd src-tauri && ./scripts/ensure-sidecars.sh
-	$(SIGNING_ENV) pnpm tauri build -b app
+build: sidecars
+	$(SIGNING_ENV) pnpm exec tauri build -b app
+
+bundle: install sidecars
+	$(SIGNING_ENV) pnpm exec tauri build -b app
 	@echo "$(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
 	@echo "✅ Bundle path copied to clipboard"
 
@@ -53,7 +52,7 @@ test:
 test-e2e: build
 	./tests/e2e_session_persistence.sh
 
-dev-bundle:
+dev-bundle: sidecars
 	$(eval BRANCH := $(shell git branch --show-current | sed 's|/|-|g'))
 	$(eval SUFFIX := $(if $(filter main,$(BRANCH)),dev,$(if $(BRANCH),$(shell echo $(BRANCH) | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) printf substr($$i,1,1); printf int(rand()*10)}'),dev)))
 	@# Swap identifier, productName, and binary name for isolated dev build
@@ -61,7 +60,7 @@ dev-bundle:
 	sed -i '' 's/"identifier": "ca.nicolegros.planeai"/"identifier": "ca.nicolegros.planeai.$(SUFFIX)"/' src-tauri/tauri.conf.json
 	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
 	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
-	$(SIGNING_ENV) pnpm tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
+	$(SIGNING_ENV) pnpm exec tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
 	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
 	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app

@@ -414,6 +414,29 @@ fn main() {
             delete_loop,
             updater::install_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if code == Some(tauri::RESTART_EXIT_CODE) {
+                    tracing::warn!(
+                        "restart requested; plugin runtimes cannot be gracefully stopped"
+                    );
+                    return;
+                }
+                let runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
+                if runtime.exit_is_permitted() {
+                    return;
+                }
+                api.prevent_exit();
+                if runtime.begin_shutdown() {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        runtime.shutdown_all().await;
+                        runtime.permit_exit();
+                        app_handle.exit(0);
+                    });
+                }
+            }
+        });
 }

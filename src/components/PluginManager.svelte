@@ -5,6 +5,8 @@
   import type { PluginInventory } from "../lib/types";
   import { Button } from "./ui";
 
+  let { onOpenWorkspace }: { onOpenWorkspace?: () => void | Promise<void> } = $props();
+
   let inventory = $state<PluginInventory[]>([]);
   let busyId = $state<string | null>(null);
   let loadError = $state<string | null>(null);
@@ -36,6 +38,7 @@
 
   async function openWorkspace(plugin: PluginInventory) {
     await emit("plugin-page-open", plugin.id);
+    await onOpenWorkspace?.();
   }
 
   onMount(() => { void refresh(); });

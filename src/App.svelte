@@ -74,6 +74,8 @@
   let showLogViewer = $state(false);
   let activePluginId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  let pluginNavigationGeneration = 0;
+  let pendingPluginPageId: string | null = null;
 
   // PR form state
   let showPrForm = $state(false);
@@ -684,7 +686,7 @@
       if (activeEntry) {
         const sessionId = ptyKeyToSessionId(activeEntry.ptyKey);
         if (sessionId !== activeSessionId) {
-          orchestrator.selectSession(sessionId);
+          selectWorkspaceSession(sessionId);
         }
       }
     }
@@ -751,17 +753,61 @@
 
   // ─── Plugin workspace ─────────────────────────────────────────────────────
 
-  async function refreshPlugins() {
+  async function refreshPlugins(): Promise<boolean> {
     try {
       pluginInventory = await pluginsApi.list();
+      return true;
     } catch (error) {
       console.warn("Failed to load plugin inventory", error);
+      return false;
     }
   }
 
+  function leavePluginWorkspace(): void {
+    pluginNavigationGeneration += 1;
+    pendingPluginPageId = null;
+    activePluginId = null;
+  }
+
+  function invalidatePluginPage(pluginId: string): void {
+    if (pendingPluginPageId === pluginId) {
+      pluginNavigationGeneration += 1;
+      pendingPluginPageId = null;
+    }
+    if (activePluginId === pluginId) activePluginId = null;
+  }
+
+  function selectWorkspaceSession(sessionId: string): void {
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(null);
+    orchestrator.selectSession(sessionId);
+  }
+
+  function jumpToWorkspaceSession(index: number): void {
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(null);
+    orchestrator.jumpToSession(index);
+  }
+
+  function selectWorkspaceLoop(loopId: string): void {
+    leavePluginWorkspace();
+    loopStore.setActiveLoopId(loopId);
+    touchMru(`loop:${loopId}`);
+  }
+
   async function openPluginPage(pluginId: string) {
-    await refreshPlugins();
-    if (pluginInventory.some((plugin) => plugin.id === pluginId)) {
+    const generation = ++pluginNavigationGeneration;
+    pendingPluginPageId = pluginId;
+    const refreshed = await refreshPlugins();
+    if (!refreshed) {
+      if (generation === pluginNavigationGeneration && pendingPluginPageId === pluginId) {
+        pendingPluginPageId = null;
+      }
+      return;
+    }
+    if (generation !== pluginNavigationGeneration || pendingPluginPageId !== pluginId) return;
+    pendingPluginPageId = null;
+    if (pluginInventory.some((plugin) => plugin.id === pluginId && plugin.state === "running")) {
       loopStore.setActiveLoopId(null);
       activePluginId = pluginId;
     }
@@ -800,11 +846,11 @@
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
-      if (activePluginId === event.payload.id && event.payload.state !== "running") activePluginId = null;
+      if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
     });
     const unlistenPluginPage = listen<string>("plugin-page-open", (event) => { void openPluginPage(event.payload); });
     const unlistenPluginPageClose = listen<string>("plugin-page-close", (event) => {
-      if (activePluginId === event.payload) activePluginId = null;
+      invalidatePluginPage(event.payload);
     });
 
     startJiraDepartedListening();
@@ -820,7 +866,7 @@
           showNewItemModal = true;
         } else if (action.type === "new_project") { showProjectForm = true; }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
-        else if (action.type === "jump_to_session") { loopStore.setActiveLoopId(null); orchestrator.jumpToSession(action.index); }
+        else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
         else if (action.type === "tab_switch") {
           const sw = getCycleState();
           const currentId = activeLoopId ? `loop:${activeLoopId}` : activeSessionId ?? undefined;
@@ -915,11 +961,9 @@
     /** Route a navigation target (may be a session ID or a loop:<id> prefixed string). */
     function routeNavTarget(target: string): void {
       if (isLoopId(target)) {
-        loopStore.setActiveLoopId(parseLoopId(target));
-        touchMru(target);
+        selectWorkspaceLoop(parseLoopId(target));
       } else {
-        loopStore.setActiveLoopId(null);
-        orchestrator.selectSession(target);
+        selectWorkspaceSession(target);
       }
     }
 
@@ -951,7 +995,7 @@
     activeTabIndex={titlebarActiveTabIdx}
     runningCount={sessions.filter(s => s.status === 'active').length}
     activeProvider={activeSession?.provider ?? null}
-    onSelectTab={(i) => { const tree = splitTree.getTree(); if (tree?.type === "leaf" && tree.tabs[i]) splitTree.setLeafActiveTab(tree.id, tree.tabs[i].ptyKey); else orchestrator.selectUnifiedTab(i); }}
+    onSelectTab={(i) => { leavePluginWorkspace(); loopStore.setActiveLoopId(null); const tree = splitTree.getTree(); if (tree?.type === "leaf" && tree.tabs[i]) splitTree.setLeafActiveTab(tree.id, tree.tabs[i].ptyKey); else orchestrator.selectUnifiedTab(i); }}
     onCloseTab={(i) => {
       if (!activeSessionId) return;
       if (i === -1) orchestrator.closeDiffTab(activeSessionId);
@@ -969,7 +1013,7 @@
   {#if sidebarVisible}
       <UnifiedSidebar
         {renamingSessionId}
-        onSelectSession={(id) => { activePluginId = null; loopStore.setActiveLoopId(null); orchestrator.selectSession(id); }}
+        onSelectSession={selectWorkspaceSession}
         onArchiveSession={(s) => orchestrator.archiveSession(s)}
         onDeleteSession={(s) => (sessionToDelete = s)}
         onRestartSession={(s) => orchestrator.restartSession(s)}
@@ -981,7 +1025,7 @@
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showTaskForm = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
-        onSelectLoop={(id) => { activePluginId = null; loopStore.setActiveLoopId(id); touchMru(`loop:${id}`); }}
+        onSelectLoop={selectWorkspaceLoop}
         onStartLoop={(id) => { loopsApi.start(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onTickLoop={(id) => { loopsApi.tick(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
         onStopLoop={(id) => { loopsApi.stop(id).then(() => loopStore.refreshAllLoops(projects.map(p => p.id))); }}
@@ -1007,7 +1051,7 @@
         {sessions}
         {taskPrefill}
         currentProjectId={taskPrefill?.projectId ?? sessions.find(s => s.id === activeSessionId)?.project_id ?? null}
-        onCreated={(session) => { showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onCreated={(session) => { leavePluginWorkspace(); showSessionForm = false; orchestrator.createSession(session); focusTerminal(); }}
         onCancel={() => { showSessionForm = false; taskPrefill = null; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
@@ -1022,7 +1066,7 @@
         tasks={taskStore.getAllTasks()}
         onSubmitted={() => { showTaskForm = false; taskStore.refresh(projects.map((p) => p.path)); focusTerminal(); }}
         onCancel={() => { showTaskForm = false; tick().then(() => refocusTerminal()); }}
-        onSessionCreated={(session) => { showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
+        onSessionCreated={(session) => { leavePluginWorkspace(); showTaskForm = false; orchestrator.createSession(session); focusTerminal(); }}
       />
     </FormDialog>
     {/if}
@@ -1031,7 +1075,7 @@
     <FormDialog title="Start Loop" onClose={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}>
       <LoopForm
         projects={projects.map(p => ({ id: p.id, name: p.name, path: p.path }))}
-        onCreated={(loop) => { showLoopForm = false; loopStore.setActiveLoopId(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
+        onCreated={(loop) => { showLoopForm = false; selectWorkspaceLoop(loop.id); loopStore.refreshAllLoops(projects.map(p => p.id)); focusTerminal(); }}
         onCancel={() => { showLoopForm = false; tick().then(() => refocusTerminal()); }}
       />
     </FormDialog>
@@ -1045,7 +1089,7 @@
       open={commandMenuOpen}
       openFileMode={commandMenuFileMode}
       onOpenChange={(v) => { commandMenuOpen = v; if (!v) commandMenuFileMode = false; }}
-      onSelectSession={(id) => { orchestrator.selectSession(id); focusTerminal(); }}
+      onSelectSession={(id) => { selectWorkspaceSession(id); focusTerminal(); }}
       onArchiveSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) orchestrator.archiveSession(s); } }}
       onDeleteSession={() => { if (activeSessionId) { const s = sessions.find(x => x.id === activeSessionId); if (s) sessionToDelete = s; } }}
       onRenameSession={() => { if (activeSessionId) { sidebarVisible = true; renamingSessionId = activeSessionId; } }}
@@ -1082,7 +1126,7 @@
         class:split-leaf-focused={leaf.id === splitTree.getFocusedLeafId() && hasMultiplePanes}
         role="group"
         aria-label="Split pane"
-        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); orchestrator.selectSession(sid); } focusTerminal(); }}
+        onclick={() => { splitTree.setFocusedLeaf(leaf.id); if (activeEntry) { const sid = ptyKeyToSessionId(activeEntry.ptyKey); selectWorkspaceSession(sid); } focusTerminal(); }}
       >
         {#if showLeafTabBar}
         <div class="flex items-stretch h-[38px] bg-chrome border-b border-border shrink-0">
@@ -1114,8 +1158,8 @@
               <div class="absolute inset-0" class:hidden={!isActiveInLeaf}>
                 <Terminal
                   sessionId={tabEntry.ptyKey}
-                  visible={isActiveInLeaf && !activeLoopId}
-                  focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  visible={isActiveInLeaf && !activeLoopId && !activePluginId}
+                  focused={isActiveInLeaf && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
@@ -1133,7 +1177,7 @@
                   <ReviewTab
                     {repoPath}
                     {baseBranch}
-                    visible={true}
+                    visible={!activePluginId}
                     sessionId={sessionId}
                     onEditFile={(filePath) => openFileInTree(sessionId, filePath)}
                     onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
@@ -1148,10 +1192,10 @@
                 {@const editorRepoPath = session.worktree_path ?? project.path}
                 <EditorTab
                   repoPath={editorRepoPath}
-                  visible={isActiveInLeaf}
+                  visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
-                  focused={isActiveInLeaf && leaf.id === splitTree.getFocusedLeafId() && zone === "editor"}
+                  focused={isActiveInLeaf && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "editor"}
                   onClose={() => splitTree.removeSessionFromLeaf(tabEntry.ptyKey)}
                   onFocusEditor={() => { splitTree.focusTab(tabEntry.ptyKey); focusEditor(); }}
                   onFileChange={(name) => splitTree.updateTabLabel(tabEntry.ptyKey, name)}
@@ -1183,7 +1227,7 @@
     {#if activePluginId}
       <div class="w-full h-full bg-main">
         <div class="flex items-center gap-3 border-b border-border px-4 py-2">
-          <button class="text-xs text-t2 hover:text-t1" onclick={() => { activePluginId = null; }}>← Back to workspace</button>
+          <button class="text-xs text-t2 hover:text-t1" onclick={leavePluginWorkspace}>← Back to workspace</button>
           <span class="text-sm font-medium text-t1">{activePlugin?.name ?? "Plugin"}</span>
         </div>
         {#if activePlugin}
@@ -1200,13 +1244,13 @@
         <LoopDashboard
           loopId={activeLoopId}
           projectPath={loopProjectPath}
-          onSelectSession={(sessionId) => { loopStore.setActiveLoopId(null); orchestrator.selectSession(sessionId); }}
+          onSelectSession={selectWorkspaceSession}
           onOpenArtifact={(path) => {
             // If no active session, select the first session from this loop
             if (!activeSession) {
               const loopSessions = loopStore.getSessionsForLoop(activeLoopId);
               if (loopSessions.length > 0) {
-                orchestrator.selectSession(loopSessions[0].session_id);
+                selectWorkspaceSession(loopSessions[0].session_id);
               } else return;
             }
             loopStore.setActiveLoopId(null);
