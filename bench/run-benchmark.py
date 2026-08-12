@@ -212,7 +212,7 @@ def main():
     iced_bin = args.iced_binary or (find_iced_spike() if "iced-alacritty" in args.backends else None)
 
     if "tauri-xterm" in args.backends and not tauri_bin:
-        print("ERROR: PlaneAI binary not found. Build with: pnpm tauri build")
+        print("ERROR: PlaneAI binary not found. Build with: make build")
         print("       Or specify with --tauri-binary")
         sys.exit(1)
 

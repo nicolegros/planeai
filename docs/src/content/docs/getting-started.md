@@ -29,7 +29,7 @@ To run planeai from source:
 
 ```bash
 pnpm install
-pnpm tauri dev
+make dev
 ```
 
 ## Next Steps

@@ -37,20 +37,14 @@ cp .env.example .env
 ## Development
 
 ```bash
-pnpm tauri dev     # Run the app in dev mode
+make dev           # Run the app in dev mode
 ```
 
 ## Testing
 
 ```bash
-pnpm test              # Frontend (vitest)
-cd src-tauri && cargo test   # Backend (Rust)
-```
-
-Or run both with:
-
-```bash
-make test
+make test  # Frontend and backend tests
+make ci    # Full lint and test suite
 ```
 
 ## Commit Convention
@@ -68,7 +62,7 @@ Use [conventional commits](https://www.conventionalcommits.org/):
 
 1. Fork the repo and create a branch from `main`
 2. Write tests for new functionality (TDD preferred — see [AGENTS.md](./AGENTS.md))
-3. Ensure `pnpm test` and `cargo test` pass
+3. Ensure `make ci` passes
 4. Open a PR with a clear description of what and why
 
 ## Architecture

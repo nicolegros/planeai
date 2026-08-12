@@ -10,7 +10,7 @@
 PLANEAI_LOCAL_PTY_CORE=planeai-pty \
 PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
 PLANEAI_DOGFOOD_LOG_VIEWER=1 \
-pnpm tauri dev
+make dev
 ```
 
 Or via config (`~/.config/planeai/config.json`):
@@ -39,13 +39,13 @@ Both `local_pty_core` and `session_log_dir` can be set in config. Env vars take 
 ### Legacy mode (default)
 
 ```bash
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=legacy make dev
 ```
 
 ### planeai-pty mode
 
 ```bash
-PLANEAI_LOCAL_PTY_CORE=planeai-pty pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=planeai-pty make dev
 ```
 
 ### Full dogfood mode (logs + viewer)
@@ -54,7 +54,7 @@ PLANEAI_LOCAL_PTY_CORE=planeai-pty pnpm tauri dev
 PLANEAI_LOCAL_PTY_CORE=planeai-pty \
 PLANEAI_SESSION_LOG_DIR=/tmp/planeai-session-logs \
 PLANEAI_DOGFOOD_LOG_VIEWER=1 \
-pnpm tauri dev
+make dev
 ```
 
 ## Rollback Instructions
@@ -70,7 +70,7 @@ unset PLANEAI_DOGFOOD_LOG_VIEWER
 Or explicitly:
 
 ```bash
-PLANEAI_LOCAL_PTY_CORE=legacy pnpm tauri dev
+PLANEAI_LOCAL_PTY_CORE=legacy make dev
 ```
 
 No data loss occurs on rollback. Existing durable logs remain on disk and are still readable if the viewer is enabled.
@@ -157,7 +157,7 @@ $PLANEAI_SESSION_LOG_DIR/
 | 19  | No backend panic in logs                   | ✅ No panic in startup logs                                      |
 | 20  | No frontend error overlay                  | ✅ svelte-check passes (1 pre-existing unrelated error)          |
 
-**Note:** Full interactive GUI testing (manual typing, visual terminal rendering) requires a human running `pnpm tauri dev` with a display. The backend and data layer are fully verified by the test suite.
+**Note:** Full interactive GUI testing (manual typing, visual terminal rendering) requires a human running `make dev` with a display. The backend and data layer are fully verified by the test suite.
 
 ## Dogfood Session Matrix
 
@@ -397,7 +397,7 @@ Full daemon lifecycle verified headlessly via `daemon-lifecycle-smoke` binary:
 | Close window → detach (not kill) | ✅       | code review (--detach-on-close default)                               |
 | Scrollback after reattach        | ✅       | headless smoke (snapshot_bytes > 0)                                   |
 | Input after reattach             | ✅       | headless smoke                                                        |
-| Production Tauri builds          | ✅       | cargo build --release -p planeai                                      |
+| Production Tauri builds          | ✅       | make build                                                            |
 | All iced-spike tests pass        | ✅       | cargo test -p planeai-iced-spike (14 pass)                            |
 | All daemon tests pass            | ✅       | env -u PLANEAI_DAEMON_PTY_CORE cargo test -p planeai-daemon (14 pass) |
 | All planeai-pty tests pass       | ✅       | cargo test -p planeai-pty (7 pass)                                    |

@@ -11,7 +11,7 @@ Compares the Tauri + xterm.js terminal path against a native Rust/Iced + alacrit
 python bench/generate-fixtures.py --size medium --output-dir bench/fixtures
 
 # 2. Build the app
-pnpm tauri build
+make build
 
 # 3. Run one benchmark
 PLANEAI_BENCH_REPLAY=$(pwd)/bench/fixtures/mixed-agent-like.ansi \
@@ -43,7 +43,7 @@ python bench/generate-fixtures.py --size medium --output-dir bench/fixtures
 ## Capture a Real Session
 
 ```bash
-PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/my-session.ansi pnpm tauri dev
+PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/my-session.ansi make dev
 ```
 
 Optionally filter to one session:
@@ -51,7 +51,7 @@ Optionally filter to one session:
 ```bash
 PLANEAI_BENCH_CAPTURE=$(pwd)/bench/captures/real.ansi \
 PLANEAI_BENCH_CAPTURE_SESSION=<uuid> \
-pnpm tauri dev
+make dev
 ```
 
 ## Run Tauri+xterm Benchmark

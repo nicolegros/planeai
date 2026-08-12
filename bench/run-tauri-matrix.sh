@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run tauri-xterm benchmarks: full matrix, 3 runs each.
-# Requires: pnpm tauri build (already done)
+# Requires: make build (already done)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
