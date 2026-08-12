@@ -1,5 +1,5 @@
 import { spawnSync, execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { platform } from "node:process";
 
@@ -24,12 +24,19 @@ const sidecars = [
   ["planeai-plugin-jira", "planeai-plugin-jira"],
 ];
 
+// Tauri validates every externalBin while compiling the main app, including
+// while a sidecar's dependency graph happens to compile that app first.
+mkdirSync(binariesDir, { recursive: true });
+for (const [, binaryName] of sidecars) {
+  const placeholder = join(binariesDir, `${binaryName}-${target}${extension}`);
+  if (!existsSync(placeholder)) writeFileSync(placeholder, "");
+}
+
 for (const [packageName] of sidecars) {
   run("cargo", ["clean", "--release", "--target", target, "-p", packageName], tauriDir);
   run("cargo", ["build", "--release", "--target", target, "-p", packageName], tauriDir);
 }
 
-mkdirSync(binariesDir, { recursive: true });
 for (const [, binaryName] of sidecars) {
   const source = join(releaseDir, `${binaryName}${extension}`);
   const destination = join(binariesDir, `${binaryName}-${target}${extension}`);
