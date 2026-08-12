@@ -3,9 +3,6 @@
 # Dummy updater signing key for local builds (not used in CI releases)
 DUMMY_SIGNING_KEY := dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5QnlHWnBkWklHc0lISUlrbDg0L29zSHR0L1NQQWovcHlsbVNRaDd3TXhxQUFBQkFBQUFBQUFBQUFBQUlBQUFBQXhTY3gvZW82clBCNUhCdWtoTkZNZEhJaVRUMkh0OVZsUzVESDdhU1JjR2ZwT3l4NlhTUEtvVnlpVjVsSFAwUDQ5aWF4QlVCUWJuRlFULy9DR1JQWC95dk04QTJNbGgvVTdRTHdiUmxrRHh1clQrWWgzdUY5bTZsQzl1OVFoYWgzVlRXK3gvajVrRzQ9Cg==
 SIGNING_ENV := TAURI_SIGNING_PRIVATE_KEY=$${TAURI_SIGNING_PRIVATE_KEY:-$(DUMMY_SIGNING_KEY)} TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}
-TARGET ?= $(TAURI_ENV_TARGET_TRIPLE)
-TAURI_TARGET := $(if $(TARGET),--target $(TARGET))
-TAURI_RELEASE_DIR := src-tauri/target$(if $(TARGET),/$(TARGET))/release
 
 ci: install lint test ## Run lint + tests
 
@@ -24,7 +21,7 @@ lint: ## Check formatting and clippy
 	cd src-tauri && JIRA_CLIENT_ID=$${JIRA_CLIENT_ID:-dummy} JIRA_CLIENT_SECRET=$${JIRA_CLIENT_SECRET:-dummy} cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 dev: sidecars
-	RUST_LOG=planeai=debug pnpm exec tauri dev $(TAURI_TARGET)
+	RUST_LOG=planeai=debug pnpm exec tauri dev
 
 dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 	cd src-tauri && \
@@ -37,7 +34,7 @@ dogfood: ## Run Iced workflow shell (ensures planeai-pty + durable logs)
 sidecars:
 	cd src-tauri && \
 	set -e; \
-	TARGET="$(if $(TARGET),$(TARGET),$$(rustc --print host-tuple))"; \
+	TARGET="$${TAURI_ENV_TARGET_TRIPLE:-$$(rustc --print host-tuple)}"; \
 	TAURI_ENV_TARGET_TRIPLE="$$TARGET" ./scripts/ensure-sidecars.sh; \
 	EXT=""; case "$$TARGET" in *windows*) EXT=".exe";; esac; \
 	cargo build --release --target "$$TARGET" \
@@ -48,25 +45,18 @@ sidecars:
 		cp "target/$$TARGET/release/$$binary$$EXT" "binaries/$$binary-$$TARGET$$EXT"; \
 	done; \
 	if [ "$$EXT" != ".exe" ]; then chmod +x binaries/planeai-cli-"$$TARGET" binaries/planeai-daemon-"$$TARGET" binaries/planeai-plugin-jira-"$$TARGET"; fi
-	cd src-tauri && cargo build $(TAURI_TARGET) -p planeai-plugin-jira
+	cd src-tauri && cargo build -p planeai-plugin-jira
 
 build: sidecars
-	$(SIGNING_ENV) pnpm exec tauri build -b app $(TAURI_TARGET)
+	$(SIGNING_ENV) pnpm exec tauri build -b app
 
 bundle: install sidecars
-	$(SIGNING_ENV) pnpm exec tauri build -b app $(TAURI_TARGET)
-	@case "$$(uname -s):$(TARGET)" in \
-		Darwin:|Darwin:*apple-darwin) \
-			echo "$(CURDIR)/$(TAURI_RELEASE_DIR)/bundle/macos/planeai.app" | pbcopy; \
-			echo "✅ Bundle path copied to clipboard" ;; \
-		*) echo "✅ Bundle artifacts ready: $(CURDIR)/$(TAURI_RELEASE_DIR)/bundle" ;; \
-	esac
+	$(SIGNING_ENV) pnpm exec tauri build -b app
+	@echo "$(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
+	@echo "✅ Bundle path copied to clipboard"
 
 open: bundle
-	@case "$$(uname -s):$(TARGET)" in \
-		Darwin:|Darwin:*apple-darwin) open "$(TAURI_RELEASE_DIR)/bundle/macos/planeai.app" ;; \
-		*) echo "open supports only macOS bundle targets" >&2; exit 1 ;; \
-	esac
+	open src-tauri/target/release/bundle/macos/planeai.app
 
 test:
 	pnpm test
@@ -79,18 +69,14 @@ dev-bundle: sidecars
 	$(eval BRANCH := $(shell git branch --show-current | sed 's|/|-|g'))
 	$(eval SUFFIX := $(if $(filter main,$(BRANCH)),dev,$(if $(BRANCH),$(shell echo $(BRANCH) | sed 's/-/ /g' | awk '{for(i=1;i<=NF;i++) printf substr($$i,1,1); printf int(rand()*10)}'),dev)))
 	@# Swap identifier, productName, and binary name for isolated dev build
-	sed -i.bak 's/"productName": "planeai"/"productName": "planeai-$(SUFFIX)"/' src-tauri/tauri.conf.json && rm src-tauri/tauri.conf.json.bak
-	sed -i.bak 's/"identifier": "ca.nicolegros.planeai"/"identifier": "ca.nicolegros.planeai.$(SUFFIX)"/' src-tauri/tauri.conf.json && rm src-tauri/tauri.conf.json.bak
-	sed -i.bak '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml && rm src-tauri/Cargo.toml.bak
-	sed -i.bak '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml && rm src-tauri/Cargo.toml.bak
-	$(SIGNING_ENV) pnpm exec tauri build -b app $(TAURI_TARGET) || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
+	sed -i '' 's/"productName": "planeai"/"productName": "planeai-$(SUFFIX)"/' src-tauri/tauri.conf.json
+	sed -i '' 's/"identifier": "ca.nicolegros.planeai"/"identifier": "ca.nicolegros.planeai.$(SUFFIX)"/' src-tauri/tauri.conf.json
+	sed -i '' '/^\[package\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
+	sed -i '' '/^\[\[bin\]\]/,/^\[/{s/^name = "planeai"/name = "planeai-$(SUFFIX)"/;}' src-tauri/Cargo.toml
+	$(SIGNING_ENV) pnpm exec tauri build -b app || (git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml && exit 1)
 	git checkout -- src-tauri/tauri.conf.json src-tauri/Cargo.toml
-	@case "$$(uname -s):$(TARGET)" in \
-		Darwin:|Darwin:*apple-darwin) \
-			echo "\n✅ Dev bundle ready: $(TAURI_RELEASE_DIR)/bundle/macos/planeai-$(SUFFIX).app"; \
-			open -n "$(TAURI_RELEASE_DIR)/bundle/macos/planeai-$(SUFFIX).app" ;; \
-		*) echo "✅ Dev bundle artifacts ready: $(CURDIR)/$(TAURI_RELEASE_DIR)/bundle" ;; \
-	esac
+	@echo "\n✅ Dev bundle ready: src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app"
+	open -n src-tauri/target/release/bundle/macos/planeai-$(SUFFIX).app
 
 docs: ## Run docs site locally
 	cd docs && pnpm dev
