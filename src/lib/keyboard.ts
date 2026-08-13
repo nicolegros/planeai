@@ -275,59 +275,75 @@ export function installKeyboardRouter(
     "focus_split_down",
   ]);
 
-  function handler(e: KeyboardEvent) {
-    // Contribution ShadowRoots receive composed key events before the host router.
-    // A plugin may cancel an event to claim that shortcut while it is focused.
-    if (e.defaultPrevented) return;
+  function routeAction(e: KeyboardEvent, action: KeyboardAction): void {
+    // Only filter editor shortcuts while CodeMirror actually owns focus.
+    // An editor tab can remain active underneath another focused pane such as Explorer.
+    if (
+      getActiveZone() === "editor" &&
+      isEditorFocused?.() &&
+      !editorAllowedActions.has(action.type)
+    ) {
+      return;
+    }
+
+    // Explorer owns Escape while its shadow-DOM search input is focused;
+    // let its capture handler close search and return focus to the tree row.
+    if (action.type === "focus_terminal" && isExplorerSearchEvent(e)) {
+      return;
+    }
+
+    // If Escape and terminal already focused with no overlays, let it pass through
+    if (
+      action.type === "focus_terminal" &&
+      getActiveZone() === "terminal" &&
+      (!shouldPassEscape || shouldPassEscape())
+    ) {
+      return;
+    }
+
+    // If Escape and a form controller is active, let it handle
+    if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Built-in focus actions
+    if (action.type === "focus_terminal") {
+      if (getActiveZone() === "explorer") toggleExplorerFocus();
+      else focusTerminal();
+    } else if (action.type === "toggle_sessions_panel") {
+      toggleSessionsPanel();
+    } else if (action.type === "toggle_task_panel") {
+      toggleTaskPanel();
+    }
+
+    onAction(action);
+  }
+
+  function captureTabSwitcher(e: KeyboardEvent): void {
     const action = matchChord(e);
-    if (action) {
-      // Only filter editor shortcuts while CodeMirror actually owns focus.
-      // An editor tab can remain active underneath another focused pane such as Explorer.
-      if (
-        getActiveZone() === "editor" &&
-        isEditorFocused?.() &&
-        !editorAllowedActions.has(action.type)
-      ) {
-        return;
-      }
-
-      // Explorer owns Escape while its shadow-DOM search input is focused;
-      // let its capture handler close search and return focus to the tree row.
-      if (action.type === "focus_terminal" && isExplorerSearchEvent(e)) {
-        return;
-      }
-
-      // If Escape and terminal already focused with no overlays, let it pass through
-      if (
-        action.type === "focus_terminal" &&
-        getActiveZone() === "terminal" &&
-        (!shouldPassEscape || shouldPassEscape())
-      ) {
-        return;
-      }
-
-      // If Escape and a form controller is active, let it handle
-      if (action.type === "focus_terminal" && shouldYieldEscape?.()) {
-        return;
-      }
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Built-in focus actions
-      if (action.type === "focus_terminal") {
-        if (getActiveZone() === "explorer") toggleExplorerFocus();
-        else focusTerminal();
-      } else if (action.type === "toggle_sessions_panel") {
-        toggleSessionsPanel();
-      } else if (action.type === "toggle_task_panel") {
-        toggleTaskPanel();
-      }
-
-      onAction(action);
+    if (action?.type === "tab_switch" || action?.type === "tab_switch_reverse") {
+      routeAction(e, action);
     }
   }
 
+  function handler(e: KeyboardEvent): void {
+    // Contribution ShadowRoots receive composed key events before the host router.
+    // A plugin may cancel an event to claim any non-reserved shortcut while focused.
+    if (e.defaultPrevented) return;
+    const action = matchChord(e);
+    if (!action || action.type === "tab_switch" || action.type === "tab_switch_reverse") return;
+    routeAction(e, action);
+  }
+
+  // Ctrl+Tab is reserved for MRU session switching, even when focused content
+  // (such as xterm) consumes bubbling keyboard events.
+  window.addEventListener("keydown", captureTabSwitcher, true);
   window.addEventListener("keydown", handler);
-  return () => window.removeEventListener("keydown", handler);
+  return () => {
+    window.removeEventListener("keydown", captureTabSwitcher, true);
+    window.removeEventListener("keydown", handler);
+  };
 }
