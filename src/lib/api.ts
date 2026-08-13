@@ -247,9 +247,16 @@ export const jira = {
 
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
+  installLocal: (sourcePath: string) =>
+    invoke<PluginInventory>("install_local_plugin", { sourcePath }),
+  removeLocal: (pluginId: string) => invoke("remove_local_plugin", { pluginId }),
   enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
   disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
+  call: <T>(pluginId: string, method: string, params: unknown = null) =>
+    invoke<T>("plugin_call", { pluginId, method, params }),
+  localUiSource: (pluginId: string, contributionId: string) =>
+    invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
   jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
 };
 

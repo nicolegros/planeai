@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,8 +30,66 @@ pub struct PluginManifest {
     pub version: String,
     pub host_api_version: String,
     pub source_kind: PluginSourceKind,
-    pub backend_entrypoint: String,
-    pub ui_entrypoint: Option<String>,
+    #[serde(default)]
+    pub backend_entrypoint: Option<String>,
+    #[serde(default)]
+    pub backend_entrypoints: HashMap<String, String>,
+    #[serde(default)]
+    pub ui_contributions: Vec<PluginUiContribution>,
+    #[serde(default, rename = "ui_entrypoint")]
+    legacy_ui_entrypoint: Option<String>,
+}
+
+impl PluginManifest {
+    pub fn effective_ui_contributions(&self) -> Vec<PluginUiContribution> {
+        if !self.ui_contributions.is_empty() {
+            return self.ui_contributions.clone();
+        }
+        self.legacy_ui_entrypoint
+            .as_deref()
+            .filter(|entrypoint| !entrypoint.trim().is_empty())
+            .map(|entrypoint| {
+                vec![PluginUiContribution {
+                    id: "legacy-main-pane".to_string(),
+                    label: self.name.clone(),
+                    placement: PluginUiPlacement::MainPane,
+                    entrypoint: entrypoint.to_string(),
+                    order: None,
+                    shortcut: None,
+                }]
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginUiPlacement {
+    #[serde(rename = "sidebar.header")]
+    SidebarHeader,
+    #[serde(rename = "sidebar.navigation")]
+    SidebarNavigation,
+    #[serde(rename = "sidebar.footer")]
+    SidebarFooter,
+    #[serde(rename = "main-pane")]
+    MainPane,
+}
+
+impl PluginUiPlacement {
+    fn is_sidebar(self) -> bool {
+        !matches!(self, Self::MainPane)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginUiContribution {
+    pub id: String,
+    pub label: String,
+    pub placement: PluginUiPlacement,
+    pub entrypoint: String,
+    #[serde(default)]
+    pub order: Option<i32>,
+    #[serde(default)]
+    pub shortcut: Option<String>,
 }
 
 impl PluginManifest {
@@ -59,19 +117,125 @@ impl PluginManifest {
                 self.id, self.host_api_version
             ));
         }
-        if self.backend_entrypoint.trim().is_empty() {
-            return Err("plugin backend_entrypoint is required".to_string());
+        match self.source_kind {
+            PluginSourceKind::Builtin => {
+                if self.backend_entrypoint.as_deref() != Some(JIRA_BACKEND_ENTRYPOINT) {
+                    return Err(format!(
+                        "builtin plugin {} has an untrusted backend entrypoint",
+                        self.id
+                    ));
+                }
+            }
+            PluginSourceKind::Local if self.backend_entrypoints.is_empty() => {
+                return Err("local plugin backend_entrypoints is required".to_string());
+            }
+            PluginSourceKind::Local => {}
         }
-        if self.source_kind == PluginSourceKind::Builtin
-            && self.backend_entrypoint != JIRA_BACKEND_ENTRYPOINT
+        if self
+            .legacy_ui_entrypoint
+            .as_deref()
+            .is_some_and(|entrypoint| entrypoint.trim().is_empty())
         {
+            return Err("legacy ui_entrypoint must not be empty".to_string());
+        }
+        validate_ui_contributions(&self.id, &self.effective_ui_contributions())
+    }
+}
+
+fn validate_ui_contributions(
+    plugin_id: &str,
+    contributions: &[PluginUiContribution],
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    let mut shortcuts = HashSet::new();
+    for contribution in contributions {
+        if contribution.id.trim().is_empty()
+            || !contribution
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(
+                "UI contribution id must contain lowercase letters, digits, or hyphens".to_string(),
+            );
+        }
+        if !ids.insert(&contribution.id) {
             return Err(format!(
-                "builtin plugin {} has an untrusted backend entrypoint",
-                self.id
+                "plugin {plugin_id} defines duplicate UI contribution {}",
+                contribution.id
             ));
         }
-        Ok(())
+        if contribution.label.trim().is_empty() || contribution.entrypoint.trim().is_empty() {
+            return Err("UI contribution label and entrypoint are required".to_string());
+        }
+        crate::plugin_packages::validate_package_path(
+            &contribution.entrypoint,
+            "UI contribution entrypoint",
+        )?;
+        if contribution.placement.is_sidebar() && contribution.shortcut.is_some() {
+            return Err(
+                "UI contribution shortcuts are only valid for main-pane contributions".to_string(),
+            );
+        }
+        if matches!(contribution.placement, PluginUiPlacement::MainPane)
+            && contribution.order.is_some()
+        {
+            return Err(
+                "UI contribution order is only valid for sidebar contributions".to_string(),
+            );
+        }
+        if let Some(shortcut) = &contribution.shortcut {
+            validate_shortcut(shortcut)?;
+            if !shortcuts.insert(shortcut) {
+                return Err(format!(
+                    "plugin {plugin_id} defines duplicate UI contribution shortcut {shortcut}"
+                ));
+            }
+        }
     }
+    Ok(())
+}
+
+fn validate_shortcut(shortcut: &str) -> Result<(), String> {
+    let parts = shortcut.split('+').collect::<Vec<_>>();
+    let key = parts.last().copied().unwrap_or_default();
+    let modifiers = &parts[1..parts.len().saturating_sub(1)];
+    let valid_key = key.len() == 1 && key.as_bytes()[0].is_ascii_uppercase();
+    if parts.len() < 2
+        || parts.first() != Some(&"Mod")
+        || !valid_key
+        || modifiers
+            .iter()
+            .any(|modifier| !matches!(*modifier, "Shift" | "Alt"))
+        || modifiers.windows(2).any(|pair| pair[0] == pair[1])
+    {
+        return Err("UI contribution shortcut must use Mod+[Shift+][Alt+]A-Z syntax".to_string());
+    }
+    let canonical = match modifiers {
+        [] => format!("Mod+{key}"),
+        ["Shift"] => format!("Mod+Shift+{key}"),
+        ["Alt"] => format!("Mod+Alt+{key}"),
+        ["Shift", "Alt"] => format!("Mod+Shift+Alt+{key}"),
+        _ => {
+            return Err(
+                "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
+            )
+        }
+    };
+    if canonical != shortcut {
+        return Err(
+            "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
+        );
+    }
+    if matches!(
+        key,
+        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
+    ) {
+        return Err(format!(
+            "UI contribution shortcut {shortcut} is reserved by PlaneAI"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -137,7 +301,10 @@ pub struct PluginInventory {
     pub host_api_version: String,
     pub source_kind: PluginSourceKind,
     pub backend_entrypoint: String,
-    pub ui_entrypoint: Option<String>,
+    pub ui_contributions: Vec<PluginUiContribution>,
+    pub installed_hash: Option<String>,
+    pub installed_path: Option<String>,
+    pub original_display_path: Option<String>,
     pub enabled: bool,
     pub state: PluginRuntimeState,
     pub last_error: Option<String>,
@@ -231,13 +398,6 @@ pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
     Ok(vec![manifest])
 }
 
-fn bundled_manifest(plugin_id: &str) -> Result<PluginManifest, String> {
-    bundled_manifests()?
-        .into_iter()
-        .find(|manifest| manifest.id == plugin_id)
-        .ok_or_else(|| format!("unknown bundled plugin: {plugin_id}"))
-}
-
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS plugin_inventory (
@@ -247,7 +407,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             host_api_version TEXT NOT NULL,
             source_kind TEXT NOT NULL CHECK (source_kind IN ('builtin', 'local')),
             backend_entrypoint TEXT NOT NULL,
-            ui_entrypoint TEXT,
+            ui_contributions TEXT NOT NULL DEFAULT '[]',
+            installed_hash TEXT,
+            installed_path TEXT,
+            original_display_path TEXT,
             enabled INTEGER NOT NULL DEFAULT 0,
             runtime_state TEXT NOT NULL DEFAULT 'disabled'
                 CHECK (runtime_state IN ('disabled', 'starting', 'running', 'stopping', 'error')),
@@ -255,15 +418,88 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             log_path TEXT,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );",
-    )
+    )?;
+    for (column, definition) in [
+        ("installed_hash", "TEXT"),
+        ("installed_path", "TEXT"),
+        ("original_display_path", "TEXT"),
+        ("ui_contributions", "TEXT NOT NULL DEFAULT '[]'"),
+    ] {
+        let has_column = conn
+            .prepare("PRAGMA table_info(plugin_inventory)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|existing| existing == column);
+        if !has_column {
+            conn.execute_batch(&format!(
+                "ALTER TABLE plugin_inventory ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    let legacy_ui_entrypoint = conn
+        .prepare("PRAGMA table_info(plugin_inventory)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|column| column == "ui_entrypoint");
+    if legacy_ui_entrypoint {
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = json_array(json_object('id', 'legacy-main-pane', 'label', name, 'placement', 'main-pane', 'entrypoint', ui_entrypoint, 'order', null, 'shortcut', null)) WHERE source_kind = 'local' AND ui_contributions = '[]' AND ui_entrypoint IS NOT NULL AND trim(ui_entrypoint) != ''",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_shortcut_collisions(
+    conn: &Connection,
+    manifest: &PluginManifest,
+) -> Result<(), String> {
+    let effective_contributions = manifest.effective_ui_contributions();
+    let declared = effective_contributions
+        .iter()
+        .filter_map(|item| item.shortcut.as_deref())
+        .collect::<HashSet<_>>();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let mut statement = conn
+        .prepare("SELECT id, ui_contributions FROM plugin_inventory WHERE id != ?1")
+        .map_err(|error| error.to_string())?;
+    let existing = statement
+        .query_map([&manifest.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    for row in existing {
+        let (plugin_id, json) = row.map_err(|error| error.to_string())?;
+        let contributions: Vec<PluginUiContribution> =
+            serde_json::from_str(&json).map_err(|error| {
+                format!("failed to parse persisted UI contributions for {plugin_id}: {error}")
+            })?;
+        if let Some(shortcut) = contributions
+            .iter()
+            .filter_map(|item| item.shortcut.as_deref())
+            .find(|shortcut| declared.contains(shortcut))
+        {
+            return Err(format!(
+                "UI contribution shortcut {shortcut} conflicts with installed plugin {plugin_id}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result<(), String> {
     for manifest in manifests {
         manifest.validate()?;
+        validate_shortcut_collisions(conn, manifest)?;
+        let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+            .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
         conn.execute(
             "INSERT INTO plugin_inventory (
-                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_entrypoint
+                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -271,7 +507,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 host_api_version = excluded.host_api_version,
                 source_kind = excluded.source_kind,
                 backend_entrypoint = excluded.backend_entrypoint,
-                ui_entrypoint = excluded.ui_entrypoint,
+                ui_contributions = excluded.ui_contributions,
                 updated_at = CURRENT_TIMESTAMP",
             params![
                 manifest.id,
@@ -279,8 +515,8 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 manifest.version,
                 manifest.host_api_version,
                 manifest.source_kind.as_str(),
-                manifest.backend_entrypoint,
-                manifest.ui_entrypoint,
+                manifest.backend_entrypoint.as_deref().unwrap_or_default(),
+                ui_contributions,
             ],
         )
         .map_err(|e| format!("failed to persist plugin inventory: {e}"))?;
@@ -291,8 +527,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
 pub fn reconcile_interrupted_runs(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute(
         "UPDATE plugin_inventory
-         SET enabled = 0,
-             runtime_state = 'error',
+         SET runtime_state = 'error',
              last_error = 'PlaneAI stopped while this plugin runtime was active',
              updated_at = CURRENT_TIMESTAMP
          WHERE runtime_state IN ('starting', 'running', 'stopping')",
@@ -300,10 +535,51 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> rusqlite::Result<usize> 
     )
 }
 
+pub fn insert_local_inventory(
+    conn: &Connection,
+    manifest: &PluginManifest,
+    backend_entrypoint: &str,
+    content_hash: &str,
+    package_dir: &Path,
+    original_display_path: &str,
+) -> Result<PluginInventory, String> {
+    if get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
+        return Err(format!("plugin id is already installed: {}", manifest.id));
+    }
+    manifest.validate()?;
+    validate_shortcut_collisions(conn, manifest)?;
+    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
+    conn.execute(
+        "INSERT INTO plugin_inventory (
+            id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions,
+            installed_hash, installed_path, original_display_path, enabled, runtime_state
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, 0, 'disabled')",
+        params![
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.host_api_version,
+            backend_entrypoint,
+            ui_contributions,
+            content_hash,
+            package_dir.display().to_string(),
+            original_display_path,
+        ],
+    )
+    .map_err(|error| format!("failed to persist imported local plugin: {error}"))?;
+    get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "new local plugin inventory record was not found".to_string())
+}
+
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_entrypoint, enabled, runtime_state, last_error, log_path
+                ui_contributions, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -316,7 +592,7 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_entrypoint, enabled, runtime_state, last_error, log_path
+                ui_contributions, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -324,21 +600,53 @@ pub fn get_inventory(
     .optional()
 }
 
+pub fn delete_local_inventory(conn: &Connection, plugin_id: &str) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "DELETE FROM plugin_inventory WHERE id = ?1 AND source_kind = 'local'",
+            [plugin_id],
+        )
+        .map_err(|error| format!("failed to remove plugin inventory: {error}"))?;
+    if changed != 1 {
+        return Err(format!(
+            "local plugin inventory entry not found: {plugin_id}"
+        ));
+    }
+    Ok(())
+}
+
 fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory> {
+    let id: String = row.get(0)?;
     let source_kind: String = row.get(4)?;
-    let state: String = row.get(8)?;
+    let state: String = row.get(11)?;
+    let ui_contributions = serde_json::from_str::<Vec<PluginUiContribution>>(
+        &row.get::<_, String>(6)?,
+    )
+    .map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    validate_ui_contributions(&id, &ui_contributions).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            7,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+        )
+    })?;
     Ok(PluginInventory {
-        id: row.get(0)?,
+        id,
         name: row.get(1)?,
         version: row.get(2)?,
         host_api_version: row.get(3)?,
         source_kind: PluginSourceKind::from_db(&source_kind),
         backend_entrypoint: row.get(5)?,
-        ui_entrypoint: row.get(6)?,
-        enabled: row.get(7)?,
+        ui_contributions,
+        installed_hash: row.get(7)?,
+        installed_path: row.get(8)?,
+        original_display_path: row.get(9)?,
+        enabled: row.get(10)?,
         state: PluginRuntimeState::from_db(&state),
-        last_error: row.get(9)?,
-        log_path: row.get(10)?,
+        last_error: row.get(12)?,
+        log_path: row.get(13)?,
     })
 }
 
@@ -530,6 +838,150 @@ impl PluginRuntimeSupervisor {
             .is_ok()
     }
 
+    pub async fn install_local(&self, source_path: String) -> Result<PluginInventory, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let app = self.app.clone();
+        let imported = commands::blocking(move || {
+            use tauri::Manager as _;
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve PlaneAI plugin storage: {error}"))?;
+            crate::plugin_packages::import_local_package(&app_data, Path::new(&source_path))
+        })
+        .await?;
+        let manifest = imported.manifest.clone();
+        let backend = imported.backend_entrypoint.clone();
+        let hash = imported.content_hash.clone();
+        let package_dir = imported.package_dir.clone();
+        let original_path = imported.original_display_path.clone();
+        let inventory = self
+            .with_db(move |conn| {
+                insert_local_inventory(
+                    conn,
+                    &manifest,
+                    &backend,
+                    &hash,
+                    &package_dir,
+                    &original_path,
+                )
+            })
+            .await?;
+        self.emit_change(&inventory.id).await;
+        Ok(inventory)
+    }
+
+    pub async fn remove(&self, plugin_id: &str) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        if inventory.source_kind != PluginSourceKind::Local {
+            return Err(format!("builtin plugin {plugin_id} cannot be removed"));
+        }
+        if inventory.state != PluginRuntimeState::Disabled {
+            self.disable_inner(plugin_id).await?;
+        }
+        let id = inventory.id.clone();
+        let app = self.app.clone();
+        let package_path = inventory.installed_path.clone().map(PathBuf::from);
+        let cleanup = commands::blocking(move || {
+            use tauri::Manager as _;
+            let app_data = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve PlaneAI plugin state: {error}"))?;
+            crate::plugin_packages::remove_local_artifacts(&app_data, &id, package_path.as_deref())
+        })
+        .await;
+        if let Err(error) = cleanup {
+            self.update_state(
+                plugin_id,
+                false,
+                PluginRuntimeState::Error,
+                Some(error.clone()),
+            )
+            .await?;
+            return Err(error);
+        }
+        let remove_id = plugin_id.to_string();
+        self.with_db(move |conn| delete_local_inventory(conn, &remove_id))
+            .await
+    }
+
+    pub async fn call(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        if matches!(method, "plugin.handshake" | "plugin.shutdown") {
+            return Err("plugin lifecycle methods are reserved for PlaneAI".to_string());
+        }
+        let _lifecycle = self.lifecycle.lock().await;
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        if inventory.state != PluginRuntimeState::Running {
+            return Err(format!("plugin {plugin_id} is not running"));
+        }
+        let process = self.processes.lock().await.get(plugin_id).cloned();
+        let process =
+            process.ok_or_else(|| format!("plugin runtime was not available: {plugin_id}"))?;
+        let mut runtime = process.lock().await;
+        runtime.request(method, params).await
+    }
+
+    pub async fn local_ui_source(
+        &self,
+        plugin_id: &str,
+        contribution_id: &str,
+    ) -> Result<String, String> {
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        if inventory.source_kind != PluginSourceKind::Local {
+            return Err("builtin plugins use their bundled UI entrypoints".to_string());
+        }
+        let package = inventory
+            .installed_path
+            .ok_or_else(|| format!("local plugin {plugin_id} has no imported package path"))?;
+        let entrypoint = inventory
+            .ui_contributions
+            .iter()
+            .find(|contribution| contribution.id == contribution_id)
+            .map(|contribution| contribution.entrypoint.clone())
+            .ok_or_else(|| {
+                format!("plugin {plugin_id} has no UI contribution {contribution_id}")
+            })?;
+        commands::blocking(move || {
+            std::fs::read_to_string(Path::new(&package).join(entrypoint))
+                .map_err(|error| format!("failed to read imported plugin UI bundle: {error}"))
+        })
+        .await
+    }
+
+    pub async fn start_enabled(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
+        let enabled = match self.list().await {
+            Ok(inventory) => inventory
+                .into_iter()
+                .filter(|plugin| plugin.enabled)
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                tracing::warn!(%error, "failed to list enabled plugins at startup");
+                return;
+            }
+        };
+        for plugin in enabled {
+            if let Err(error) = self.enable_inner(&plugin.id).await {
+                tracing::warn!(plugin_id = %plugin.id, %error, "failed to restore enabled plugin at startup");
+            }
+        }
+    }
     pub fn permit_exit(&self) {
         self.exit_permitted.store(true, Ordering::Release);
     }
@@ -564,7 +1016,7 @@ impl PluginRuntimeSupervisor {
             .cloned()
             .collect::<Vec<_>>();
         for plugin_id in plugin_ids {
-            if let Err(error) = self.disable_inner(&plugin_id).await {
+            if let Err(error) = self.stop_for_shutdown_inner(&plugin_id).await {
                 tracing::warn!(plugin_id, %error, "failed to stop plugin runtime before update");
                 self.restore_after_failed_update_inner(&enabled_plugin_ids)
                     .await;
@@ -599,10 +1051,44 @@ impl PluginRuntimeSupervisor {
             .cloned()
             .collect::<Vec<_>>();
         for plugin_id in plugin_ids {
-            if let Err(error) = self.disable_inner(&plugin_id).await {
+            if let Err(error) = self.stop_for_shutdown_inner(&plugin_id).await {
                 tracing::warn!(plugin_id, %error, "failed to stop plugin runtime during shutdown");
             }
         }
+    }
+
+    async fn stop_for_shutdown_inner(&self, plugin_id: &str) -> Result<(), String> {
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        self.update_state(
+            plugin_id,
+            inventory.enabled,
+            PluginRuntimeState::Stopping,
+            inventory.last_error.clone(),
+        )
+        .await?;
+        if let Some(process) = self.processes.lock().await.remove(plugin_id) {
+            if let Err(error) = stop_process(process).await {
+                self.update_state(
+                    plugin_id,
+                    inventory.enabled,
+                    PluginRuntimeState::Error,
+                    Some(error.clone()),
+                )
+                .await?;
+                return Err(error);
+            }
+        }
+        self.update_state(
+            plugin_id,
+            inventory.enabled,
+            PluginRuntimeState::Disabled,
+            None,
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn enable(&self, plugin_id: &str) -> Result<PluginInventory, String> {
@@ -614,10 +1100,12 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn enable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
-        let manifest = bundled_manifest(plugin_id)?;
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
         let app = self.app.clone();
-        let entrypoint = manifest.backend_entrypoint.clone();
-        let id = manifest.id.clone();
+        let id = inventory.id.clone();
         let log_path = plugin_log_path(&app, &id).await?;
 
         let starting_id = id.clone();
@@ -626,20 +1114,29 @@ impl PluginRuntimeSupervisor {
             .await?;
         self.emit_change(&id).await;
 
-        let binary =
-            match commands::blocking(move || resolve_trusted_binary(&app, &entrypoint)).await {
-                Ok(binary) => binary,
-                Err(error) => {
-                    self.update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
-                        .await?;
-                    return Err(error);
-                }
-            };
+        let binary_inventory = inventory.clone();
+        let binary = match commands::blocking(move || {
+            resolve_plugin_binary(&app, &binary_inventory)
+        })
+        .await
+        {
+            Ok(binary) => binary,
+            Err(error) => {
+                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
+                    .await?;
+                return Err(error);
+            }
+        };
 
-        let process = match spawn_runtime(&binary, &log_path).await {
+        let state_path = if inventory.source_kind == PluginSourceKind::Local {
+            Some(plugin_state_root(&self.app, &id).await?)
+        } else {
+            None
+        };
+        let process = match spawn_runtime(&binary, &log_path, state_path.as_deref()).await {
             Ok(process) => process,
             Err(error) => {
-                self.update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
+                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
                     .await?;
                 return Err(error);
             }
@@ -660,9 +1157,9 @@ impl PluginRuntimeSupervisor {
                 .map_err(|e| format!("invalid plugin handshake: {e}"))
         }) {
             Ok(value)
-                if value.plugin_id == manifest.id
-                    && value.plugin_name == manifest.name
-                    && value.plugin_version == manifest.version
+                if value.plugin_id == inventory.id
+                    && value.plugin_name == inventory.name
+                    && value.plugin_version == inventory.version
                     && value.host_api_version == HOST_API_VERSION =>
             {
                 value
@@ -671,13 +1168,13 @@ impl PluginRuntimeSupervisor {
                 let error = "plugin handshake identity or host API version did not match manifest"
                     .to_string();
                 let _ = stop_process(process).await;
-                self.update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
+                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
                     .await?;
                 return Err(error);
             }
             Err(error) => {
                 let _ = stop_process(process).await;
-                self.update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
+                self.update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
                     .await?;
                 return Err(error);
             }
@@ -692,7 +1189,7 @@ impl PluginRuntimeSupervisor {
                 tracing::warn!(plugin_id = %id, %stop_error, "failed to stop plugin after startup persistence failure");
             }
             if let Err(recovery_error) = self
-                .update_state(&id, false, PluginRuntimeState::Error, Some(error.clone()))
+                .update_state(&id, true, PluginRuntimeState::Error, Some(error.clone()))
                 .await
             {
                 tracing::warn!(plugin_id = %id, %recovery_error, "failed to record plugin startup persistence failure");
@@ -718,7 +1215,6 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn disable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
-        bundled_manifest(plugin_id)?;
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -820,8 +1316,13 @@ impl PluginRuntimeSupervisor {
         let process = self.processes.lock().await.get(plugin_id).cloned();
         let Some(process) = process else {
             let error = "plugin runtime was not available".to_string();
-            self.update_state(plugin_id, false, PluginRuntimeState::Error, Some(error))
-                .await?;
+            self.update_state(
+                plugin_id,
+                inventory.enabled,
+                PluginRuntimeState::Error,
+                Some(error),
+            )
+            .await?;
             let inventory = self
                 .inventory(plugin_id)
                 .await?
@@ -856,6 +1357,10 @@ impl PluginRuntimeSupervisor {
     }
 
     async fn fail_runtime(&self, plugin_id: &str, error: &str) -> Result<JiraPluginStatus, String> {
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
         let process = self.processes.lock().await.remove(plugin_id);
         if let Some(process) = process {
             if let Err(stop_error) = stop_process(process).await {
@@ -864,7 +1369,7 @@ impl PluginRuntimeSupervisor {
         }
         self.update_state(
             plugin_id,
-            false,
+            inventory.enabled,
             PluginRuntimeState::Error,
             Some(error.to_string()),
         )
@@ -895,21 +1400,61 @@ fn status_from_inventory(inventory: &PluginInventory) -> JiraPluginStatus {
     }
 }
 
-async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
-    use tauri::Manager as _;
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("failed to resolve plugin log directory: {e}"))?
-        .join("plugins");
-    tokio::fs::create_dir_all(&directory)
-        .await
-        .map_err(|e| format!("failed to create plugin log directory: {e}"))?;
-    Ok(directory.join(format!("{plugin_id}.log")))
+fn resolve_plugin_binary(app: &AppHandle, inventory: &PluginInventory) -> Result<PathBuf, String> {
+    match inventory.source_kind {
+        PluginSourceKind::Builtin => resolve_trusted_binary(app, &inventory.backend_entrypoint),
+        PluginSourceKind::Local => {
+            let package = inventory.installed_path.as_deref().ok_or_else(|| {
+                format!("local plugin {} has no imported package path", inventory.id)
+            })?;
+            let binary = Path::new(package).join(&inventory.backend_entrypoint);
+            if binary.is_file() {
+                Ok(binary)
+            } else {
+                Err(format!(
+                    "imported backend for plugin {} is missing: {}",
+                    inventory.id,
+                    binary.display()
+                ))
+            }
+        }
+    }
 }
 
-async fn spawn_runtime(binary: &Path, log_path: &Path) -> Result<RuntimeProcess, String> {
+async fn plugin_state_root(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
+    use tauri::Manager as _;
+    let root = crate::plugin_packages::state_root(
+        &app.path()
+            .app_data_dir()
+            .map_err(|error| format!("failed to resolve plugin state directory: {error}"))?,
+        plugin_id,
+    );
+    for directory in [root.join("data"), root.join("secrets"), root.join("logs")] {
+        tokio::fs::create_dir_all(directory)
+            .await
+            .map_err(|error| format!("failed to create plugin state directory: {error}"))?;
+    }
+    Ok(root)
+}
+
+async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, String> {
+    Ok(plugin_state_root(app, plugin_id)
+        .await?
+        .join("logs")
+        .join("stderr.log"))
+}
+
+async fn spawn_runtime(
+    binary: &Path,
+    log_path: &Path,
+    state_root: Option<&Path>,
+) -> Result<RuntimeProcess, String> {
     let mut command = Command::new(binary);
+    if let Some(state_root) = state_root {
+        command
+            .env("PLANEAI_PLUGIN_DATA_DIR", state_root.join("data"))
+            .env("PLANEAI_PLUGIN_SECRETS_DIR", state_root.join("secrets"));
+    }
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -980,10 +1525,14 @@ async fn record_monitored_process_failure(
     let update_id = plugin_id.clone();
     let inventory = commands::blocking(move || {
         let conn = db.lock().map_err(|e| e.to_string())?;
+        let enabled = get_inventory(&conn, &update_id)
+            .map_err(|e| e.to_string())?
+            .map(|inventory| inventory.enabled)
+            .ok_or_else(|| format!("plugin inventory entry not found: {update_id}"))?;
         set_state(
             &conn,
             &update_id,
-            false,
+            enabled,
             PluginRuntimeState::Error,
             Some(&error),
         )?;
@@ -1111,6 +1660,47 @@ mod tests {
     }
 
     #[test]
+    fn legacy_inventory_schema_migrates_a_local_ui_entrypoint_to_a_main_pane_contribution() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE plugin_inventory (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                host_api_version TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                backend_entrypoint TEXT NOT NULL,
+                ui_entrypoint TEXT,
+                installed_hash TEXT,
+                installed_path TEXT,
+                original_display_path TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                runtime_state TEXT NOT NULL DEFAULT 'disabled',
+                last_error TEXT,
+                log_path TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO plugin_inventory (
+                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_entrypoint
+            ) VALUES ('legacy', 'Legacy', '1.0.0', 'planeai.plugin-host.v1', 'local', 'bin/plugin', 'ui/entry.js');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        let ui_contributions: String = conn
+            .query_row(
+                "SELECT ui_contributions FROM plugin_inventory WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let contributions: Vec<PluginUiContribution> =
+            serde_json::from_str(&ui_contributions).unwrap();
+        assert_eq!(contributions[0].id, "legacy-main-pane");
+        assert_eq!(contributions[0].entrypoint, "ui/entry.js");
+    }
+
+    #[test]
     fn bundled_jira_manifest_is_valid_and_disabled_by_default() {
         let manifest = bundled_manifests().unwrap().pop().unwrap();
         assert_eq!(manifest.id, "jira");
@@ -1139,6 +1729,74 @@ mod tests {
     }
 
     #[test]
+    fn local_ui_contributions_round_trip_through_inventory() {
+        let conn = database();
+        let manifest = PluginManifest {
+            schema: "planeai.plugin.v1".into(),
+            id: "sidebar-test".into(),
+            name: "Sidebar test".into(),
+            version: "1.0.0".into(),
+            host_api_version: HOST_API_VERSION.into(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: None,
+            backend_entrypoints: HashMap::from([(
+                crate::plugin_packages::current_platform_key().to_string(),
+                "bin/plugin".into(),
+            )]),
+            ui_contributions: vec![PluginUiContribution {
+                id: "log".into(),
+                label: "Log".into(),
+                placement: PluginUiPlacement::SidebarFooter,
+                entrypoint: "ui/log.js".into(),
+                order: Some(0),
+                shortcut: None,
+            }],
+            legacy_ui_entrypoint: None,
+        };
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
+        )
+        .unwrap();
+        let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
+        assert_eq!(inventory.ui_contributions, manifest.ui_contributions);
+
+        let mut invalid_shortcut = manifest.clone();
+        invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
+        assert!(invalid_shortcut
+            .validate()
+            .unwrap_err()
+            .contains("shortcuts"));
+    }
+
+    #[test]
+    fn invalid_persisted_ui_contributions_are_not_silently_discarded() {
+        let conn = database();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = 'not-json' WHERE id = 'jira'",
+            [],
+        )
+        .unwrap();
+        assert!(get_inventory(&conn, "jira").is_err());
+    }
+
+    #[test]
+    fn semantically_invalid_persisted_ui_contributions_are_rejected() {
+        let conn = database();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
+            [r#"[{"id":"bad","label":"Bad","placement":"sidebar.footer","entrypoint":"ui/bad.js","shortcut":"Mod+B"}]"#],
+        )
+        .unwrap();
+        assert!(get_inventory(&conn, "jira").is_err());
+    }
+
+    #[test]
     fn plugin_failures_are_isolated_to_their_inventory_record() {
         let conn = database();
         let local = PluginManifest {
@@ -1148,8 +1806,13 @@ mod tests {
             version: "1.0.0".into(),
             host_api_version: HOST_API_VERSION.into(),
             source_kind: PluginSourceKind::Local,
-            backend_entrypoint: "local-test".into(),
-            ui_entrypoint: None,
+            backend_entrypoint: None,
+            backend_entrypoints: HashMap::from([(
+                crate::plugin_packages::current_platform_key().to_string(),
+                "local-test".into(),
+            )]),
+            ui_contributions: vec![],
+            legacy_ui_entrypoint: None,
         };
         sync_inventory(&conn, &[local]).unwrap();
         set_state(
@@ -1166,11 +1829,64 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_local_plugin_ids_are_rejected_without_replacing_inventory() {
+        let conn = database();
+        let manifest = PluginManifest {
+            schema: "planeai.plugin.v1".into(),
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            version: "1.0.0".into(),
+            host_api_version: HOST_API_VERSION.into(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: None,
+            backend_entrypoints: HashMap::from([(
+                crate::plugin_packages::current_platform_key().to_string(),
+                "bin/plugin".into(),
+            )]),
+            ui_contributions: vec![],
+            legacy_ui_entrypoint: None,
+        };
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "content-hash",
+            package.path(),
+            "/original/package",
+        )
+        .unwrap();
+        let error = insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "different-hash",
+            package.path(),
+            "/different/package",
+        )
+        .unwrap_err();
+        assert!(error.contains("already installed"));
+        let inventory = get_inventory(&conn, "fixture").unwrap().unwrap();
+        assert_eq!(inventory.installed_hash.as_deref(), Some("content-hash"));
+        assert_eq!(
+            inventory.original_display_path.as_deref(),
+            Some("/original/package")
+        );
+        delete_local_inventory(&conn, "fixture").unwrap();
+        assert!(get_inventory(&conn, "fixture").unwrap().is_none());
+        assert!(delete_local_inventory(&conn, "jira")
+            .unwrap_err()
+            .contains("local plugin"));
+        assert!(get_inventory(&conn, "jira").unwrap().is_some());
+    }
+
+    #[test]
     fn startup_reconciles_interrupted_runtime_without_losing_diagnostics() {
         let conn = database();
         set_state(&conn, "jira", true, PluginRuntimeState::Running, None).unwrap();
         assert_eq!(reconcile_interrupted_runs(&conn).unwrap(), 1);
         let jira = get_inventory(&conn, "jira").unwrap().unwrap();
+        assert!(jira.enabled);
         assert_eq!(jira.state, PluginRuntimeState::Error);
         assert!(jira.last_error.unwrap().contains("stopped"));
     }

@@ -8,7 +8,7 @@
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
-  import { installKeyboardRouter, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
+  import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
@@ -42,7 +42,8 @@
   import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
-  import PluginWorkspaceHost from "./components/PluginWorkspaceHost.svelte";
+  import PluginContributionHost from "./components/PluginContributionHost.svelte";
+  import type { PluginInventory, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
@@ -73,9 +74,8 @@
   let fileExplorerVisible = $state(false);
   let showLogViewer = $state(false);
   let activePluginId = $state<string | null>(null);
+  let activeContributionId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
-  let pluginNavigationGeneration = 0;
-  let pendingPluginPageId: string | null = null;
 
   // PR form state
   let showPrForm = $state(false);
@@ -215,6 +215,19 @@
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
+  const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
+  const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
+    (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
+  const sidebarPluginContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement !== "main-pane").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
+  const mainPaneCommands = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
   const ciStatus = $derived.by(() => {
@@ -764,17 +777,25 @@
   }
 
   function leavePluginWorkspace(): void {
-    pluginNavigationGeneration += 1;
-    pendingPluginPageId = null;
     activePluginId = null;
+    activeContributionId = null;
   }
 
   function invalidatePluginPage(pluginId: string): void {
-    if (pendingPluginPageId === pluginId) {
-      pluginNavigationGeneration += 1;
-      pendingPluginPageId = null;
+    if (activePluginId === pluginId) leavePluginWorkspace();
+  }
+
+  function openPluginContribution(pluginId: string, contributionId: string): void {
+    const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
+    const contribution = plugin?.ui_contributions.find((candidate) => candidate.id === contributionId && candidate.placement === "main-pane");
+    if (!plugin || !contribution) {
+      showSnackbar("Plugin main-pane contribution is unavailable");
+      return;
     }
-    if (activePluginId === pluginId) activePluginId = null;
+    if (activePluginId === pluginId && activeContributionId === contributionId) return;
+    loopStore.setActiveLoopId(null);
+    activePluginId = pluginId;
+    activeContributionId = contributionId;
   }
 
   function selectWorkspaceSession(sessionId: string): void {
@@ -793,24 +814,6 @@
     leavePluginWorkspace();
     loopStore.setActiveLoopId(loopId);
     touchMru(`loop:${loopId}`);
-  }
-
-  async function openPluginPage(pluginId: string) {
-    const generation = ++pluginNavigationGeneration;
-    pendingPluginPageId = pluginId;
-    const refreshed = await refreshPlugins();
-    if (!refreshed) {
-      if (generation === pluginNavigationGeneration && pendingPluginPageId === pluginId) {
-        pendingPluginPageId = null;
-      }
-      return;
-    }
-    if (generation !== pluginNavigationGeneration || pendingPluginPageId !== pluginId) return;
-    pendingPluginPageId = null;
-    if (pluginInventory.some((plugin) => plugin.id === pluginId && plugin.state === "running")) {
-      loopStore.setActiveLoopId(null);
-      activePluginId = pluginId;
-    }
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -848,13 +851,18 @@
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
       if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
     });
-    const unlistenPluginPage = listen<string>("plugin-page-open", (event) => { void openPluginPage(event.payload); });
-    const unlistenPluginPageClose = listen<string>("plugin-page-close", (event) => {
-      invalidatePluginPage(event.payload);
-    });
 
     startJiraDepartedListening();
     initUpdateListener();
+    const onPluginShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isPlatformMod(event) || matchChord(event)) return;
+      const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key.toUpperCase();
+      const parts = ["Mod", ...(event.shiftKey ? ["Shift"] : []), ...(event.altKey ? ["Alt"] : []), key];
+      const shortcut = parts.join("+");
+      const target = mainPaneCommands.find(({ contribution }) => contribution.shortcut === shortcut);
+      if (target) { event.preventDefault(); openPluginContribution(target.plugin.id, target.contribution.id); }
+    };
+    window.addEventListener("keydown", onPluginShortcut);
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -977,7 +985,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginPage.then((fn) => fn()); unlistenPluginPageClose.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1033,6 +1041,9 @@
         onDeleteLoopSession={(session, loopId) => { const loop = projects.flatMap(p => loopStore.getLoopsForProject(p.id)).find(l => l.id === loopId); if (loop && isLoopActive(loop.status)) { showSnackbar("Stop the loop before deleting its sessions"); } else { orchestrator.deleteSession(session); } }}
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiffInTree}
+        pluginContributions={sidebarPluginContributions}
+        onPluginNavigate={openPluginContribution}
+        onPluginClose={leavePluginWorkspace}
       />
   {/if}
 
@@ -1111,6 +1122,8 @@
       onSplitVertical={() => handleSplitAction("split_vertical")}
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
+      pluginCommands={mainPaneCommands}
+      onOpenPluginContribution={openPluginContribution}
     />
 
     <KeyboardShortcuts open={showShortcuts} onOpenChange={(v) => (showShortcuts = v)} />
@@ -1228,12 +1241,12 @@
       <div class="w-full h-full bg-main">
         <div class="flex items-center gap-3 border-b border-border px-4 py-2">
           <button class="text-xs text-t2 hover:text-t1" onclick={leavePluginWorkspace}>← Back to workspace</button>
-          <span class="text-sm font-medium text-t1">{activePlugin?.name ?? "Plugin"}</span>
+          <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
-        {#if activePlugin}
-          <div class="h-[calc(100%-41px)]"><PluginWorkspaceHost plugin={activePlugin} /></div>
+        {#if activePlugin && activeContribution}
+          <div class="h-[calc(100%-41px)]"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} autofocus /></div>
         {:else}
-          <div class="flex h-[calc(100%-41px)] items-center justify-center text-sm text-t3">Plugin is no longer available.</div>
+          <div class="flex h-[calc(100%-41px)] items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
       </div>
     {/if}

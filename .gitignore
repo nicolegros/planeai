@@ -26,3 +26,6 @@ bench/captures/
 bench/results/
 src-tauri/planeai-iced-spike/:memory-shared:
 .planeai/
+
+# Generated local plugin fixture sidecars
+src-tauri/plugins/local-fixture/bin/

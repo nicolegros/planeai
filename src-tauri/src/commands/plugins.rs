@@ -1,3 +1,4 @@
+use serde_json::Value;
 use tauri::State;
 
 use crate::plugins::{JiraPluginStatus, PluginInventory, PluginRuntimeHandle};
@@ -9,6 +10,43 @@ pub async fn list_plugins(
     runtime.0.list().await
 }
 
+#[tauri::command]
+pub async fn install_local_plugin(
+    source_path: String,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<PluginInventory, String> {
+    runtime.0.install_local(source_path).await
+}
+
+#[tauri::command]
+pub async fn remove_local_plugin(
+    plugin_id: String,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<(), String> {
+    runtime.0.remove(&plugin_id).await
+}
+
+#[tauri::command]
+pub async fn plugin_call(
+    plugin_id: String,
+    method: String,
+    params: Value,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<Value, String> {
+    runtime.0.call(&plugin_id, &method, params).await
+}
+
+#[tauri::command]
+pub async fn local_plugin_ui_source(
+    plugin_id: String,
+    contribution_id: String,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<String, String> {
+    runtime
+        .0
+        .local_ui_source(&plugin_id, &contribution_id)
+        .await
+}
 #[tauri::command]
 pub async fn enable_plugin(
     plugin_id: String,

@@ -276,6 +276,9 @@ export function installKeyboardRouter(
   ]);
 
   function handler(e: KeyboardEvent) {
+    // Contribution ShadowRoots receive composed key events before the host router.
+    // A plugin may cancel an event to claim that shortcut while it is focused.
+    if (e.defaultPrevented) return;
     const action = matchChord(e);
     if (action) {
       // Only filter editor shortcuts while CodeMirror actually owns focus.
@@ -325,6 +328,6 @@ export function installKeyboardRouter(
     }
   }
 
-  window.addEventListener("keydown", handler, true);
-  return () => window.removeEventListener("keydown", handler, true);
+  window.addEventListener("keydown", handler);
+  return () => window.removeEventListener("keydown", handler);
 }

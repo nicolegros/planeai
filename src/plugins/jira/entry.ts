@@ -1,3 +1,4 @@
+import type { JiraPluginStatus } from "../../lib/types";
 import type { PluginUiEntrypoint } from "../../lib/plugin-sdk";
 
 const STYLES = `
@@ -37,7 +38,7 @@ export const jiraStatusEntrypoint: PluginUiEntrypoint = {
     const status = page.querySelector<HTMLElement>("[data-status]")!;
     let disposed = false;
 
-    void context.host.getJiraStatus(context.plugin.id).then(
+    void context.host.call<JiraPluginStatus>("jira.status").then(
       (value) => {
         if (!disposed) status.textContent = value.runtime_state;
       },

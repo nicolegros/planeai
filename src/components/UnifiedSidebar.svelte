@@ -1,13 +1,14 @@
 <script lang="ts">
   import { projects as projectsApi, jira as jiraApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
-  import type { TaskItem, Session, Project } from "../lib/types";
+  import type { TaskItem, Session, Project, PluginInventory, PluginUiContribution } from "../lib/types";
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
-  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey } from "../lib/sidebar-nav.svelte";
+  import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
+  import PluginContributionHost from "./PluginContributionHost.svelte";
   import { ContextMenu, ResizeHandle } from "./ui";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { MOD_LABEL } from "../lib/keyboard";
@@ -47,9 +48,12 @@
     onDeleteLoopSession?: (session: Session, loopId: string) => void;
     onToggleDiff?: () => void;
     selectedLoopId?: string | null;
+    pluginContributions?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    onPluginNavigate?: (pluginId: string, contributionId: string) => void;
+    onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -394,8 +398,7 @@
   function handleKeydown(e: KeyboardEvent) {
     if (zone !== "sidebar") return;
     if (flatNav.length === 0) return;
-    const el = document.activeElement;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.closest("[role='combobox']") || el.closest("[role='dialog']"))) return;
+    if (shouldBypassSidebarKeyboard(document.activeElement)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
     if (!action) return;
@@ -583,6 +586,10 @@
       {#if sidebarWidth >= 220 || projects.length === 0}<span class="font-mono text-[10px] text-t3 shrink-0 ml-1">{MOD_LABEL}⇧N</span>{/if}
     </button>
   </div>
+
+  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+  {/each}
 
   <!-- Main content -->
   <nav bind:this={navRef} class="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2 space-y-3 scrollbar-hide select-none">
@@ -851,7 +858,14 @@
       />
     {/if}
 
+    {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+    {/each}
   </nav>
+
+  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+  {/each}
 
   <!-- Preferences footer -->
   <button

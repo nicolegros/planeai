@@ -2,7 +2,6 @@
   import { onMount, onDestroy } from "svelte";
   import { preferences } from "../lib/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
@@ -75,12 +74,6 @@
       e.stopPropagation();
       getCurrentWindow().close();
     }
-  }
-
-  async function returnToMainWorkspace(): Promise<void> {
-    const mainWindow = await WebviewWindow.getByLabel("main");
-    await mainWindow?.setFocus();
-    await getCurrentWindow().close();
   }
 
   onMount(async () => {
@@ -556,7 +549,7 @@
     {/if}
 
     {#if activeTab === "Plugins"}
-    <PluginManager onOpenWorkspace={returnToMainWorkspace} />
+    <PluginManager />
     {/if}
 
     {#if activeTab === "More"}
