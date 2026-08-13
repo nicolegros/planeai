@@ -11,9 +11,6 @@ import type {
   CiCheck,
   PrStatus,
   CommitEntry,
-  JiraStatus,
-  SyncResult,
-  JiraTasksResponse,
   PluginInventory,
   JiraPluginStatus,
   LoopRunSummary,
@@ -237,16 +234,6 @@ export const symphony = {
   getStatus: () => invoke<string>("get_symphony_status"),
 };
 
-export const jira = {
-  connect: () => invoke("jira_connect"),
-  disconnect: () => invoke("jira_disconnect"),
-  syncNow: () => invoke<SyncResult>("jira_sync_now"),
-  status: () => invoke<JiraStatus>("jira_status"),
-  listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
-  assign: (jiraTaskKey: string, projectId: string) =>
-    invoke<TaskItem>("assign_jira_task", { jiraTaskKey, projectId }),
-};
-
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
   installLocal: (sourcePath: string) =>
@@ -257,9 +244,13 @@ export const plugins = {
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
+  settings: <T>(pluginId: string) => invoke<T>("plugin_settings", { pluginId }),
+  updateSettings: <T>(pluginId: string, settings: unknown) =>
+    invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
   jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
+  openJiraAuthorizationUrl: (url: string) => invoke<void>("open_jira_authorization_url", { url }),
 };
 
 export const preferences = {

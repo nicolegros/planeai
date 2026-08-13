@@ -10,7 +10,6 @@ mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
-mod jira;
 mod logging;
 mod notify;
 mod output_observer;
@@ -200,11 +199,9 @@ fn main() {
                     tracing::info!("stale worktree cleanup: complete");
                 }
             });
-            // Jira integration (before cfg is moved into ConfigState)
-            let jira_state = jira::init_jira(&cfg, app.handle().clone());
-
+            // Legacy Jira integration is intentionally inert while connection
+            // ownership lives in the bundled Jira plugin.
             app.manage(ConfigState(Mutex::new(cfg)));
-            app.manage(commands::JiraHandle(tokio::sync::Mutex::new(jira_state)));
 
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
@@ -361,7 +358,6 @@ fn main() {
             edit_task_item,
             move_task_item,
             fire_task_notify_hook,
-            list_jira_tasks,
             fe_list_directory,
             fe_list_all_paths,
             fe_create_file,
@@ -400,21 +396,18 @@ fn main() {
             session_logs::open_session_log_folder,
             session_logs::delete_session_log,
             session_logs::is_dogfood_log_viewer_enabled,
-            jira_connect,
-            jira_disconnect,
-            jira_sync_now,
-            jira_status,
-            assign_jira_task,
-            mark_jira_task_done,
             list_plugins,
             install_local_plugin,
             remove_local_plugin,
             plugin_call,
+            plugin_settings,
+            update_plugin_settings,
             local_plugin_ui_source,
             enable_plugin,
             disable_plugin,
             reload_plugin,
             jira_plugin_status,
+            open_jira_authorization_url,
             list_loop_runs,
             get_loop_run_detail,
             list_loop_recipes,

@@ -794,6 +794,60 @@ impl PluginRuntimeSupervisor {
         .await
     }
 
+    /// Read public structured settings for one installed plugin. Secrets remain
+    /// outside this API in the backend-only plugin secrets directory.
+    pub async fn settings(&self, plugin_id: &str) -> Result<Value, String> {
+        self.inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        let root = plugin_state_root(&self.app, plugin_id).await?;
+        commands::blocking(move || {
+            let path = root.join("data").join("settings.json");
+            if !path.exists() {
+                return Ok(serde_json::json!({}));
+            }
+            let value: Value =
+                serde_json::from_reader(std::fs::File::open(&path).map_err(|error| {
+                    format!("failed to read plugin settings {}: {error}", path.display())
+                })?)
+                .map_err(|error| format!("failed to parse plugin settings: {error}"))?;
+            if !value.is_object() {
+                return Err("plugin settings must be a JSON object".to_string());
+            }
+            Ok(value)
+        })
+        .await
+    }
+
+    /// Replace public structured settings atomically. Plugin secrets are never
+    /// accepted here and therefore cannot be returned over UI RPC.
+    pub async fn update_settings(&self, plugin_id: &str, settings: Value) -> Result<Value, String> {
+        if !settings.is_object() {
+            return Err("plugin settings must be a JSON object".to_string());
+        }
+        self.inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        let root = plugin_state_root(&self.app, plugin_id).await?;
+        commands::blocking(move || {
+            let data_dir = root.join("data");
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
+            let temporary = data_dir.join("settings.json.tmp");
+            let path = data_dir.join("settings.json");
+            std::fs::write(
+                &temporary,
+                serde_json::to_vec_pretty(&settings)
+                    .map_err(|error| format!("failed to serialize plugin settings: {error}"))?,
+            )
+            .map_err(|error| format!("failed to write plugin settings: {error}"))?;
+            std::fs::rename(&temporary, &path)
+                .map_err(|error| format!("failed to save plugin settings: {error}"))?;
+            Ok(settings)
+        })
+        .await
+    }
+
     async fn update_state(
         &self,
         plugin_id: &str,
@@ -1128,11 +1182,9 @@ impl PluginRuntimeSupervisor {
             }
         };
 
-        let state_path = if inventory.source_kind == PluginSourceKind::Local {
-            Some(plugin_state_root(&self.app, &id).await?)
-        } else {
-            None
-        };
+        // Bundled plugins own durable state too; Jira settings and credentials
+        // must survive restarts under the same plugin namespace as local plugins.
+        let state_path = Some(plugin_state_root(&self.app, &id).await?);
         let process = match spawn_runtime(&binary, &log_path, state_path.as_deref()).await {
             Ok(process) => process,
             Err(error) => {

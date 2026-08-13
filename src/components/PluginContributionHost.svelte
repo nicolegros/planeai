@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { jiraStatusEntrypoint } from "../plugins/jira/entry";
+  import { jiraConnectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins } from "../lib/api";
   import type { PluginUiDisposer, PluginUiEntrypoint } from "../lib/plugin-sdk";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
@@ -10,17 +10,19 @@
     contribution: PluginUiContribution;
     onNavigate: (pluginId: string, contributionId: string) => void;
     onClose: () => void;
+    onOpenPreferences?: () => void;
     autofocus?: boolean;
   }
   type LocalPluginModule = { default?: PluginUiEntrypoint; pluginEntrypoint?: PluginUiEntrypoint };
 
-  let { plugin, contribution, onNavigate, onClose, autofocus = false }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, autofocus = false }: Props = $props();
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
 
   const bundledEntries: Record<string, () => Promise<PluginUiEntrypoint>> = {
     "jira:jira-status": async () => jiraStatusEntrypoint,
+    "jira:jira-connection": async () => jiraConnectionEntrypoint,
   };
 
   function disposeCurrent(): void {
@@ -90,7 +92,8 @@
         contribution,
         host: {
           call: <T>(method: string, params: unknown = null) => plugins.call<T>(plugin.id, method, params),
-          navigation: { open: onNavigate, close: onClose },
+          navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
+          openJiraAuthorizationUrl: (url: string) => plugins.openJiraAuthorizationUrl(url),
         },
       });
       if (version !== generation) {
