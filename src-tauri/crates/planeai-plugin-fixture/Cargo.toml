@@ -1,0 +1,12 @@
+[package]
+name = "planeai-plugin-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "planeai-plugin-fixture"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }

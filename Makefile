@@ -1,4 +1,4 @@
-.PHONY: dev build bundle open test dev-bundle ci fmt lint docs install
+.PHONY: dev build bundle open test dev-bundle ci fmt lint docs install sidecars local-plugin-fixture
 
 # Dummy updater signing key for local builds (not used in CI releases)
 DUMMY_SIGNING_KEY := dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5QnlHWnBkWklHc0lISUlrbDg0L29zSHR0L1NQQWovcHlsbVNRaDd3TXhxQUFBQkFBQUFBQUFBQUFBQUlBQUFBQXhTY3gvZW82clBCNUhCdWtoTkZNZEhJaVRUMkh0OVZsUzVESDdhU1JjR2ZwT3l4NlhTUEtvVnlpVjVsSFAwUDQ5aWF4QlVCUWJuRlFULy9DR1JQWC95dk04QTJNbGgvVTdRTHdiUmxrRHh1clQrWWgzdUY5bTZsQzl1OVFoYWgzVlRXK3gvajVrRzQ9Cg==
@@ -42,6 +42,12 @@ bundle: install sidecars
 	$(SIGNING_ENV) pnpm exec tauri build -b app
 	@echo "$(CURDIR)/src-tauri/target/release/bundle/macos/planeai.app" | pbcopy
 	@echo "✅ Bundle path copied to clipboard"
+
+local-plugin-fixture:
+	cd src-tauri && cargo build -p planeai-plugin-fixture
+	mkdir -p src-tauri/plugins/local-fixture/bin
+	cp src-tauri/target/debug/planeai-plugin-fixture src-tauri/plugins/local-fixture/bin/planeai-plugin-fixture
+	chmod +x src-tauri/plugins/local-fixture/bin/planeai-plugin-fixture
 
 open: bundle
 	open src-tauri/target/release/bundle/macos/planeai.app

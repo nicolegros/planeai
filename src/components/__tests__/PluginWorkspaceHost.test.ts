@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
-const { jiraStatus } = vi.hoisted(() => ({
-  jiraStatus: vi.fn(() =>
+const { pluginCall, localUiSource } = vi.hoisted(() => ({
+  pluginCall: vi.fn(() =>
     Promise.resolve({
       plugin_id: "jira",
       plugin_name: "Jira",
@@ -12,11 +12,15 @@ const { jiraStatus } = vi.hoisted(() => ({
       last_error: null,
     }),
   ),
+  localUiSource: vi.fn(),
 }));
 
-vi.mock("../../lib/api", () => ({ plugins: { jiraStatus } }));
+vi.mock("../../lib/api", () => ({
+  plugins: { call: pluginCall, localUiSource },
+}));
 
 import PluginWorkspaceHostHarness from "./PluginWorkspaceHostHarness.svelte";
+import PluginWorkspaceHostLocalHarness from "./PluginWorkspaceHostLocalHarness.svelte";
 
 describe("PluginWorkspaceHost", () => {
   let target: HTMLElement;
@@ -45,7 +49,33 @@ describe("PluginWorkspaceHost", () => {
       expect(host?.shadowRoot?.textContent).toContain("planeai.plugin-host.v1");
       expect(host?.shadowRoot?.textContent).toContain("running");
     });
-    expect(jiraStatus).toHaveBeenCalledWith("jira");
+    expect(pluginCall).toHaveBeenCalledWith("jira", "jira.status", null);
+  });
+
+  it("mounts an imported local ESM bundle and scopes calls to its sidecar", async () => {
+    localUiSource.mockResolvedValue(`
+      export default {
+        mount(root, context) {
+          const page = document.createElement("p");
+          page.className = "fixture-page";
+          page.textContent = "Loading…";
+          root.replaceChildren(page);
+          context.host.call("fixture.status").then((value) => { page.textContent = value.runtime_state; });
+          return () => root.replaceChildren();
+        }
+      };
+    `);
+    pluginCall.mockResolvedValueOnce({ runtime_state: "running" } as never);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginWorkspaceHostLocalHarness, { target }) as typeof component;
+
+    await vi.waitFor(() => {
+      const host = target.querySelector<HTMLElement>("[data-plugin-workspace-host]");
+      expect(host?.shadowRoot?.querySelector(".fixture-page")?.textContent).toBe("running");
+    });
+    expect(localUiSource).toHaveBeenCalledWith("local-fixture");
+    expect(pluginCall).toHaveBeenCalledWith("local-fixture", "fixture.status", null);
   });
 
   it("disposes the old UI before remounting and on host destruction", async () => {
@@ -88,6 +118,6 @@ describe("PluginWorkspaceHost", () => {
 
     const host = target.querySelector<HTMLElement>("[data-plugin-workspace-host]")!;
     await vi.waitFor(() => expect(host.shadowRoot?.childNodes).toHaveLength(0));
-    expect(jiraStatus).toHaveBeenCalledTimes(1);
+    expect(pluginCall).toHaveBeenCalledTimes(1);
   });
 });

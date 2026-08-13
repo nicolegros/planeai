@@ -11,6 +11,7 @@ members = [
   "crates/planeai-cli-bin",
   "crates/planeai-daemon-bin",
   "crates/planeai-plugin-jira",
+  "crates/planeai-plugin-fixture",
 ]
 resolver = "2"
 
@@ -61,6 +62,7 @@ clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "=0.10.9"
 json_comments = "0.2"
 regex = { workspace = true }
 rusqlite = { version = "0.40", features = ["bundled"] }

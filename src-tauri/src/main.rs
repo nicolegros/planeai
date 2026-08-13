@@ -15,6 +15,7 @@ mod logging;
 mod notify;
 mod output_observer;
 mod paths;
+mod plugin_packages;
 mod plugins;
 mod pr;
 mod pty;
@@ -238,6 +239,10 @@ fn main() {
                 db_arc.clone(),
                 app.handle().clone(),
             ));
+            let plugin_runtime = app.state::<plugins::PluginRuntimeHandle>().0.clone();
+            tauri::async_runtime::spawn(async move {
+                plugin_runtime.start_enabled().await;
+            });
 
             // Notification system
             let notify_state: notify::SharedNotifyState =
@@ -400,6 +405,10 @@ fn main() {
             assign_jira_task,
             mark_jira_task_done,
             list_plugins,
+            install_local_plugin,
+            remove_local_plugin,
+            plugin_call,
+            local_plugin_ui_source,
             enable_plugin,
             disable_plugin,
             reload_plugin,

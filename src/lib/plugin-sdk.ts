@@ -1,12 +1,11 @@
-import type { JiraPluginStatus, PluginInventory } from "./types";
+import type { PluginInventory } from "./types";
 
 /**
- * The only host capability exposed to bundled plugin UI modules in v1.
- * Plugin modules receive this object from the host; they do not import stores
- * or invoke Tauri commands directly.
+ * Plugin UI modules use only this host-injected bridge. The host scopes every
+ * request to the selected plugin runtime; modules never invoke Tauri directly.
  */
 export interface PluginUiHost {
-  getJiraStatus(pluginId: string): Promise<JiraPluginStatus>;
+  call<T>(method: string, params?: unknown): Promise<T>;
 }
 
 export interface PluginUiContext {

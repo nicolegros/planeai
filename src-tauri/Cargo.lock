@@ -3295,6 +3295,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3416,6 +3417,14 @@ name = "planeai-paths"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "planeai-plugin-fixture"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

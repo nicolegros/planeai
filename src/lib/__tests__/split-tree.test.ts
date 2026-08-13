@@ -196,7 +196,6 @@ describe("moveSessionToLeaf", () => {
 describe("closeSplit", () => {
   it("migrates tabs to sibling and destroys the split", () => {
     initTree([tab("s1")]);
-    const originalLeafId = getFocusedLeafId()!;
     splitFocusedLeaf("vertical");
     const newLeafId = getFocusedLeafId()!;
     addSessionToLeaf(newLeafId, tab("s2"));

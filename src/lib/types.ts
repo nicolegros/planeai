@@ -87,6 +87,9 @@ export interface PluginInventory {
   source_kind: PluginSourceKind;
   backend_entrypoint: string;
   ui_entrypoint: string | null;
+  installed_hash: string | null;
+  installed_path: string | null;
+  original_display_path: string | null;
   enabled: boolean;
   state: PluginRuntimeState;
   last_error: string | null;
