@@ -5,12 +5,14 @@
   import { Button, Input, Label } from "./ui";
 
   interface JiraSettings { site: string; sync_interval_ms: number; }
-  interface JiraStatus { connected: boolean; site: string | null; }
+  interface JiraStatus { connected: boolean; authorizing: boolean; site: string | null; last_error: string | null; }
 
   let settings = $state<JiraSettings>({ site: "", sync_interval_ms: 60000 });
-  let status = $state<JiraStatus>({ connected: false, site: null });
+  let status = $state<JiraStatus>({ connected: false, authorizing: false, site: null, last_error: null });
   let loading = $state(true);
   let connecting = $state(false);
+  let saveChain = Promise.resolve();
+  let latestSave = 0;
   const hasSite = $derived(!!settings.site.trim());
 
   async function call<T>(method: string, params: unknown = null): Promise<T> {
@@ -31,7 +33,9 @@
 
   onMount(async () => {
     try {
-      await plugins.enable("jira");
+      const jira = (await plugins.list()).find((plugin) => plugin.id === "jira");
+      if (!jira) throw new Error("The bundled Jira plugin is unavailable.");
+      if (jira.state !== "running") await plugins.enable("jira");
       await refresh();
     } catch (error) {
       showSnackbar(`Jira plugin could not start: ${String(error)}`, "error");
@@ -40,12 +44,22 @@
     }
   });
 
-  async function save(): Promise<void> {
-    try {
-      settings = await plugins.updateSettings<JiraSettings>("jira", settings);
-    } catch (error) {
+  function save(): Promise<void> {
+    const sequence = ++latestSave;
+    const snapshot = { ...settings };
+    const write = saveChain
+      .catch(() => {})
+      .then(() => plugins.updateSettings<JiraSettings>("jira", snapshot));
+    saveChain = write.then(() => {}, () => {});
+    return write.then((saved) => {
+      if (sequence === latestSave) settings = saved;
+    });
+  }
+
+  function saveAfterEdit(): void {
+    void save().catch((error) => {
       showSnackbar(`Could not save Jira settings: ${String(error)}`, "error");
-    }
+    });
   }
 
   async function connect(): Promise<void> {
@@ -61,13 +75,27 @@
       }
       showSnackbar("Finish Jira authorization in your browser…", "success");
       await call("jira.connect.complete");
-      await refresh();
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        await refresh();
+      } while (status.authorizing);
+      if (!status.connected) throw new Error(status.last_error ?? "Jira authorization did not complete.");
       showSnackbar("Connected to Jira", "success");
     } catch (error) {
       await refresh().catch(() => {});
       showSnackbar(`Jira connection failed: ${String(error)}`, "error");
     } finally {
       connecting = false;
+    }
+  }
+
+  async function cancelConnection(): Promise<void> {
+    try {
+      await call("jira.connect.cancel");
+      await refresh();
+      showSnackbar("Jira authorization cancelled", "success");
+    } catch (error) {
+      showSnackbar(`Could not cancel Jira authorization: ${String(error)}`, "error");
     }
   }
 
@@ -96,15 +124,17 @@
     <span class="text-sm text-t2">{status.connected ? `Connected to ${status.site ?? settings.site}` : 'Not connected'}</span>
     {#if status.connected}
       <Button onclick={disconnect} disabled={connecting}>{connecting ? 'Disconnecting…' : 'Disconnect'}</Button>
+    {:else if connecting}
+      <Button onclick={cancelConnection}>Cancel authorization</Button>
     {:else}
-      <Button onclick={connect} disabled={connecting || !hasSite}>{connecting ? 'Connecting…' : 'Connect'}</Button>
+      <Button onclick={connect} disabled={!hasSite}>Connect</Button>
       {#if !hasSite}<span class="text-xs text-t3">Enter a site URL to connect</span>{/if}
     {/if}
   </div>
 
   <div class="space-y-1">
     <Label for="jira-site">Site URL</Label>
-    <Input id="jira-site" bind:value={settings.site} placeholder="https://mycompany.atlassian.net" onchange={save} />
+    <Input id="jira-site" bind:value={settings.site} placeholder="https://mycompany.atlassian.net" onchange={saveAfterEdit} disabled={loading || connecting || status.connected} />
   </div>
   <div class="space-y-1">
     <Label for="jira-sync-interval">Sync interval (seconds)</Label>
@@ -112,9 +142,10 @@
       id="jira-sync-interval"
       type="number"
       value={String(settings.sync_interval_ms / 1000)}
+      disabled={loading || connecting}
       onchange={(event) => {
         settings = { ...settings, sync_interval_ms: (parseInt(event.currentTarget.value, 10) || 60) * 1000 };
-        save();
+        saveAfterEdit();
       }}
     />
     <p class="text-xs text-t3">Saved for a future sync worker; no periodic sync runs in this release.</p>

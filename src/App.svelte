@@ -1241,7 +1241,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="h-[calc(100%-41px)]"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} autofocus /></div>
+          <div class="h-[calc(100%-41px)]"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
           <div class="flex h-[calc(100%-41px)] items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
