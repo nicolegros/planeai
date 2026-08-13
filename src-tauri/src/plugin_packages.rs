@@ -410,7 +410,7 @@ mod tests {
             r#"{
           "schema": "planeai.plugin.v1", "id": "fixture", "name": "Fixture", "version": "1",
           "host_api_version": "planeai.plugin-host.v1", "source_kind": "local",
-          "backend_entrypoints": { "windows-x64": "bin/plugin.exe" }
+          "backend_entrypoints": { "unsupported-platform": "bin/plugin" }
         }"#,
         )
         .unwrap();
