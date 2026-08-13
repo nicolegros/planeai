@@ -9,7 +9,10 @@ export interface PluginUiHost {
   navigation: {
     open(pluginId: string, contributionId: string): void;
     close(): void;
+    openPreferences(): void;
   };
+  /** Opens only a Jira OAuth authorization URL via PlaneAI's opener integration. */
+  openJiraAuthorizationUrl(url: string): Promise<void>;
 }
 
 export interface PluginUiContext {

@@ -39,7 +39,6 @@
   import LogViewer from "./components/LogViewer.svelte";
   import PrPanel from "./components/PrPanel.svelte";
   import PostMergePrompt from "./components/PostMergePrompt.svelte";
-  import JiraDepartedPrompt from "./components/JiraDepartedPrompt.svelte";
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
@@ -47,7 +46,6 @@
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
   import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
-  import { startListening as startJiraDepartedListening, stopListening as stopJiraDepartedListening, focusDepartedPrompt, getCurrent as getDepartedPrompt } from "./lib/jira-departed-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -852,7 +850,6 @@
       if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
     });
 
-    startJiraDepartedListening();
     initUpdateListener();
     const onPluginShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isPlatformMod(event) || matchChord(event)) return;
@@ -922,7 +919,7 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else if (getDepartedPrompt()) focusDepartedPrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
+        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
@@ -985,7 +982,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); stopJiraDepartedListening(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1521,5 +1518,4 @@
 {/if}
 
 <PostMergePrompt />
-<JiraDepartedPrompt />
 <UpdateToast />

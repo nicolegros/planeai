@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { projects as projectsApi, jira as jiraApi } from "../lib/api";
+  import { projects as projectsApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
   import type { TaskItem, Session, Project, PluginInventory, PluginUiContribution } from "../lib/types";
   import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
@@ -15,14 +15,11 @@
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import TaskPanel from "./TaskPanel.svelte";
-  import JiraSidebarSection from "./JiraSidebarSection.svelte";
-  import AssignJiraDialog from "./AssignJiraDialog.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import * as jiraTaskStore from "../lib/jira-task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
 
   interface Props {
@@ -39,7 +36,6 @@
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
-    onAssignJiraTask?: (jiraTaskKey: string) => void;
     onSelectLoop?: (loopId: string) => void;
     onStartLoop?: (loopId: string) => void;
     onTickLoop?: (loopId: string) => void;
@@ -53,7 +49,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -62,8 +58,6 @@
   const agentStates = $derived(orchestrator.getAgentStates());
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
-  const jiraTasks = $derived(jiraTaskStore.getJiraTasks());
-  const jiraChildCounts = $derived(jiraTaskStore.getChildCounts());
 
   // Aggregate all loops across all projects
   const allLoops = $derived(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)));
@@ -112,12 +106,6 @@
     }
   }
   $effect(() => { if (projects.length) loadAutoModes(); });
-  let jiraConnected = $state(false);
-  $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
-  $effect(() => {
-    const unlisten = listen("jira-sync-complete", () => { jiraTaskStore.loadJiraTasks(); });
-    return () => { unlisten.then(fn => fn()); };
-  });
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);
@@ -176,34 +164,6 @@
     failed: "text-status-exited", cancelled: "text-status-exited",
   };
   function shortId(id: string): string { return id.slice(0, 8); }
-
-  // Jira task assignment
-  let assignTask = $state<TaskItem | null>(null);
-  let assignPreselectedProjectId = $state("");
-  let pendingAssignTask = $state<TaskItem | null>(null);
-  let projectIdsBeforeCreate = $state<Set<string>>(new Set());
-
-  function openAssignDialog(task: TaskItem) { assignTask = task; assignPreselectedProjectId = ""; }
-
-  function startNewProjectForAssign() {
-    if (assignTask) {
-      pendingAssignTask = assignTask;
-      projectIdsBeforeCreate = new Set(projects.map(p => p.id));
-    }
-    assignTask = null;
-    onAddProject();
-  }
-
-  // Re-open assign dialog after project creation with the new project pre-selected
-  $effect(() => {
-    if (!pendingAssignTask) return;
-    const newProject = projects.find(p => !projectIdsBeforeCreate.has(p.id));
-    if (newProject) {
-      assignTask = pendingAssignTask;
-      assignPreselectedProjectId = newProject.id;
-      pendingAssignTask = null;
-    }
-  });
 
   async function hideProject(id: string) {
     try {
@@ -338,13 +298,6 @@
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
     }
-    // Jira section
-    if (jiraTasks.length > 0) {
-      result.push({ type: "jira_header" });
-      if (!collapsedSections["jira"]) {
-        for (const t of jiraTasks) result.push({ type: "jira_task", task: t });
-      }
-    }
     return result;
   });
 
@@ -477,16 +430,6 @@
       return;
     }
 
-    if (current.type === "jira_header") {
-      if (action.type === "select") toggleSection("jira");
-      return;
-    }
-
-    if (current.type === "jira_task") {
-      if (action.type === "select") openAssignDialog(current.task);
-      return;
-    }
-
     if (current.type === "loop") {
       if (action.type === "select") { onSelectLoop?.(current.loop.id); }
       else if (action.type === "delete") { onDeleteLoop?.(current.loop.id); }
@@ -530,7 +473,6 @@
     if (now - lastFocusRefresh < FOCUS_REFRESH_COOLDOWN_MS) return;
     lastFocusRefresh = now;
     taskStore.refresh(projects.map(p => p.path));
-    if (jiraConnected) jiraTaskStore.loadJiraTasks();
   }
 </script>
 
@@ -588,7 +530,7 @@
   </div>
 
   {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
   {/each}
 
   <!-- Main content -->
@@ -843,28 +785,15 @@
         </div>
       {/each}
 
-      <!-- Jira section -->
-      <JiraSidebarSection
-        tasks={jiraTasks}
-        childCounts={jiraChildCounts}
-        collapsed={collapsedSections["jira"] ?? false}
-        {zone}
-        {flatNavIndex}
-        onToggleSection={() => toggleSection("jira")}
-        onAssignJiraTask={(key) => {
-          const task = jiraTasks.find(t => t.key === key);
-          if (task) openAssignDialog(task);
-        }}
-      />
     {/if}
 
     {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
-      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
     {/each}
   </nav>
 
   {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
   {/each}
 
   <!-- Preferences footer -->
@@ -983,15 +912,4 @@
       { label: "Delete", danger: true, onSelect: () => { onDeleteLoopSession?.(loopSessionContextMenu!.session, loopSessionContextMenu!.loopId); loopSessionContextMenu = null; } },
     ]}
   />
-{/if}
-
-<!-- Assign Jira task to project dialog -->
-{#if assignTask}
-<AssignJiraDialog
-  task={assignTask}
-  {projects}
-  preselectedProjectId={assignPreselectedProjectId}
-  onClose={() => { assignTask = null; }}
-  onNewProject={startNewProjectForAssign}
-/>
 {/if}

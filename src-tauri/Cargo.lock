@@ -3431,9 +3431,17 @@ dependencies = [
 name = "planeai-plugin-jira"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "dotenvy",
+ "rand 0.10.2",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
  "tokio",
+ "url",
+ "wiremock",
 ]
 
 [[package]]

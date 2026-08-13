@@ -1,24 +1,15 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, State};
 
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
-use crate::commands::jira::JiraHandle;
 use crate::db;
 use crate::state::{ConfigState, DbState, PtyState};
 
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
-
-/// Response for list_jira_tasks: tasks + child counts derived in-memory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JiraTasksResponse {
-    pub tasks: Vec<TaskItem>,
-    pub child_counts: HashMap<String, usize>,
-}
 
 /// Task structure returned to the frontend. Matches the original contract + parent_key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,7 +174,6 @@ pub async fn move_task_item(
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
     pty_state: State<'_, PtyState>,
-    jira: State<'_, JiraHandle>,
     app: AppHandle,
     key: String,
     status: String,
@@ -196,7 +186,7 @@ pub async fn move_task_item(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // All I/O (DB writes, subprocess kills) runs off the main thread.
-    let (archived_session_ids, parent_key) = super::blocking({
+    let archived_session_ids = super::blocking({
         let key = key.clone();
         let cfg = cfg.clone();
         move || {
@@ -224,13 +214,11 @@ pub async fn move_task_item(
                 )
                 .map_err(|e| e.to_string())?;
 
-            let mut parent_key: Option<String> = None;
             let mut session_ids: Vec<String> = Vec::new();
 
             if s == Status::Done {
-                parent_key = planeai_tasks::try_auto_complete_parent(&repo, &task);
-                if let Some(ref pk) = parent_key {
-                    tracing::info!(parent_key = %pk, "auto-completed parent task");
+                if let Some(parent_key) = planeai_tasks::try_auto_complete_parent(&repo, &task) {
+                    tracing::info!(parent_key = %parent_key, "auto-completed parent task");
                 }
 
                 // Archive sessions linked to this task
@@ -243,22 +231,10 @@ pub async fn move_task_item(
                 crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
             }
 
-            Ok((session_ids, parent_key))
+            Ok(session_ids)
         }
     })
     .await?;
-
-    // Jira writeback (tokio Mutex — must stay on async thread)
-    if let Ok(guard) = jira.0.try_lock() {
-        if let Some(state) = guard.as_ref() {
-            state.try_writeback(&key, s, &cfg);
-            if let Some(ref pk) = parent_key {
-                state.try_writeback(pk, Status::Done, &cfg);
-            }
-        }
-    } else {
-        tracing::warn!(key = %key, "move_task_item: could not acquire jira lock, skipping writeback");
-    }
 
     // Detach PTYs (PtyManager is !Send, must stay on main thread)
     for id in &archived_session_ids {
@@ -294,45 +270,4 @@ pub async fn fire_task_notify_hook(
         Ok(())
     })
     .await
-}
-
-#[tauri::command]
-pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<JiraTasksResponse, String> {
-    let guard = jira.0.lock().await;
-    let state = match guard.as_ref() {
-        Some(s) => s,
-        None => {
-            return Ok(JiraTasksResponse {
-                tasks: Vec::new(),
-                child_counts: HashMap::new(),
-            })
-        }
-    };
-
-    let issue_keys = state
-        .repo
-        .list_active_issue_keys()
-        .map_err(|e| e.to_string())?;
-    if issue_keys.is_empty() {
-        return Ok(JiraTasksResponse {
-            tasks: Vec::new(),
-            child_counts: HashMap::new(),
-        });
-    }
-
-    let db_path = planeai_paths::db_path();
-    let db_path_str = db_path.to_str().ok_or("invalid db path")?;
-    // Prefix is unused — list_by_keys and count_children are cross-prefix queries.
-    let repo = SqliteRepository::open(db_path_str, "_").map_err(|e| e.to_string())?;
-
-    let key_refs: Vec<&str> = issue_keys.iter().map(|k| k.as_str()).collect();
-    let tasks = repo.list_by_keys(&key_refs).map_err(|e| e.to_string())?;
-
-    let task_keys: Vec<&str> = tasks.iter().map(|t| t.key.as_str()).collect();
-    let child_counts = repo.count_children(&task_keys).map_err(|e| e.to_string())?;
-
-    Ok(JiraTasksResponse {
-        tasks: tasks.into_iter().map(TaskItem::from).collect(),
-        child_counts,
-    })
 }

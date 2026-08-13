@@ -12,6 +12,13 @@
       "label": "Dashboard",
       "placement": "main-pane",
       "entrypoint": "jira-status"
+    },
+    {
+      "id": "connection",
+      "label": "Jira",
+      "placement": "sidebar.navigation",
+      "entrypoint": "jira-connection",
+      "order": 100
     }
   ]
 }
