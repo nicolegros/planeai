@@ -2,7 +2,7 @@
   import { Command, Dialog } from "bits-ui";
   import { MOD_LABEL } from "../lib/keyboard";
   import { sessions as sessionsApi, projects as projectsApi, tasks as tasksApi, git } from "../lib/api";
-  import type { Session, Project, TaskItem } from "../lib/types";
+  import type { Session, Project, TaskItem, PluginInventory, PluginUiContribution } from "../lib/types";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { getSettings, updateSettings } from "../lib/settings.svelte";
@@ -34,10 +34,12 @@
     onSplitVertical?: () => void;
     onSplitHorizontal?: () => void;
     onCloseSplit?: () => void;
+    pluginCommands?: Array<{ plugin: PluginInventory; contribution: PluginUiContribution }>;
+    onOpenPluginContribution?: (pluginId: string, contributionId: string) => void;
     openFileMode?: boolean;
   }
 
-  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, openFileMode = false }: Props = $props();
+  let { open, onOpenChange, onSelectSession, onArchiveSession, onDeleteSession, onNewSession, onRenameSession, onRestoreSession, onDestroyArchivedSession, onResetTerminal, onArchiveProject, onHideProject, onUnhideProject, onDeleteProject, onRestoreProject, onPickTask, onCreateTask, onToggleDiff, onOpenFile, onOpenLogViewer, onCreatePr, onSplitVertical, onSplitHorizontal, onCloseSplit, pluginCommands = [], onOpenPluginContribution, openFileMode = false }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const sessions = $derived(orchestrator.getSessions());
@@ -450,6 +452,21 @@
                 {/each}
               </Command.GroupItems>
             </Command.Group>
+
+            {#if pluginCommands.length > 0}
+              <Command.Separator class="my-1 h-px bg-border" />
+              <Command.Group>
+                <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Plugin panes</Command.GroupHeading>
+                <Command.GroupItems>
+                  {#each pluginCommands as item (`${item.plugin.id}:${item.contribution.id}`)}
+                    <Command.Item value={`plugin ${item.plugin.name} ${item.contribution.label}`} keywords={[item.plugin.name, item.contribution.label, "plugin"]} class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg" onSelect={() => { onOpenPluginContribution?.(item.plugin.id, item.contribution.id); close(); }}>
+                      <span class="truncate">{item.plugin.name} · {item.contribution.label}</span>
+                      {#if item.contribution.shortcut}<kbd class="ml-auto text-[10px] font-mono text-t3">{item.contribution.shortcut.replace("Mod", MOD_LABEL)}</kbd>{/if}
+                    </Command.Item>
+                  {/each}
+                </Command.GroupItems>
+              </Command.Group>
+            {/if}
 
             <Command.Separator class="my-1 h-px bg-border" />
 

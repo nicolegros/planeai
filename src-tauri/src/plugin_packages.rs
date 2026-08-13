@@ -60,8 +60,9 @@ pub fn import_local_package(
         .cloned()
         .ok_or_else(|| format!("plugin {} has no backend for {platform}", manifest.id))?;
     validate_package_path(&backend_entrypoint, "backend entrypoint")?;
-    if let Some(entrypoint) = &manifest.ui_entrypoint {
-        validate_package_path(entrypoint, "UI entrypoint")?;
+    let ui_contributions = manifest.effective_ui_contributions();
+    for contribution in &ui_contributions {
+        validate_package_path(&contribution.entrypoint, "UI contribution entrypoint")?;
     }
 
     let backend_path = source.join(&backend_entrypoint);
@@ -75,9 +76,12 @@ pub fn import_local_package(
             "plugin backend for {platform} is not executable: {backend_entrypoint}"
         ));
     }
-    if let Some(entrypoint) = &manifest.ui_entrypoint {
-        if !source.join(entrypoint).is_file() {
-            return Err(format!("plugin UI entrypoint is missing: {entrypoint}"));
+    for contribution in &ui_contributions {
+        if !source.join(&contribution.entrypoint).is_file() {
+            return Err(format!(
+                "plugin UI contribution entrypoint is missing: {}",
+                contribution.entrypoint
+            ));
         }
     }
 

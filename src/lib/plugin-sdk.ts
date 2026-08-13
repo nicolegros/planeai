@@ -1,4 +1,4 @@
-import type { PluginInventory } from "./types";
+import type { PluginInventory, PluginUiContribution } from "./types";
 
 /**
  * Plugin UI modules use only this host-injected bridge. The host scopes every
@@ -6,10 +6,15 @@ import type { PluginInventory } from "./types";
  */
 export interface PluginUiHost {
   call<T>(method: string, params?: unknown): Promise<T>;
+  navigation: {
+    open(pluginId: string, contributionId: string): void;
+    close(): void;
+  };
 }
 
 export interface PluginUiContext {
   plugin: PluginInventory;
+  contribution: PluginUiContribution;
   host: PluginUiHost;
 }
 

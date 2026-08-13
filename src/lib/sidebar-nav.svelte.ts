@@ -33,6 +33,16 @@ export function clampIndex(length: number): void {
   if (selectedIndex >= length) selectedIndex = Math.max(0, length - 1);
 }
 
+/** Native controls must retain their browser keyboard semantics while the sidebar has focus. */
+export function shouldBypassSidebarKeyboard(element: Element | null): boolean {
+  return Boolean(
+    element?.matches("input, textarea, select, [data-plugin-ui-contribution]") ||
+    element?.closest(
+      "[role='combobox'], [role='dialog'], [data-plugin-sidebar-action], [data-plugin-ui-contribution]",
+    ),
+  );
+}
+
 /**
  * Handle a keydown event for sidebar navigation.
  * Returns a SidebarNavAction if matched, or null if consumed as navigation / no match.

@@ -255,7 +255,8 @@ export const plugins = {
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
-  localUiSource: (pluginId: string) => invoke<string>("local_plugin_ui_source", { pluginId }),
+  localUiSource: (pluginId: string, contributionId: string) =>
+    invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
   jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
 };
 

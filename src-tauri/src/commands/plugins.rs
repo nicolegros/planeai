@@ -39,9 +39,13 @@ pub async fn plugin_call(
 #[tauri::command]
 pub async fn local_plugin_ui_source(
     plugin_id: String,
+    contribution_id: String,
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<String, String> {
-    runtime.0.local_ui_source(&plugin_id).await
+    runtime
+        .0
+        .local_ui_source(&plugin_id, &contribution_id)
+        .await
 }
 #[tauri::command]
 pub async fn enable_plugin(

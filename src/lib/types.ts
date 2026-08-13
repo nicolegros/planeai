@@ -79,6 +79,21 @@ export interface CiCheck {
 export type PluginSourceKind = "builtin" | "local";
 export type PluginRuntimeState = "disabled" | "starting" | "running" | "stopping" | "error";
 
+export type PluginUiPlacement =
+  | "sidebar.header"
+  | "sidebar.navigation"
+  | "sidebar.footer"
+  | "main-pane";
+
+export interface PluginUiContribution {
+  id: string;
+  label: string;
+  placement: PluginUiPlacement;
+  entrypoint: string;
+  order: number | null;
+  shortcut: string | null;
+}
+
 export interface PluginInventory {
   id: string;
   name: string;
@@ -86,7 +101,7 @@ export interface PluginInventory {
   host_api_version: string;
   source_kind: PluginSourceKind;
   backend_entrypoint: string;
-  ui_entrypoint: string | null;
+  ui_contributions: PluginUiContribution[];
   installed_hash: string | null;
   installed_path: string | null;
   original_display_path: string | null;

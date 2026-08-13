@@ -1,5 +1,5 @@
 <script lang="ts">
-  import PluginWorkspaceHost from "../PluginWorkspaceHost.svelte";
+  import PluginContributionHost from "../PluginContributionHost.svelte";
   import type { PluginInventory } from "../../lib/types";
 
   let plugin = $state<PluginInventory>({
@@ -9,7 +9,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "planeai-plugin-jira",
-    ui_entrypoint: "jira-status",
+    ui_contributions: [{ id: "dashboard", label: "Dashboard", placement: "main-pane", entrypoint: "jira-status", order: null, shortcut: null }],
     installed_hash: null,
     installed_path: null,
     original_display_path: null,
@@ -28,4 +28,4 @@
   }
 </script>
 
-<PluginWorkspaceHost {plugin} />
+<PluginContributionHost {plugin} contribution={plugin.ui_contributions[0]} onNavigate={() => {}} onClose={() => {}} />

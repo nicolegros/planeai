@@ -1,5 +1,5 @@
 <script lang="ts">
-  import PluginWorkspaceHost from "../PluginWorkspaceHost.svelte";
+  import PluginContributionHost from "../PluginContributionHost.svelte";
   import type { PluginInventory } from "../../lib/types";
 
   const plugin: PluginInventory = {
@@ -9,7 +9,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "local",
     backend_entrypoint: "bin/planeai-plugin-fixture",
-    ui_entrypoint: "ui/entry.js",
+    ui_contributions: [{ id: "fixture", label: "Fixture", placement: "main-pane", entrypoint: "ui/entry.js", order: null, shortcut: null }],
     installed_hash: "fixture-hash",
     installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
     original_display_path: "/source/local-fixture",
@@ -20,4 +20,4 @@
   };
 </script>
 
-<PluginWorkspaceHost {plugin} />
+<PluginContributionHost {plugin} contribution={plugin.ui_contributions[0]} onNavigate={() => {}} onClose={() => {}} />

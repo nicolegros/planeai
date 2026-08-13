@@ -4,6 +4,7 @@ import {
   setSelectedIndex,
   clampIndex,
   handleSidebarKey,
+  shouldBypassSidebarKeyboard,
 } from "../sidebar-nav.svelte";
 
 function key(overrides: Partial<KeyboardEvent>): KeyboardEvent {
@@ -162,6 +163,14 @@ describe("sidebar-nav", () => {
       setSelectedIndex(5);
       clampIndex(0);
       expect(getSelectedIndex()).toBe(0);
+    });
+  });
+
+  describe("native controls", () => {
+    it("preserves Enter activation for plugin sidebar actions", () => {
+      const button = document.createElement("button");
+      button.dataset.pluginSidebarAction = "minimal-logger:log";
+      expect(shouldBypassSidebarKeyboard(button)).toBe(true);
     });
   });
 

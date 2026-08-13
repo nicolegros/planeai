@@ -1,12 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { emit } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { plugins } from "../lib/api";
   import type { PluginInventory } from "../lib/types";
   import { Button, Dialog } from "./ui";
-
-  let { onOpenWorkspace }: { onOpenWorkspace?: () => void | Promise<void> } = $props();
 
   let inventory = $state<PluginInventory[]>([]);
   let busyId = $state<string | null>(null);
@@ -41,7 +38,6 @@
   async function run(id: string, action: "enable" | "disable" | "reload") {
     busyId = id;
     try {
-      if (action !== "enable") await emit("plugin-page-close", id);
       if (action === "enable") await plugins.enable(id);
       else if (action === "disable") await plugins.disable(id);
       else await plugins.reload(id);
@@ -59,7 +55,6 @@
     if (!plugin) return;
     busyId = plugin.id;
     try {
-      await emit("plugin-page-close", plugin.id);
       await plugins.removeLocal(plugin.id);
       pendingRemoval = null;
       await refresh();
@@ -71,10 +66,6 @@
     }
   }
 
-  async function openWorkspace(plugin: PluginInventory) {
-    await emit("plugin-page-open", plugin.id);
-    await onOpenWorkspace?.();
-  }
 
   onMount(() => { void refresh(); });
 </script>
@@ -116,15 +107,15 @@
       {#if plugin.log_path}
         <p class="font-mono text-[11px] text-t3 break-all">Log: {plugin.log_path}</p>
       {/if}
+      {#if plugin.ui_contributions.length > 0}
+        <p class="text-xs text-t3">Contributions: {plugin.ui_contributions.map((contribution) => `${contribution.label} (${contribution.placement})`).join(", ")}</p>
+      {/if}
       <div class="flex flex-wrap gap-2">
         {#if plugin.state === "disabled" || plugin.state === "error"}
           <Button type="button" disabled={busyId === plugin.id} onclick={() => void run(plugin.id, "enable")}>
             {busyId === plugin.id ? "Starting…" : "Enable"}
           </Button>
         {:else if plugin.state === "running"}
-          {#if plugin.ui_entrypoint}
-            <Button type="button" disabled={busyId === plugin.id} onclick={() => void openWorkspace(plugin)}>Open page</Button>
-          {/if}
           <Button type="button" disabled={busyId === plugin.id} onclick={() => void run(plugin.id, "reload")}>
             {busyId === plugin.id ? "Reloading…" : "Reload"}
           </Button>

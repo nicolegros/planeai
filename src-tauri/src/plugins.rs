@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,62 @@ pub struct PluginManifest {
     pub backend_entrypoint: Option<String>,
     #[serde(default)]
     pub backend_entrypoints: HashMap<String, String>,
-    pub ui_entrypoint: Option<String>,
+    #[serde(default)]
+    pub ui_contributions: Vec<PluginUiContribution>,
+    #[serde(default, rename = "ui_entrypoint")]
+    legacy_ui_entrypoint: Option<String>,
+}
+
+impl PluginManifest {
+    pub fn effective_ui_contributions(&self) -> Vec<PluginUiContribution> {
+        if !self.ui_contributions.is_empty() {
+            return self.ui_contributions.clone();
+        }
+        self.legacy_ui_entrypoint
+            .as_deref()
+            .filter(|entrypoint| !entrypoint.trim().is_empty())
+            .map(|entrypoint| {
+                vec![PluginUiContribution {
+                    id: "legacy-main-pane".to_string(),
+                    label: self.name.clone(),
+                    placement: PluginUiPlacement::MainPane,
+                    entrypoint: entrypoint.to_string(),
+                    order: None,
+                    shortcut: None,
+                }]
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum PluginUiPlacement {
+    #[serde(rename = "sidebar.header")]
+    SidebarHeader,
+    #[serde(rename = "sidebar.navigation")]
+    SidebarNavigation,
+    #[serde(rename = "sidebar.footer")]
+    SidebarFooter,
+    #[serde(rename = "main-pane")]
+    MainPane,
+}
+
+impl PluginUiPlacement {
+    fn is_sidebar(self) -> bool {
+        !matches!(self, Self::MainPane)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginUiContribution {
+    pub id: String,
+    pub label: String,
+    pub placement: PluginUiPlacement,
+    pub entrypoint: String,
+    #[serde(default)]
+    pub order: Option<i32>,
+    #[serde(default)]
+    pub shortcut: Option<String>,
 }
 
 impl PluginManifest {
@@ -76,8 +131,111 @@ impl PluginManifest {
             }
             PluginSourceKind::Local => {}
         }
-        Ok(())
+        if self
+            .legacy_ui_entrypoint
+            .as_deref()
+            .is_some_and(|entrypoint| entrypoint.trim().is_empty())
+        {
+            return Err("legacy ui_entrypoint must not be empty".to_string());
+        }
+        validate_ui_contributions(&self.id, &self.effective_ui_contributions())
     }
+}
+
+fn validate_ui_contributions(
+    plugin_id: &str,
+    contributions: &[PluginUiContribution],
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    let mut shortcuts = HashSet::new();
+    for contribution in contributions {
+        if contribution.id.trim().is_empty()
+            || !contribution
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(
+                "UI contribution id must contain lowercase letters, digits, or hyphens".to_string(),
+            );
+        }
+        if !ids.insert(&contribution.id) {
+            return Err(format!(
+                "plugin {plugin_id} defines duplicate UI contribution {}",
+                contribution.id
+            ));
+        }
+        if contribution.label.trim().is_empty() || contribution.entrypoint.trim().is_empty() {
+            return Err("UI contribution label and entrypoint are required".to_string());
+        }
+        crate::plugin_packages::validate_package_path(
+            &contribution.entrypoint,
+            "UI contribution entrypoint",
+        )?;
+        if contribution.placement.is_sidebar() && contribution.shortcut.is_some() {
+            return Err(
+                "UI contribution shortcuts are only valid for main-pane contributions".to_string(),
+            );
+        }
+        if matches!(contribution.placement, PluginUiPlacement::MainPane)
+            && contribution.order.is_some()
+        {
+            return Err(
+                "UI contribution order is only valid for sidebar contributions".to_string(),
+            );
+        }
+        if let Some(shortcut) = &contribution.shortcut {
+            validate_shortcut(shortcut)?;
+            if !shortcuts.insert(shortcut) {
+                return Err(format!(
+                    "plugin {plugin_id} defines duplicate UI contribution shortcut {shortcut}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_shortcut(shortcut: &str) -> Result<(), String> {
+    let parts = shortcut.split('+').collect::<Vec<_>>();
+    let key = parts.last().copied().unwrap_or_default();
+    let modifiers = &parts[1..parts.len().saturating_sub(1)];
+    let valid_key = key.len() == 1 && key.as_bytes()[0].is_ascii_uppercase();
+    if parts.len() < 2
+        || parts.first() != Some(&"Mod")
+        || !valid_key
+        || modifiers
+            .iter()
+            .any(|modifier| !matches!(*modifier, "Shift" | "Alt"))
+        || modifiers.windows(2).any(|pair| pair[0] == pair[1])
+    {
+        return Err("UI contribution shortcut must use Mod+[Shift+][Alt+]A-Z syntax".to_string());
+    }
+    let canonical = match modifiers {
+        [] => format!("Mod+{key}"),
+        ["Shift"] => format!("Mod+Shift+{key}"),
+        ["Alt"] => format!("Mod+Alt+{key}"),
+        ["Shift", "Alt"] => format!("Mod+Shift+Alt+{key}"),
+        _ => {
+            return Err(
+                "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
+            )
+        }
+    };
+    if canonical != shortcut {
+        return Err(
+            "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
+        );
+    }
+    if matches!(
+        key,
+        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
+    ) {
+        return Err(format!(
+            "UI contribution shortcut {shortcut} is reserved by PlaneAI"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -143,7 +301,7 @@ pub struct PluginInventory {
     pub host_api_version: String,
     pub source_kind: PluginSourceKind,
     pub backend_entrypoint: String,
-    pub ui_entrypoint: Option<String>,
+    pub ui_contributions: Vec<PluginUiContribution>,
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
@@ -249,7 +407,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             host_api_version TEXT NOT NULL,
             source_kind TEXT NOT NULL CHECK (source_kind IN ('builtin', 'local')),
             backend_entrypoint TEXT NOT NULL,
-            ui_entrypoint TEXT,
+            ui_contributions TEXT NOT NULL DEFAULT '[]',
             installed_hash TEXT,
             installed_path TEXT,
             original_display_path TEXT,
@@ -265,6 +423,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("installed_hash", "TEXT"),
         ("installed_path", "TEXT"),
         ("original_display_path", "TEXT"),
+        ("ui_contributions", "TEXT NOT NULL DEFAULT '[]'"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -278,15 +437,69 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ))?;
         }
     }
+    let legacy_ui_entrypoint = conn
+        .prepare("PRAGMA table_info(plugin_inventory)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|column| column == "ui_entrypoint");
+    if legacy_ui_entrypoint {
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = json_array(json_object('id', 'legacy-main-pane', 'label', name, 'placement', 'main-pane', 'entrypoint', ui_entrypoint, 'order', null, 'shortcut', null)) WHERE source_kind = 'local' AND ui_contributions = '[]' AND ui_entrypoint IS NOT NULL AND trim(ui_entrypoint) != ''",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_shortcut_collisions(
+    conn: &Connection,
+    manifest: &PluginManifest,
+) -> Result<(), String> {
+    let effective_contributions = manifest.effective_ui_contributions();
+    let declared = effective_contributions
+        .iter()
+        .filter_map(|item| item.shortcut.as_deref())
+        .collect::<HashSet<_>>();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let mut statement = conn
+        .prepare("SELECT id, ui_contributions FROM plugin_inventory WHERE id != ?1")
+        .map_err(|error| error.to_string())?;
+    let existing = statement
+        .query_map([&manifest.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    for row in existing {
+        let (plugin_id, json) = row.map_err(|error| error.to_string())?;
+        let contributions: Vec<PluginUiContribution> =
+            serde_json::from_str(&json).map_err(|error| {
+                format!("failed to parse persisted UI contributions for {plugin_id}: {error}")
+            })?;
+        if let Some(shortcut) = contributions
+            .iter()
+            .filter_map(|item| item.shortcut.as_deref())
+            .find(|shortcut| declared.contains(shortcut))
+        {
+            return Err(format!(
+                "UI contribution shortcut {shortcut} conflicts with installed plugin {plugin_id}"
+            ));
+        }
+    }
     Ok(())
 }
 
 pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result<(), String> {
     for manifest in manifests {
         manifest.validate()?;
+        validate_shortcut_collisions(conn, manifest)?;
+        let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+            .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
         conn.execute(
             "INSERT INTO plugin_inventory (
-                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_entrypoint
+                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -294,7 +507,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 host_api_version = excluded.host_api_version,
                 source_kind = excluded.source_kind,
                 backend_entrypoint = excluded.backend_entrypoint,
-                ui_entrypoint = excluded.ui_entrypoint,
+                ui_contributions = excluded.ui_contributions,
                 updated_at = CURRENT_TIMESTAMP",
             params![
                 manifest.id,
@@ -303,7 +516,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 manifest.host_api_version,
                 manifest.source_kind.as_str(),
                 manifest.backend_entrypoint.as_deref().unwrap_or_default(),
-                manifest.ui_entrypoint,
+                ui_contributions,
             ],
         )
         .map_err(|e| format!("failed to persist plugin inventory: {e}"))?;
@@ -336,9 +549,13 @@ pub fn insert_local_inventory(
     {
         return Err(format!("plugin id is already installed: {}", manifest.id));
     }
+    manifest.validate()?;
+    validate_shortcut_collisions(conn, manifest)?;
+    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
     conn.execute(
         "INSERT INTO plugin_inventory (
-            id, name, version, host_api_version, source_kind, backend_entrypoint, ui_entrypoint,
+            id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions,
             installed_hash, installed_path, original_display_path, enabled, runtime_state
         ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, 0, 'disabled')",
         params![
@@ -347,7 +564,7 @@ pub fn insert_local_inventory(
             manifest.version,
             manifest.host_api_version,
             backend_entrypoint,
-            manifest.ui_entrypoint,
+            ui_contributions,
             content_hash,
             package_dir.display().to_string(),
             original_display_path,
@@ -362,7 +579,7 @@ pub fn insert_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_entrypoint, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -375,7 +592,7 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_entrypoint, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -399,16 +616,30 @@ pub fn delete_local_inventory(conn: &Connection, plugin_id: &str) -> Result<(), 
 }
 
 fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory> {
+    let id: String = row.get(0)?;
     let source_kind: String = row.get(4)?;
     let state: String = row.get(11)?;
+    let ui_contributions = serde_json::from_str::<Vec<PluginUiContribution>>(
+        &row.get::<_, String>(6)?,
+    )
+    .map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    validate_ui_contributions(&id, &ui_contributions).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            7,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+        )
+    })?;
     Ok(PluginInventory {
-        id: row.get(0)?,
+        id,
         name: row.get(1)?,
         version: row.get(2)?,
         host_api_version: row.get(3)?,
         source_kind: PluginSourceKind::from_db(&source_kind),
         backend_entrypoint: row.get(5)?,
-        ui_entrypoint: row.get(6)?,
+        ui_contributions,
         installed_hash: row.get(7)?,
         installed_path: row.get(8)?,
         original_display_path: row.get(9)?,
@@ -703,7 +934,11 @@ impl PluginRuntimeSupervisor {
         runtime.request(method, params).await
     }
 
-    pub async fn local_ui_source(&self, plugin_id: &str) -> Result<String, String> {
+    pub async fn local_ui_source(
+        &self,
+        plugin_id: &str,
+        contribution_id: &str,
+    ) -> Result<String, String> {
         let inventory = self
             .inventory(plugin_id)
             .await?
@@ -715,8 +950,13 @@ impl PluginRuntimeSupervisor {
             .installed_path
             .ok_or_else(|| format!("local plugin {plugin_id} has no imported package path"))?;
         let entrypoint = inventory
-            .ui_entrypoint
-            .ok_or_else(|| format!("plugin {plugin_id} has no workspace UI"))?;
+            .ui_contributions
+            .iter()
+            .find(|contribution| contribution.id == contribution_id)
+            .map(|contribution| contribution.entrypoint.clone())
+            .ok_or_else(|| {
+                format!("plugin {plugin_id} has no UI contribution {contribution_id}")
+            })?;
         commands::blocking(move || {
             std::fs::read_to_string(Path::new(&package).join(entrypoint))
                 .map_err(|error| format!("failed to read imported plugin UI bundle: {error}"))
@@ -1420,6 +1660,47 @@ mod tests {
     }
 
     #[test]
+    fn legacy_inventory_schema_migrates_a_local_ui_entrypoint_to_a_main_pane_contribution() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE plugin_inventory (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                host_api_version TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                backend_entrypoint TEXT NOT NULL,
+                ui_entrypoint TEXT,
+                installed_hash TEXT,
+                installed_path TEXT,
+                original_display_path TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                runtime_state TEXT NOT NULL DEFAULT 'disabled',
+                last_error TEXT,
+                log_path TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO plugin_inventory (
+                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_entrypoint
+            ) VALUES ('legacy', 'Legacy', '1.0.0', 'planeai.plugin-host.v1', 'local', 'bin/plugin', 'ui/entry.js');",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        let ui_contributions: String = conn
+            .query_row(
+                "SELECT ui_contributions FROM plugin_inventory WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let contributions: Vec<PluginUiContribution> =
+            serde_json::from_str(&ui_contributions).unwrap();
+        assert_eq!(contributions[0].id, "legacy-main-pane");
+        assert_eq!(contributions[0].entrypoint, "ui/entry.js");
+    }
+
+    #[test]
     fn bundled_jira_manifest_is_valid_and_disabled_by_default() {
         let manifest = bundled_manifests().unwrap().pop().unwrap();
         assert_eq!(manifest.id, "jira");
@@ -1448,6 +1729,74 @@ mod tests {
     }
 
     #[test]
+    fn local_ui_contributions_round_trip_through_inventory() {
+        let conn = database();
+        let manifest = PluginManifest {
+            schema: "planeai.plugin.v1".into(),
+            id: "sidebar-test".into(),
+            name: "Sidebar test".into(),
+            version: "1.0.0".into(),
+            host_api_version: HOST_API_VERSION.into(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: None,
+            backend_entrypoints: HashMap::from([(
+                crate::plugin_packages::current_platform_key().to_string(),
+                "bin/plugin".into(),
+            )]),
+            ui_contributions: vec![PluginUiContribution {
+                id: "log".into(),
+                label: "Log".into(),
+                placement: PluginUiPlacement::SidebarFooter,
+                entrypoint: "ui/log.js".into(),
+                order: Some(0),
+                shortcut: None,
+            }],
+            legacy_ui_entrypoint: None,
+        };
+        let package = tempfile::TempDir::new().unwrap();
+        insert_local_inventory(
+            &conn,
+            &manifest,
+            "bin/plugin",
+            "hash",
+            package.path(),
+            "/source",
+        )
+        .unwrap();
+        let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
+        assert_eq!(inventory.ui_contributions, manifest.ui_contributions);
+
+        let mut invalid_shortcut = manifest.clone();
+        invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
+        assert!(invalid_shortcut
+            .validate()
+            .unwrap_err()
+            .contains("shortcuts"));
+    }
+
+    #[test]
+    fn invalid_persisted_ui_contributions_are_not_silently_discarded() {
+        let conn = database();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = 'not-json' WHERE id = 'jira'",
+            [],
+        )
+        .unwrap();
+        assert!(get_inventory(&conn, "jira").is_err());
+    }
+
+    #[test]
+    fn semantically_invalid_persisted_ui_contributions_are_rejected() {
+        let conn = database();
+        conn.execute(
+            "UPDATE plugin_inventory SET ui_contributions = ?1 WHERE id = 'jira'",
+            [r#"[{"id":"bad","label":"Bad","placement":"sidebar.footer","entrypoint":"ui/bad.js","shortcut":"Mod+B"}]"#],
+        )
+        .unwrap();
+        assert!(get_inventory(&conn, "jira").is_err());
+    }
+
+    #[test]
     fn plugin_failures_are_isolated_to_their_inventory_record() {
         let conn = database();
         let local = PluginManifest {
@@ -1462,7 +1811,8 @@ mod tests {
                 crate::plugin_packages::current_platform_key().to_string(),
                 "local-test".into(),
             )]),
-            ui_entrypoint: None,
+            ui_contributions: vec![],
+            legacy_ui_entrypoint: None,
         };
         sync_inventory(&conn, &[local]).unwrap();
         set_state(
@@ -1493,7 +1843,8 @@ mod tests {
                 crate::plugin_packages::current_platform_key().to_string(),
                 "bin/plugin".into(),
             )]),
-            ui_entrypoint: None,
+            ui_contributions: vec![],
+            legacy_ui_entrypoint: None,
         };
         let package = tempfile::TempDir::new().unwrap();
         insert_local_inventory(
