@@ -25,18 +25,22 @@ describe("installKeyboardRouter shortcut ownership", () => {
     return consumer;
   }
 
-  it("routes Ctrl+Tab before a focused consumer can claim it", () => {
+  it.each([
+    { action: { type: "tab_switch" }, name: "Ctrl+Tab", shiftKey: false },
+    { action: { type: "tab_switch_reverse" }, name: "Ctrl+Shift+Tab", shiftKey: true },
+  ])("routes $name before a focused consumer can claim it", ({ action, shiftKey }) => {
     const consumer = addShortcutConsumer();
     const event = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
       ctrlKey: true,
       key: "Tab",
+      shiftKey,
     });
 
     consumer.dispatchEvent(event);
 
-    expect(onAction).toHaveBeenCalledWith({ type: "tab_switch" });
+    expect(onAction).toHaveBeenCalledWith(action);
     expect(event.defaultPrevented).toBe(true);
   });
 
