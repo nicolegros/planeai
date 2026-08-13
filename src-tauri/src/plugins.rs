@@ -722,6 +722,15 @@ struct RuntimeProcess {
 
 impl RuntimeProcess {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_timeout(method, params, RPC_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        request_timeout: Duration,
+    ) -> Result<Value, String> {
         self.next_request_id += 1;
         let request_id = self.next_request_id;
         let frame = encode_json_rpc_line(request_id, method, params)?;
@@ -736,7 +745,7 @@ impl RuntimeProcess {
 
         let mut bytes = Vec::new();
         let bytes_read = timeout(
-            RPC_TIMEOUT,
+            request_timeout,
             (&mut self.stdout)
                 .take(MAX_RPC_FRAME_BYTES)
                 .read_until(b'\n', &mut bytes),
@@ -833,7 +842,7 @@ impl PluginRuntimeSupervisor {
             let data_dir = root.join("data");
             std::fs::create_dir_all(&data_dir)
                 .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
-            let temporary = data_dir.join("settings.json.tmp");
+            let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
             let path = data_dir.join("settings.json");
             std::fs::write(
                 &temporary,
@@ -973,15 +982,17 @@ impl PluginRuntimeSupervisor {
         if matches!(method, "plugin.handshake" | "plugin.shutdown") {
             return Err("plugin lifecycle methods are reserved for PlaneAI".to_string());
         }
-        let _lifecycle = self.lifecycle.lock().await;
-        let inventory = self
-            .inventory(plugin_id)
-            .await?
-            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
-        if inventory.state != PluginRuntimeState::Running {
-            return Err(format!("plugin {plugin_id} is not running"));
-        }
-        let process = self.processes.lock().await.get(plugin_id).cloned();
+        let process = {
+            let _lifecycle = self.lifecycle.lock().await;
+            let inventory = self
+                .inventory(plugin_id)
+                .await?
+                .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+            if inventory.state != PluginRuntimeState::Running {
+                return Err(format!("plugin {plugin_id} is not running"));
+            }
+            self.processes.lock().await.get(plugin_id).cloned()
+        };
         let process =
             process.ok_or_else(|| format!("plugin runtime was not available: {plugin_id}"))?;
         let mut runtime = process.lock().await;

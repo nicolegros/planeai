@@ -93,7 +93,6 @@
         host: {
           call: <T>(method: string, params: unknown = null) => plugins.call<T>(plugin.id, method, params),
           navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
-          openJiraAuthorizationUrl: (url: string) => plugins.openJiraAuthorizationUrl(url),
         },
       });
       if (version !== generation) {
