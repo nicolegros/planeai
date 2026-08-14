@@ -23,6 +23,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as jiraTaskStore from "../lib/jira-task-store.svelte";
+  import { subscribeToJiraConnectionState } from "../lib/jira-connection-state";
   import * as loopStore from "../lib/loop-store.svelte";
 
   interface Props {
@@ -113,9 +114,37 @@
   }
   $effect(() => { if (projects.length) loadAutoModes(); });
   let jiraConnected = $state(false);
-  $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
+  let jiraStatusRequest = 0;
+  async function refreshJiraPresentation() {
+    const request = ++jiraStatusRequest;
+    try {
+      const status = await jiraApi.status();
+      if (request !== jiraStatusRequest) return;
+      jiraConnected = status.connected;
+      if (status.connected) void jiraTaskStore.loadJiraTasks();
+      else jiraTaskStore.clearJiraTasks();
+    } catch {
+      if (request !== jiraStatusRequest) return;
+      jiraConnected = false;
+      jiraTaskStore.clearJiraTasks();
+    }
+  }
+  function onJiraConnectionStateChanged() {
+    // Clear immediately: a queued sync-complete event must not start a new fetch while the
+    // connection-status request is still resolving.
+    jiraStatusRequest += 1;
+    jiraConnected = false;
+    jiraTaskStore.clearJiraTasks();
+    void refreshJiraPresentation();
+  }
+  $effect(() => subscribeToJiraConnectionState(
+    onJiraConnectionStateChanged,
+    () => void refreshJiraPresentation(),
+  ));
   $effect(() => {
-    const unlisten = listen("jira-sync-complete", () => { jiraTaskStore.loadJiraTasks(); });
+    const unlisten = listen("jira-sync-complete", () => {
+      void jiraTaskStore.loadJiraTasksIfConnected(jiraConnected);
+    });
     return () => { unlisten.then(fn => fn()); };
   });
   async function toggleAutoMode(project: Project) {

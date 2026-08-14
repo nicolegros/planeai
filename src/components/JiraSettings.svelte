@@ -22,20 +22,42 @@
     { value: "done", label: "done" },
   ];
 
+  let statusRequest = 0;
+
   async function refreshStatus(showErrors = true) {
+    const request = ++statusRequest;
     try {
-      status = await jira.status();
+      const nextStatus = await jira.status();
+      if (request === statusRequest) status = nextStatus;
     } catch (e) {
-      if (showErrors) showSnackbar(String(e));
+      if (showErrors && request === statusRequest) showSnackbar(String(e));
     }
   }
 
   onMount(() => {
-    void refreshStatus();
-    // The backend emits this when an invalid refresh token clears OAuth state, including
-    // failures reached through writeback. Refresh status without polling token storage.
-    const unlisten = listen("jira-connection-state-changed", () => void refreshStatus(false));
-    return () => { unlisten.then((fn) => fn()); };
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    // Install the listener before the first status read. An invalid refresh can occur while
+    // Settings opens, and an older status response must not overwrite reconnect-required.
+    void listen("jira-connection-state-changed", () => void refreshStatus(false)).then(
+      (stop) => {
+        unlisten = stop;
+        if (disposed) stop();
+        else void refreshStatus();
+      },
+      (error) => {
+        if (!disposed) {
+          showSnackbar(String(error));
+          void refreshStatus();
+        }
+      },
+    );
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
 
   function saveJira(patch: Partial<JiraConfig>) {
@@ -51,7 +73,7 @@
     connecting = true;
     try {
       await jira.connect();
-      status = await jira.status();
+      await refreshStatus();
       showSnackbar("Connected to Jira");
     } catch (e) {
       showSnackbar(String(e));
@@ -64,6 +86,7 @@
     connecting = true;
     try {
       await jira.disconnect();
+      statusRequest += 1;
       status = { connected: false, site: null };
       showSnackbar("Disconnected from Jira");
     } catch (e) {
@@ -114,7 +137,7 @@
   <h2 class="text-sm font-medium text-t3 uppercase tracking-wide">Connection</h2>
   <div class="flex items-center gap-3">
     <span class="inline-block w-2.5 h-2.5 rounded-full {status.connected ? 'bg-green-500' : 'bg-surface-400'}"></span>
-    <span class="text-sm text-t2">{status.connected ? status.site : 'Not connected'}</span>
+    <span class="text-sm text-t2" role="status" aria-live="polite">{status.connected ? status.site : 'Not connected'}</span>
   </div>
   <div class="flex gap-2">
     {#if status.connected}
