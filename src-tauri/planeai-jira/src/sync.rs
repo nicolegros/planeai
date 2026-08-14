@@ -43,6 +43,8 @@ pub struct JiraSync {
     task_provider: Arc<dyn TaskProvider + Send + Sync>,
     config: JiraConfig,
     listener: Arc<dyn SyncListener>,
+    /// Serializes timer-driven and manually requested runs against the shared SQLite/task state.
+    run_lock: tokio::sync::Mutex<()>,
 }
 
 impl JiraSync {
@@ -68,6 +70,7 @@ impl JiraSync {
             task_provider,
             config,
             listener,
+            run_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -81,10 +84,13 @@ impl JiraSync {
                     return;
                 }
                 _ = interval.tick() => {
-                    match self.sync_now().await {
-                        Ok(r) => {
+                    match self.sync_now_with_cancellation(&cancel).await {
+                        Ok(r) if !cancel.is_cancelled() => {
                             info!(created = r.created, updated = r.updated, departed = r.departed, errors = r.errors, "jira sync complete");
-                            self.listener.on_sync_complete(&r);
+                        }
+                        Ok(_) | Err(crate::Error::Cancelled) => {
+                            info!("jira sync loop cancelled");
+                            return;
                         }
                         Err(e) => warn!(error = %e, "jira sync error"),
                     }
@@ -94,6 +100,22 @@ impl JiraSync {
     }
 
     pub async fn sync_now(&self) -> Result<SyncResult, crate::Error> {
+        self.sync_now_with_cancellation(&CancellationToken::new())
+            .await
+    }
+
+    pub async fn sync_now_with_cancellation(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<SyncResult, crate::Error> {
+        let _run = tokio::select! {
+            _ = cancel.cancelled() => return Err(crate::Error::Cancelled),
+            guard = self.run_lock.lock() => guard,
+        };
+        if cancel.is_cancelled() {
+            return Err(crate::Error::Cancelled);
+        }
+
         let mut result = SyncResult::default();
 
         if self.config.sources.is_empty() {
@@ -102,13 +124,25 @@ impl JiraSync {
         }
 
         for (source_name, mapping) in &self.config.sources {
-            match self.sync_project(source_name, mapping, &mut result).await {
-                Ok(()) => {}
-                Err(e) => {
-                    warn!(source = %source_name, error = %e, "sync failed for source, continuing");
-                    result.errors += 1;
+            tokio::select! {
+                _ = cancel.cancelled() => return Err(crate::Error::Cancelled),
+                sync_result = self.sync_project(source_name, mapping, &mut result, cancel) => match sync_result {
+                    Ok(()) => {}
+                    Err(crate::Error::Cancelled) => return Err(crate::Error::Cancelled),
+                    Err(e) => {
+                        warn!(source = %source_name, error = %e, "sync failed for source, continuing");
+                        result.errors += 1;
+                    }
                 }
             }
+
+            if cancel.is_cancelled() {
+                return Err(crate::Error::Cancelled);
+            }
+        }
+
+        if result.errors == 0 {
+            self.listener.on_sync_complete(&result);
         }
 
         Ok(result)
@@ -119,12 +153,19 @@ impl JiraSync {
         source_name: &str,
         mapping: &crate::config::JiraSyncSource,
         result: &mut SyncResult,
+        cancel: &CancellationToken,
     ) -> Result<(), crate::Error> {
         let issues = self.client.search(&mapping.jql).await?;
+        if cancel.is_cancelled() {
+            return Err(crate::Error::Cancelled);
+        }
 
         let mut seen_keys = HashSet::new();
 
         for issue in &issues {
+            if cancel.is_cancelled() {
+                return Err(crate::Error::Cancelled);
+            }
             seen_keys.insert(issue.issue_key.clone());
 
             // Upsert raw issue into local store
@@ -192,6 +233,9 @@ impl JiraSync {
         // Notify listener about issues that disappeared from JQL results
         let synced_keys = self.repo.list_synced_keys(source_name)?;
         for key in synced_keys {
+            if cancel.is_cancelled() {
+                return Err(crate::Error::Cancelled);
+            }
             if seen_keys.contains(&key) {
                 continue;
             }

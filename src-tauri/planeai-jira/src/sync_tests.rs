@@ -4,7 +4,7 @@ use crate::config::{JiraConfig, JiraSyncSource};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 #[test]
 fn test_map_status_found() {
@@ -165,6 +165,41 @@ impl SyncListener for CapturingListener {
     }
 
     fn on_sync_complete(&self, _result: &SyncResult) {}
+}
+
+struct DelayedSearchResponse {
+    request_started: std::sync::Arc<tokio::sync::Notify>,
+    delay: Duration,
+}
+
+impl Respond for DelayedSearchResponse {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        self.request_started.notify_one();
+        ResponseTemplate::new(200)
+            .set_delay(self.delay)
+            .set_body_json(serde_json::json!({ "issues": [] }))
+    }
+}
+
+struct CompletionListener {
+    completed: std::sync::atomic::AtomicUsize,
+}
+
+impl CompletionListener {
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            completed: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl SyncListener for CompletionListener {
+    fn on_issue_departed(&self, _key: &str, _summary: &str) {}
+
+    fn on_sync_complete(&self, _result: &SyncResult) {
+        self.completed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[tokio::test]
@@ -380,6 +415,162 @@ async fn start_stops_on_cancellation() {
         .await
         .expect("start should stop on cancel")
         .unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_stops_an_in_progress_sync_without_completion_notification() {
+    let server = MockServer::start().await;
+    let request_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    Mock::given(method("GET"))
+        .and(path("/search/jql"))
+        .respond_with(DelayedSearchResponse {
+            request_started: request_started.clone(),
+            delay: Duration::from_secs(5),
+        })
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let (jira_repo, task_repo) = setup_db();
+    let listener = CompletionListener::new();
+    let sync = std::sync::Arc::new(JiraSync::with_listener(
+        client,
+        jira_repo,
+        task_repo,
+        test_config(),
+        listener.clone(),
+    ));
+    let cancel = CancellationToken::new();
+    let request_started_wait = request_started.notified();
+    let handle = tokio::spawn({
+        let sync = sync.clone();
+        let cancel = cancel.clone();
+        async move { sync.start(cancel).await }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), request_started_wait)
+        .await
+        .expect("sync request should begin");
+    cancel.cancel();
+
+    tokio::time::timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("in-progress sync should stop on cancellation")
+        .unwrap();
+    assert_eq!(
+        listener.completed.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn manual_sync_notifies_completion_listener_once_after_success() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/jql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "issues": []
+        })))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let (jira_repo, task_repo) = setup_db();
+    let listener = CompletionListener::new();
+    let sync = JiraSync::with_listener(
+        client,
+        jira_repo,
+        task_repo,
+        test_config(),
+        listener.clone(),
+    );
+
+    let result = sync
+        .sync_now_with_cancellation(&CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.errors, 0);
+    assert_eq!(
+        listener.completed.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn manual_sync_does_not_notify_completion_listener_when_failed_or_cancelled() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search/jql"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let (jira_repo, task_repo) = setup_db();
+    let listener = CompletionListener::new();
+    let sync = JiraSync::with_listener(
+        client,
+        jira_repo,
+        task_repo,
+        test_config(),
+        listener.clone(),
+    );
+
+    let failed = sync
+        .sync_now_with_cancellation(&CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(failed.errors, 1);
+    assert_eq!(
+        listener.completed.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    assert!(sync.sync_now_with_cancellation(&cancelled).await.is_err());
+    assert_eq!(
+        listener.completed.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn concurrent_manual_syncs_serialize_with_an_active_run() {
+    let server = MockServer::start().await;
+    let request_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    Mock::given(method("GET"))
+        .and(path("/search/jql"))
+        .respond_with(DelayedSearchResponse {
+            request_started: request_started.clone(),
+            delay: Duration::from_millis(200),
+        })
+        .mount(&server)
+        .await;
+
+    let client = test_client(&server).await;
+    let (jira_repo, task_repo) = setup_db();
+    let sync = Arc::new(JiraSync::new(client, jira_repo, task_repo, test_config()));
+    let first = tokio::spawn({
+        let sync = sync.clone();
+        async move { sync.sync_now().await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), request_started.notified())
+        .await
+        .expect("first sync request should begin");
+
+    let second = tokio::spawn(async move { sync.sync_now().await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        1,
+        "manual sync must wait for the active run rather than overlap it"
+    );
+
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[tokio::test]

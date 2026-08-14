@@ -250,7 +250,7 @@ pub async fn move_task_item(
 
     // Jira writeback (tokio Mutex — must stay on async thread)
     if let Ok(guard) = jira.0.try_lock() {
-        if let Some(state) = guard.as_ref() {
+        if let Some(state) = guard.state.as_ref() {
             state.try_writeback(&key, s, &cfg);
             if let Some(ref pk) = parent_key {
                 state.try_writeback(pk, Status::Done, &cfg);
@@ -298,41 +298,45 @@ pub async fn fire_task_notify_hook(
 
 #[tauri::command]
 pub async fn list_jira_tasks(jira: State<'_, JiraHandle>) -> Result<JiraTasksResponse, String> {
-    let guard = jira.0.lock().await;
-    let state = match guard.as_ref() {
-        Some(s) => s,
-        None => {
-            return Ok(JiraTasksResponse {
-                tasks: Vec::new(),
-                child_counts: HashMap::new(),
-            })
-        }
+    let issue_repo = {
+        let guard = jira.0.lock().await;
+        guard.state.as_ref().map(|state| state.repo.clone())
     };
-
-    let issue_keys = state
-        .repo
-        .list_active_issue_keys()
-        .map_err(|e| e.to_string())?;
-    if issue_keys.is_empty() {
+    let Some(issue_repo) = issue_repo else {
         return Ok(JiraTasksResponse {
             tasks: Vec::new(),
             child_counts: HashMap::new(),
         });
-    }
+    };
 
-    let db_path = planeai_paths::db_path();
-    let db_path_str = db_path.to_str().ok_or("invalid db path")?;
-    // Prefix is unused — list_by_keys and count_children are cross-prefix queries.
-    let repo = SqliteRepository::open(db_path_str, "_").map_err(|e| e.to_string())?;
+    // Jira and task repositories both do synchronous SQLite work. Keep all reads, including
+    // opening the task repository, off the macOS Tauri IPC thread.
+    super::blocking(move || {
+        let issue_keys = issue_repo
+            .list_active_issue_keys()
+            .map_err(|e| e.to_string())?;
+        if issue_keys.is_empty() {
+            return Ok(JiraTasksResponse {
+                tasks: Vec::new(),
+                child_counts: HashMap::new(),
+            });
+        }
 
-    let key_refs: Vec<&str> = issue_keys.iter().map(|k| k.as_str()).collect();
-    let tasks = repo.list_by_keys(&key_refs).map_err(|e| e.to_string())?;
+        let db_path = planeai_paths::db_path();
+        let db_path_str = db_path.to_str().ok_or("invalid db path")?;
+        // Prefix is unused — list_by_keys and count_children are cross-prefix queries.
+        let repo = SqliteRepository::open(db_path_str, "_").map_err(|e| e.to_string())?;
 
-    let task_keys: Vec<&str> = tasks.iter().map(|t| t.key.as_str()).collect();
-    let child_counts = repo.count_children(&task_keys).map_err(|e| e.to_string())?;
+        let key_refs: Vec<&str> = issue_keys.iter().map(|k| k.as_str()).collect();
+        let tasks = repo.list_by_keys(&key_refs).map_err(|e| e.to_string())?;
 
-    Ok(JiraTasksResponse {
-        tasks: tasks.into_iter().map(TaskItem::from).collect(),
-        child_counts,
+        let task_keys: Vec<&str> = tasks.iter().map(|t| t.key.as_str()).collect();
+        let child_counts = repo.count_children(&task_keys).map_err(|e| e.to_string())?;
+
+        Ok(JiraTasksResponse {
+            tasks: tasks.into_iter().map(TaskItem::from).collect(),
+            child_counts,
+        })
     })
+    .await
 }

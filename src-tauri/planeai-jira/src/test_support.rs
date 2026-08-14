@@ -27,7 +27,7 @@ impl TokenStore for MemStore {
             .unwrap()
             .get(key)
             .cloned()
-            .ok_or_else(|| Error::Keyring(format!("not found: {key}")))
+            .ok_or_else(|| Error::TokenNotFound(key.to_string()))
     }
 
     fn set(&self, key: &str, value: &str) -> Result<(), Error> {

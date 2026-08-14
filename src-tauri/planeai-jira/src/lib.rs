@@ -18,6 +18,7 @@ pub enum Error {
     Storage(String),
     Client(String),
     TaskProvider(String),
+    Cancelled,
 }
 
 impl std::fmt::Display for Error {
@@ -26,6 +27,7 @@ impl std::fmt::Display for Error {
             Self::Storage(s) => write!(f, "jira storage error: {s}"),
             Self::Client(s) => write!(f, "jira client error: {s}"),
             Self::TaskProvider(s) => write!(f, "task provider error: {s}"),
+            Self::Cancelled => write!(f, "jira sync cancelled"),
         }
     }
 }

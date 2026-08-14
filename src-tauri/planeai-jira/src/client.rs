@@ -86,7 +86,7 @@ impl JiraClient {
 
         if resp.status() == StatusCode::UNAUTHORIZED {
             warn!("received 401, refreshing token and retrying");
-            self.auth.invalidate_token().await;
+            self.auth.invalidate_token_if_matches(&token).await;
             let new_token = self.auth.access_token().await?;
             let retry = build(&new_token).send().await?;
             if retry.status() == StatusCode::UNAUTHORIZED {

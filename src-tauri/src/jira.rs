@@ -51,32 +51,89 @@ pub struct JiraState {
     pub auth: Arc<JiraAuth>,
     pub repo: Arc<JiraRepository>,
     pub cancel: Option<CancellationToken>,
+    /// Exact settings used to construct the active sync/writeback runtime.
+    pub sync_config: Option<JiraConfig>,
+    /// An activation is being prepared off the IPC thread.
+    pub activating: bool,
+}
+
+/// Cloneable state required to build sync clients and repositories off the IPC thread.
+pub(crate) struct JiraActivationInputs {
+    auth: Arc<JiraAuth>,
+    repo: Arc<JiraRepository>,
+}
+
+/// Fully-built sync state awaiting a brief, lock-only installation into `JiraState`.
+pub(crate) struct PreparedJiraActivation {
+    sync: Arc<JiraSync>,
+    writeback: Arc<JiraWriteback>,
+    cancel: CancellationToken,
+    config: JiraConfig,
 }
 
 impl JiraState {
-    /// Activate sync + writeback. Returns the CancellationToken for the sync loop.
-    pub fn activate(
-        &mut self,
-        jira_config: &JiraConfig,
+    pub(crate) fn activation_inputs(&self) -> JiraActivationInputs {
+        JiraActivationInputs {
+            auth: self.auth.clone(),
+            repo: self.repo.clone(),
+        }
+    }
+
+    /// Perform all filesystem and SQLite work required to activate Jira.
+    /// Call this through `commands::blocking`, never while holding `JiraHandle`.
+    pub(crate) fn prepare_activation(
+        inputs: JiraActivationInputs,
+        jira_config: JiraConfig,
         app: AppHandle,
-    ) -> Result<CancellationToken, String> {
-        let cloud_id = self.auth.cloud_id().map_err(|e| e.to_string())?;
-        let client = Arc::new(JiraClient::new(self.auth.clone(), cloud_id));
-        let task_provider = open_task_provider(jira_config)?;
+    ) -> Result<PreparedJiraActivation, String> {
+        let cloud_id = inputs.auth.cloud_id().map_err(|e| e.to_string())?;
+        let client = Arc::new(JiraClient::new(inputs.auth, cloud_id));
+        let task_provider = open_task_provider(&jira_config)?;
         let cancel = CancellationToken::new();
         let listener = Arc::new(TauriSyncListener::new(app));
-
-        self.sync = Some(Arc::new(JiraSync::with_listener(
+        let sync_config = jira_config.clone();
+        let sync = Arc::new(JiraSync::with_listener(
             client.clone(),
-            self.repo.clone(),
+            inputs.repo,
             task_provider,
-            jira_config.clone(),
+            jira_config,
             listener,
-        )));
-        self.writeback = Some(Arc::new(JiraWriteback::new(client)));
-        self.auth.set_sync_cancellation(cancel.clone());
-        self.cancel = Some(cancel.clone());
-        Ok(cancel)
+        ));
+        let writeback = Arc::new(JiraWriteback::new(client));
+
+        Ok(PreparedJiraActivation {
+            sync,
+            writeback,
+            cancel,
+            config: sync_config,
+        })
+    }
+
+    /// True only when the active runtime was built from exactly these Jira settings.
+    pub(crate) fn sync_matches_config(&self, jira_config: &JiraConfig) -> bool {
+        self.sync_config.as_ref() == Some(jira_config)
+    }
+
+    /// Install already-prepared state. This intentionally performs no I/O.
+    pub(crate) fn install_activation(
+        &mut self,
+        prepared: PreparedJiraActivation,
+    ) -> Result<CancellationToken, String> {
+        if self.sync.is_some() || self.writeback.is_some() || self.cancel.is_some() {
+            return Err("jira sync is already initialized".to_string());
+        }
+        if !self.auth.is_connection_active() {
+            return Err(
+                "Jira authorization was disconnected before activation completed".to_string(),
+            );
+        }
+
+        self.auth.set_sync_cancellation(prepared.cancel.clone());
+        self.sync = Some(prepared.sync);
+        self.writeback = Some(prepared.writeback);
+        self.sync_config = Some(prepared.config);
+        self.cancel = Some(prepared.cancel.clone());
+        Ok(prepared.cancel)
     }
 
     /// Deactivate: cancel sync loop and clear client state.
@@ -86,7 +143,9 @@ impl JiraState {
         }
         self.sync = None;
         self.writeback = None;
+        self.sync_config = None;
         self.cancel = None;
+        self.activating = false;
     }
 
     /// Trigger async writeback if this task is Jira-sourced. Non-blocking.
@@ -130,8 +189,12 @@ impl JiraState {
     }
 }
 
-pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
-    let jira_config = config.integrations.as_ref()?.jira.as_ref()?;
+/// Construct Jira state, including token-store probing and Jira repository migration.
+/// Commands must call this through `commands::blocking`.
+pub(crate) fn construct_jira_state(
+    jira_config: JiraConfig,
+    app: AppHandle,
+) -> Result<JiraState, String> {
     let token_dir = planeai_paths::app_data_dir().join("jira-tokens");
     let auth = Arc::new(JiraAuth::new(&jira_config.site, token_dir));
     let connection_state_app = app.clone();
@@ -142,32 +205,40 @@ pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
     }));
 
     let db_path = planeai_paths::db_path();
-    let conn = match Connection::open(&db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(error = %e, "jira: failed to open database");
-            return None;
-        }
-    };
-    let repo = match JiraRepository::new(conn) {
-        Ok(r) => Arc::new(r),
-        Err(e) => {
-            tracing::warn!(error = %e, "jira: failed to initialize repository");
-            return None;
-        }
-    };
+    let conn = Connection::open(&db_path).map_err(|error| {
+        tracing::warn!(error = %error, "jira: failed to open database");
+        error.to_string()
+    })?;
+    let repo = Arc::new(JiraRepository::new(conn).map_err(|error| {
+        tracing::warn!(error = %error, "jira: failed to initialize repository");
+        error.to_string()
+    })?);
 
-    let mut state = JiraState {
+    Ok(JiraState {
         sync: None,
         writeback: None,
         auth,
         repo,
         cancel: None,
-    };
+        sync_config: None,
+        activating: false,
+    })
+}
+
+/// Startup-only Jira initialization. Tauri commands use `construct_jira_state` and
+/// `prepare_activation` through `commands::blocking` instead.
+pub fn init_jira(config: &Config, app: AppHandle) -> Option<JiraState> {
+    let jira_config = config.integrations.as_ref()?.jira.as_ref()?.clone();
+    let mut state = construct_jira_state(jira_config.clone(), app.clone()).ok()?;
 
     if state.auth.is_connected() {
-        if let Err(e) = state.activate(jira_config, app) {
-            tracing::warn!(error = %e, "jira: configured but failed to activate");
+        match JiraState::prepare_activation(state.activation_inputs(), jira_config, app) {
+            Ok(prepared) => {
+                if let Err(error) = state.install_activation(prepared) {
+                    tracing::warn!(error = %error, "jira: configured but failed to activate");
+                }
+            }
+            Err(error) => tracing::warn!(error = %error, "jira: configured but failed to activate"),
         }
     }
 
@@ -200,4 +271,95 @@ pub fn open_task_provider(
     planeai_tasks::sqlite::SqliteRepository::open(path_str, &prefix)
         .map(|r| Arc::new(r) as Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn installed_manual_sync_reuses_auth_cancellation_and_disconnects_immediately() {
+        let token_dir = tempfile::tempdir().unwrap();
+        std::fs::write(token_dir.path().join("refresh_token"), "refresh").unwrap();
+        std::fs::write(token_dir.path().join("cloud_id"), "cloud").unwrap();
+        std::fs::write(token_dir.path().join("connection_cleared"), "false").unwrap();
+        let auth = Arc::new(JiraAuth::new(
+            "https://test.atlassian.net",
+            token_dir.path().to_path_buf(),
+        ));
+        let repo = Arc::new(JiraRepository::new(Connection::open_in_memory().unwrap()).unwrap());
+        let task_provider =
+            Arc::new(planeai_tasks::sqlite::SqliteRepository::open_in_memory("TST").unwrap())
+                as Arc<dyn planeai_tasks::provider::TaskProvider + Send + Sync>;
+        let config = JiraConfig {
+            site: "https://test.atlassian.net".to_string(),
+            sync_interval_ms: 60_000,
+            sources: HashMap::new(),
+        };
+        let client = Arc::new(JiraClient::new(auth.clone(), "cloud".to_string()));
+        let sync = Arc::new(JiraSync::new(
+            client.clone(),
+            repo.clone(),
+            task_provider,
+            config.clone(),
+        ));
+        let cancel = CancellationToken::new();
+        let mut state = JiraState {
+            sync: None,
+            writeback: None,
+            auth: auth.clone(),
+            repo,
+            cancel: None,
+            sync_config: None,
+            activating: false,
+        };
+
+        // `install_activation` only attaches pre-built objects; it does not perform I/O.
+        let installed_cancel = state
+            .install_activation(PreparedJiraActivation {
+                sync: sync.clone(),
+                writeback: Arc::new(JiraWriteback::new(client)),
+                cancel,
+                config: config.clone(),
+            })
+            .unwrap();
+
+        assert!(Arc::ptr_eq(state.sync.as_ref().unwrap(), &sync));
+        let handle = crate::commands::jira::JiraHandle::new(None);
+        let mut slot = handle.0.lock().await;
+        slot.state = Some(state);
+
+        let registration_handle = handle.clone();
+        let registration = tokio::spawn(async move {
+            registration_handle
+                .install_runtime_deactivation_listener()
+                .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !registration.is_finished(),
+            "listener registration must wait for the Jira slot rather than silently skipping"
+        );
+        drop(slot);
+        registration.await.unwrap();
+
+        auth.disconnect().await.unwrap();
+        assert!(installed_cancel.is_cancelled());
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let slot = handle.0.lock().await;
+                if slot.state.as_ref().is_some_and(|state| {
+                    state.sync.is_none() && state.writeback.is_none() && state.cancel.is_none()
+                }) {
+                    break;
+                }
+                drop(slot);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connection-state event should deactivate stale Jira runtime state");
+    }
 }
