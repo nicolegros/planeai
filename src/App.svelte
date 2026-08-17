@@ -1107,7 +1107,12 @@
       onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
       onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
-      onResetTerminal={() => { if (activeSessionId) pty.write(activeSessionId, [0x0c]); }}
+      onResetTerminal={() => {
+        if (activeSessionId) {
+          orchestrator.recordUserInput(activeSessionId);
+          pty.write(activeSessionId, [0x0c]);
+        }
+      }}
       onArchiveProject={async (id) => { await projectStore.archiveProject(id); }}
       onHideProject={async (id) => { await projectStore.hideProject(id); }}
       onUnhideProject={async (id) => { await projectStore.unhideProject(id); }}
@@ -1176,7 +1181,7 @@
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
-                  onUserInput={() => { if (agentStates[sessionId]) orchestrator.clearAgentState(sessionId); orchestrator.clearReviewReady(sessionId); }}
+                  onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
               </div>
               {/if}

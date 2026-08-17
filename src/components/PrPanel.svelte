@@ -6,7 +6,7 @@
   import { hasConflicts } from "../lib/ci-checks.svelte";
   import { pr, pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
-  import { getActiveSession } from "../lib/session-orchestrator.svelte";
+  import { getActiveSession, recordUserInput } from "../lib/session-orchestrator.svelte";
   import { createFormKeyboardController } from "../lib/form-keyboard.svelte";
 
   interface Props {
@@ -132,6 +132,7 @@
         });
         msg = `CI checks failed for this PR. Please fix the following:\n\n${lines.join("\n")}`;
       }
+      recordUserInput(sessionId);
       await pty.write(sessionId, Array.from(new TextEncoder().encode(msg + "\r")));
       showSnackbar("CI failures sent to agent", "success");
     } catch (e: any) { showSnackbar(e.toString()); }

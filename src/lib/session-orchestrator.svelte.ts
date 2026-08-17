@@ -24,7 +24,7 @@ import { clearComments } from "./review-comments.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
-import { preloadPatches } from "./diff-preload";
+import { preloadPatches, clearPreloadedPatches, disposePreloadedPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getProjects } from "./project-store.svelte";
@@ -140,7 +140,12 @@ export function toggleDiff(): void {
 // ─── Session Lifecycle ───────────────────────────────────────────────────────
 
 export async function loadSessions(): Promise<void> {
-  sessions = await sessionsApi.list();
+  const loadedSessions = await sessionsApi.list();
+  const loadedSessionIds = new Set(loadedSessions.map((session) => session.id));
+  for (const session of sessions) {
+    if (!loadedSessionIds.has(session.id)) disposePreloadedPatches(session.id);
+  }
+  sessions = loadedSessions;
   updateCiSessions(sessions);
   updatePrCommentSessions(sessions);
   for (const s of sessions) {
@@ -201,6 +206,7 @@ export async function deleteSession(s: Session): Promise<void> {
   dismissForSession(s.id);
   destroyTabState(s.id);
   clearComments(s.id);
+  disposePreloadedPatches(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
@@ -215,6 +221,7 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   dismissForSession(s.id);
   clearComments(s.id);
+  disposePreloadedPatches(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -241,6 +248,13 @@ export function clearAgentState(sessionId: string): void {
   agentStates = rest;
   sessionsApi.acknowledge(sessionId);
 }
+
+/** Invalidate review state before bytes from a user action reach the PTY. */
+export function recordUserInput(sessionId: string): void {
+  if (agentStates[sessionId]) clearAgentState(sessionId);
+  clearReviewReady(sessionId);
+  clearPreloadedPatches(sessionId);
+}
 export function updateSessionStatus(sessionId: string, status: Session["status"]): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
 }
@@ -253,6 +267,7 @@ export function removeProjectSessions(projectId: string): string[] {
   for (const id of ids) {
     poolRemove(id);
     destroyTabState(id);
+    disposePreloadedPatches(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
