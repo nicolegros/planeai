@@ -15,14 +15,15 @@
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
-  import { getActiveSession } from "../lib/session-orchestrator.svelte";
+  import { getActiveSession, recordUserInput } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
-  import { getPreloadedPatches, clearPreloadedPatches } from "../lib/diff-preload";
+  import { getCombinedPatchForReview } from "../lib/diff-preload";
   import { hasConflicts } from "../lib/ci-checks.svelte";
   import BranchCompareForm from "./BranchCompareForm.svelte";
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import { rebuildItemWithFullContent } from "../lib/diff-expansion";
+  import { getRefreshedSelectedIndex } from "../lib/diff-selection";
   import type { MenuItem } from "./ui/ContextMenu.svelte";
   import { buildPointerSelectionRange, commentRangeOverlapsSelection, commentTargetFromSelection, gutterActionAnchor, lockSelectionToOriginSide, pointerSelectionMode, selectionForContextMenu, selectionLabel, shouldClearSelectionAfterClick, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
   import { renderCommentAnnotation } from "../lib/comment-annotation";
@@ -133,36 +134,35 @@
     return files[selectedIndex] ? `diff:${files[selectedIndex].path}` : "";
   }
 
-  async function refresh(confirmDraft = true) {
+  async function refresh({ confirmDraft = true, usePreloaded = false } = {}) {
     if (confirmDraft && !prepareForNavigation("reload")) return;
+    const generation = ++diffGeneration;
     clearSelection();
     loading = true;
     try {
-      await loadAllDiffs();
+      await loadAllDiffs(usePreloaded, generation);
     } catch (e) {
+      if (generation !== diffGeneration) return;
       console.error("Failed to load diffs:", e);
       files = [];
+    } finally {
+      if (generation === diffGeneration) loading = false;
     }
-    loading = false;
   }
 
-  async function loadAllDiffs() {
+  async function loadAllDiffs(usePreloaded: boolean, generation: number) {
     if (!viewer) return;
-    diffGeneration++;
     // Reset expanded files tracking on fresh load
     expandedFiles = new Set<string>();
-    // Use preloaded patches if available (populated when agent finishes)
-    const preloaded = getPreloadedPatches(sessionId);
+    const combinedPatch = await getCombinedPatchForReview(
+      sessionId,
+      repoPath,
+      effectiveBase,
+      effectiveHead,
+      usePreloaded,
+    );
 
-    let combinedPatch: string;
-    if (preloaded) {
-      combinedPatch = preloaded;
-    } else {
-      combinedPatch = await git.getCombinedPatch(repoPath, effectiveBase, effectiveHead);
-    }
-
-    if (!viewer) return;
-    if (preloaded) clearPreloadedPatches(sessionId);
+    if (!viewer || generation !== diffGeneration) return;
 
     // Parse the combined patch into per-file diffs
     const parsed = parsePatchFiles(combinedPatch, sessionId);
@@ -185,8 +185,8 @@
       return { path, status, additions, deletions, old_path: oldPath ?? null };
     });
 
+    selectedIndex = getRefreshedSelectedIndex(files, selectedIndex, derivedFiles);
     files = derivedFiles;
-    if (files.length > 0 && selectedIndex >= files.length) selectedIndex = 0;
     if (files.length > 0) {
       onFileChange?.(files[selectedIndex].path.split("/").pop() || files[selectedIndex].path);
     }
@@ -219,7 +219,7 @@
     // up enableLineSelection on the first render frame. Bumping a version on
     // the items forces a re-render which re-runs flushManagers/syncPointerListeners.
     requestAnimationFrame(() => {
-      if (!viewer) return;
+      if (!viewer || generation !== diffGeneration) return;
       const rendered = viewer.getRenderedItems();
       for (const r of rendered) {
         r.instance.flushManagers();
@@ -551,6 +551,7 @@
       }));
       const serialized = serializeComments(comments, fileDiffs);
       const bytes = Array.from(new TextEncoder().encode(serialized));
+      recordUserInput(sessionId);
       await pty.write(sessionId, bytes);
       await pty.write(sessionId, [0x0d]);
       const count = comments.length;
@@ -974,7 +975,7 @@
     if (viewer && viewerRoot) {
       viewer.cleanUp();
       viewer = createViewer();
-      void refresh(false);
+      void refresh({ confirmDraft: false });
     }
   }
 
@@ -1286,7 +1287,7 @@
       viewerRoot.addEventListener("click", handleViewerClick);
       viewerRoot.addEventListener("contextmenu", handleViewerContextMenu);
       applyDiffFont();
-      void refresh();
+      void refresh({ usePreloaded: true });
       // Start observing to fix library's incorrect height constraint
       requestAnimationFrame(() => startContainerHeightFix());
     }
@@ -1385,7 +1386,7 @@
           if (!prepareForNavigation("reload")) return;
           setComparison(sessionId, { baseRef, headRef });
           showCompareForm = false;
-          void refresh(false);
+          void refresh({ confirmDraft: false });
         }}
         onCancel={() => { showCompareForm = false; }}
       />

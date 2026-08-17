@@ -15,6 +15,7 @@
   import { matchTerminalKey } from "../lib/terminal-keys";
   import { extractCommandName } from "../lib/shell-title";
   import { updateTabLabel } from "../lib/split-tree.svelte";
+  import { writeUserInput as writeTerminalUserInput } from "../lib/terminal-input";
 
   interface Props {
     sessionId: string;
@@ -42,6 +43,10 @@
   // ── Input write — send immediately for responsive typing ──────────────
   function queueWrite(bytes: number[]) {
     pty.write(sessionId, bytes);
+  }
+
+  function writeUserInput(bytes: number[]) {
+    writeTerminalUserInput(bytes, () => onUserInput?.(), queueWrite);
   }
 
   // ── Fit terminal and sync PTY dimensions ──────────────────────────────
@@ -133,7 +138,7 @@
       const text = e.clipboardData?.getData("text");
       if (text) {
         const bytes = Array.from(new TextEncoder().encode(text));
-        queueWrite(bytes);
+        writeUserInput(bytes);
       }
     });
 
@@ -197,7 +202,7 @@
         case "paste":
           ev.preventDefault();
           navigator.clipboard.readText().then((text) => {
-            if (text) queueWrite([...new TextEncoder().encode(text)]);
+            if (text) writeUserInput([...new TextEncoder().encode(text)]);
           }).catch(() => {});
           return false;
         case "scroll_page_up":
@@ -220,7 +225,7 @@
           return true;
         case "send_bytes":
           ev.preventDefault();
-          queueWrite(action.bytes);
+          writeUserInput(action.bytes);
           return false;
       }
     });
@@ -234,8 +239,7 @@
       }
       if (!filtered) return;
       const bytes = Array.from(new TextEncoder().encode(filtered));
-      queueWrite(bytes);
-      onUserInput?.();
+      writeUserInput(bytes);
     });
 
     // ── Listen for PTY output with flow control ─────────────────────────
