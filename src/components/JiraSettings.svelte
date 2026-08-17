@@ -11,6 +11,9 @@
   let status = $state<JiraStatus>({ connected: false, authorizing: false, site: null, last_error: null });
   let loading = $state(true);
   let connecting = $state(false);
+  let cancelling = $state(false);
+  let connectionAttempt = 0;
+  let activeAttemptId: string | null = null;
   let saveChain = Promise.resolve();
   let latestSave = 0;
   const hasSite = $derived(!!settings.site.trim());
@@ -63,39 +66,67 @@
   }
 
   async function connect(): Promise<void> {
+    const attempt = ++connectionAttempt;
+    const attemptId = crypto.randomUUID();
+    activeAttemptId = attemptId;
     connecting = true;
     try {
       await save();
-      const { authorization_url } = await call<{ authorization_url: string }>("jira.connect.start");
+      if (attempt !== connectionAttempt) return;
+      const { authorization_url } = await call<{ authorization_url: string }>("jira.connect.start", { attempt_id: attemptId });
+      if (attempt !== connectionAttempt) {
+        await call("jira.connect.cancel", { attempt_id: attemptId });
+        return;
+      }
       try {
         await plugins.openJiraAuthorizationUrl(authorization_url);
       } catch (error) {
-        await call("jira.connect.cancel").catch(() => {});
+        await call("jira.connect.cancel", { attempt_id: attemptId }).catch(() => {});
         throw new Error(`Could not open your browser. ${String(error)}`);
       }
+      if (attempt !== connectionAttempt) return;
       showSnackbar("Finish Jira authorization in your browser…", "success");
-      await call("jira.connect.complete");
+      await call("jira.connect.complete", { attempt_id: attemptId });
+      if (attempt !== connectionAttempt) {
+        await call("jira.connect.cancel", { attempt_id: attemptId });
+        return;
+      }
       do {
         await new Promise((resolve) => setTimeout(resolve, 500));
         await refresh();
+        if (attempt !== connectionAttempt) {
+          await call("jira.connect.cancel", { attempt_id: attemptId });
+          return;
+        }
       } while (status.authorizing);
       if (!status.connected) throw new Error(status.last_error ?? "Jira authorization did not complete.");
       showSnackbar("Connected to Jira", "success");
     } catch (error) {
-      await refresh().catch(() => {});
-      showSnackbar(`Jira connection failed: ${String(error)}`, "error");
+      if (attempt === connectionAttempt) {
+        await refresh().catch(() => {});
+        showSnackbar(`Jira connection failed: ${String(error)}`, "error");
+      }
     } finally {
-      connecting = false;
+      if (attempt === connectionAttempt) {
+        connecting = false;
+        activeAttemptId = null;
+      }
     }
   }
 
   async function cancelConnection(): Promise<void> {
+    connectionAttempt += 1;
+    const attemptId = activeAttemptId;
+    cancelling = true;
     try {
-      await call("jira.connect.cancel");
+      await call("jira.connect.cancel", attemptId ? { attempt_id: attemptId } : null);
       await refresh();
       showSnackbar("Jira authorization cancelled", "success");
     } catch (error) {
       showSnackbar(`Could not cancel Jira authorization: ${String(error)}`, "error");
+    } finally {
+      connecting = false;
+      cancelling = false;
     }
   }
 
@@ -125,7 +156,7 @@
     {#if status.connected}
       <Button onclick={disconnect} disabled={connecting}>{connecting ? 'Disconnecting…' : 'Disconnect'}</Button>
     {:else if connecting}
-      <Button onclick={cancelConnection}>Cancel authorization</Button>
+      <Button onclick={cancelConnection} disabled={cancelling}>{cancelling ? 'Cancelling…' : 'Cancel authorization'}</Button>
     {:else}
       <Button onclick={connect} disabled={!hasSite}>Connect</Button>
       {#if !hasSite}<span class="text-xs text-t3">Enter a site URL to connect</span>{/if}

@@ -104,18 +104,25 @@ struct Credentials {
 }
 
 struct PendingAuth {
+    attempt_id: String,
     site: String,
     verifier: String,
     state: String,
     listener: TcpListener,
 }
 
+struct AuthCompletion {
+    attempt_id: String,
+    task: tokio::task::JoinHandle<Result<(), AuthError>>,
+}
+
 struct JiraPlugin {
     data_dir: PathBuf,
     secrets_dir: PathBuf,
     pending_auth: Option<PendingAuth>,
-    completion: Option<tokio::task::JoinHandle<Result<(), AuthError>>>,
+    completion: Option<AuthCompletion>,
     authorization_error: Option<String>,
+    completed_attempt: Option<String>,
     client: Client,
     token_url: String,
     resources_url: String,
@@ -140,6 +147,7 @@ impl JiraPlugin {
             pending_auth: None,
             completion: None,
             authorization_error: None,
+            completed_attempt: None,
             client: Client::builder()
                 .timeout(OAUTH_NETWORK_TIMEOUT)
                 .build()
@@ -188,12 +196,23 @@ impl JiraPlugin {
         }
     }
 
-    async fn connect_start(&mut self) -> Result<Value, AuthError> {
+    async fn connect_start(&mut self, params: &Value) -> Result<Value, AuthError> {
         if self.pending_auth.is_some() || self.completion.is_some() {
             return Err(AuthError::CallbackStart(
                 "an authorization flow is already waiting for a callback".to_string(),
             ));
         }
+        if self.read_credentials().is_ok() {
+            return Err(AuthError::CallbackStart(
+                "disconnect the current Jira site before authorizing another one".to_string(),
+            ));
+        }
+        let attempt_id = params
+            .get("attempt_id")
+            .and_then(Value::as_str)
+            .filter(|attempt_id| !attempt_id.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(generate_state);
         let site = self.site()?;
         let listener = TcpListener::bind(CALLBACK_ADDRESS).await.map_err(|e| {
             AuthError::CallbackStart(format!(
@@ -204,7 +223,9 @@ impl JiraPlugin {
         let state = generate_state();
         let authorization_url = build_auth_url(REDIRECT_URI, &challenge, &state)?;
         self.authorization_error = None;
+        self.completed_attempt = None;
         self.pending_auth = Some(PendingAuth {
+            attempt_id,
             site,
             verifier,
             state,
@@ -213,26 +234,37 @@ impl JiraPlugin {
         Ok(json!({ "authorization_url": authorization_url.to_string() }))
     }
 
-    async fn connect_complete(&mut self) -> Result<Value, AuthError> {
+    async fn connect_complete(&mut self, params: &Value) -> Result<Value, AuthError> {
+        let requested_attempt = params.get("attempt_id").and_then(Value::as_str);
         let pending = self.pending_auth.take().ok_or_else(|| {
             AuthError::CallbackStart("start authorization before completing it".to_string())
         })?;
+        if requested_attempt.is_some_and(|attempt_id| attempt_id != pending.attempt_id) {
+            self.pending_auth = Some(pending);
+            return Err(AuthError::CallbackStart(
+                "authorization attempt does not match the active flow".to_string(),
+            ));
+        }
+        let attempt_id = pending.attempt_id.clone();
         let client = self.client.clone();
         let token_url = self.token_url.clone();
         let resources_url = self.resources_url.clone();
         let secrets_dir = self.secrets_dir.clone();
         let data_dir = self.data_dir.clone();
-        self.completion = Some(tokio::spawn(async move {
-            finish_authorization(
-                pending,
-                &client,
-                &token_url,
-                &resources_url,
-                &data_dir,
-                &secrets_dir,
-            )
-            .await
-        }));
+        self.completion = Some(AuthCompletion {
+            attempt_id,
+            task: tokio::spawn(async move {
+                finish_authorization(
+                    pending,
+                    &client,
+                    &token_url,
+                    &resources_url,
+                    &data_dir,
+                    &secrets_dir,
+                )
+                .await
+            }),
+        });
         Ok(json!({ "authorizing": true }))
     }
 
@@ -256,33 +288,60 @@ impl JiraPlugin {
         if self
             .completion
             .as_ref()
-            .is_some_and(|completion| completion.is_finished())
+            .is_some_and(|completion| completion.task.is_finished())
         {
-            let result = self
+            let completion = self
                 .completion
                 .take()
-                .expect("completion was checked above")
-                .await;
+                .expect("completion was checked above");
+            let attempt_id = completion.attempt_id;
+            let result = completion.task.await;
             self.authorization_error = result
                 .map_err(|error| error.to_string())
                 .and_then(|result| result.map_err(|error| error.to_string()))
                 .err();
+            self.completed_attempt = Some(attempt_id);
         }
     }
 
-    fn cancel_authorization(&mut self) {
-        self.pending_auth = None;
-        if let Some(completion) = self.completion.take() {
-            completion.abort();
+    async fn cancel_authorization(&mut self, attempt_id: Option<&str>) -> bool {
+        let pending_matches = self.pending_auth.as_ref().is_some_and(|pending| {
+            attempt_id.is_none_or(|attempt_id| pending.attempt_id == attempt_id)
+        });
+        if pending_matches {
+            self.pending_auth = None;
         }
+        let completion_matches = self.completion.as_ref().is_some_and(|completion| {
+            attempt_id.is_none_or(|attempt_id| completion.attempt_id == attempt_id)
+        });
+        if let Some(completion) = completion_matches.then(|| self.completion.take()).flatten() {
+            completion.task.abort();
+            let _ = completion.task.await;
+        }
+        let completed_matches =
+            self.completed_attempt
+                .as_deref()
+                .is_some_and(|completed_attempt| {
+                    attempt_id.is_none_or(|attempt_id| completed_attempt == attempt_id)
+                });
+        if completed_matches {
+            self.completed_attempt = None;
+        }
+        pending_matches || completion_matches || completed_matches
     }
 
-    fn connect_cancel(&mut self) {
-        self.cancel_authorization();
+    async fn connect_cancel(&mut self, params: &Value) -> Result<Value, AuthError> {
+        let cancelled = self
+            .cancel_authorization(params.get("attempt_id").and_then(Value::as_str))
+            .await;
+        if cancelled {
+            self.delete_credentials()?;
+        }
+        Ok(json!({ "cancelled": cancelled }))
     }
 
-    fn disconnect(&mut self) -> Result<Value, AuthError> {
-        self.cancel_authorization();
+    async fn disconnect(&mut self) -> Result<Value, AuthError> {
+        self.cancel_authorization(None).await;
         self.delete_credentials()?;
         Ok(json!({ "connected": false }))
     }
@@ -294,17 +353,34 @@ fn configured_site(data_dir: &std::path::Path) -> Result<String, AuthError> {
             .map_err(|error| AuthError::Secrets(error.to_string()))?,
     )
     .map_err(|error| AuthError::Secrets(error.to_string()))?;
-    let site = value
+    value
         .get("site")
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|site| !site.is_empty())
-        .ok_or(AuthError::InvalidSite)?;
-    let parsed = Url::parse(site).map_err(|_| AuthError::InvalidSite)?;
-    if parsed.scheme() != "https" || parsed.host_str().is_none() || parsed.query().is_some() {
+        .ok_or(AuthError::InvalidSite)
+        .and_then(canonicalize_site)
+}
+
+fn canonicalize_site(site: &str) -> Result<String, AuthError> {
+    let parsed = Url::parse(site.trim()).map_err(|_| AuthError::InvalidSite)?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
         return Err(AuthError::InvalidSite);
     }
-    Ok(site.trim_end_matches('/').to_string())
+    let host = parsed
+        .host_str()
+        .expect("host was checked above")
+        .to_ascii_lowercase();
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(format!("https://{host}{port}"))
 }
 
 fn write_credentials_to(
@@ -325,8 +401,11 @@ fn write_credentials_to(
         let _ = std::fs::remove_file(&temporary);
         return Err(AuthError::Secrets(error.to_string()));
     }
-    std::fs::rename(&temporary, secrets_dir.join("credentials.json"))
-        .map_err(|error| AuthError::Secrets(error.to_string()))
+    if let Err(error) = std::fs::rename(&temporary, secrets_dir.join("credentials.json")) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(AuthError::Secrets(error.to_string()));
+    }
+    Ok(())
 }
 
 async fn finish_authorization(
@@ -403,7 +482,7 @@ async fn fetch_cloud_id(
         .await?;
     resources
         .iter()
-        .find(|resource| resource.url.trim_end_matches('/') == site)
+        .find(|resource| canonicalize_site(&resource.url).ok().as_deref() == Some(site))
         .map(|resource| resource.id.clone())
         .ok_or_else(|| AuthError::CloudIdNotFound(site.to_string()))
 }
@@ -485,18 +564,18 @@ async fn dispatch(plugin: &mut JiraPlugin, request: Request) -> Response {
         "jira.status" => Ok(plugin.status().await),
         "jira.settings.get" => plugin.settings(),
         "jira.connect.start" => plugin
-            .connect_start()
+            .connect_start(&request.params)
             .await
             .map_err(|error| error.to_string()),
         "jira.connect.complete" => plugin
-            .connect_complete()
+            .connect_complete(&request.params)
             .await
             .map_err(|error| error.to_string()),
-        "jira.connect.cancel" => {
-            plugin.connect_cancel();
-            Ok(json!({ "cancelled": true }))
-        }
-        "jira.disconnect" => plugin.disconnect().map_err(|error| error.to_string()),
+        "jira.connect.cancel" => plugin
+            .connect_cancel(&request.params)
+            .await
+            .map_err(|error| error.to_string()),
+        "jira.disconnect" => plugin.disconnect().await.map_err(|error| error.to_string()),
         "plugin.shutdown" => Ok(json!({ "stopping": true })),
         _ => Err("method not found".to_string()),
     };
@@ -532,8 +611,16 @@ fn encode_response_frame(response: Response) -> Result<String, serde_json::Error
     if frame.len() < MAX_RPC_FRAME_BYTES as usize {
         return Ok(frame);
     }
-    serde_json::to_string(&error(
+    let fallback = serde_json::to_string(&error(
         response.id,
+        -32000,
+        "plugin response exceeded the maximum frame size",
+    ))?;
+    if fallback.len() < MAX_RPC_FRAME_BYTES as usize {
+        return Ok(fallback);
+    }
+    serde_json::to_string(&error(
+        Value::Null,
         -32000,
         "plugin response exceeded the maximum frame size",
     ))
@@ -760,6 +847,7 @@ mod tests {
             pending_auth: None,
             completion: None,
             authorization_error: None,
+            completed_attempt: None,
             client: Client::new(),
             token_url: format!("{}/oauth/token", server.uri()),
             resources_url: format!("{}/resources", server.uri()),
@@ -814,6 +902,7 @@ mod tests {
             pending_auth: None,
             completion: None,
             authorization_error: None,
+            completed_attempt: None,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
@@ -863,6 +952,133 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[tokio::test]
+    async fn cancelling_authorization_removes_credentials_written_by_the_task() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        let (written, observed_write) = tokio::sync::oneshot::channel();
+        let task_secrets_dir = secrets_dir.clone();
+        let completion = tokio::spawn(async move {
+            write_credentials_to(
+                &task_secrets_dir,
+                &Credentials {
+                    refresh_token: "refresh".to_string(),
+                    cloud_id: "cloud".to_string(),
+                    site: "https://example.atlassian.net".to_string(),
+                },
+            )?;
+            let _ = written.send(());
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        let mut plugin = JiraPlugin {
+            data_dir: root.join("data"),
+            secrets_dir: secrets_dir.clone(),
+            pending_auth: None,
+            completion: Some(AuthCompletion {
+                attempt_id: "test".to_string(),
+                task: completion,
+            }),
+            authorization_error: None,
+            completed_attempt: None,
+            client: Client::new(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        };
+        observed_write.await.unwrap();
+        plugin.connect_cancel(&Value::Null).await.unwrap();
+        assert!(!secrets_dir.join("credentials.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_reaped_attempt_removes_its_credentials() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        write_credentials_to(
+            &secrets_dir,
+            &Credentials {
+                refresh_token: "refresh".to_string(),
+                cloud_id: "cloud".to_string(),
+                site: "https://example.atlassian.net".to_string(),
+            },
+        )
+        .unwrap();
+        let mut plugin = JiraPlugin {
+            data_dir: root.join("data"),
+            secrets_dir: secrets_dir.clone(),
+            pending_auth: None,
+            completion: None,
+            authorization_error: None,
+            completed_attempt: Some("completed-attempt".to_string()),
+            client: Client::new(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        };
+        assert_eq!(
+            plugin
+                .connect_cancel(&json!({ "attempt_id": "completed-attempt" }))
+                .await
+                .unwrap()["cancelled"],
+            true
+        );
+        assert!(!secrets_dir.join("credentials.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn stale_cancellation_does_not_remove_a_newer_attempts_credentials() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        write_credentials_to(
+            &secrets_dir,
+            &Credentials {
+                refresh_token: "refresh".to_string(),
+                cloud_id: "cloud".to_string(),
+                site: "https://example.atlassian.net".to_string(),
+            },
+        )
+        .unwrap();
+        let mut plugin = JiraPlugin {
+            data_dir: root.join("data"),
+            secrets_dir: secrets_dir.clone(),
+            pending_auth: None,
+            completion: None,
+            authorization_error: None,
+            completed_attempt: Some("newer-attempt".to_string()),
+            client: Client::new(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        };
+
+        assert_eq!(
+            plugin
+                .connect_cancel(&json!({ "attempt_id": "stale-attempt" }))
+                .await
+                .unwrap()["cancelled"],
+            false
+        );
+        assert!(secrets_dir.join("credentials.json").exists());
+        assert_eq!(plugin.completed_attempt.as_deref(), Some("newer-attempt"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_site_normalizes_equivalent_https_origins() {
+        assert_eq!(
+            canonicalize_site("https://EXAMPLE.atlassian.net:443/").unwrap(),
+            "https://example.atlassian.net"
+        );
+        assert!(canonicalize_site("https://example.atlassian.net/jira/software").is_err());
+        assert!(canonicalize_site("https://user@example.atlassian.net/").is_err());
+    }
+
     #[test]
     fn oversized_responses_are_replaced_with_a_bounded_error_frame() {
         let frame = encode_response_frame(success(
@@ -872,6 +1088,17 @@ mod tests {
         .unwrap();
         assert!(frame.len() < MAX_RPC_FRAME_BYTES as usize);
         assert!(frame.contains("maximum frame size"));
+    }
+
+    #[test]
+    fn oversized_response_fallback_bounds_a_long_scalar_id() {
+        let frame = encode_response_frame(success(
+            json!("x".repeat(MAX_RPC_FRAME_BYTES as usize)),
+            json!({ "site": "x".repeat(MAX_RPC_FRAME_BYTES as usize) }),
+        ))
+        .unwrap();
+        assert!(frame.len() < MAX_RPC_FRAME_BYTES as usize);
+        assert!(frame.contains("\"id\":null"));
     }
 
     #[test]
