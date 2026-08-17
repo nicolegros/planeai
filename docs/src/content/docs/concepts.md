@@ -59,7 +59,7 @@ Tasks are planeai's built-in work tracker. Each task represents a unit of work â
 
 Tasks appear in the sidebar grouped by status. Clicking a task either jumps to its linked session (if one exists) or starts a new session for it. You can create tasks from the GUI, the CLI, or directly from an agent session using the built-in agent skills.
 
-Tasks can also be synced from Jira Cloud. When configured, planeai pulls issues matching JQL filters and displays them in a dedicated sidebar section. You assign a Jira issue to a project to create a local child task, which can then be dispatched to an agent like any other task. See the [Task Management guide](/planeai/guides/task-management/#jira-integration) for details.
+The bundled Jira plugin currently manages the Jira Cloud OAuth connection only. Jira issue synchronization, sidebar workflows, and writeback are deferred to a later parity slice. See the [Task Management guide](/planeai/guides/task-management/#jira-integration) for the current scope.
 
 ## Auto-Dispatch (Symphony Mode)
 
