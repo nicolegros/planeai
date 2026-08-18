@@ -400,6 +400,13 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
             render("header");
           },
           onFocus: (active) => {
+            if (!active) {
+              if (selected) {
+                selected = "";
+                render();
+              }
+              return;
+            }
             if (active && selected !== "header") {
               selected = "header";
               render("header");
@@ -419,6 +426,13 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
                 render("header");
               },
               onFocus: (active: boolean) => {
+                if (!active) {
+                  if (selected) {
+                    selected = "";
+                    render();
+                  }
+                  return;
+                }
                 if (active && selected !== item.key) {
                   selected = item.key;
                   render(`issue:${item.key}`);

@@ -192,6 +192,39 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
       expect(getSelectedIndex()).toBe(2);
       expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-42");
     });
+
+    const selectedFirstIssue =
+      host.shadowRoot!.querySelector<HTMLButtonElement>(".issue.selected")!;
+    selectedFirstIssue.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(getSelectedIndex()).toBe(1);
+      expect(host.shadowRoot?.querySelector(".section-header.selected")).toBeTruthy();
+    });
+
+    const selectedHeader = host.shadowRoot!.querySelector<HTMLButtonElement>(
+      ".section-header.selected",
+    )!;
+    selectedHeader.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(getSelectedIndex()).toBe(0);
+      expect(host.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0);
+    });
   });
 
   it("does not reset to the active session when Jira focus rerenders its rows", async () => {
