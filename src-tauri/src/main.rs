@@ -406,6 +406,7 @@ fn main() {
             plugin_settings,
             update_plugin_settings,
             local_plugin_ui_source,
+            plugin_data_changed,
             enable_plugin,
             disable_plugin,
             reload_plugin,

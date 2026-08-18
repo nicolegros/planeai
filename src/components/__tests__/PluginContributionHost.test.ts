@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
-const { pluginCall, localUiSource } = vi.hoisted(() => ({
+const { pluginCall, localUiSource, eventListeners } = vi.hoisted(() => ({
   pluginCall: vi.fn(() =>
     Promise.resolve({
       plugin_id: "jira",
@@ -13,6 +13,7 @@ const { pluginCall, localUiSource } = vi.hoisted(() => ({
     }),
   ),
   localUiSource: vi.fn(),
+  eventListeners: new Map<string, (event: { payload: string }) => void>(),
 }));
 
 vi.mock("../../lib/api", () => ({
@@ -22,6 +23,12 @@ vi.mock("../../lib/api", () => ({
 import PluginContributionHostHarness from "./PluginContributionHostHarness.svelte";
 import PluginContributionHostLocalHarness from "./PluginContributionHostLocalHarness.svelte";
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((eventName: string, handler: (event: { payload: string }) => void) => {
+    eventListeners.set(eventName, handler);
+    return Promise.resolve(() => eventListeners.delete(eventName));
+  }),
+}));
 describe("PluginContributionHost", () => {
   let target: HTMLElement;
   let component:
@@ -35,6 +42,7 @@ describe("PluginContributionHost", () => {
     if (component) unmount(component);
     target?.remove();
     vi.clearAllMocks();
+    eventListeners.clear();
   });
 
   it("mounts the Jira UI in a host-owned Shadow DOM root", async () => {
@@ -76,6 +84,30 @@ describe("PluginContributionHost", () => {
     });
     expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture");
     expect(pluginCall).toHaveBeenCalledWith("local-fixture", "fixture.status", null);
+  });
+
+  it("remounts a sidebar section when its plugin data changes", async () => {
+    localUiSource.mockResolvedValue(`
+      export default {
+        mount(root) {
+          const page = document.createElement("p");
+          page.className = "fixture-page";
+          page.textContent = "sidebar item";
+          root.replaceChildren(page);
+          return () => root.replaceChildren();
+        }
+      };
+    `);
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(eventListeners.get("plugin-data-changed")).toBeTypeOf("function"),
+    );
+    eventListeners.get("plugin-data-changed")?.({ payload: "local-fixture" });
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledTimes(2));
   });
 
   it("disposes the old UI before remounting and on host destruction", async () => {

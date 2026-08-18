@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins } from "../lib/api";
   import type { PluginUiDisposer, PluginUiEntrypoint } from "../lib/plugin-sdk";
@@ -98,6 +99,9 @@
           sidebar: {
             register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
           },
+          data: {
+            changed: () => plugins.dataChanged(plugin.id),
+          },
         },
       });
       if (version !== generation) {
@@ -118,6 +122,21 @@
     return () => {
       if (generation === version) generation += 1;
       disposeCurrent();
+    };
+  });
+
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<string>("plugin-data-changed", (event) => {
+      if (event.payload === plugin.id && contribution.placement === "sidebar.section") retry();
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
     };
   });
 
