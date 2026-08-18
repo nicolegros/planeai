@@ -323,6 +323,32 @@
     return map;
   });
 
+  function selectPluginSidebarRow(contributionKey: string, rowId: string): void {
+    const index = flatNavIndex.get(`plugin:${contributionKey}:${rowId}`);
+    if (index !== undefined) setSelectedIndex(index);
+  }
+
+  $effect(() => {
+    if (!navRef) return;
+    const handlePluginSidebarSelect = (event: Event) => {
+      const contributionKey = (event.target as HTMLElement | null)?.dataset.pluginUiContribution;
+      const rowId = (event as CustomEvent<{ rowId?: unknown }>).detail?.rowId;
+      if (contributionKey && typeof rowId === "string") selectPluginSidebarRow(contributionKey, rowId);
+    };
+    const handlePluginSidebarKeydown = (event: Event) => {
+      const detail = (event as CustomEvent<{ event?: unknown; handled?: boolean }>).detail;
+      if (!(detail?.event instanceof KeyboardEvent)) return;
+      handleKeydown(detail.event);
+      detail.handled = detail.event.defaultPrevented;
+    };
+    navRef.addEventListener("plugin-sidebar-select", handlePluginSidebarSelect);
+    navRef.addEventListener("plugin-sidebar-keydown", handlePluginSidebarKeydown);
+    return () => {
+      navRef?.removeEventListener("plugin-sidebar-select", handlePluginSidebarSelect);
+      navRef?.removeEventListener("plugin-sidebar-keydown", handlePluginSidebarKeydown);
+    };
+  });
+
   $effect(() => { clampIndex(flatNav.length); });
 
   // Scroll selected item into view on keyboard navigation
@@ -344,32 +370,40 @@
     if (current?.type === "plugin") current.row.onFocus?.(true);
   });
 
-  // Auto-focus active session/loop when sessions panel is toggled
+  // Auto-focus active session/loop when sessions panel is toggled or its target changes.
+  let autoFocusedSidebarTarget = "";
   $effect(() => {
-    if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") return;
-    // If viewing a loop dashboard, highlight the loop item
-    if (selectedLoopId) {
-      const idx = flatNavIndex.get(`loop:${selectedLoopId}`);
-      if (idx !== undefined) setSelectedIndex(idx);
+    if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") {
+      autoFocusedSidebarTarget = "";
       return;
     }
-    if (!activeSessionId) return;
-    // Try loop_session lookup first
-    let idx = flatNavIndex.get(`loop_session:${activeSessionId}`);
-    // Then orphan lookup
-    if (idx === undefined) idx = flatNavIndex.get(`orphan:${activeSessionId}`);
-    // If not found, look up via task_key
-    if (idx === undefined) {
-      const active = sessions.find(s => s.id === activeSessionId);
-      if (active?.task_key) idx = flatNavIndex.get(`task:${active.task_key}`);
+
+    let target: string | undefined;
+    if (selectedLoopId) {
+      target = `loop:${selectedLoopId}`;
+    } else if (activeSessionId) {
+      target = flatNavIndex.has(`loop_session:${activeSessionId}`)
+        ? `loop_session:${activeSessionId}`
+        : flatNavIndex.has(`orphan:${activeSessionId}`)
+          ? `orphan:${activeSessionId}`
+          : (() => {
+              const active = sessions.find((session) => session.id === activeSessionId);
+              return active?.task_key ? `task:${active.task_key}` : undefined;
+            })();
     }
-    if (idx !== undefined) setSelectedIndex(idx);
+
+    if (!target || target === autoFocusedSidebarTarget) return;
+    const idx = flatNavIndex.get(target);
+    if (idx === undefined) return;
+    setSelectedIndex(idx);
+    autoFocusedSidebarTarget = target;
   });
 
   function handleKeydown(e: KeyboardEvent) {
     if (zone !== "sidebar") return;
     if (flatNav.length === 0) return;
-    if (shouldBypassSidebarKeyboard(document.activeElement)) return;
+    const origin = e.composedPath().find((node): node is Element => node instanceof Element);
+    if (shouldBypassSidebarKeyboard(origin ?? document.activeElement)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
     if (!action) return;
@@ -804,7 +838,9 @@
     {/if}
 
     {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
-      <div data-plugin-sidebar-slot="section"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
+      <div data-plugin-sidebar-slot="section">
+        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} />
+      </div>
     {/each}
 
     {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}

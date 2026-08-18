@@ -110,6 +110,28 @@ describe("PluginContributionHost", () => {
     await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledTimes(2));
   });
 
+  it("bubbles a sidebar selection request from plugin UI", async () => {
+    localUiSource.mockResolvedValue(`
+      export default {
+        mount(root, context) {
+          context.host.sidebar.select("issue:ABC-1");
+          return () => root.replaceChildren();
+        }
+      };
+    `);
+    const onSelection = vi.fn();
+    target = document.createElement("div");
+    target.addEventListener("plugin-sidebar-select", onSelection);
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    await vi.waitFor(() => expect(onSelection).toHaveBeenCalledOnce());
+    const [selectionEvent] = onSelection.mock.calls[0]!;
+    expect((selectionEvent as CustomEvent).detail).toEqual({
+      rowId: "issue:ABC-1",
+    });
+  });
+
   it("disposes the old UI before remounting and on host destruction", async () => {
     target = document.createElement("div");
     document.body.append(target);

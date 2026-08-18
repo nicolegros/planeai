@@ -349,7 +349,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
     let selected = "";
     let unregister = () => {};
     let disposed = false;
-    const render = () => {
+    const render = (focusRowId: string | null = null) => {
       unregister();
       const header = document.createElement("button");
       header.className = `section-header ${selected === "header" ? "selected" : ""}`;
@@ -359,42 +359,50 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
       count.textContent = String(items.length);
       header.append(count);
       header.onclick = () => {
+        context.host.sidebar.select("header");
+        selected = "header";
         collapsed = !collapsed;
-        render();
+        render("header");
       };
+      header.onkeydown = context.host.sidebar.handleKeydown;
       section.replaceChildren(header);
+      if (focusRowId === "header") header.focus();
       if (!collapsed)
         for (const item of items) {
+          const rowId = `issue:${item.key}`;
           const row = document.createElement("button");
           row.className = `issue ${selected === item.key ? "selected" : ""}`;
           row.innerHTML = `<span class="dot ${item.status === "done" ? "done" : item.status !== "todo" ? "active" : ""}"></span><span class="key"></span><span class="title"></span>${item.child_count ? `<span class="count">${item.child_count}</span>` : ""}`;
           row.querySelector(".key")!.textContent = item.key;
           row.querySelector(".title")!.textContent = item.title;
           row.onclick = () => {
+            context.host.sidebar.select(rowId);
             selected = item.key;
-            render();
+            render(rowId);
           };
+          row.onkeydown = context.host.sidebar.handleKeydown;
           section.append(row);
+          if (focusRowId === rowId) row.focus();
         }
       unregister = context.host.sidebar.register([
         {
           id: "header",
           onSelect: () => {
             collapsed = !collapsed;
-            render();
+            render("header");
           },
           onCollapse: () => {
             collapsed = true;
-            render();
+            render("header");
           },
           onExpand: () => {
             collapsed = false;
-            render();
+            render("header");
           },
           onFocus: (active) => {
-            if (active) {
+            if (active && selected !== "header") {
               selected = "header";
-              render();
+              render("header");
               header.scrollIntoView({ block: "nearest" });
             }
           },
@@ -404,16 +412,16 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
               id: `issue:${item.key}`,
               onSelect: () => {
                 selected = item.key;
-                render();
+                render(`issue:${item.key}`);
               },
               onCollapse: () => {
                 selected = "header";
-                render();
+                render("header");
               },
               onFocus: (active: boolean) => {
-                if (active) {
+                if (active && selected !== item.key) {
                   selected = item.key;
-                  render();
+                  render(`issue:${item.key}`);
                 }
               },
             }))
