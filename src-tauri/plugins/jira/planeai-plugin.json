@@ -6,19 +6,26 @@
   "host_api_version": "planeai.plugin-host.v1",
   "source_kind": "builtin",
   "backend_entrypoint": "planeai-plugin-jira",
+  "capabilities": ["tasks.read", "tasks.create", "tasks.update", "storage", "sidebar.navigation"],
   "ui_contributions": [
+    {
+      "id": "preferences",
+      "label": "Jira",
+      "placement": "preferences",
+      "entrypoint": "jira-preferences"
+    },
+    {
+      "id": "section",
+      "label": "Jira",
+      "placement": "sidebar.section",
+      "entrypoint": "jira-sidebar-section",
+      "order": 100
+    },
     {
       "id": "dashboard",
       "label": "Dashboard",
       "placement": "main-pane",
       "entrypoint": "jira-status"
-    },
-    {
-      "id": "connection",
-      "label": "Jira",
-      "placement": "sidebar.navigation",
-      "entrypoint": "jira-connection",
-      "order": 100
     }
   ]
 }

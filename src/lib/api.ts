@@ -12,7 +12,6 @@ import type {
   PrStatus,
   CommitEntry,
   PluginInventory,
-  JiraPluginStatus,
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
@@ -249,8 +248,6 @@ export const plugins = {
     invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
-  jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
-  openJiraAuthorizationUrl: (url: string) => invoke<void>("open_jira_authorization_url", { url }),
 };
 
 export const preferences = {

@@ -82,7 +82,9 @@ export type PluginRuntimeState = "disabled" | "starting" | "running" | "stopping
 export type PluginUiPlacement =
   | "sidebar.header"
   | "sidebar.navigation"
+  | "sidebar.section"
   | "sidebar.footer"
+  | "preferences"
   | "main-pane";
 
 export interface PluginUiContribution {

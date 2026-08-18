@@ -1,8 +1,7 @@
 use serde_json::Value;
 use tauri::State;
-use tauri_plugin_opener::OpenerExt;
 
-use crate::plugins::{JiraPluginStatus, PluginInventory, PluginRuntimeHandle};
+use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
 #[tauri::command]
 pub async fn list_plugins(
@@ -87,26 +86,4 @@ pub async fn reload_plugin(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<PluginInventory, String> {
     runtime.0.reload(&plugin_id).await
-}
-
-/// Plugin-scoped status bridge. This intentionally exposes only Jira's fixed
-/// read-only method rather than accepting an arbitrary RPC method name.
-#[tauri::command]
-pub async fn jira_plugin_status(
-    plugin_id: String,
-    runtime: State<'_, PluginRuntimeHandle>,
-) -> Result<JiraPluginStatus, String> {
-    runtime.0.jira_status(&plugin_id).await
-}
-
-/// Open the Atlassian authorization page for the bundled Jira plugin. This is
-/// intentionally not a generic plugin shell or Tauri capability.
-#[tauri::command]
-pub async fn open_jira_authorization_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
-    if !url.starts_with("https://auth.atlassian.com/authorize?") {
-        return Err("Jira authorization URL must target auth.atlassian.com".to_string());
-    }
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|error| format!("failed to open browser for Jira authorization: {error}"))
 }

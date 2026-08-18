@@ -22,6 +22,7 @@
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
+  import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
 
   interface Props {
     renamingSessionId: string | null;
@@ -267,7 +268,7 @@
   );
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "project_header"; project: Project } | { type: "loop"; loop: import("../lib/types").LoopRunSummary } | { type: "loop_session"; session: Session; loopId: string; item: import("../lib/types").LoopSessionItem } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
+  type NavItem = { type: "project_header"; project: Project } | { type: "loop"; loop: import("../lib/types").LoopRunSummary } | { type: "loop_session"; session: Session; loopId: string; item: import("../lib/types").LoopSessionItem } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of visibleProjects) {
@@ -300,6 +301,12 @@
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
     }
+    for (const contribution of pluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
+      const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
+      for (const row of getPluginSidebarRows(contributionKey)) {
+        result.push({ type: "plugin", contributionKey, row });
+      }
+    }
     return result;
   });
 
@@ -313,8 +320,7 @@
       else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
       else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
       else if (item.type === "task") map.set(`task:${item.task.key}`, i);
-      else if (item.type === "jira_header") map.set("jira_header", i);
-      else if (item.type === "jira_task") map.set(`jira:${item.task.key}`, i);
+      else if (item.type === "plugin") map.set(`plugin:${item.contributionKey}:${item.row.id}`, i);
     });
     return map;
   });
@@ -326,6 +332,18 @@
     const idx = getSelectedIndex();
     if (zone !== "sidebar" || !navRef) return;
     navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+  });
+
+  let focusedPluginRow = "";
+  $effect(() => {
+    const current = flatNav[getSelectedIndex()];
+    const key = current?.type === "plugin" ? `${current.contributionKey}:${current.row.id}` : "";
+    if (key === focusedPluginRow) return;
+    for (const item of flatNav) {
+      if (item.type === "plugin" && `${item.contributionKey}:${item.row.id}` === focusedPluginRow) item.row.onFocus?.(false);
+    }
+    focusedPluginRow = key;
+    if (current?.type === "plugin") current.row.onFocus?.(true);
   });
 
   // Auto-focus active session/loop when sessions panel is toggled
@@ -390,12 +408,8 @@
             break;
           }
         }
-      } else if (current.type === "jira_header") {
-        if (!collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: true };
-      } else if (current.type === "jira_task") {
-        // First press jumps to header; if already on header it will collapse
-        const jiraIdx = flatNav.findIndex(n => n.type === "jira_header");
-        if (jiraIdx >= 0) setSelectedIndex(jiraIdx);
+      } else if (current.type === "plugin") {
+        current.row.onCollapse?.();
       }
       return;
     }
@@ -410,8 +424,8 @@
       } else if (current.type === "status_header") {
         const sectionKey = `${current.projectPath}:${current.status}`;
         if (collapsedSections[sectionKey]) collapsedSections = { ...collapsedSections, [sectionKey]: false };
-      } else if (current.type === "jira_header") {
-        if (collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: false };
+      } else if (current.type === "plugin") {
+        current.row.onExpand?.();
       }
       return;
     }
@@ -466,6 +480,8 @@
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
       else if (action.type === "rename") { const linked = sessionForTask(task.key); if (linked) startRename(linked); }
       else if (action.type === "restart") { const linked = sessionForTask(task.key); if (linked) onRestartSession(linked); }
+    } else if (current.type === "plugin" && action.type === "select") {
+      current.row.onSelect?.();
     }
   }
 
@@ -790,6 +806,10 @@
       {/each}
 
     {/if}
+
+    {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div data-plugin-sidebar-slot="section"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
+    {/each}
 
     {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
       <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>

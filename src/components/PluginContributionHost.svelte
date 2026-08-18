@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { jiraConnectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
+  import { jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins } from "../lib/api";
   import type { PluginUiDisposer, PluginUiEntrypoint } from "../lib/plugin-sdk";
+  import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
 
   interface Props {
@@ -22,7 +23,8 @@
 
   const bundledEntries: Record<string, () => Promise<PluginUiEntrypoint>> = {
     "jira:jira-status": async () => jiraStatusEntrypoint,
-    "jira:jira-connection": async () => jiraConnectionEntrypoint,
+    "jira:jira-preferences": async () => jiraPreferencesEntrypoint,
+    "jira:jira-sidebar-section": async () => jiraSidebarSectionEntrypoint,
   };
 
   function disposeCurrent(): void {
@@ -93,6 +95,9 @@
         host: {
           call: <T>(method: string, params: unknown = null) => plugins.call<T>(plugin.id, method, params),
           navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
+          sidebar: {
+            register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
+          },
         },
       });
       if (version !== generation) {

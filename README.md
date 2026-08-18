@@ -27,7 +27,7 @@ A desktop app that lets you run multiple AI coding agents in parallel — each i
 - **Task management** — built-in task tracker with lifecycle hooks and auto-dispatch
 - **Loop recipes** — declarative YAML workflows for multi-agent loops (maker-verifier, n-candidates-arbiter, custom)
 - **Loop Runs UI** — sidebar panel + dashboard for monitoring loop progress, verifier results, and controlling loops without the terminal
-- **Jira connection** — bundled Jira plugin with PKCE OAuth and plugin-scoped settings; source sync and writeback follow in a later parity slice
+- **Jira connection** — bundled Jira plugin with PKCE OAuth, plugin-scoped source settings, manual source sync, and a dedicated sidebar section; assignment, writeback, and periodic sync follow in later slices
 - **Git worktree isolation** — parallel agents work on separate branches without conflicts
 - **Cross-platform** — macOS, Linux, and Windows
 
