@@ -98,6 +98,18 @@
           navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
           sidebar: {
             register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
+            select: (rowId) => {
+              container?.dispatchEvent(
+                new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId } }),
+              );
+            },
+            handleKeydown: (event) => {
+              const detail: { event: KeyboardEvent; handled: boolean } = { event, handled: false };
+              container?.dispatchEvent(
+                new CustomEvent("plugin-sidebar-keydown", { bubbles: true, detail }),
+              );
+              if (detail.handled) event.stopPropagation();
+            },
           },
           data: {
             changed: () => plugins.dataChanged(plugin.id),
@@ -152,5 +164,6 @@
   role="region"
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
+  data-plugin-sidebar-contribution={contribution.placement === "sidebar.section" ? "" : undefined}
   bind:this={container}
 ></div>

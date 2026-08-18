@@ -14,6 +14,8 @@ export interface PluginUiHost {
   };
   sidebar: {
     register(rows: PluginSidebarNavRow[]): () => void;
+    select(rowId: string): void;
+    handleKeydown(event: KeyboardEvent): void;
   };
   data: {
     changed(): Promise<void>;
