@@ -218,7 +218,7 @@ Specific examples:
 
 Jira connection settings are owned by the bundled `planeai-plugin-jira`, not by `integrations.jira`. Configure the Jira Cloud site and connect from **Preferences → Jira**. OAuth credentials are stored only in the plugin secrets namespace.
 
-The current slice intentionally has no JQL sources, task synchronization, writeback, or periodic worker. Legacy `integrations.jira` values and legacy tokens are not imported.
+The current slice supports manual JQL sources, task synchronization, and a Jira sidebar section. Writeback and periodic synchronization remain deferred. On startup, legacy `integrations.jira` public settings are migrated once into plugin settings; existing plugin values take precedence. Legacy OAuth tokens are not imported.
 
 ### Build-time environment variables
 

@@ -22,23 +22,42 @@ const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); d
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
+type InputOptions = { disabled?: boolean; ariaLabel?: string };
+let nextFieldId = 0;
 function input(
   value: string,
   changed: (value: string) => void,
   placeholder = "",
+  options: InputOptions = {},
 ): HTMLInputElement {
   const element = document.createElement("input");
   element.value = value;
   element.placeholder = placeholder;
+  element.disabled = options.disabled ?? false;
+  if (options.ariaLabel) element.setAttribute("aria-label", options.ariaLabel);
   element.addEventListener("change", () => changed(element.value));
   return element;
 }
 function field(label: string, element: HTMLElement): HTMLElement {
   const wrap = document.createElement("div");
   const heading = document.createElement("label");
+  const id = element.id || `jira-field-${++nextFieldId}`;
+  element.id = id;
+  heading.htmlFor = id;
   heading.textContent = label;
   wrap.append(heading, element);
   return wrap;
+}
+
+function sidebarStatusLabel(status: string): string {
+  return (
+    {
+      todo: "To do",
+      in_progress: "In progress",
+      in_review: "In review",
+      done: "Done",
+    }[status] ?? status
+  );
 }
 
 export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
@@ -53,10 +72,28 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
     let syncing = false;
     let result: SyncTotals | null = null;
     let disposed = false;
-    const save = async (next: JiraSettings) => {
-      settings = await call<JiraSettings>(context, "jira.settings.update", next);
-      await context.host.data.changed();
+    let saveGeneration = 0;
+    let saveChain: Promise<boolean> = Promise.resolve(true);
+    const save = (next: JiraSettings) => {
+      settings = next;
+      const generation = ++saveGeneration;
       render();
+      const operation = saveChain.then(async () => {
+        try {
+          const saved = await call<JiraSettings>(context, "jira.settings.update", next);
+          if (generation === saveGeneration) settings = saved;
+          status = { ...status, last_error: null };
+          await context.host.data.changed();
+          return true;
+        } catch (error) {
+          status = { ...status, last_error: String(error) };
+          return false;
+        } finally {
+          if (!disposed) render();
+        }
+      });
+      saveChain = operation;
+      return operation;
     };
     const refresh = async () => {
       const [nextSettings, nextStatus] = await Promise.all([
@@ -78,7 +115,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
     };
     const connect = async () => {
       try {
-        await save(settings);
+        if (!(await save(settings))) return;
         const started = await call<{ authorization_url: string }>(context, "jira.connect.start", {
           attempt_id: crypto.randomUUID(),
         });
@@ -159,6 +196,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
             settings.site,
             (site) => void save({ ...settings, site }),
             "https://company.atlassian.net",
+            { disabled: status.connected },
           ),
         ),
       );
@@ -171,12 +209,11 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         head.append(
           field(
             "Source name",
-            input(name, async (nextName) => {
+            input(name, (nextName) => {
               if (!nextName || nextName === name || sources[nextName]) return;
-              await call(context, "jira.sources.rename", { from: name, to: nextName });
               const next = { ...sources, [nextName]: source };
               delete next[name];
-              await save({ ...settings, sources: next });
+              void save({ ...settings, sources: next });
             }),
           ),
         );
@@ -209,8 +246,9 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         for (const [jiraStatus, planeaiStatus] of Object.entries(map)) {
           const row = document.createElement("div");
           row.className = "row";
-          row.append(
-            input(jiraStatus, (nextStatus) => {
+          const jiraStatusInput = input(
+            jiraStatus,
+            (nextStatus) => {
               const next = { ...map };
               delete next[jiraStatus];
               if (nextStatus) next[nextStatus] = planeaiStatus;
@@ -218,9 +256,13 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
                 ...settings,
                 sources: { ...sources, [name]: { ...source, status_map: next } },
               });
-            }),
+            },
+            "",
+            { ariaLabel: "Jira status" },
           );
+          row.append(jiraStatusInput);
           const select = document.createElement("select");
+          select.setAttribute("aria-label", `PlaneAI status for ${jiraStatus}`);
           for (const value of ["todo", "in_progress", "in_review", "done"])
             select.append(
               new Option(value, value, value === planeaiStatus, value === planeaiStatus),
@@ -236,6 +278,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
           row.append(select);
           const removeMap = document.createElement("button");
           removeMap.textContent = "×";
+          removeMap.setAttribute("aria-label", `Remove status mapping for ${jiraStatus}`);
           removeMap.onclick = () => {
             const next = { ...map };
             delete next[jiraStatus];
@@ -260,56 +303,6 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         };
         mapWrap.append(addMap);
         card.append(mapWrap);
-        const writeback = source.writeback ?? {};
-        card.append(
-          field(
-            "Writeback on_start",
-            input(
-              writeback.on_start ?? "",
-              (on_start) =>
-                void save({
-                  ...settings,
-                  sources: {
-                    ...sources,
-                    [name]: { ...source, writeback: { ...writeback, on_start: on_start || null } },
-                  },
-                }),
-            ),
-          ),
-        );
-        card.append(
-          field(
-            "Writeback on_complete",
-            input(
-              writeback.on_complete ?? "",
-              (on_complete) =>
-                void save({
-                  ...settings,
-                  sources: {
-                    ...sources,
-                    [name]: {
-                      ...source,
-                      writeback: { ...writeback, on_complete: on_complete || null },
-                    },
-                  },
-                }),
-            ),
-          ),
-        );
-        const comment = document.createElement("label");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = !!writeback.comment;
-        checkbox.onchange = () =>
-          void save({
-            ...settings,
-            sources: {
-              ...sources,
-              [name]: { ...source, writeback: { ...writeback, comment: checkbox.checked } },
-            },
-          });
-        comment.append(checkbox, document.createTextNode(" Add comment on transition"));
-        card.append(comment);
         config.append(card);
       }
       const add = document.createElement("button");
@@ -320,7 +313,14 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         while (sources[name]) name = `source-${i++}`;
         void save({
           ...settings,
-          sources: { ...sources, [name]: { jql: "", status_map: {}, writeback: null } },
+          sources: {
+            ...sources,
+            [name]: {
+              jql: "key = __PLANEAI_CONFIGURE_SOURCE__",
+              status_map: {},
+              writeback: null,
+            },
+          },
         });
       };
       config.append(add);
@@ -353,6 +353,8 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
       unregister();
       const header = document.createElement("button");
       header.className = `section-header ${selected === "header" ? "selected" : ""}`;
+      header.setAttribute("aria-expanded", String(!collapsed));
+      header.setAttribute("aria-controls", "jira-sidebar-issues");
       header.textContent = `${collapsed ? "›" : "⌄"} Jira`;
       const count = document.createElement("span");
       count.className = "count";
@@ -365,7 +367,11 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
         render("header");
       };
       header.onkeydown = context.host.sidebar.handleKeydown;
-      section.replaceChildren(header);
+      const issueRegion = document.createElement("div");
+      issueRegion.id = "jira-sidebar-issues";
+      issueRegion.setAttribute("role", "group");
+      issueRegion.setAttribute("aria-label", "Jira issues");
+      section.replaceChildren(header, issueRegion);
       if (focusRowId === "header") header.focus();
       if (!collapsed)
         for (const item of items) {
@@ -373,6 +379,10 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
           const row = document.createElement("button");
           row.className = `issue ${selected === item.key ? "selected" : ""}`;
           row.innerHTML = `<span class="dot ${item.status === "done" ? "done" : item.status !== "todo" ? "active" : ""}"></span><span class="key"></span><span class="title"></span>${item.child_count ? `<span class="count">${item.child_count}</span>` : ""}`;
+          row.setAttribute(
+            "aria-label",
+            `${item.key}: ${item.title}. Status: ${sidebarStatusLabel(item.status)}`,
+          );
           row.querySelector(".key")!.textContent = item.key;
           row.querySelector(".title")!.textContent = item.title;
           row.onclick = () => {
@@ -381,7 +391,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
             render(rowId);
           };
           row.onkeydown = context.host.sidebar.handleKeydown;
-          section.append(row);
+          issueRegion.append(row);
           if (focusRowId === rowId) row.focus();
         }
       unregister = context.host.sidebar.register([

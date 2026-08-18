@@ -19,6 +19,7 @@ use crate::commands;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(120);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
@@ -762,9 +763,18 @@ struct RuntimeProcess {
     capabilities: HashSet<PluginHostCapability>,
 }
 
+fn request_timeout(method: &str) -> Duration {
+    if method == "jira.syncNow" {
+        JIRA_SYNC_RPC_TIMEOUT
+    } else {
+        RPC_TIMEOUT
+    }
+}
+
 impl RuntimeProcess {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.request_with_timeout(method, params, RPC_TIMEOUT).await
+        self.request_with_timeout(method, params, request_timeout(method))
+            .await
     }
 
     async fn request_with_timeout(
@@ -832,10 +842,18 @@ impl RuntimeProcess {
                 serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": message } })
             }
         };
-        let frame = serde_json::to_string(&response)
+        let mut frame = serde_json::to_string(&response)
             .map_err(|error| format!("failed to encode host callback response: {error}"))?;
         if frame.len() >= MAX_RPC_FRAME_BYTES as usize {
-            return Err("host callback response exceeded the frame limit".to_string());
+            frame = serde_json::to_string(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32000,
+                    "message": "host callback response exceeded the frame limit",
+                },
+            }))
+            .map_err(|error| format!("failed to encode bounded host callback error: {error}"))?;
         }
         self.stdin
             .write_all(frame.as_bytes())
@@ -995,6 +1013,16 @@ async fn execute_host_task(
                                 .and_then(Value::as_str)
                                 .map(str::to_string),
                             status,
+                            priority: params
+                                .get("priority")
+                                .and_then(Value::as_i64)
+                                .map(|value| value as i32),
+                            tags: params
+                                .get("tags")
+                                .cloned()
+                                .map(serde_json::from_value)
+                                .transpose()
+                                .map_err(|error| format!("invalid task tags: {error}"))?,
                             ..Default::default()
                         },
                     )
@@ -1214,7 +1242,37 @@ impl PluginRuntimeSupervisor {
         let process =
             process.ok_or_else(|| format!("plugin runtime was not available: {plugin_id}"))?;
         let mut runtime = process.lock().await;
-        runtime.request(method, params).await
+        let result = runtime.request(method, params).await;
+        drop(runtime);
+        let Err(error) = result else {
+            return result;
+        };
+        if !error.starts_with("plugin RPC ") || !error.ends_with(" timed out") {
+            return Err(error);
+        }
+
+        let _lifecycle = self.lifecycle.lock().await;
+        let owns_process = {
+            let mut active_processes = self.processes.lock().await;
+            remove_current_process(&mut active_processes, plugin_id, &process)
+        };
+        if owns_process {
+            if let Err(stop_error) = stop_process(process).await {
+                tracing::warn!(plugin_id, %stop_error, "failed to stop timed-out plugin runtime");
+            }
+            if let Err(state_error) = self
+                .update_state(
+                    plugin_id,
+                    true,
+                    PluginRuntimeState::Error,
+                    Some(error.clone()),
+                )
+                .await
+            {
+                tracing::warn!(plugin_id, %state_error, "failed to record timed-out plugin runtime");
+            }
+        }
+        Err(error)
     }
 
     pub async fn local_ui_source(
@@ -2148,6 +2206,12 @@ mod tests {
         assert!(Arc::ptr_eq(processes.get("jira").unwrap(), &replacement));
         assert!(remove_current_process(&mut processes, "jira", &replacement));
         assert!(processes.is_empty());
+    }
+
+    #[test]
+    fn jira_sync_uses_the_extended_rpc_timeout() {
+        assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
+        assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
     }
 
     #[test]
