@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use rand::RngExt;
 use reqwest::Client;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -373,35 +373,44 @@ impl JiraPlugin {
     }
 
     fn update_source_settings(&self, settings: &Value) -> Result<Value, String> {
-        let old = settings_from_value(&self.settings()?);
+        let old_value = self.settings()?;
+        let old = settings_from_value(&old_value);
         let new = settings_from_value(settings);
-        let conn = self.database()?;
-        for source in old.sources.keys() {
-            if !new.sources.contains_key(source) {
-                depart_source(&conn, source)?;
+        validate_settings(&new)?;
+        if let Ok(credentials) = self.read_credentials() {
+            let configured_site = canonicalize_site(&new.site)
+                .map_err(|error| format!("invalid connected Jira site: {error}"))?;
+            if configured_site != credentials.site {
+                return Err(
+                    "disconnect the current Jira site before changing the configured site"
+                        .to_string(),
+                );
             }
         }
-        self.save_settings(settings)
+
+        let renamed = renamed_sources(&old, &new);
+        let saved = self.save_settings(settings)?;
+        let sync_memberships = (|| {
+            let mut conn = self.database()?;
+            for (from, to) in &renamed {
+                rename_source_memberships(&mut conn, from, to)?;
+            }
+            for source in old.sources.keys() {
+                if !new.sources.contains_key(source) && !renamed.contains_key(source) {
+                    depart_source(&conn, source)?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = sync_memberships {
+            let _ = self.save_settings(&old_value);
+            return Err(error);
+        }
+        Ok(saved)
     }
 
-    fn rename_source(&self, params: &Value) -> Result<Value, String> {
-        let from = params
-            .get("from")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or("source rename requires a non-empty from value")?;
-        let to = params
-            .get("to")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or("source rename requires a non-empty to value")?;
-        let conn = self.database()?;
-        conn.execute(
-            "UPDATE jira_issues SET source_name = ?1 WHERE source_name = ?2",
-            params![to, from],
-        )
-        .map_err(|error| format!("failed to rename Jira source ownership: {error}"))?;
-        Ok(json!({ "renamed": true }))
+    fn rename_source(&self, _params: &Value) -> Result<Value, String> {
+        Err("source renames must be persisted through jira.settings.update".to_string())
     }
 
     fn sidebar_items(&self) -> Result<Value, String> {
@@ -421,14 +430,25 @@ impl JiraPlugin {
         W: tokio::io::AsyncWrite + Unpin,
     {
         let settings = settings_from_value(&self.settings()?);
-        let credentials = self
+        validate_settings(&settings)?;
+        let mut credentials = self
             .read_credentials()
             .map_err(|error| format!("Jira is not connected: {error}"))?;
-        let access_token = refresh_access_token(&self.client, &credentials.refresh_token).await?;
+        let token =
+            refresh_access_token(&self.client, &self.token_url, &credentials.refresh_token).await?;
+        if let Some(refresh_token) = token.refresh_token {
+            persist_rotated_refresh_token(&self.secrets_dir, &mut credentials, refresh_token)
+                .map_err(|error| {
+                    format!("failed to persist refreshed Jira credentials: {error}")
+                })?;
+        }
+        let access_token = token.access_token;
         let conn = self.database()?;
         let mut result = SyncTotals::default();
         let mut request_id = 0_u64;
-        for (source_name, source) in &settings.sources {
+        let mut sources: Vec<_> = settings.sources.iter().collect();
+        sources.sort_by_key(|(name, _)| *name);
+        for (source_name, source) in sources {
             let issues = match fetch_issues(
                 &self.client,
                 &credentials.cloud_id,
@@ -469,15 +489,44 @@ impl JiraPlugin {
                 };
                 let task_result = if existing.is_null() {
                     host_call(input, output, &mut request_id, "host.task.create", json!({ "key": issue.key, "title": issue.summary, "description": issue.description, "status": mapped_status, "priority": map_priority(issue.priority.as_deref()), "tags": issue.labels })).await.map(|_| { result.created += 1; })
+                } else if linked_task_key(&conn, &issue.key)?.is_none() {
+                    Err(format!(
+                        "refusing to overwrite local task {} without a Jira task link",
+                        issue.key
+                    ))
                 } else {
+                    let mapped_priority = map_priority(issue.priority.as_deref());
                     let changed = existing.get("title").and_then(Value::as_str)
                         != Some(issue.summary.as_str())
                         || existing.get("description").and_then(Value::as_str)
                             != Some(issue.description.as_str())
                         || existing.get("status").and_then(Value::as_str)
-                            != Some(mapped_status.as_str());
+                            != Some(mapped_status.as_str())
+                        || existing.get("priority").and_then(Value::as_i64)
+                            != Some(i64::from(mapped_priority))
+                        || existing.get("tags")
+                            != Some(&Value::Array(
+                                issue.labels.iter().cloned().map(Value::String).collect(),
+                            ));
                     if changed {
-                        host_call(input, output, &mut request_id, "host.task.update", json!({ "key": issue.key, "title": issue.summary, "description": issue.description, "status": mapped_status })).await.map(|_| { result.updated += 1; })
+                        host_call(
+                            input,
+                            output,
+                            &mut request_id,
+                            "host.task.update",
+                            json!({
+                                "key": issue.key,
+                                "title": issue.summary,
+                                "description": issue.description,
+                                "status": mapped_status,
+                                "priority": mapped_priority,
+                                "tags": issue.labels,
+                            }),
+                        )
+                        .await
+                        .map(|_| {
+                            result.updated += 1;
+                        })
                     } else {
                         Ok(())
                     }
@@ -487,6 +536,7 @@ impl JiraPlugin {
                     break;
                 }
                 upsert_issue(&conn, &issue, source_name, &mapped_status)?;
+                sync_issue_source(&conn, &issue.key, source_name)?;
                 conn.execute("INSERT INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2) ON CONFLICT(issue_key) DO UPDATE SET task_key = excluded.task_key", params![issue.key, issue.key]).map_err(|error| format!("failed to persist Jira task link: {error}"))?;
             }
             if source_failed {
@@ -508,7 +558,7 @@ impl JiraPlugin {
                 .ok()
                 .and_then(|value| value.get("task").cloned())
                 .unwrap_or(Value::Null);
-                mark_departed(&conn, &departed.key)?;
+                mark_departed(&conn, &departed.key, source_name)?;
                 if task.get("status").and_then(Value::as_str) != Some("done") {
                     result.departed += 1;
                 }
@@ -530,7 +580,7 @@ struct JiraSettings {
 fn default_sync_interval_ms() -> u64 {
     60_000
 }
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 struct JiraSource {
     #[serde(default)]
     jql: String,
@@ -596,6 +646,45 @@ fn settings_from_value(value: &Value) -> JiraSettings {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
+fn validate_settings(settings: &JiraSettings) -> Result<(), String> {
+    for (name, source) in &settings.sources {
+        if source.jql.trim().is_empty() {
+            return Err(format!(
+                "Jira source {name:?} requires a non-empty JQL query"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn renamed_sources(old: &JiraSettings, new: &JiraSettings) -> HashMap<String, String> {
+    let mut removed: Vec<_> = old
+        .sources
+        .iter()
+        .filter(|(name, _)| !new.sources.contains_key(*name))
+        .collect();
+    removed.sort_by_key(|(name, _)| *name);
+    let mut added: Vec<_> = new
+        .sources
+        .iter()
+        .filter(|(name, _)| !old.sources.contains_key(*name))
+        .collect();
+    added.sort_by_key(|(name, _)| *name);
+
+    let mut renamed = HashMap::new();
+    let mut used = HashSet::new();
+    for (old_name, old_source) in removed {
+        if let Some((new_name, _)) = added
+            .iter()
+            .find(|(new_name, new_source)| !used.contains(*new_name) && *new_source == old_source)
+        {
+            renamed.insert((*old_name).clone(), (*new_name).clone());
+            used.insert((*new_name).clone());
+        }
+    }
+    renamed
+}
+
 fn migrate_database(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS jira_plugin_schema_migrations (
@@ -636,8 +725,25 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("failed to apply Jira plugin migration 1: {error}"))?;
     }
 
+    if current_version < 2 {
+        conn.execute_batch(
+            "CREATE TABLE jira_issue_sources (
+                issue_key TEXT NOT NULL REFERENCES jira_issues(issue_key),
+                source_name TEXT NOT NULL,
+                sync_status TEXT NOT NULL DEFAULT 'synced',
+                PRIMARY KEY (issue_key, source_name)
+            );
+            CREATE INDEX jira_issue_sources_source_active ON jira_issue_sources(source_name, sync_status);
+            INSERT OR IGNORE INTO jira_issue_sources (issue_key, source_name, sync_status)
+                SELECT issue_key, source_name, sync_status FROM jira_issues;
+            INSERT INTO jira_plugin_schema_migrations (version) VALUES (2);",
+        )
+        .map_err(|error| format!("failed to apply Jira plugin migration 2: {error}"))?;
+    }
+
     Ok(())
 }
+
 fn upsert_issue(
     conn: &Connection,
     issue: &FetchedIssue,
@@ -648,39 +754,134 @@ fn upsert_issue(
     conn.execute("INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, priority, labels, source_name, sync_status, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'synced', ?9) ON CONFLICT(issue_key) DO UPDATE SET summary = excluded.summary, description = excluded.description, jira_status = excluded.jira_status, mapped_status = excluded.mapped_status, priority = excluded.priority, labels = excluded.labels, source_name = excluded.source_name, sync_status = 'synced', last_synced_at = excluded.last_synced_at", params![issue.key, issue.summary, issue.description, issue.status, mapped_status, issue.priority, labels, source_name, Utc::now().to_rfc3339()]).map_err(|error| format!("failed to persist Jira issue: {error}"))?;
     Ok(())
 }
+fn rename_source_memberships(conn: &mut Connection, from: &str, to: &str) -> Result<(), String> {
+    let transaction = conn
+        .transaction()
+        .map_err(|error| format!("failed to start Jira source rename: {error}"))?;
+    transaction
+        .execute(
+            "UPDATE jira_issues SET source_name = ?1 WHERE source_name = ?2",
+            params![to, from],
+        )
+        .map_err(|error| format!("failed to rename legacy Jira source ownership: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status)
+             SELECT issue_key, ?1, sync_status FROM jira_issue_sources WHERE source_name = ?2
+             ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status =
+                 CASE WHEN jira_issue_sources.sync_status = 'synced' OR excluded.sync_status = 'synced'
+                 THEN 'synced' ELSE 'departed' END",
+            params![to, from],
+        )
+        .map_err(|error| format!("failed to rename Jira source memberships: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM jira_issue_sources WHERE source_name = ?1",
+            params![from],
+        )
+        .map_err(|error| format!("failed to remove renamed Jira source memberships: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("failed to commit Jira source rename: {error}"))
+}
+
+fn linked_task_key(conn: &Connection, issue_key: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT task_key FROM jira_task_links WHERE issue_key = ?1",
+        params![issue_key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|error| format!("failed to read Jira task link: {error}"))
+}
+
+fn sync_issue_source(conn: &Connection, key: &str, source_name: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status) VALUES (?1, ?2, 'synced') ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status = 'synced'",
+        params![key, source_name],
+    )
+    .map_err(|error| format!("failed to persist Jira source membership: {error}"))?;
+    refresh_issue_sync_status(conn, key)
+}
+
 fn active_source_issues(conn: &Connection, source_name: &str) -> Result<Vec<StoredIssue>, String> {
     let mut statement = conn
         .prepare(
-            "SELECT issue_key FROM jira_issues WHERE source_name = ?1 AND sync_status = 'synced'",
+            "SELECT issue_key FROM jira_issue_sources WHERE source_name = ?1 AND sync_status = 'synced'",
         )
         .map_err(|error| format!("failed to list active Jira source issues: {error}"))?;
     let rows = statement
         .query_map(params![source_name], |row| {
             Ok(StoredIssue { key: row.get(0)? })
         })
-        .map_err(|error| format!("failed to query active Jira source issues: {error}"))?;
+        .map_err(|error| format!("failed to query Jira source memberships: {error}"))?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
 }
-fn mark_departed(conn: &Connection, key: &str) -> Result<(), String> {
+
+fn mark_departed(conn: &Connection, key: &str, source_name: &str) -> Result<(), String> {
     conn.execute(
-        "UPDATE jira_issues SET sync_status = 'departed' WHERE issue_key = ?1",
-        params![key],
+        "UPDATE jira_issue_sources SET sync_status = 'departed' WHERE issue_key = ?1 AND source_name = ?2",
+        params![key, source_name],
     )
-    .map_err(|error| format!("failed to mark Jira issue departed: {error}"))?;
-    Ok(())
+    .map_err(|error| format!("failed to mark Jira source membership departed: {error}"))?;
+    refresh_issue_sync_status(conn, key)
 }
+
 fn depart_source(conn: &Connection, source_name: &str) -> Result<(), String> {
-    conn.execute("UPDATE jira_issues SET sync_status = 'departed' WHERE source_name = ?1 AND sync_status = 'synced'", params![source_name]).map_err(|error| format!("failed to depart removed Jira source: {error}"))?;
+    let issues = active_source_issues(conn, source_name)?;
+    conn.execute(
+        "UPDATE jira_issue_sources SET sync_status = 'departed' WHERE source_name = ?1 AND sync_status = 'synced'",
+        params![source_name],
+    )
+    .map_err(|error| format!("failed to depart removed Jira source: {error}"))?;
+    for issue in issues {
+        refresh_issue_sync_status(conn, &issue.key)?;
+    }
     Ok(())
 }
 
-async fn refresh_access_token(client: &Client, refresh_token: &str) -> Result<String, String> {
-    #[derive(Deserialize)]
-    struct RefreshResponse {
-        access_token: String,
-    }
-    client.post(TOKEN_URL).json(&json!({ "grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": refresh_token })).send().await.map_err(|error| format!("failed to refresh Jira token: {error}"))?.error_for_status().map_err(|error| format!("Jira token refresh failed: {error}"))?.json::<RefreshResponse>().await.map(|response| response.access_token).map_err(|error| format!("invalid Jira token response: {error}"))
+fn refresh_issue_sync_status(conn: &Connection, key: &str) -> Result<(), String> {
+    let has_active_source: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM jira_issue_sources WHERE issue_key = ?1 AND sync_status = 'synced')",
+            params![key],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("failed to read Jira source memberships: {error}"))?;
+    conn.execute(
+        "UPDATE jira_issues SET sync_status = CASE WHEN ?1 THEN 'synced' ELSE 'departed' END WHERE issue_key = ?2",
+        params![has_active_source, key],
+    )
+    .map_err(|error| format!("failed to refresh Jira issue sync status: {error}"))?;
+    Ok(())
+}
+
+fn persist_rotated_refresh_token(
+    secrets_dir: &std::path::Path,
+    credentials: &mut Credentials,
+    refresh_token: String,
+) -> Result<(), AuthError> {
+    credentials.refresh_token = refresh_token;
+    write_credentials_to(secrets_dir, credentials)
+}
+
+async fn refresh_access_token(
+    client: &Client,
+    token_url: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, String> {
+    client
+        .post(token_url)
+        .json(&json!({ "grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": refresh_token }))
+        .send()
+        .await
+        .map_err(|error| format!("failed to refresh Jira token: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Jira token refresh failed: {error}"))?
+        .json::<TokenResponse>()
+        .await
+        .map_err(|error| format!("invalid Jira token response: {error}"))
 }
 async fn fetch_issues(
     client: &Client,
@@ -728,6 +929,9 @@ async fn fetch_issues(
             Some(token) => next_page_token = Some(token),
             None => break,
         }
+    }
+    if next_page_token.is_some() {
+        return Err("Jira search exceeded the 5,000-issue synchronization limit".to_string());
     }
     Ok(issues)
 }
@@ -864,7 +1068,26 @@ mod sync_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn migration_backfills_source_memberships_from_v1_records() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE jira_plugin_schema_migrations (version INTEGER PRIMARY KEY);
+             INSERT INTO jira_plugin_schema_migrations (version) VALUES (1);
+             CREATE TABLE jira_issues (
+                issue_key TEXT PRIMARY KEY, summary TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+                jira_status TEXT NOT NULL, mapped_status TEXT NOT NULL, priority TEXT, labels TEXT NOT NULL DEFAULT '[]',
+                source_name TEXT NOT NULL, sync_status TEXT NOT NULL DEFAULT 'synced', last_synced_at TEXT NOT NULL
+             );
+             INSERT INTO jira_issues VALUES ('ONE-1', 'Summary', '', 'Open', 'todo', NULL, '[]', 'one', 'synced', 'now');",
+        )
+        .unwrap();
+
+        migrate_database(&conn).unwrap();
+        assert_eq!(active_source_issues(&conn, "one").unwrap()[0].key, "ONE-1");
     }
 
     #[test]
@@ -872,12 +1095,124 @@ mod sync_tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate_database(&conn).unwrap();
         upsert_issue(&conn, &issue("ONE-1", "Open"), "one", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "one").unwrap();
         upsert_issue(&conn, &issue("TWO-1", "Open"), "two", "todo").unwrap();
+        sync_issue_source(&conn, "TWO-1", "two").unwrap();
 
         assert_eq!(active_source_issues(&conn, "one").unwrap()[0].key, "ONE-1");
         depart_source(&conn, "one").unwrap();
         assert!(active_source_issues(&conn, "one").unwrap().is_empty());
         assert_eq!(active_source_issues(&conn, "two").unwrap()[0].key, "TWO-1");
+    }
+
+    #[test]
+    fn departing_one_overlapping_source_keeps_the_issue_synced() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "one", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "one").unwrap();
+        sync_issue_source(&conn, "ONE-1", "two").unwrap();
+
+        mark_departed(&conn, "ONE-1", "one").unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT sync_status FROM jira_issues WHERE issue_key = 'ONE-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "synced");
+
+        mark_departed(&conn, "ONE-1", "two").unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT sync_status FROM jira_issues WHERE issue_key = 'ONE-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "departed");
+    }
+
+    #[test]
+    fn settings_reject_blank_source_jql() {
+        let settings = JiraSettings {
+            sources: HashMap::from([(
+                "empty".to_string(),
+                JiraSource {
+                    jql: "  ".to_string(),
+                    status_map: HashMap::new(),
+                    writeback: None,
+                },
+            )]),
+            ..JiraSettings::default()
+        };
+        assert!(validate_settings(&settings)
+            .unwrap_err()
+            .contains("non-empty JQL"));
+    }
+
+    #[test]
+    fn source_rename_moves_memberships_without_departing_issues() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "old", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "old").unwrap();
+
+        rename_source_memberships(&mut conn, "old", "new").unwrap();
+        assert!(active_source_issues(&conn, "old").unwrap().is_empty());
+        assert_eq!(active_source_issues(&conn, "new").unwrap()[0].key, "ONE-1");
+        depart_source(&conn, "old").unwrap();
+        let status: String = conn
+            .query_row(
+                "SELECT sync_status FROM jira_issues WHERE issue_key = 'ONE-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "synced");
+    }
+
+    #[test]
+    fn settings_detect_a_pure_source_rename() {
+        let source = JiraSource {
+            jql: "project = PLA".to_string(),
+            status_map: HashMap::new(),
+            writeback: None,
+        };
+        let old = JiraSettings {
+            sources: HashMap::from([("old".to_string(), source.clone())]),
+            ..JiraSettings::default()
+        };
+        let new = JiraSettings {
+            sources: HashMap::from([("new".to_string(), source)]),
+            ..JiraSettings::default()
+        };
+        assert_eq!(
+            renamed_sources(&old, &new).get("old"),
+            Some(&"new".to_string())
+        );
+    }
+
+    #[test]
+    fn task_link_distinguishes_synced_jira_tasks_from_local_key_collisions() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        assert!(linked_task_key(&conn, "ONE-1").unwrap().is_none());
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, last_synced_at) VALUES ('ONE-1', 'Summary', '', 'Open', 'todo', 'source', 'now')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO jira_task_links (task_key, issue_key) VALUES ('ONE-1', 'ONE-1')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            linked_task_key(&conn, "ONE-1").unwrap().as_deref(),
+            Some("ONE-1")
+        );
     }
 
     #[test]
@@ -1483,6 +1818,30 @@ mod tests {
             .unwrap(),
             "cloud"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rotated_refresh_token_replaces_persisted_credentials() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        let mut credentials = Credentials {
+            refresh_token: "old-refresh".to_string(),
+            cloud_id: "cloud".to_string(),
+            site: "https://example.atlassian.net".to_string(),
+        };
+
+        persist_rotated_refresh_token(&secrets_dir, &mut credentials, "new-refresh".to_string())
+            .unwrap();
+        let stored: Credentials = serde_json::from_reader(
+            std::fs::File::open(secrets_dir.join("credentials.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.refresh_token, "new-refresh");
+        assert_eq!(stored.cloud_id, "cloud");
+        assert_eq!(stored.site, "https://example.atlassian.net");
         let _ = std::fs::remove_dir_all(root);
     }
 

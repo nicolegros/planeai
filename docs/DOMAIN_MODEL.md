@@ -168,7 +168,7 @@ Tauri still owns:
 
 ## Jira Integration
 
-The bundled `planeai-plugin-jira` currently owns Jira Cloud connection setup only. It stores the configured site and future sync interval in plugin-scoped settings and OAuth refresh credentials in its backend-only secrets namespace.
+The bundled `planeai-plugin-jira` owns Jira Cloud connection setup and manual configured-source synchronization. It stores the configured site and sources in plugin-scoped settings, OAuth refresh credentials in its backend-only secrets namespace, and synced issue membership/cache state in its plugin database.
 
 ### Authentication
 
@@ -176,7 +176,7 @@ OAuth 2.0 authorization uses PKCE. Configure the Jira Cloud site and connect fro
 
 ### Deferred parity workflows
 
-JQL sources, Jira issue caching, task import, sidebar workflows, departed-issue handling, writeback, and periodic synchronization are intentionally deferred. Legacy `integrations.jira` values and legacy tokens are not imported.
+Writeback and periodic synchronization are intentionally deferred. On startup, legacy `integrations.jira` public settings are migrated once into plugin settings, while legacy OAuth tokens are not imported.
 
 ## Loop Runs
 

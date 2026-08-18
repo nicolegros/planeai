@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-PlaneAI needs an extensibility path for integrations that does not entangle their process lifetime, storage, or UI with the session runtime. The legacy in-process Jira OAuth/sync implementation is inert while the bundled Jira plugin owns the connection flow. The migration needs a safe, scoped first slice without importing legacy configuration or tokens.
+PlaneAI needs an extensibility path for integrations that does not entangle their process lifetime, storage, or UI with the session runtime. The legacy in-process Jira OAuth/sync implementation is inert while the bundled Jira plugin owns the connection flow. The migration safely imports legacy public Jira settings once into the plugin namespace but does not import legacy OAuth tokens.
 
 In-process plugins and dynamically loaded native libraries were considered. They make a plugin crash, memory-unsafety defect, dependency conflict, or lifecycle leak part of PlaneAI's process. They also make versioning and unload behavior difficult to reason about. User-installed executable paths and remote UI modules are out of scope for the first iteration because they would introduce a distribution and trust model before the host contract is proven.
 

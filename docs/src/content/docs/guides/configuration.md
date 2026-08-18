@@ -181,12 +181,12 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-Jira is currently a **connection-only** bundled plugin. Configure the Jira Cloud site in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
+Jira is a bundled plugin with manual configured-source synchronization. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar. Writeback and periodic polling remain deferred. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
 
-Source sync, JQL filters, task import, writeback, and periodic polling are deferred to a later parity slice. Existing `integrations.jira` configuration and legacy tokens are intentionally not imported.
+Writeback and periodic polling are deferred to a later parity slice. On startup, existing `integrations.jira` public configuration is migrated once into plugin settings; legacy OAuth tokens are intentionally not imported.
 
 #### Authentication
 
 Connect via **Preferences → Jira → Connect**. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, the build succeeds but OAuth cannot work at runtime.
 
-Jira source synchronization, including departed-issue handling, is not available in this release.
+Jira source synchronization includes departed-issue handling: when an issue no longer matches a configured source, its membership for that source is marked departed. An issue remains in the Jira sidebar while it matches any configured source.
