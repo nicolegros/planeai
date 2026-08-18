@@ -1,4 +1,5 @@
 import type { PluginInventory, PluginUiContribution } from "./types";
+import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
 
 /**
  * Plugin UI modules use only this host-injected bridge. The host scopes every
@@ -10,6 +11,9 @@ export interface PluginUiHost {
     open(pluginId: string, contributionId: string): void;
     close(): void;
     openPreferences(): void;
+  };
+  sidebar: {
+    register(rows: PluginSidebarNavRow[]): () => void;
   };
 }
 

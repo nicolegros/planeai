@@ -45,9 +45,9 @@ describe("PluginContributionHost", () => {
     await vi.waitFor(() => {
       const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
       expect(host?.shadowRoot).toBeTruthy();
-      expect(host?.shadowRoot?.querySelector(".plugin-page")).toBeTruthy();
-      expect(host?.shadowRoot?.textContent).toContain("planeai.plugin-host.v1");
-      expect(host?.shadowRoot?.textContent).toContain("running");
+      expect(host?.shadowRoot?.querySelector(".page")).toBeTruthy();
+      expect(host?.shadowRoot?.textContent).toContain("Jira connection");
+      expect(host?.shadowRoot?.textContent).toContain("Not connected");
     });
     expect(pluginCall).toHaveBeenCalledWith("jira", "jira.status", null);
   });
@@ -84,7 +84,7 @@ describe("PluginContributionHost", () => {
     component = mount(PluginContributionHostHarness, { target }) as typeof component;
     await vi.waitFor(() => {
       const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
-      expect(host?.shadowRoot?.textContent).toContain("Jira");
+      expect(host?.shadowRoot?.textContent).toContain("Jira connection");
     });
 
     const current = component;
@@ -92,7 +92,7 @@ describe("PluginContributionHost", () => {
     current.reload();
     await vi.waitFor(() => {
       const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
-      expect(host?.shadowRoot?.textContent).toContain("Jira Reloaded");
+      expect(host?.shadowRoot?.querySelector(".page")).toBeTruthy();
       expect(host?.shadowRoot?.querySelectorAll("style")).toHaveLength(1);
     });
 
@@ -109,7 +109,7 @@ describe("PluginContributionHost", () => {
     await vi.waitFor(() => {
       expect(
         target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")?.shadowRoot?.textContent,
-      ).toContain("Jira");
+      ).toContain("Jira connection");
     });
 
     const current = component;
@@ -118,6 +118,6 @@ describe("PluginContributionHost", () => {
 
     const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")!;
     await vi.waitFor(() => expect(host.shadowRoot?.childNodes).toHaveLength(0));
-    expect(pluginCall).toHaveBeenCalledTimes(1);
+    expect(pluginCall).toHaveBeenCalledTimes(2);
   });
 });

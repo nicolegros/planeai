@@ -218,7 +218,7 @@
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   const sidebarPluginContributions = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement !== "main-pane").map((contribution) => ({ plugin, contribution })),
+      plugin.ui_contributions.filter((contribution) => ["sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"].includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
   const mainPaneCommands = $derived(

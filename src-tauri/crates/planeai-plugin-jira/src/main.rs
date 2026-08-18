@@ -1,10 +1,12 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::Utc;
 use rand::RngExt;
 use reqwest::Client;
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 #[cfg(unix)]
@@ -345,6 +347,597 @@ impl JiraPlugin {
         self.delete_credentials()?;
         Ok(json!({ "connected": false }))
     }
+
+    fn save_settings(&self, settings: &Value) -> Result<Value, String> {
+        if !settings.is_object() {
+            return Err("plugin settings must be a JSON object".to_string());
+        }
+        let path = self.data_dir.join("settings.json");
+        let temporary = self.data_dir.join(".settings.tmp");
+        std::fs::write(
+            &temporary,
+            serde_json::to_vec_pretty(settings)
+                .map_err(|error| format!("failed to serialize settings: {error}"))?,
+        )
+        .map_err(|error| format!("failed to write settings: {error}"))?;
+        std::fs::rename(&temporary, &path)
+            .map_err(|error| format!("failed to save settings: {error}"))?;
+        Ok(settings.clone())
+    }
+
+    fn database(&self) -> Result<Connection, String> {
+        let conn = Connection::open(self.data_dir.join("jira.sqlite"))
+            .map_err(|error| format!("failed to open Jira plugin database: {error}"))?;
+        migrate_database(&conn)?;
+        Ok(conn)
+    }
+
+    fn update_source_settings(&self, settings: &Value) -> Result<Value, String> {
+        let old = settings_from_value(&self.settings()?);
+        let new = settings_from_value(settings);
+        let conn = self.database()?;
+        for source in old.sources.keys() {
+            if !new.sources.contains_key(source) {
+                depart_source(&conn, source)?;
+            }
+        }
+        self.save_settings(settings)
+    }
+
+    fn rename_source(&self, params: &Value) -> Result<Value, String> {
+        let from = params
+            .get("from")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or("source rename requires a non-empty from value")?;
+        let to = params
+            .get("to")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or("source rename requires a non-empty to value")?;
+        let conn = self.database()?;
+        conn.execute(
+            "UPDATE jira_issues SET source_name = ?1 WHERE source_name = ?2",
+            params![to, from],
+        )
+        .map_err(|error| format!("failed to rename Jira source ownership: {error}"))?;
+        Ok(json!({ "renamed": true }))
+    }
+
+    fn sidebar_items(&self) -> Result<Value, String> {
+        let conn = self.database()?;
+        let mut statement = conn.prepare("SELECT issue_key, summary, mapped_status FROM jira_issues WHERE sync_status = 'synced' ORDER BY last_synced_at DESC, issue_key").map_err(|error| format!("failed to list Jira sidebar items: {error}"))?;
+        let rows = statement.query_map([], |row| Ok(json!({ "key": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?, "status": row.get::<_, String>(2)?, "child_count": 0 }))).map_err(|error| format!("failed to query Jira sidebar items: {error}"))?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|error| format!("failed to read Jira sidebar item: {error}"))?);
+        }
+        Ok(json!({ "items": items }))
+    }
+
+    async fn sync_now<R, W>(&self, input: &mut R, output: &mut W) -> Result<Value, String>
+    where
+        R: tokio::io::AsyncBufRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let settings = settings_from_value(&self.settings()?);
+        let credentials = self
+            .read_credentials()
+            .map_err(|error| format!("Jira is not connected: {error}"))?;
+        let access_token = refresh_access_token(&self.client, &credentials.refresh_token).await?;
+        let conn = self.database()?;
+        let mut result = SyncTotals::default();
+        let mut request_id = 0_u64;
+        for (source_name, source) in &settings.sources {
+            let issues = match fetch_issues(
+                &self.client,
+                &credentials.cloud_id,
+                &access_token,
+                &source.jql,
+            )
+            .await
+            {
+                Ok(issues) => issues,
+                Err(_) => {
+                    result.errors += 1;
+                    continue;
+                }
+            };
+            let mut seen = HashSet::new();
+            let mut source_failed = false;
+            for issue in issues {
+                seen.insert(issue.key.clone());
+                let mapped_status = map_status(
+                    &issue.status,
+                    &source.status_map,
+                    issue.status_category.as_deref(),
+                );
+                let existing = match host_call(
+                    input,
+                    output,
+                    &mut request_id,
+                    "host.task.get",
+                    json!({ "key": issue.key }),
+                )
+                .await
+                {
+                    Ok(value) => value.get("task").cloned().unwrap_or(Value::Null),
+                    Err(_) => {
+                        source_failed = true;
+                        break;
+                    }
+                };
+                let task_result = if existing.is_null() {
+                    host_call(input, output, &mut request_id, "host.task.create", json!({ "key": issue.key, "title": issue.summary, "description": issue.description, "status": mapped_status, "priority": map_priority(issue.priority.as_deref()), "tags": issue.labels })).await.map(|_| { result.created += 1; })
+                } else {
+                    let changed = existing.get("title").and_then(Value::as_str)
+                        != Some(issue.summary.as_str())
+                        || existing.get("description").and_then(Value::as_str)
+                            != Some(issue.description.as_str())
+                        || existing.get("status").and_then(Value::as_str)
+                            != Some(mapped_status.as_str());
+                    if changed {
+                        host_call(input, output, &mut request_id, "host.task.update", json!({ "key": issue.key, "title": issue.summary, "description": issue.description, "status": mapped_status })).await.map(|_| { result.updated += 1; })
+                    } else {
+                        Ok(())
+                    }
+                };
+                if task_result.is_err() {
+                    source_failed = true;
+                    break;
+                }
+                upsert_issue(&conn, &issue, source_name, &mapped_status)?;
+                conn.execute("INSERT INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2) ON CONFLICT(issue_key) DO UPDATE SET task_key = excluded.task_key", params![issue.key, issue.key]).map_err(|error| format!("failed to persist Jira task link: {error}"))?;
+            }
+            if source_failed {
+                result.errors += 1;
+                continue;
+            }
+            for departed in active_source_issues(&conn, source_name)? {
+                if seen.contains(&departed.key) {
+                    continue;
+                }
+                let task = host_call(
+                    input,
+                    output,
+                    &mut request_id,
+                    "host.task.get",
+                    json!({ "key": departed.key }),
+                )
+                .await
+                .ok()
+                .and_then(|value| value.get("task").cloned())
+                .unwrap_or(Value::Null);
+                mark_departed(&conn, &departed.key)?;
+                if task.get("status").and_then(Value::as_str) != Some("done") {
+                    result.departed += 1;
+                }
+            }
+        }
+        serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct JiraSettings {
+    #[serde(default)]
+    site: String,
+    #[serde(default = "default_sync_interval_ms")]
+    sync_interval_ms: u64,
+    #[serde(default)]
+    sources: HashMap<String, JiraSource>,
+}
+fn default_sync_interval_ms() -> u64 {
+    60_000
+}
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+struct JiraSource {
+    #[serde(default)]
+    jql: String,
+    #[serde(default)]
+    status_map: HashMap<String, String>,
+    #[serde(default)]
+    writeback: Option<Value>,
+}
+#[derive(Debug, Default, Serialize)]
+struct SyncTotals {
+    created: usize,
+    updated: usize,
+    departed: usize,
+    errors: usize,
+}
+#[derive(Debug)]
+struct FetchedIssue {
+    key: String,
+    summary: String,
+    description: String,
+    status: String,
+    status_category: Option<String>,
+    priority: Option<String>,
+    labels: Vec<String>,
+}
+#[derive(Deserialize)]
+struct SearchResponse {
+    #[serde(default)]
+    issues: Vec<RawIssue>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
+}
+#[derive(Deserialize)]
+struct RawIssue {
+    key: String,
+    fields: RawFields,
+}
+#[derive(Deserialize)]
+struct RawFields {
+    summary: String,
+    #[serde(default)]
+    description: Value,
+    status: RawStatus,
+    priority: Option<RawName>,
+    #[serde(default)]
+    labels: Vec<String>,
+}
+#[derive(Deserialize)]
+struct RawStatus {
+    name: String,
+    #[serde(rename = "statusCategory")]
+    status_category: Option<RawName>,
+}
+#[derive(Deserialize)]
+struct RawName {
+    name: String,
+}
+#[derive(Debug)]
+struct StoredIssue {
+    key: String,
+}
+fn settings_from_value(value: &Value) -> JiraSettings {
+    serde_json::from_value(value.clone()).unwrap_or_default()
+}
+
+fn migrate_database(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jira_plugin_schema_migrations (
+            version INTEGER PRIMARY KEY
+        );",
+    )
+    .map_err(|error| format!("failed to initialize Jira plugin migration table: {error}"))?;
+
+    let current_version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM jira_plugin_schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("failed to read Jira plugin schema version: {error}"))?;
+
+    if current_version < 1 {
+        conn.execute_batch(
+            "CREATE TABLE jira_issues (
+                issue_key TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                jira_status TEXT NOT NULL,
+                mapped_status TEXT NOT NULL,
+                priority TEXT,
+                labels TEXT NOT NULL DEFAULT '[]',
+                source_name TEXT NOT NULL,
+                sync_status TEXT NOT NULL DEFAULT 'synced',
+                last_synced_at TEXT NOT NULL
+            );
+            CREATE TABLE jira_task_links (
+                task_key TEXT PRIMARY KEY,
+                issue_key TEXT NOT NULL UNIQUE REFERENCES jira_issues(issue_key)
+            );
+            CREATE INDEX jira_issues_source_active ON jira_issues(source_name, sync_status);
+            INSERT INTO jira_plugin_schema_migrations (version) VALUES (1);",
+        )
+        .map_err(|error| format!("failed to apply Jira plugin migration 1: {error}"))?;
+    }
+
+    Ok(())
+}
+fn upsert_issue(
+    conn: &Connection,
+    issue: &FetchedIssue,
+    source_name: &str,
+    mapped_status: &str,
+) -> Result<(), String> {
+    let labels = serde_json::to_string(&issue.labels).map_err(|error| error.to_string())?;
+    conn.execute("INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, priority, labels, source_name, sync_status, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'synced', ?9) ON CONFLICT(issue_key) DO UPDATE SET summary = excluded.summary, description = excluded.description, jira_status = excluded.jira_status, mapped_status = excluded.mapped_status, priority = excluded.priority, labels = excluded.labels, source_name = excluded.source_name, sync_status = 'synced', last_synced_at = excluded.last_synced_at", params![issue.key, issue.summary, issue.description, issue.status, mapped_status, issue.priority, labels, source_name, Utc::now().to_rfc3339()]).map_err(|error| format!("failed to persist Jira issue: {error}"))?;
+    Ok(())
+}
+fn active_source_issues(conn: &Connection, source_name: &str) -> Result<Vec<StoredIssue>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT issue_key FROM jira_issues WHERE source_name = ?1 AND sync_status = 'synced'",
+        )
+        .map_err(|error| format!("failed to list active Jira source issues: {error}"))?;
+    let rows = statement
+        .query_map(params![source_name], |row| {
+            Ok(StoredIssue { key: row.get(0)? })
+        })
+        .map_err(|error| format!("failed to query active Jira source issues: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+fn mark_departed(conn: &Connection, key: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE jira_issues SET sync_status = 'departed' WHERE issue_key = ?1",
+        params![key],
+    )
+    .map_err(|error| format!("failed to mark Jira issue departed: {error}"))?;
+    Ok(())
+}
+fn depart_source(conn: &Connection, source_name: &str) -> Result<(), String> {
+    conn.execute("UPDATE jira_issues SET sync_status = 'departed' WHERE source_name = ?1 AND sync_status = 'synced'", params![source_name]).map_err(|error| format!("failed to depart removed Jira source: {error}"))?;
+    Ok(())
+}
+
+async fn refresh_access_token(client: &Client, refresh_token: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct RefreshResponse {
+        access_token: String,
+    }
+    client.post(TOKEN_URL).json(&json!({ "grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": refresh_token })).send().await.map_err(|error| format!("failed to refresh Jira token: {error}"))?.error_for_status().map_err(|error| format!("Jira token refresh failed: {error}"))?.json::<RefreshResponse>().await.map(|response| response.access_token).map_err(|error| format!("invalid Jira token response: {error}"))
+}
+async fn fetch_issues(
+    client: &Client,
+    cloud_id: &str,
+    token: &str,
+    jql: &str,
+) -> Result<Vec<FetchedIssue>, String> {
+    let mut next_page_token: Option<String> = None;
+    let mut issues = Vec::new();
+    for _ in 0..100 {
+        let url = format!("https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql");
+        let mut request = client.get(&url).bearer_auth(token).query(&[
+            ("jql", jql),
+            ("fields", "summary,description,status,priority,labels"),
+            ("maxResults", "50"),
+        ]);
+        if let Some(page) = &next_page_token {
+            request = request.query(&[("nextPageToken", page)]);
+        }
+        let page = request
+            .send()
+            .await
+            .map_err(|error| format!("Jira search failed: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("Jira search failed: {error}"))?
+            .json::<SearchResponse>()
+            .await
+            .map_err(|error| format!("invalid Jira search response: {error}"))?;
+        issues.extend(page.issues.into_iter().map(|issue| {
+            FetchedIssue {
+                key: issue.key,
+                summary: issue.fields.summary,
+                description: plain_text(&issue.fields.description),
+                status: issue.fields.status.name,
+                status_category: issue
+                    .fields
+                    .status
+                    .status_category
+                    .map(|category| category.name),
+                priority: issue.fields.priority.map(|priority| priority.name),
+                labels: issue.fields.labels,
+            }
+        }));
+        match page.next_page_token {
+            Some(token) => next_page_token = Some(token),
+            None => break,
+        }
+    }
+    Ok(issues)
+}
+fn plain_text(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(plain_text)
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(values) => values
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| values.get("content").map(plain_text).unwrap_or_default()),
+        _ => String::new(),
+    }
+}
+fn map_status(
+    jira_status: &str,
+    status_map: &HashMap<String, String>,
+    category: Option<&str>,
+) -> String {
+    if let Some(status) = status_map.get(jira_status).filter(|status| {
+        matches!(
+            status.as_str(),
+            "todo" | "in_progress" | "in_review" | "done"
+        )
+    }) {
+        return status.clone();
+    }
+    match category {
+        Some("To Do") => "todo",
+        Some("In Progress") => "in_progress",
+        Some("Done") => "done",
+        _ => "todo",
+    }
+    .to_string()
+}
+fn map_priority(priority: Option<&str>) -> i32 {
+    match priority {
+        Some("Highest") => 1,
+        Some("High") => 2,
+        Some("Medium") => 3,
+        Some("Low") => 4,
+        Some("Lowest") => 5,
+        _ => 0,
+    }
+}
+async fn host_call<R, W>(
+    input: &mut R,
+    output: &mut W,
+    next_id: &mut u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    *next_id += 1;
+    let id = format!("plugin:{next_id}");
+    let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let encoded = serde_json::to_string(&request).map_err(|error| error.to_string())?;
+    if encoded.len() >= MAX_RPC_FRAME_BYTES as usize {
+        return Err("host RPC request exceeded the maximum frame size".to_string());
+    }
+    output
+        .write_all(encoded.as_bytes())
+        .await
+        .map_err(|error| format!("failed to write host RPC request: {error}"))?;
+    output
+        .write_all(b"\n")
+        .await
+        .map_err(|error| format!("failed to frame host RPC request: {error}"))?;
+    output
+        .flush()
+        .await
+        .map_err(|error| format!("failed to flush host RPC request: {error}"))?;
+    let Some(frame) = read_json_rpc_frame(input)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("host closed plugin RPC input".to_string());
+    };
+    let response: Value = serde_json::from_str(&frame)
+        .map_err(|error| format!("invalid host RPC response: {error}"))?;
+    if response.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || response.get("id").and_then(Value::as_str) != Some(id.as_str())
+    {
+        return Err("host RPC response id did not match request".to_string());
+    }
+    if let Some(error) = response.get("error") {
+        return Err(error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("host task request failed")
+            .to_string());
+    }
+    response
+        .get("result")
+        .cloned()
+        .ok_or("host RPC response omitted result".to_string())
+}
+
+#[cfg(test)]
+mod sync_tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    fn issue(key: &str, status: &str) -> FetchedIssue {
+        FetchedIssue {
+            key: key.to_string(),
+            summary: format!("Summary {key}"),
+            description: "Description".to_string(),
+            status: status.to_string(),
+            status_category: Some("To Do".to_string()),
+            priority: Some("High".to_string()),
+            labels: vec!["sync".to_string()],
+        }
+    }
+
+    #[test]
+    fn migrations_are_versioned_and_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        migrate_database(&conn).unwrap();
+        let version: i64 = conn
+            .query_row(
+                "SELECT MAX(version) FROM jira_plugin_schema_migrations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn source_records_are_isolated_and_removed_sources_depart_only_their_records() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "one", "todo").unwrap();
+        upsert_issue(&conn, &issue("TWO-1", "Open"), "two", "todo").unwrap();
+
+        assert_eq!(active_source_issues(&conn, "one").unwrap()[0].key, "ONE-1");
+        depart_source(&conn, "one").unwrap();
+        assert!(active_source_issues(&conn, "one").unwrap().is_empty());
+        assert_eq!(active_source_issues(&conn, "two").unwrap()[0].key, "TWO-1");
+    }
+
+    #[test]
+    fn status_mapping_prefers_explicit_valid_mapping_then_category_then_todo() {
+        let explicit = HashMap::from([("In QA".to_string(), "in_review".to_string())]);
+        assert_eq!(map_status("In QA", &explicit, Some("Done")), "in_review");
+        assert_eq!(
+            map_status("Other", &HashMap::new(), Some("In Progress")),
+            "in_progress"
+        );
+        assert_eq!(map_status("Other", &HashMap::new(), None), "todo");
+        let invalid = HashMap::from([("In QA".to_string(), "not-a-status".to_string())]);
+        assert_eq!(map_status("In QA", &invalid, Some("Done")), "done");
+    }
+
+    #[test]
+    fn priority_mapping_preserves_legacy_priority_order() {
+        assert_eq!(map_priority(Some("Highest")), 1);
+        assert_eq!(map_priority(Some("High")), 2);
+        assert_eq!(map_priority(Some("Medium")), 3);
+        assert_eq!(map_priority(Some("Low")), 4);
+        assert_eq!(map_priority(Some("Lowest")), 5);
+        assert_eq!(map_priority(Some("Unknown")), 0);
+    }
+
+    #[tokio::test]
+    async fn host_callback_uses_a_correlated_nested_json_rpc_request() {
+        let (plugin_stream, host_stream) = tokio::io::duplex(4096);
+        let (plugin_read, plugin_write) = tokio::io::split(plugin_stream);
+        let (host_read, mut host_write) = tokio::io::split(host_stream);
+        let mut input = BufReader::new(plugin_read);
+        let mut output = plugin_write;
+        let host = tokio::spawn(async move {
+            let mut reader = BufReader::new(host_read);
+            let mut request = String::new();
+            reader.read_line(&mut request).await.unwrap();
+            let request: Value = serde_json::from_str(&request).unwrap();
+            assert_eq!(request["method"], "host.task.get");
+            assert_eq!(request["params"]["key"], "ABC-1");
+            let response =
+                json!({ "jsonrpc": "2.0", "id": request["id"], "result": { "task": null } });
+            host_write
+                .write_all(format!("{response}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let mut next_id = 0;
+        let result = host_call(
+            &mut input,
+            &mut output,
+            &mut next_id,
+            "host.task.get",
+            json!({ "key": "ABC-1" }),
+        )
+        .await
+        .unwrap();
+        host.await.unwrap();
+        assert_eq!(result["task"], Value::Null);
+    }
 }
 
 fn configured_site(data_dir: &std::path::Path) -> Result<String, AuthError> {
@@ -501,7 +1094,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let should_shutdown = is_valid_shutdown_request(&request);
-        let response = dispatch(&mut plugin, request).await;
+        let response = dispatch(&mut plugin, request, &mut input, &mut output).await;
         output
             .write_all(encode_response_frame(response)?.as_bytes())
             .await?;
@@ -537,7 +1130,16 @@ where
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-async fn dispatch(plugin: &mut JiraPlugin, request: Request) -> Response {
+async fn dispatch<R, W>(
+    plugin: &mut JiraPlugin,
+    request: Request,
+    input: &mut R,
+    output: &mut W,
+) -> Response
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
     if !matches!(
         request.id,
         Value::Null | Value::String(_) | Value::Number(_)
@@ -563,6 +1165,19 @@ async fn dispatch(plugin: &mut JiraPlugin, request: Request) -> Response {
         },
         "jira.status" => Ok(plugin.status().await),
         "jira.settings.get" => plugin.settings(),
+        "jira.settings.update" => plugin.update_source_settings(&request.params),
+        "jira.sources.rename" => plugin.rename_source(&request.params),
+        "jira.sidebar.items" => plugin.sidebar_items(),
+        "jira.syncNow" => plugin.sync_now(input, output).await,
+        "jira.open_browser" => request
+            .params
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or("missing browser URL".to_string())
+            .and_then(|url| {
+                open::that(url).map_err(|error| format!("failed to open browser: {error}"))
+            })
+            .map(|_| json!({ "opened": true })),
         "jira.connect.start" => plugin
             .connect_start(&request.params)
             .await

@@ -448,6 +448,77 @@ pub fn save(config_dir: &Path, config: &Config) -> Result<(), String> {
     std::fs::write(config_dir.join("config.json"), json).map_err(|e| e.to_string())
 }
 
+/// Move the formerly host-owned Jira object into the Jira plugin's public
+/// settings file. Existing plugin values win while missing source aliases are
+/// imported; the legacy field is removed only after the plugin file is saved.
+pub fn migrate_legacy_jira_plugin_settings(
+    config_dir: &Path,
+    app_data_dir: &Path,
+    config: &mut Config,
+) -> Result<bool, String> {
+    let Some(legacy) = config
+        .integrations
+        .as_ref()
+        .and_then(|items| items.jira.clone())
+    else {
+        return Ok(false);
+    };
+    let data_dir = app_data_dir
+        .join("plugins")
+        .join("state")
+        .join("jira")
+        .join("data");
+    std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
+    let path = data_dir.join("settings.json");
+    let mut imported = if path.exists() {
+        serde_json::from_reader::<_, serde_json::Value>(
+            std::fs::File::open(&path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("failed to parse Jira plugin settings: {error}"))?
+    } else {
+        serde_json::json!({})
+    };
+    if !imported.is_object() {
+        return Err("Jira plugin settings must be a JSON object".to_string());
+    }
+    let legacy = serde_json::to_value(legacy).map_err(|error| error.to_string())?;
+    let target = imported.as_object_mut().expect("object was checked");
+    let source = legacy
+        .as_object()
+        .expect("Jira config serializes as object");
+    for key in ["site", "sync_interval_ms"] {
+        if !target.contains_key(key) {
+            if let Some(value) = source.get(key) {
+                target.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    let target_sources = target
+        .entry("sources")
+        .or_insert_with(|| serde_json::json!({}));
+    if !target_sources.is_object() {
+        return Err("Jira plugin sources must be an object".to_string());
+    }
+    let destination = target_sources.as_object_mut().expect("object was checked");
+    if let Some(legacy_sources) = source.get("sources").and_then(serde_json::Value::as_object) {
+        for (name, source) in legacy_sources {
+            destination
+                .entry(name.clone())
+                .or_insert_with(|| source.clone());
+        }
+    }
+    let temporary = data_dir.join(".settings-import.tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&imported).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+    config.integrations = None;
+    save(config_dir, config)?;
+    Ok(true)
+}
+
 /// Migrate legacy SQLite settings into a config file. No-op if config already exists.
 pub fn migrate_from_db(config_dir: &Path, settings: &crate::db::Settings) -> Result<(), String> {
     if config_dir.join("config.json").exists() {
