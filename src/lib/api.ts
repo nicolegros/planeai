@@ -246,6 +246,7 @@ export const plugins = {
     invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
+  dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
 };
 
 export const preferences = {

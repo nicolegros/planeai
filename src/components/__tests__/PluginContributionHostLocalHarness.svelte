@@ -9,7 +9,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "local",
     backend_entrypoint: "bin/planeai-plugin-fixture",
-    ui_contributions: [{ id: "fixture", label: "Fixture", placement: "main-pane", entrypoint: "ui/entry.js", order: null, shortcut: null }],
+    ui_contributions: [{ id: "fixture", label: "Fixture", placement: "sidebar.section", entrypoint: "ui/entry.js", order: null, shortcut: null }],
     installed_hash: "fixture-hash",
     installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
     original_display_path: "/source/local-fixture",

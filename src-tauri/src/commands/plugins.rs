@@ -1,5 +1,5 @@
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::plugins::{PluginInventory, PluginRuntimeHandle};
 
@@ -34,6 +34,12 @@ pub async fn plugin_call(
     runtime: State<'_, PluginRuntimeHandle>,
 ) -> Result<Value, String> {
     runtime.0.call(&plugin_id, &method, params).await
+}
+
+#[tauri::command]
+pub async fn plugin_data_changed(plugin_id: String, app: AppHandle) -> Result<(), String> {
+    app.emit("plugin-data-changed", plugin_id)
+        .map_err(|error| format!("failed to emit plugin data change: {error}"))
 }
 
 #[tauri::command]

@@ -15,6 +15,9 @@ export interface PluginUiHost {
   sidebar: {
     register(rows: PluginSidebarNavRow[]): () => void;
   };
+  data: {
+    changed(): Promise<void>;
+  };
 }
 
 export interface PluginUiContext {

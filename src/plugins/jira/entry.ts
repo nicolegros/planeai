@@ -55,6 +55,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
     let disposed = false;
     const save = async (next: JiraSettings) => {
       settings = await call<JiraSettings>(context, "jira.settings.update", next);
+      await context.host.data.changed();
       render();
     };
     const refresh = async () => {
@@ -99,6 +100,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
       render();
       try {
         result = await call<SyncTotals>(context, "jira.syncNow");
+        await context.host.data.changed();
       } catch (error) {
         result = { created: 0, updated: 0, departed: 0, errors: 1 };
         status = { ...status, last_error: String(error) };
