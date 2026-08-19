@@ -105,6 +105,48 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     expect(host.shadowRoot?.activeElement).not.toBe(issue);
   });
 
+  it("opens assignment when Enter activates a focused Jira issue", async () => {
+    component = mount(UnifiedSidebarJiraHarness, { target });
+
+    await vi.waitFor(() => {
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+    const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution='jira:section']")!;
+    await vi.waitFor(() =>
+      expect(
+        host.shadowRoot?.querySelector<HTMLButtonElement>(".section-header.selected"),
+      ).toBeTruthy(),
+    );
+    const header = host.shadowRoot!.querySelector<HTMLButtonElement>(".section-header.selected")!;
+    header.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, composed: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(host.shadowRoot?.querySelector<HTMLButtonElement>(".issue.selected")).toBeTruthy(),
+    );
+
+    const issue = host.shadowRoot!.querySelector<HTMLButtonElement>(".issue.selected")!;
+    issue.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => expect(document.querySelector("[data-plugin-modal]")).toBeTruthy());
+    expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-42");
+  });
+
   it("enters and traverses Jira rows from focused sidebar keyboard navigation", async () => {
     component = mount(UnifiedSidebarJiraHarness, { target });
 

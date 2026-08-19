@@ -591,7 +591,15 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
             assignmentModal?.close();
             assignmentModal = openAssignment(context, item.key);
           };
-          row.onkeydown = context.host.sidebar.handleKeydown;
+          row.onkeydown = (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              row.click();
+              return;
+            }
+            context.host.sidebar.handleKeydown(event);
+          };
           issueRegion.append(row);
           if (focusRowId === rowId) row.focus();
         }

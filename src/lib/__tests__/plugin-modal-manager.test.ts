@@ -36,4 +36,21 @@ describe("plugin modal manager", () => {
     expect(document.activeElement).toBe(origin);
     origin.remove();
   });
+
+  it("uses the established application dialog shell styling", () => {
+    const controls = openPluginModal({
+      title: "Styled",
+      mount: (root) => root.append(document.createElement("button")),
+    });
+    const layer = document.querySelector<HTMLElement>("[data-plugin-modal]")!;
+    const dialog = layer.querySelector<HTMLElement>("[role='dialog']")!;
+
+    expect(layer.className).not.toContain("bg-black/50");
+    expect(layer.className).not.toContain("p-4");
+    expect(dialog.className).toContain("w-[452px]");
+    expect(dialog.className).toContain("max-h-[85vh]");
+    expect(dialog.className).toContain("border-border-s");
+
+    controls.close();
+  });
 });

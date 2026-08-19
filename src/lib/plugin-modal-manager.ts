@@ -76,11 +76,11 @@ function trapTab(event: KeyboardEvent, modal: ManagedModal): void {
 
 function openShell(title: string): { modal: ManagedModal; controls: PluginModalControls } {
   const layer = document.createElement("div");
-  layer.className = "fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4";
+  layer.className = "fixed inset-0 z-50 flex items-center justify-center";
   layer.dataset.pluginModal = "";
   const dialog = document.createElement("div");
   dialog.className =
-    "flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-border bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)]";
+    "flex max-h-[85vh] w-[452px] flex-col overflow-hidden rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)]";
   dialog.tabIndex = -1;
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
