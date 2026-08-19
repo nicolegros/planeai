@@ -7,6 +7,7 @@ import type { TaskItem } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
+let refreshVersion = 0;
 
 export function getTasksByProject(): Record<string, TaskItem[]> {
   return tasksByProject;
@@ -33,9 +34,13 @@ export function isLoading(): boolean {
 }
 
 export async function loadTasks(projectPaths: string[]): Promise<void> {
-  if (projectPaths.length === 0) return;
+  const version = ++refreshVersion;
   loading = true;
   try {
+    if (projectPaths.length === 0) {
+      if (version === refreshVersion) tasksByProject = {};
+      return;
+    }
     const results: Record<string, TaskItem[]> = {};
     await Promise.all(
       projectPaths.map(async (path) => {
@@ -46,9 +51,9 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
         }
       }),
     );
-    tasksByProject = results;
+    if (version === refreshVersion) tasksByProject = results;
   } finally {
-    loading = false;
+    if (version === refreshVersion) loading = false;
   }
 }
 

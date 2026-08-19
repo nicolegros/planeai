@@ -193,6 +193,7 @@
   let logViewerEnabled = $state(false);
   let sessionToDelete = $state<Session | null>(null);
   let projectToDelete = $state<Project | null>(null);
+  let projectToEdit = $state<Project | null>(null);
   let loopToDelete = $state<import("./lib/types").LoopRunSummary | null>(null);
   let renamingSessionId = $state<string | null>(null);
   let taskPrefill = $state<{ key: string; title: string; description: string; branch: string; name: string; prompt: string; baseBranch?: string; projectId?: string | null } | null>(null);
@@ -741,6 +742,29 @@
     focusTerminal();
   }
 
+  function openAddProject() {
+    projectToEdit = null;
+    showProjectForm = true;
+  }
+
+  function openEditProject(project: Project) {
+    projectToEdit = project;
+    showProjectForm = true;
+  }
+
+  async function finishProjectForm() {
+    showProjectForm = false;
+    projectToEdit = null;
+    await taskStore.refresh(projects.map((project) => project.path));
+    focusTerminal();
+  }
+
+  function cancelProjectForm() {
+    showProjectForm = false;
+    projectToEdit = null;
+    tick().then(() => refocusTerminal());
+  }
+
   async function deleteProject(p: Project) {
     await projectStore.deleteProject(p.id);
     projectToDelete = null;
@@ -872,7 +896,7 @@
       (action) => {
         if (action.type === "new_session") {
           showNewItemModal = true;
-        } else if (action.type === "new_project") { showProjectForm = true; }
+        } else if (action.type === "new_project") { openAddProject(); }
         else if (action.type === "toggle_sidebar") { sidebarVisible = !sidebarVisible; if (sidebarVisible) focusSidebar(); else focusTerminal(); }
         else if (action.type === "jump_to_session") { jumpToWorkspaceSession(action.index); }
         else if (action.type === "tab_switch") {
@@ -888,7 +912,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -1028,8 +1052,9 @@
         onRenameSession={doRename}
         onStartRename={(id) => { renamingSessionId = id || null; if (!id) focusTerminal(); }}
         onDeleteProject={(p) => (projectToDelete = p)}
+        onEditProject={openEditProject}
         onPickTask={(task, repoPath) => { const proj = projects.find(p => p.path === repoPath); taskPrefill = { key: task.key, title: task.title, description: task.description, branch: "", name: `${task.key}: ${task.title}`, prompt: "", baseBranch: task.base_branch, projectId: proj?.id ?? null }; showSessionForm = true; }}
-        onAddProject={() => (showProjectForm = true)}
+        onAddProject={openAddProject}
         onOpenPreferences={openPreferences}
         onCreateSession={() => { showTaskForm = true; }}
         onSessionsChanged={() => { orchestrator.loadSessions(); taskStore.refresh(projects.map((p) => p.path)); }}
@@ -1050,8 +1075,8 @@
   <section class="flex-1 flex flex-col relative bg-main overflow-hidden">
     <div class="flex-1 relative overflow-hidden">
     {#if showProjectForm}
-    <FormDialog title="Add Project" onClose={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }}>
-      <ProjectForm onCreated={() => { showProjectForm = false; projectStore.loadProjects(); focusTerminal(); }} onCancel={() => { showProjectForm = false; tick().then(() => refocusTerminal()); }} />
+    <FormDialog title={projectToEdit ? "Edit Project" : "Add Project"} onClose={cancelProjectForm}>
+      <ProjectForm project={projectToEdit} onCreated={finishProjectForm} onCancel={cancelProjectForm} />
     </FormDialog>
     {/if}
 
@@ -1106,7 +1131,7 @@
       onRenameSession={() => { if (activeSessionId) { sidebarVisible = true; renamingSessionId = activeSessionId; } }}
       onRestoreSession={async (id) => { await sessionsApi.restore(id); await orchestrator.loadSessions(); }}
       onDestroyArchivedSession={async (id) => { await sessionsApi.destroy(id); }}
-      onNewSession={() => { if (projects.length === 0) showProjectForm = true; else showSessionForm = true; }}
+      onNewSession={() => { if (projects.length === 0) openAddProject(); else showSessionForm = true; }}
       onResetTerminal={() => {
         if (activeSessionId) {
           orchestrator.recordUserInput(activeSessionId);

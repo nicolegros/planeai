@@ -59,6 +59,8 @@ export const projects = {
   list: () => invoke<Project[]>("list_projects"),
   listArchived: () => invoke<Project[]>("list_archived_projects"),
   create: (name: string, path: string) => invoke("create_project", { name, path }),
+  update: (id: string, name: string, path: string) =>
+    invoke<Project>("update_project", { id, name, path }),
   delete: (id: string) => invoke("delete_project", { id }),
   archive: (id: string) => invoke("archive_project", { id }),
   restore: (id: string) => invoke("restore_project", { id }),

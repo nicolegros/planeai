@@ -25,6 +25,11 @@ export async function createProject(name: string, path: string): Promise<void> {
   await loadProjects();
 }
 
+export async function updateProject(id: string, name: string, path: string): Promise<void> {
+  await projectsApi.update(id, name, path);
+  await loadProjects();
+}
+
 export async function archiveProject(id: string): Promise<void> {
   await projectsApi.archive(id);
   removeProjectSessions(id);

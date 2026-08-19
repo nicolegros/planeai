@@ -6,6 +6,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
+  import { projectContextMenuItems } from "../lib/project-context-menu";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
@@ -36,6 +37,7 @@
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
     onDeleteProject: (project: Project) => void;
+    onEditProject: (project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
@@ -53,7 +55,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -465,6 +467,8 @@
       if (action.type === "select") {
         const key = `project:${current.project.id}`;
         toggleSection(key);
+      } else if (action.type === "edit") {
+        onEditProject(current.project);
       }
       return;
     }
@@ -920,12 +924,17 @@
     x={projectContextMenu.x}
     y={projectContextMenu.y}
     onClose={() => (projectContextMenu = null)}
-    items={[
-      { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
-      { label: "Hide project", onSelect: () => hideProject(projectContextMenu!.project.id) },
-      { label: "Archive project", onSelect: () => projectStore.archiveProject(projectContextMenu!.project.id) },
-      { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
-    ]}
+    items={projectContextMenuItems(
+      projectContextMenu.project,
+      projectAutoMode[projectContextMenu.project.id] ?? false,
+      {
+        onEdit: onEditProject,
+        onToggleAutoDispatch: toggleAutoMode,
+        onHide: hideProject,
+        onArchive: (id) => projectStore.archiveProject(id),
+        onDelete: onDeleteProject,
+      },
+    )}
   />
 {/if}
 

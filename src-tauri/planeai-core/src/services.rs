@@ -407,6 +407,18 @@ impl ProjectService {
         })
     }
 
+    /// Update display metadata for a project without changing its stable task prefix.
+    pub fn update(conn: &Connection, id: &str, name: &str, path: &str) -> SqlResult<Project> {
+        let updated = conn.execute(
+            "UPDATE projects SET name = ?1, path = ?2 WHERE id = ?3",
+            params![name, path, id],
+        )?;
+        if updated == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Self::get_by_id(conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
     pub fn archive(conn: &Connection, id: &str) -> SqlResult<()> {
         conn.execute(
             "UPDATE sessions SET status = 'archived' WHERE project_id = ?1",

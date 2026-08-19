@@ -437,6 +437,23 @@ fn get_project_by_path() {
         .is_none());
 }
 
+#[test]
+fn update_project_persists_name_and_path_without_changing_prefix() {
+    let conn = test_db();
+    let project = ProjectService::create(&conn, "before", "/tmp/before").unwrap();
+
+    let updated = ProjectService::update(&conn, &project.id, "after", "/tmp/after").unwrap();
+
+    assert_eq!(updated.name, "after");
+    assert_eq!(updated.path, "/tmp/after");
+    assert_eq!(updated.prefix, project.prefix);
+    let reloaded = ProjectService::get_by_id(&conn, &project.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reloaded.name, "after");
+    assert_eq!(reloaded.path, "/tmp/after");
+}
+
 // ─── SessionService ──────────────────────────────────────────────────────────
 
 #[test]
