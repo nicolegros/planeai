@@ -254,6 +254,34 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     });
   });
 
+  it("clears Jira row selection when focus leaves the sidebar", async () => {
+    component = mount(UnifiedSidebarJiraHarness, { target });
+
+    await vi.waitFor(() => {
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+
+    const jiraHost = target.querySelector<HTMLElement>(
+      "[data-plugin-ui-contribution='jira:section']",
+    )!;
+    await vi.waitFor(() =>
+      expect(jiraHost.shadowRoot?.querySelector(".section-header.selected")).toBeTruthy(),
+    );
+
+    focusTerminal();
+
+    await vi.waitFor(() =>
+      expect(jiraHost.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0),
+    );
+  });
+
   it("does not reset to the active session when Jira focus rerenders its rows", async () => {
     projectList.mockResolvedValue([{ id: "p1", name: "Project", path: "/project", hidden: false }]);
     sessionList.mockResolvedValue([

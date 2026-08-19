@@ -1,8 +1,11 @@
+import { createFormKeyboardController } from "../../lib/form-keyboard.svelte";
+import { MOD_ENTER_HINT } from "../../lib/keyboard";
 import type {
   PluginModalControls,
   PluginUiContext,
   PluginUiEntrypoint,
 } from "../../lib/plugin-sdk";
+import { createSearchableCombobox } from "./searchable-combobox";
 
 type JiraSource = {
   jql: string;
@@ -22,7 +25,7 @@ type JiraStatus = {
 };
 type SyncTotals = { created: number; updated: number; departed: number; errors: number };
 type SidebarItem = { key: string; title: string; status: string; child_count: number };
-const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .selected { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
+const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
@@ -45,8 +48,9 @@ function input(
 function field(label: string, element: HTMLElement): HTMLElement {
   const wrap = document.createElement("div");
   const heading = document.createElement("label");
-  const id = element.id || `jira-field-${++nextFieldId}`;
-  element.id = id;
+  const control = element.querySelector<HTMLElement>("[data-field-control]") ?? element;
+  const id = control.id || `jira-field-${++nextFieldId}`;
+  control.id = id;
   heading.htmlFor = id;
   heading.textContent = label;
   wrap.append(heading, element);
@@ -70,9 +74,10 @@ type AssignmentProject = { id: string; name: string; path: string; hidden: boole
 function openAssignment(context: PluginUiContext, key: string): PluginModalControls {
   return context.host.interaction.openModal({
     title: "Assign Jira issue",
+    contentResponsive: true,
     mount(root, controls) {
       const style = document.createElement("style");
-      style.textContent = `${styles} .assignment { padding:0 20px 20px; display:grid; gap:14px; } .preview { border:1px solid var(--color-border); border-radius:8px; padding:10px; } .preview h3 { margin:4px 0; font-size:14px; } .preview p { white-space:pre-wrap; margin:0; color:var(--color-t2); font-size:12px; } .actions { display:flex; justify-content:flex-end; gap:8px; } .empty { color:var(--color-t2); font-size:12px; }`;
+      style.textContent = `${styles} .assignment { padding:0 20px 20px; display:grid; gap:14px; } .preview { border:1px solid var(--color-border); border-radius:8px; padding:10px; } .preview h3 { margin:4px 0; font-size:14px; } .preview p { white-space:pre-wrap; margin:0; color:var(--color-t2); font-size:12px; } .actions { display:flex; justify-content:space-between; align-items:center; gap:8px; } .keyboard-mode { display:flex; align-items:center; gap:8px; font-size:10px; color:var(--color-t3); } .keyboard-mode strong { font-family:var(--font-mono); font-size:10px; padding:2px 6px; border-radius:4px; background:var(--color-panel-hi); color:var(--color-t2); } .keyboard-mode.insert strong { background:var(--color-accent-bg); color:var(--color-accent); } .submit-hint { margin-left:4px; font-family:var(--font-mono); font-size:10px; opacity:.6; } .empty { color:var(--color-t2); font-size:12px; }`;
       const body = document.createElement("div");
       let issue: JiraIssue | null = null;
       let projects: AssignmentProject[] = [];
@@ -81,11 +86,53 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
       let loading = true;
       let submitting = false;
       let disposed = false;
+      body.tabIndex = -1;
+      body.dataset.formKeyboard = "";
+
+      const updateKeyboardMode = () => {
+        const status = body.querySelector<HTMLElement>("[data-assignment-keyboard-mode]");
+        if (!status) return;
+        const insert = formKeyboard.mode === "insert";
+        status.classList.toggle("insert", insert);
+        status.innerHTML = insert
+          ? "<strong>INSERT</strong><span>esc → normal mode</span>"
+          : "<strong>NORMAL</strong><span>press a key to focus field</span>";
+      };
+      const formKeyboard = createFormKeyboardController(
+        () => [
+          {
+            key: "p",
+            ref: () => body.querySelector<HTMLElement>("[data-jira-project-combobox]") ?? null,
+          },
+          {
+            key: "n",
+            toggle: () => {
+              if (!submitting) void createProject();
+            },
+          },
+        ],
+        { wrapper: () => body, onDismiss: () => controls.close() },
+      );
+      body.addEventListener("focusin", (event) => {
+        formKeyboard.handleFocusin(event);
+        updateKeyboardMode();
+      });
+      body.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          void submit();
+          return;
+        }
+        formKeyboard.handleKeydown(event);
+        updateKeyboardMode();
+      });
 
       const selectedProject = () =>
         projects.find((project) => project.id === selectedProjectId) ?? null;
       const focusPicker = () =>
-        queueMicrotask(() => root.querySelector<HTMLSelectElement>("select")?.focus());
+        queueMicrotask(() =>
+          root.querySelector<HTMLInputElement>("[data-jira-project-combobox]")?.focus(),
+        );
       const refreshProjects = async (projectId?: string) => {
         projects = await context.host.projects.list();
         selectedProjectId = projectId ?? selectedProjectId;
@@ -98,21 +145,6 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
         form.addEventListener("submit", (event) => {
           event.preventDefault();
           void submit();
-        });
-        form.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault();
-            void submit();
-            return;
-          }
-          if (!submitting && event.key.toLowerCase() === "p") {
-            event.preventDefault();
-            focusPicker();
-          }
-          if (!submitting && event.key.toLowerCase() === "n") {
-            event.preventDefault();
-            void createProject();
-          }
         });
         if (loading) {
           const message = document.createElement("p");
@@ -144,26 +176,20 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
             empty.textContent = "No PlaneAI projects available. Press N to create one.";
             form.append(empty);
           } else {
-            const picker = document.createElement("select");
-            picker.setAttribute("aria-label", "PlaneAI project");
-            const placeholder = document.createElement("option");
-            placeholder.value = "";
-            placeholder.textContent = "Choose a project";
-            picker.append(placeholder);
-            for (const project of projects) {
-              const option = document.createElement("option");
-              option.value = project.id;
-              option.textContent = project.name;
-              option.selected = project.id === selectedProjectId;
-              picker.append(option);
-            }
-            picker.disabled = submitting;
-            picker.onchange = () => {
-              selectedProjectId = picker.value;
-              error = "";
-              render();
-              focusPicker();
-            };
+            const picker = createSearchableCombobox({
+              ariaLabel: "PlaneAI project",
+              items: projects.map((project) => ({ value: project.id, label: project.name })),
+              value: selectedProjectId,
+              disabled: submitting,
+              placeholder: "Search projects…",
+              emptyText: "No projects found",
+              onValueChange: (projectId) => {
+                selectedProjectId = projectId;
+                error = "";
+                render();
+                focusPicker();
+              },
+            });
             form.append(field("PlaneAI project (P)", picker));
           }
           if (error) {
@@ -175,6 +201,12 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
           }
           const actions = document.createElement("div");
           actions.className = "actions";
+          const keyboardMode = document.createElement("div");
+          keyboardMode.className = "keyboard-mode";
+          keyboardMode.dataset.assignmentKeyboardMode = "";
+          actions.append(keyboardMode);
+          const actionButtons = document.createElement("div");
+          actionButtons.className = "row";
           const newProject = document.createElement("button");
           newProject.type = "button";
           newProject.textContent = "New Project (N)";
@@ -183,13 +215,23 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
           const assign = document.createElement("button");
           assign.type = "submit";
           assign.className = "primary";
-          assign.textContent = submitting ? "Assigning…" : "Assign";
+          if (submitting) {
+            assign.textContent = "Assigning…";
+          } else {
+            assign.append("Assign ");
+            const submitHint = document.createElement("span");
+            submitHint.className = "submit-hint";
+            submitHint.textContent = MOD_ENTER_HINT;
+            assign.append(submitHint);
+          }
           assign.disabled = submitting || !selectedProject();
-          assign.title = "⌘↵";
-          actions.append(newProject, assign);
+          assign.title = MOD_ENTER_HINT;
+          actionButtons.append(newProject, assign);
+          actions.append(actionButtons);
           form.append(actions);
         }
         body.replaceChildren(form);
+        updateKeyboardMode();
       };
       const createProject = async () => {
         const project = await context.host.interaction.openProjectForm();
@@ -241,7 +283,7 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
           loading = false;
           if (!disposed) {
             render();
-            focusPicker();
+            queueMicrotask(() => body.focus());
           }
         })
         .catch((nextError) => {

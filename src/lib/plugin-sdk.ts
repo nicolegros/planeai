@@ -8,6 +8,7 @@ export interface PluginModalControls {
 
 export interface PluginModalOptions {
   title: string;
+  contentResponsive?: boolean;
   mount(root: ShadowRoot, controls: PluginModalControls): (() => void) | void;
 }
 

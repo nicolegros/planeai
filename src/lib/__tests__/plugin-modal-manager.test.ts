@@ -37,6 +37,20 @@ describe("plugin modal manager", () => {
     origin.remove();
   });
 
+  it("uses a larger content-responsive shell when requested", () => {
+    const controls = openPluginModal({
+      title: "Responsive",
+      contentResponsive: true,
+      mount: (root) => root.append(document.createElement("button")),
+    });
+    const dialog = document.querySelector<HTMLElement>("[data-plugin-modal] [role='dialog']")!;
+
+    expect(dialog.className).toContain("w-[min(90vw,42rem)]");
+    expect(dialog.className).toContain("max-h-[90vh]");
+
+    controls.close();
+  });
+
   it("uses the established application dialog shell styling", () => {
     const controls = openPluginModal({
       title: "Styled",
