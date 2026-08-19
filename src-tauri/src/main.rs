@@ -26,6 +26,7 @@ mod session_restart;
 mod startup;
 mod state;
 mod symphony;
+mod task_lifecycle;
 mod template;
 #[cfg(not(windows))]
 mod tmux;

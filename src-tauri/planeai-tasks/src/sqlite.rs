@@ -174,6 +174,70 @@ impl SqliteRepository {
         Ok(map)
     }
 
+    /// Create a task and atomically report whether its parent had no children
+    /// immediately before this committed assignment.
+    pub fn create_with_first_child_assignment(
+        &self,
+        params: CreateParams,
+    ) -> Result<(Task, Option<bool>), Error> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let key = match params.key.clone() {
+            Some(key) => key,
+            None => {
+                let seq: i32 = tx.query_row(
+                    "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
+                    params![self.prefix], |row| row.get(0),
+                ).map_err(|e| Error::Storage(e.to_string()))?;
+                format!("{}-{seq}", self.prefix)
+            }
+        };
+        let parent_key_for_result = params.parent_key.clone();
+        let is_first = match &params.parent_key {
+            Some(parent_key) => !tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+                    params![parent_key],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|e| Error::Storage(e.to_string()))?,
+            None => false,
+        };
+        let now = Utc::now().to_rfc3339();
+        let status = params.status.unwrap_or(Status::Todo);
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![key, self.prefix, params.title, params.description, status.as_str(), params.priority, params.parent_key, params.base_branch, now, now],
+        ).map_err(|e| Error::Storage(e.to_string()))?;
+        if inserted == 0 {
+            tx.commit().map_err(|e| Error::Storage(e.to_string()))?;
+            let task = self.query_task(&conn, &key, Some(&self.prefix))?;
+            return Ok((task, None));
+        }
+        for blocker in &params.blocked_by {
+            tx.execute(
+                "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
+                params![key, blocker],
+            )
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        }
+        for tag in &params.tags {
+            tx.execute(
+                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                params![key, tag],
+            )
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| Error::Storage(e.to_string()))?;
+        let task = self.query_task(&conn, &key, Some(&self.prefix))?;
+        Ok((task, parent_key_for_result.map(|_| is_first)))
+    }
+
     fn next_key(&self, conn: &Connection) -> Result<String, Error> {
         let seq: i32 = conn
             .query_row(

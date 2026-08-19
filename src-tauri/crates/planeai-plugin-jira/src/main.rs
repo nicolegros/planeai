@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
+use planeai_jira::config::WritebackConfig;
 use rand::RngExt;
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -125,6 +126,7 @@ struct JiraPlugin {
     completion: Option<AuthCompletion>,
     authorization_error: Option<String>,
     completed_attempt: Option<String>,
+    last_writeback: Option<Value>,
     client: Client,
     token_url: String,
     resources_url: String,
@@ -150,6 +152,7 @@ impl JiraPlugin {
             completion: None,
             authorization_error: None,
             completed_attempt: None,
+            last_writeback: None,
             client: Client::builder()
                 .timeout(OAUTH_NETWORK_TIMEOUT)
                 .build()
@@ -280,6 +283,7 @@ impl JiraPlugin {
             "host_api_version": HOST_API_VERSION,
             "runtime_state": "running",
             "last_error": self.authorization_error,
+            "last_writeback": self.last_writeback,
             "connected": credentials.is_some(),
             "authorizing": self.completion.is_some(),
             "site": credentials.map(|credentials| credentials.site),
@@ -597,6 +601,210 @@ impl JiraPlugin {
             }
         }
         serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+    fn selected_writeback_source(
+        &self,
+        issue_key: &str,
+    ) -> Result<Option<(String, WritebackConfig)>, String> {
+        let conn = self.database()?;
+        let source_name = conn
+            .query_row(
+                "SELECT source_name FROM jira_issue_sources WHERE issue_key = ?1 AND sync_status = 'synced' ORDER BY source_name LIMIT 1",
+                params![issue_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("failed to resolve Jira writeback source: {error}"))?;
+        let Some(source_name) = source_name else {
+            return Ok(None);
+        };
+        let settings = settings_from_value(&self.settings()?);
+        let writeback = settings
+            .sources
+            .get(&source_name)
+            .and_then(|source| source.writeback.clone())
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                format!("invalid Jira writeback settings for {source_name}: {error}")
+            })?;
+        Ok(writeback.map(|writeback| (source_name, writeback)))
+    }
+
+    async fn writeback_lifecycle(
+        &mut self,
+        issue_key: &str,
+        source_name: &str,
+        action: &str,
+        config: &WritebackConfig,
+    ) -> Value {
+        let target = if action == "start" {
+            config.on_start.as_deref()
+        } else {
+            config.on_complete.as_deref()
+        };
+        let message = format!(
+            "planeai: Task moved to {} at {}",
+            if action == "start" {
+                "Start"
+            } else {
+                "Complete"
+            },
+            Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        );
+        let mut errors = Vec::new();
+        let mut transition_ok = target.is_none();
+        let mut comment_ok = !config.comment;
+        match self
+            .read_credentials()
+            .map_err(|e| format!("Jira is not connected: {e}"))
+        {
+            Err(error) => errors.push(error),
+            Ok(mut credentials) => match refresh_access_token(
+                &self.client,
+                &self.token_url,
+                &credentials.refresh_token,
+            )
+            .await
+            {
+                Err(error) => errors.push(error),
+                Ok(token) => {
+                    if let Some(refresh_token) = token.refresh_token {
+                        if let Err(error) = persist_rotated_refresh_token(
+                            &self.secrets_dir,
+                            &mut credentials,
+                            refresh_token,
+                        ) {
+                            errors.push(error.to_string());
+                        }
+                    }
+                    let base = format!(
+                        "https://api.atlassian.com/ex/jira/{}/rest/api/3/issue/{issue_key}",
+                        credentials.cloud_id
+                    );
+                    if let Some(target) = target {
+                        let transition = async {
+                            let transitions: Value = self
+                                .client
+                                .get(format!("{base}/transitions"))
+                                .bearer_auth(&token.access_token)
+                                .send()
+                                .await
+                                .map_err(|e| format!("Jira transition lookup failed: {e}"))?
+                                .error_for_status()
+                                .map_err(|e| format!("Jira transition lookup failed: {e}"))?
+                                .json()
+                                .await
+                                .map_err(|e| format!("invalid Jira transitions response: {e}"))?;
+                            let id = transitions
+                                .get("transitions")
+                                .and_then(Value::as_array)
+                                .and_then(|items| {
+                                    items.iter().find(|item| {
+                                        item.get("to")
+                                            .and_then(|to| to.get("name"))
+                                            .and_then(Value::as_str)
+                                            .is_some_and(|name| name.eq_ignore_ascii_case(target))
+                                    })
+                                })
+                                .and_then(|item| item.get("id"))
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    format!("Jira transition target {target:?} was not available")
+                                })?;
+                            self.client
+                                .post(format!("{base}/transitions"))
+                                .bearer_auth(&token.access_token)
+                                .json(&json!({"transition":{"id":id}}))
+                                .send()
+                                .await
+                                .map_err(|e| format!("Jira transition failed: {e}"))?
+                                .error_for_status()
+                                .map_err(|e| format!("Jira transition failed: {e}"))?;
+                            Ok::<(), String>(())
+                        }
+                        .await;
+                        match transition {
+                            Ok(()) => transition_ok = true,
+                            Err(error) => errors.push(error),
+                        }
+                    }
+                    if config.comment {
+                        let body = json!({"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":message}]}]}});
+                        match self
+                            .client
+                            .post(format!("{base}/comment"))
+                            .bearer_auth(&token.access_token)
+                            .json(&body)
+                            .send()
+                            .await
+                            .map_err(|e| format!("Jira comment failed: {e}"))
+                            .and_then(|r| {
+                                r.error_for_status()
+                                    .map_err(|e| format!("Jira comment failed: {e}"))
+                            }) {
+                            Ok(_) => comment_ok = true,
+                            Err(error) => errors.push(error),
+                        }
+                    }
+                }
+            },
+        }
+        let ok = errors.is_empty();
+        if !ok {
+            eprintln!("jira lifecycle writeback failed issue={issue_key} source={source_name} action={action}: {}", errors.join("; "));
+        }
+        let outcome = json!({"at":Utc::now(),"issue_key":issue_key,"source":source_name,"action":action,"ok":ok,"transition_ok":transition_ok,"comment_ok":comment_ok,"error":(!errors.is_empty()).then(|| errors.join("; "))});
+        self.last_writeback = Some(outcome.clone());
+        outcome
+    }
+
+    async fn task_lifecycle(&mut self, params: &Value) -> Result<Value, String> {
+        let events = params
+            .get("batch")
+            .and_then(|batch| batch.get("events"))
+            .and_then(Value::as_array)
+            .ok_or("task lifecycle batch requires events")?;
+        let mut outcomes = Vec::new();
+        for event in events {
+            let event_type = event
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let candidate = match event_type {
+                "child_assigned"
+                    if event
+                        .get("is_first_child_assignment")
+                        .and_then(Value::as_bool)
+                        == Some(true) =>
+                {
+                    event
+                        .get("parent_key")
+                        .and_then(Value::as_str)
+                        .map(|key| (key, "start"))
+                }
+                "status_changed"
+                    if event.get("previous_status").and_then(Value::as_str) != Some("done")
+                        && event.get("new_status").and_then(Value::as_str) == Some("done") =>
+                {
+                    event
+                        .get("task_key")
+                        .and_then(Value::as_str)
+                        .map(|key| (key, "complete"))
+                }
+                _ => None,
+            };
+            let Some((issue_key, action)) = candidate else {
+                continue;
+            };
+            if let Some((source_name, config)) = self.selected_writeback_source(issue_key)? {
+                outcomes.push(
+                    self.writeback_lifecycle(issue_key, &source_name, action, &config)
+                        .await,
+                );
+            }
+        }
+        Ok(json!({"outcomes": outcomes}))
     }
 }
 
@@ -1664,6 +1872,7 @@ where
                 "plugin_name": PLUGIN_NAME,
                 "plugin_version": PLUGIN_VERSION,
                 "host_api_version": HOST_API_VERSION,
+                "lifecycle_event_subscriptions": ["task.lifecycle"],
             })),
             _ => Err("unsupported plugin host API version".to_string()),
         },
@@ -1674,6 +1883,7 @@ where
         "jira.sidebar.items" => plugin.sidebar_items(),
         "jira.issue.get" => plugin.issue(&request.params),
         "jira.syncNow" => plugin.sync_now(input, output).await,
+        "plugin.taskLifecycle" => plugin.task_lifecycle(&request.params).await,
         "jira.open_browser" => request
             .params
             .get("url")
@@ -2038,6 +2248,7 @@ mod tests {
             completion: None,
             authorization_error: None,
             completed_attempt: None,
+            last_writeback: None,
             client: Client::new(),
             token_url: format!("{}/oauth/token", server.uri()),
             resources_url: format!("{}/resources", server.uri()),
@@ -2117,6 +2328,7 @@ mod tests {
             completion: None,
             authorization_error: None,
             completed_attempt: None,
+            last_writeback: None,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
@@ -2197,6 +2409,7 @@ mod tests {
             }),
             authorization_error: None,
             completed_attempt: None,
+            last_writeback: None,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
@@ -2229,6 +2442,7 @@ mod tests {
             completion: None,
             authorization_error: None,
             completed_attempt: Some("completed-attempt".to_string()),
+            last_writeback: None,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
@@ -2266,6 +2480,7 @@ mod tests {
             completion: None,
             authorization_error: None,
             completed_attempt: Some("newer-attempt".to_string()),
+            last_writeback: None,
             client: Client::new(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
@@ -2324,5 +2539,101 @@ mod tests {
             params: Value::Null,
         };
         assert!(!is_valid_shutdown_request(&request));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_uses_first_active_source_and_isolates_remote_failure() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-lifecycle-{}", generate_state()));
+        let mut plugin = JiraPlugin {
+            data_dir: root.join("data"),
+            secrets_dir: root.join("secrets"),
+            pending_auth: None,
+            completion: None,
+            authorization_error: None,
+            completed_attempt: None,
+            last_writeback: None,
+            client: Client::new(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        };
+        std::fs::create_dir_all(&plugin.data_dir).unwrap();
+        std::fs::create_dir_all(&plugin.secrets_dir).unwrap();
+        plugin.save_settings(&json!({
+            "sources": {
+                "z-source": {"jql": "project = Z", "writeback": {"on_start": "In Progress"}},
+                "a-source": {"jql": "project = A", "writeback": {"on_start": "Development", "comment": true}}
+            }
+        })).unwrap();
+        let conn = plugin.database().unwrap();
+        upsert_issue(&conn, &issue_for_test("PLA-288"), "z-source", "todo").unwrap();
+        sync_issue_source(&conn, "PLA-288", "z-source").unwrap();
+        sync_issue_source(&conn, "PLA-288", "a-source").unwrap();
+
+        let response = plugin
+            .task_lifecycle(&json!({"batch": {"events": [{
+                "type": "child_assigned", "child_key": "PLA-289", "parent_key": "PLA-288",
+                "is_first_child_assignment": true
+            }]}}))
+            .await
+            .unwrap();
+
+        assert_eq!(response["outcomes"].as_array().unwrap().len(), 1);
+        assert_eq!(response["outcomes"][0]["source"], "a-source");
+        assert_eq!(response["outcomes"][0]["action"], "start");
+        assert_eq!(response["outcomes"][0]["ok"], false);
+        assert_eq!(
+            plugin.status().await["last_writeback"]["source"],
+            "a-source"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_ignores_nonfirst_children_and_handles_auto_parent_completion() {
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-lifecycle-{}", generate_state()));
+        let mut plugin = JiraPlugin {
+            data_dir: root.join("data"),
+            secrets_dir: root.join("secrets"),
+            pending_auth: None,
+            completion: None,
+            authorization_error: None,
+            completed_attempt: None,
+            last_writeback: None,
+            client: Client::new(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        };
+        std::fs::create_dir_all(&plugin.data_dir).unwrap();
+        std::fs::create_dir_all(&plugin.secrets_dir).unwrap();
+        plugin
+            .save_settings(&json!({"sources": {"source": {
+                "jql": "project = PLA", "writeback": {"on_complete": "Done"}
+            }}}))
+            .unwrap();
+        let conn = plugin.database().unwrap();
+        upsert_issue(&conn, &issue_for_test("PLA-288"), "source", "todo").unwrap();
+        sync_issue_source(&conn, "PLA-288", "source").unwrap();
+
+        let response = plugin.task_lifecycle(&json!({"batch": {"events": [
+            {"type": "child_assigned", "child_key": "PLA-289", "parent_key": "PLA-288", "is_first_child_assignment": false},
+            {"type": "status_changed", "task_key": "PLA-288", "previous_status": "in_progress", "new_status": "done", "cause": "automatic_parent_completion"}
+        ]}})).await.unwrap();
+        assert_eq!(response["outcomes"].as_array().unwrap().len(), 1);
+        assert_eq!(response["outcomes"][0]["action"], "complete");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn issue_for_test(key: &str) -> FetchedIssue {
+        FetchedIssue {
+            key: key.to_string(),
+            summary: "summary".to_string(),
+            description: String::new(),
+            status: "Open".to_string(),
+            status_category: None,
+            priority: None,
+            labels: vec![],
+        }
     }
 }

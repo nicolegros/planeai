@@ -16,6 +16,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{timeout, timeout_at, Duration, Instant};
 
 use crate::commands;
+use crate::task_lifecycle::TaskLifecycleBatch;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -357,6 +358,8 @@ struct PluginHandshake {
     plugin_name: String,
     plugin_version: String,
     host_api_version: String,
+    #[serde(default)]
+    lifecycle_event_subscriptions: HashSet<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -763,6 +766,7 @@ struct RuntimeProcess {
     plugin_id: String,
     data_dir: PathBuf,
     capabilities: HashSet<PluginHostCapability>,
+    lifecycle_event_subscriptions: HashSet<String>,
 }
 
 fn request_timeout(method: &str) -> Duration {
@@ -1283,6 +1287,45 @@ impl PluginRuntimeSupervisor {
         Err(error)
     }
 
+    /// Deliver a committed lifecycle batch in the background. Delivery failures
+    /// are deliberately isolated from the local task transaction.
+    pub fn dispatch_task_lifecycle(self: &Arc<Self>, batch: TaskLifecycleBatch) {
+        if self.shutting_down.load(Ordering::Acquire) {
+            tracing::warn!(batch_id = %batch.batch_id, "skipped lifecycle delivery while plugin runtime is shutting down");
+            return;
+        }
+        let supervisor = Arc::clone(self);
+        tokio::spawn(async move {
+            let processes = supervisor
+                .processes
+                .lock()
+                .await
+                .iter()
+                .map(|(plugin_id, process)| (plugin_id.clone(), process.clone()))
+                .collect::<Vec<_>>();
+            for (plugin_id, process) in processes {
+                let subscribed = process
+                    .lock()
+                    .await
+                    .lifecycle_event_subscriptions
+                    .contains("task.lifecycle");
+                if !subscribed {
+                    continue;
+                }
+                if let Err(error) = supervisor
+                    .call(
+                        &plugin_id,
+                        "plugin.taskLifecycle",
+                        serde_json::json!({ "batch": batch }),
+                    )
+                    .await
+                {
+                    tracing::warn!(plugin_id, batch_id = %batch.batch_id, %error, "task lifecycle delivery failed");
+                }
+            }
+        });
+    }
+
     pub async fn local_ui_source(
         &self,
         plugin_id: &str,
@@ -1529,6 +1572,10 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
+        {
+            let mut runtime = process.lock().await;
+            runtime.lifecycle_event_subscriptions = handshake.lifecycle_event_subscriptions;
+        }
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
         // Publish the ready runtime before emitting the running lifecycle event so
@@ -1748,6 +1795,7 @@ async fn spawn_runtime(
         plugin_id: plugin_id.to_string(),
         data_dir,
         capabilities: effective_capabilities(plugin_id),
+        lifecycle_event_subscriptions: HashSet::new(),
     })
 }
 

@@ -3434,6 +3434,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "open",
+ "planeai-jira",
  "rand 0.10.2",
  "reqwest",
  "rusqlite",

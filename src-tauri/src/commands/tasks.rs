@@ -6,7 +6,11 @@ use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, PtyState};
+use crate::task_lifecycle::{
+    StatusChangeCause, TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin,
+};
 
 use crate::commands::pr::poll_pr_for_session;
 use crate::commands::sessions::helpers::{fire_task_hook, session_cwd};
@@ -45,17 +49,22 @@ impl From<planeai_tasks::model::Task> for TaskItem {
     }
 }
 
-fn resolve_repo(db_state: &State<DbState>, repo_path: &str) -> Result<SqliteRepository, String> {
+fn resolve_project(
+    db_state: &State<DbState>,
+    repo_path: &str,
+) -> Result<planeai_core::services::Project, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
-    let projects = db::list_projects(&conn).map_err(|e| e.to_string())?;
-    let project = projects
-        .iter()
-        .find(|p| crate::util::is_project_path_or_descendant(repo_path, &p.path))
-        .ok_or_else(|| format!("no project found for path: {repo_path}"))?;
-    let prefix = project.prefix.clone();
-    drop(conn);
+    db::list_projects(&conn)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|project| crate::util::is_project_path_or_descendant(repo_path, &project.path))
+        .ok_or_else(|| format!("no project found for path: {repo_path}"))
+}
+
+fn resolve_repo(db_state: &State<DbState>, repo_path: &str) -> Result<SqliteRepository, String> {
+    let project = resolve_project(db_state, repo_path)?;
     let db_path = planeai_paths::db_path();
-    SqliteRepository::open(db_path.to_str().unwrap(), &prefix).map_err(|e| e.to_string())
+    SqliteRepository::open(db_path.to_str().unwrap(), &project.prefix).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -101,6 +110,7 @@ pub fn list_all_task_items(
 #[allow(clippy::too_many_arguments)]
 pub fn create_task_item(
     db_state: State<DbState>,
+    runtime: State<PluginRuntimeHandle>,
     repo_path: String,
     title: String,
     description: String,
@@ -111,26 +121,44 @@ pub fn create_task_item(
     base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
     tracing::info!(title = %title, "create_task_item");
+    let project = resolve_project(&db_state, &repo_path)?;
     let repo = resolve_repo(&db_state, &repo_path)?;
-    repo.create(CreateParams {
-        key: None,
-        title,
-        description,
-        status: None,
-        priority,
-        tags,
-        blocked_by,
-        parent_key,
-        base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
-    })
-    .map(TaskItem::from)
-    .map_err(|e| e.to_string())
+    let (task, first_child_assignment) = repo
+        .create_with_first_child_assignment(CreateParams {
+            key: None,
+            title,
+            description,
+            status: None,
+            priority,
+            tags,
+            blocked_by,
+            parent_key,
+            base_branch: base_branch.unwrap_or_else(|| DEFAULT_BASE_BRANCH.to_string()),
+        })
+        .map_err(|e| e.to_string())?;
+
+    if let (Some(parent_key), Some(is_first_child_assignment)) =
+        (&task.parent_key, first_child_assignment)
+    {
+        runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
+            TaskLifecycleOrigin::Ui,
+            project.id,
+            project.prefix,
+            vec![TaskLifecycleEvent::ChildAssigned {
+                child_key: task.key.clone(),
+                parent_key: parent_key.clone(),
+                is_first_child_assignment,
+            }],
+        ));
+    }
+    Ok(TaskItem::from(task))
 }
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn edit_task_item(
     db_state: State<DbState>,
+    runtime: State<PluginRuntimeHandle>,
     repo_path: String,
     key: String,
     title: Option<String>,
@@ -145,27 +173,51 @@ pub fn edit_task_item(
     clear_parent: Option<bool>,
     base_branch: Option<String>,
 ) -> Result<TaskItem, String> {
+    let project = resolve_project(&db_state, &repo_path)?;
     let repo = resolve_repo(&db_state, &repo_path)?;
+    let before = repo.get(&key).map_err(|e| e.to_string())?;
     let resolved_parent_key = if clear_parent.unwrap_or(false) {
-        Some(None) // explicitly clear
+        Some(None)
     } else {
-        parent_key.map(Some) // set to value, or None = don't touch
+        parent_key.map(Some)
     };
-    repo.update(
-        &key,
-        UpdateParams {
-            title,
-            description,
-            priority,
-            tags,
-            blocked_by,
-            parent_key: resolved_parent_key,
-            base_branch,
-            ..Default::default()
-        },
-    )
-    .map(TaskItem::from)
-    .map_err(|e| e.to_string())
+    let task = repo
+        .update(
+            &key,
+            UpdateParams {
+                title,
+                description,
+                priority,
+                tags,
+                blocked_by,
+                parent_key: resolved_parent_key,
+                base_branch,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    if task.parent_key != before.parent_key {
+        if let Some(parent_key) = &task.parent_key {
+            let child_count = repo
+                .list(ListFilter {
+                    parent_key: Some(Some(parent_key.clone())),
+                    ..Default::default()
+                })
+                .map_err(|e| e.to_string())?
+                .len();
+            runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
+                TaskLifecycleOrigin::Ui,
+                project.id,
+                project.prefix,
+                vec![TaskLifecycleEvent::ChildAssigned {
+                    child_key: task.key.clone(),
+                    parent_key: parent_key.clone(),
+                    is_first_child_assignment: child_count == 1,
+                }],
+            ));
+        }
+    }
+    Ok(TaskItem::from(task))
 }
 
 #[tauri::command]
@@ -174,6 +226,7 @@ pub async fn move_task_item(
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
     pty_state: State<'_, PtyState>,
+    runtime: State<'_, PluginRuntimeHandle>,
     app: AppHandle,
     key: String,
     status: String,
@@ -181,12 +234,13 @@ pub async fn move_task_item(
 ) -> Result<(), String> {
     tracing::info!(key = %key, status = %status, "move_task_item");
     let s = Status::parse(&status).ok_or_else(|| format!("invalid status: {status}"))?;
+    let project = resolve_project(&db_state, &repo_path)?;
 
     let db = db_state.0.clone();
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // All I/O (DB writes, subprocess kills) runs off the main thread.
-    let archived_session_ids = super::blocking({
+    let (archived_session_ids, events) = super::blocking({
         let key = key.clone();
         let cfg = cfg.clone();
         move || {
@@ -204,6 +258,7 @@ pub async fn move_task_item(
                     .map_err(|e| e.to_string())?
             };
 
+            let previous = repo.get(&key).map_err(|e| e.to_string())?;
             let task = repo
                 .update(
                     &key,
@@ -213,12 +268,35 @@ pub async fn move_task_item(
                     },
                 )
                 .map_err(|e| e.to_string())?;
+            let mut events = Vec::new();
+            if previous.status != task.status {
+                events.push(TaskLifecycleEvent::StatusChanged {
+                    task_key: task.key.clone(),
+                    parent_key: task.parent_key.clone(),
+                    previous_status: previous.status.as_str().to_string(),
+                    new_status: task.status.as_str().to_string(),
+                    cause: StatusChangeCause::Direct,
+                });
+            }
 
             let mut session_ids: Vec<String> = Vec::new();
 
             if s == Status::Done {
+                let parent_before = task
+                    .parent_key
+                    .as_deref()
+                    .and_then(|parent_key| repo.get(parent_key).ok());
                 if let Some(parent_key) = planeai_tasks::try_auto_complete_parent(&repo, &task) {
                     tracing::info!(parent_key = %parent_key, "auto-completed parent task");
+                    if let (Some(before), Ok(parent)) = (parent_before, repo.get(&parent_key)) {
+                        events.push(TaskLifecycleEvent::StatusChanged {
+                            task_key: parent.key,
+                            parent_key: parent.parent_key,
+                            previous_status: before.status.as_str().to_string(),
+                            new_status: parent.status.as_str().to_string(),
+                            cause: StatusChangeCause::AutomaticParentCompletion,
+                        });
+                    }
                 }
 
                 // Archive sessions linked to this task
@@ -231,10 +309,19 @@ pub async fn move_task_item(
                 crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
             }
 
-            Ok(session_ids)
+            Ok((session_ids, events))
         }
     })
     .await?;
+
+    if !events.is_empty() {
+        runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
+            TaskLifecycleOrigin::Ui,
+            project.id,
+            project.prefix,
+            events,
+        ));
+    }
 
     // Detach PTYs (PtyManager is !Send, must stay on main thread)
     for id in &archived_session_ids {
