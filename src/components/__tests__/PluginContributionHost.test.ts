@@ -18,6 +18,7 @@ const { pluginCall, localUiSource, eventListeners } = vi.hoisted(() => ({
 
 vi.mock("../../lib/api", () => ({
   plugins: { call: pluginCall, localUiSource },
+  pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
 }));
 
 import PluginContributionHostHarness from "./PluginContributionHostHarness.svelte";

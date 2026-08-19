@@ -82,7 +82,7 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps pointer and keyboard selection synchronized with Jira issue rows", async () => {
+  it("opens a host-managed assignment modal when a Jira issue is clicked", async () => {
     component = mount(UnifiedSidebarJiraHarness, { target });
 
     await vi.waitFor(() => {
@@ -99,25 +99,10 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
 
     await vi.waitFor(() => {
       expect(getSelectedIndex()).toBe(2);
-      expect(host.shadowRoot?.querySelectorAll(".selected")).toHaveLength(1);
+      expect(document.querySelector("[data-plugin-modal]")).toBeTruthy();
       expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-42");
     });
-
-    const selectedIssue = host.shadowRoot!.querySelector<HTMLButtonElement>(".issue.selected")!;
-    expect(host.shadowRoot?.activeElement).toBe(selectedIssue);
-    selectedIssue.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowDown",
-        bubbles: true,
-        composed: true,
-        cancelable: true,
-      }),
-    );
-
-    await vi.waitFor(() => {
-      expect(getSelectedIndex()).toBe(3);
-      expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-43");
-    });
+    expect(host.shadowRoot?.activeElement).not.toBe(issue);
   });
 
   it("enters and traverses Jira rows from focused sidebar keyboard navigation", async () => {

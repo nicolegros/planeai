@@ -2,7 +2,11 @@
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
-  import { plugins } from "../lib/api";
+  import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
+  import { showSnackbar } from "../lib/snackbar.svelte";
+  import * as taskStore from "../lib/task-store.svelte";
+  import { getTasksByProject } from "../lib/task-store.svelte";
+  import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
   import type { PluginUiDisposer, PluginUiEntrypoint } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
@@ -31,6 +35,23 @@
   function disposeCurrent(): void {
     disposer?.();
     disposer = null;
+  }
+
+  async function callPlugin<T>(method: string, params: unknown = null): Promise<T> {
+    const value = await plugins.call<T>(plugin.id, method, params);
+    if (plugin.id !== "jira" || method !== "jira.sidebar.items") return value;
+    const sidebar = value as { items?: Array<{ key: string; child_count?: number }> };
+    if (!sidebar.items) return value;
+    const projectList = await projectsApi.list();
+    const taskLists = await Promise.all(projectList.map((project) => tasksApi.listAll(project.path)));
+    const counts = new Map<string, number>();
+    for (const task of taskLists.flat()) {
+      if (task.parent_key) counts.set(task.parent_key, (counts.get(task.parent_key) ?? 0) + 1);
+    }
+    return {
+      ...sidebar,
+      items: sidebar.items.map((item) => ({ ...item, child_count: counts.get(item.key) ?? 0 })),
+    } as T;
   }
 
   function localModuleUrl(source: string): { url: string; revoke: () => void } {
@@ -94,7 +115,7 @@
         plugin,
         contribution,
         host: {
-          call: <T>(method: string, params: unknown = null) => plugins.call<T>(plugin.id, method, params),
+          call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
           navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
           sidebar: {
             register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
@@ -113,6 +134,36 @@
           },
           data: {
             changed: () => plugins.dataChanged(plugin.id),
+            refreshAssignment: async (project) => {
+              try {
+                await Promise.all([
+                  taskStore.refresh([...new Set([...Object.keys(getTasksByProject()), project.path])]),
+                  plugins.dataChanged(plugin.id),
+                ]);
+              } catch (error) {
+                showSnackbar(`Child task created, but refresh failed: ${String(error)}`);
+              }
+            },
+            notify: (message, kind = "error") => showSnackbar(message, kind),
+          },
+          projects: {
+            list: async () => (await projectsApi.list()).filter((project) => !project.hidden),
+          },
+          tasks: {
+            createChild: ({ project, title, description, parentKey }) =>
+              tasksApi.create({
+                repoPath: project.path,
+                title,
+                description,
+                priority: 0,
+                tags: [],
+                blockedBy: [],
+                parentKey,
+              }),
+          },
+          interaction: {
+            openModal: openPluginModal,
+            openProjectForm,
           },
         },
       });

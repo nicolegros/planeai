@@ -1,0 +1,39 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { openPluginModal } from "../plugin-modal-manager";
+
+describe("plugin modal manager", () => {
+  afterEach(() => {
+    document.querySelectorAll("[data-plugin-modal]").forEach((element) => element.remove());
+  });
+
+  it("closes only the top modal, restores focus, and blocks dismissal while submitting", () => {
+    const origin = document.createElement("button");
+    document.body.append(origin);
+    origin.focus();
+
+    const first = openPluginModal({
+      title: "First",
+      mount: (root) => root.append(document.createElement("button")),
+    });
+    const second = openPluginModal({
+      title: "Second",
+      mount: (root) => root.append(document.createElement("button")),
+    });
+
+    first.close();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(2);
+
+    second.setSubmitting(true);
+    second.close();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(2);
+
+    second.setSubmitting(false);
+    second.close();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(1);
+
+    first.close();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(0);
+    expect(document.activeElement).toBe(origin);
+    origin.remove();
+  });
+});

@@ -424,6 +424,30 @@ impl JiraPlugin {
         Ok(json!({ "items": items }))
     }
 
+    fn issue(&self, params: &Value) -> Result<Value, String> {
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or("jira issue get requires key")?;
+        let conn = self.database()?;
+        conn.query_row(
+            "SELECT issue_key, summary, description FROM jira_issues WHERE issue_key = ?1 AND sync_status = 'synced'",
+            [key],
+            |row| {
+                Ok(json!({
+                    "key": row.get::<_, String>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "description": row.get::<_, String>(2)?,
+                }))
+            },
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => "Jira issue is no longer available".to_string(),
+            _ => format!("failed to get Jira issue: {error}"),
+        })
+    }
+
     async fn sync_now<R, W>(&self, input: &mut R, output: &mut W) -> Result<Value, String>
     where
         R: tokio::io::AsyncBufRead + Unpin,
@@ -1503,6 +1527,7 @@ where
         "jira.settings.update" => plugin.update_source_settings(&request.params),
         "jira.sources.rename" => plugin.rename_source(&request.params),
         "jira.sidebar.items" => plugin.sidebar_items(),
+        "jira.issue.get" => plugin.issue(&request.params),
         "jira.syncNow" => plugin.sync_now(input, output).await,
         "jira.open_browser" => request
             .params

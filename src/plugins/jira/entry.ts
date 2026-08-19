@@ -1,4 +1,8 @@
-import type { PluginUiContext, PluginUiEntrypoint } from "../../lib/plugin-sdk";
+import type {
+  PluginModalControls,
+  PluginUiContext,
+  PluginUiEntrypoint,
+} from "../../lib/plugin-sdk";
 
 type JiraSource = {
   jql: string;
@@ -58,6 +62,200 @@ function sidebarStatusLabel(status: string): string {
       done: "Done",
     }[status] ?? status
   );
+}
+
+type JiraIssue = { key: string; title: string; description: string };
+type AssignmentProject = { id: string; name: string; path: string; hidden: boolean };
+
+function openAssignment(context: PluginUiContext, key: string): PluginModalControls {
+  return context.host.interaction.openModal({
+    title: "Assign Jira issue",
+    mount(root, controls) {
+      const style = document.createElement("style");
+      style.textContent = `${styles} .assignment { padding:0 20px 20px; display:grid; gap:14px; } .preview { border:1px solid var(--color-border); border-radius:8px; padding:10px; } .preview h3 { margin:4px 0; font-size:14px; } .preview p { white-space:pre-wrap; margin:0; color:var(--color-t2); font-size:12px; } .actions { display:flex; justify-content:flex-end; gap:8px; } .empty { color:var(--color-t2); font-size:12px; }`;
+      const body = document.createElement("div");
+      let issue: JiraIssue | null = null;
+      let projects: AssignmentProject[] = [];
+      let selectedProjectId = "";
+      let error = "";
+      let loading = true;
+      let submitting = false;
+      let disposed = false;
+
+      const selectedProject = () =>
+        projects.find((project) => project.id === selectedProjectId) ?? null;
+      const focusPicker = () =>
+        queueMicrotask(() => root.querySelector<HTMLSelectElement>("select")?.focus());
+      const refreshProjects = async (projectId?: string) => {
+        projects = await context.host.projects.list();
+        selectedProjectId = projectId ?? selectedProjectId;
+        if (!selectedProject()) selectedProjectId = "";
+      };
+      const render = () => {
+        const form = document.createElement("form");
+        form.className = "assignment";
+        form.setAttribute("aria-label", "Assign Jira issue to PlaneAI project");
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          void submit();
+        });
+        form.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void submit();
+            return;
+          }
+          if (!submitting && event.key.toLowerCase() === "p") {
+            event.preventDefault();
+            focusPicker();
+          }
+          if (!submitting && event.key.toLowerCase() === "n") {
+            event.preventDefault();
+            void createProject();
+          }
+        });
+        if (loading) {
+          const message = document.createElement("p");
+          message.className = "muted";
+          message.textContent = "Loading Jira issue…";
+          form.append(message);
+        } else if (!issue) {
+          const message = document.createElement("p");
+          message.className = "error";
+          message.setAttribute("role", "alert");
+          message.textContent = error || "This Jira issue is no longer available.";
+          form.append(message);
+        } else {
+          const preview = document.createElement("section");
+          preview.className = "preview";
+          const issueKey = document.createElement("span");
+          issueKey.className = "key";
+          issueKey.textContent = issue.key;
+          const title = document.createElement("h3");
+          title.textContent = issue.title;
+          const description = document.createElement("p");
+          description.textContent = issue.description || "No description";
+          preview.append(issueKey, title, description);
+          form.append(preview);
+
+          if (projects.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "empty";
+            empty.textContent = "No PlaneAI projects available. Press N to create one.";
+            form.append(empty);
+          } else {
+            const picker = document.createElement("select");
+            picker.setAttribute("aria-label", "PlaneAI project");
+            const placeholder = document.createElement("option");
+            placeholder.value = "";
+            placeholder.textContent = "Choose a project";
+            picker.append(placeholder);
+            for (const project of projects) {
+              const option = document.createElement("option");
+              option.value = project.id;
+              option.textContent = project.name;
+              option.selected = project.id === selectedProjectId;
+              picker.append(option);
+            }
+            picker.disabled = submitting;
+            picker.onchange = () => {
+              selectedProjectId = picker.value;
+              error = "";
+              render();
+              focusPicker();
+            };
+            form.append(field("PlaneAI project (P)", picker));
+          }
+          if (error) {
+            const message = document.createElement("p");
+            message.className = "error";
+            message.setAttribute("role", "alert");
+            message.textContent = error;
+            form.append(message);
+          }
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const newProject = document.createElement("button");
+          newProject.type = "button";
+          newProject.textContent = "New Project (N)";
+          newProject.disabled = submitting;
+          newProject.onclick = () => void createProject();
+          const assign = document.createElement("button");
+          assign.type = "submit";
+          assign.className = "primary";
+          assign.textContent = submitting ? "Assigning…" : "Assign";
+          assign.disabled = submitting || !selectedProject();
+          assign.title = "⌘↵";
+          actions.append(newProject, assign);
+          form.append(actions);
+        }
+        body.replaceChildren(form);
+      };
+      const createProject = async () => {
+        const project = await context.host.interaction.openProjectForm();
+        if (!project || disposed) return;
+        try {
+          await refreshProjects(project.id);
+          error = "";
+          render();
+          focusPicker();
+        } catch (nextError) {
+          error = String(nextError);
+          render();
+        }
+      };
+      const submit = async () => {
+        if (submitting || !issue) return;
+        const project = selectedProject();
+        if (!project) {
+          error = "Choose a PlaneAI project.";
+          render();
+          focusPicker();
+          return;
+        }
+        submitting = true;
+        error = "";
+        controls.setSubmitting(true);
+        render();
+        try {
+          await context.host.tasks.createChild({
+            project,
+            title: issue.title,
+            description: issue.description,
+            parentKey: issue.key,
+          });
+          await context.host.data.refreshAssignment(project);
+          controls.setSubmitting(false);
+          controls.close();
+        } catch (nextError) {
+          error = String(nextError);
+          submitting = false;
+          controls.setSubmitting(false);
+          render();
+        }
+      };
+      root.append(style, body);
+      void Promise.all([call<JiraIssue>(context, "jira.issue.get", { key }), refreshProjects()])
+        .then(([nextIssue]) => {
+          issue = nextIssue;
+          loading = false;
+          if (!disposed) {
+            render();
+            focusPicker();
+          }
+        })
+        .catch((nextError) => {
+          loading = false;
+          error = String(nextError);
+          if (!disposed) render();
+        });
+      render();
+      return () => {
+        disposed = true;
+        root.replaceChildren();
+      };
+    },
+  });
 }
 
 export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
@@ -348,6 +546,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
     let collapsed = false;
     let selected = "";
     let unregister = () => {};
+    let assignmentModal: PluginModalControls | null = null;
     let disposed = false;
     const render = (focusRowId: string | null = null) => {
       unregister();
@@ -389,6 +588,8 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
             context.host.sidebar.select(rowId);
             selected = item.key;
             render(rowId);
+            assignmentModal?.close();
+            assignmentModal = openAssignment(context, item.key);
           };
           row.onkeydown = context.host.sidebar.handleKeydown;
           issueRegion.append(row);
@@ -462,6 +663,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
     });
     return () => {
       disposed = true;
+      assignmentModal?.close();
       unregister();
       root.replaceChildren();
     };

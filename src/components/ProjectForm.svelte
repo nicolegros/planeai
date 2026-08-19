@@ -9,8 +9,10 @@
   import { Button, Input, Label } from "./ui";
   import { LoaderCircle } from "@lucide/svelte";
 
+  import type { Project } from "../lib/types";
+
   interface Props {
-    onCreated: () => void;
+    onCreated: (project: Project) => void | Promise<void>;
     onCancel: () => void;
   }
 
@@ -107,13 +109,12 @@
     }
 
     try {
-      await projectsApi.create(name.trim(), path.trim());
+      const project = await projectsApi.create(name.trim(), path.trim());
+      await onCreated(project);
     } catch (e) {
       showSnackbar(String(e));
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   async function submitRemote() {
@@ -135,13 +136,12 @@
     }
 
     try {
-      await projectsApi.create(repoName, fullPath);
+      const project = await projectsApi.create(repoName, fullPath);
+      await onCreated(project);
     } catch (e) {
       showSnackbar(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   function toggleMode() {
