@@ -1,6 +1,7 @@
 <script lang="ts">
   import { projects as projectsApi, git } from "../lib/api";
   import type { Project } from "../lib/types";
+  import * as projectStore from "../lib/project-store.svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -111,9 +112,9 @@
 
     try {
       if (project) {
-        await projectsApi.update(project.id, name.trim(), path.trim());
+        await projectStore.updateProject(project.id, name.trim(), path.trim());
       } else {
-        await projectsApi.create(name.trim(), path.trim());
+        await projectStore.createProject(name.trim(), path.trim());
       }
     } catch (e) {
       showSnackbar(String(e));
@@ -142,7 +143,7 @@
     }
 
     try {
-      await projectsApi.create(repoName, fullPath);
+      await projectStore.createProject(repoName, fullPath);
     } catch (e) {
       showSnackbar(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
       submitting = false;

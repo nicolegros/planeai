@@ -1,14 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, tick } from "svelte";
 
-const { update, validateGitRepo } = vi.hoisted(() => ({
-  update: vi.fn(() => Promise.resolve()),
+const { updateProject, validateGitRepo } = vi.hoisted(() => ({
+  updateProject: vi.fn(() => Promise.resolve()),
   validateGitRepo: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("../../lib/api", () => ({
-  projects: { update, validateGitRepo },
+  projects: { validateGitRepo },
   git: { cloneRepository: vi.fn() },
+}));
+
+vi.mock("../../lib/project-store.svelte", () => ({
+  createProject: vi.fn(() => Promise.resolve()),
+  updateProject,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -35,7 +40,7 @@ function renderForm() {
 
 describe("ProjectForm editing", () => {
   beforeEach(() => {
-    update.mockClear();
+    updateProject.mockClear();
     validateGitRepo.mockClear();
   });
 
@@ -69,6 +74,6 @@ describe("ProjectForm editing", () => {
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
 
     expect(validateGitRepo).toHaveBeenCalledWith("/projects/new");
-    expect(update).toHaveBeenCalledWith("p1", "New project", "/projects/new");
+    expect(updateProject).toHaveBeenCalledWith("p1", "New project", "/projects/new");
   });
 });

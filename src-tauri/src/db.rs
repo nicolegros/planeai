@@ -90,6 +90,7 @@ pub fn update_settings(conn: &Connection, settings: &Settings) -> Result<()> {
 pub fn migrate(conn: &Connection) -> Result<()> {
     // Project/session schema lives in planeai-core (single source of truth)
     planeai_core::services::migrate_project_session_schema(conn)?;
+    normalize_project_paths(conn)?;
     planeai_core::prompt_lock::migrate(conn)?;
     planeai_core::loop_service::LoopService::migrate(conn)?;
 
@@ -120,6 +121,26 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "UPDATE settings SET terminal_theme_dark = terminal_theme WHERE terminal_theme IS NOT NULL",
     );
+    Ok(())
+}
+
+fn normalize_project_paths(conn: &Connection) -> Result<()> {
+    let mut statement = conn.prepare("SELECT id, path FROM projects")?;
+    let projects: Vec<(String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+
+    for (id, path) in projects {
+        if let Ok(canonical) = std::fs::canonicalize(&path) {
+            let canonical = canonical.to_string_lossy();
+            if canonical != path {
+                conn.execute(
+                    "UPDATE projects SET path = ?1 WHERE id = ?2",
+                    rusqlite::params![canonical, id],
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -158,6 +179,24 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
 
 pub fn update_project(conn: &Connection, id: &str, name: &str, path: &str) -> Result<Project> {
     planeai_core::services::ProjectService::update(conn, id, name, path)
+}
+
+pub fn project_path_in_use(conn: &Connection, path: &str, excluded_id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM projects WHERE status = 'active' AND path = ?1 AND id != ?2",
+        rusqlite::params![path, excluded_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+pub fn project_has_worktree_sessions(conn: &Connection, project_id: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE project_id = ?1 AND worktree_path IS NOT NULL",
+        [project_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
@@ -621,6 +660,59 @@ mod tests {
         assert!(!project_name_exists(&conn, "myapp").unwrap());
         create_project(&conn, "myapp", "/tmp/myapp").unwrap();
         assert!(project_name_exists(&conn, "myapp").unwrap());
+    }
+
+    #[test]
+    fn test_project_path_in_use_excludes_current_project_and_archived_projects() {
+        let conn = setup();
+        let first = create_project(&conn, "first", "/tmp/first").unwrap();
+        let second = create_project(&conn, "second", "/tmp/second").unwrap();
+
+        assert!(!project_path_in_use(&conn, "/tmp/first", &first.id).unwrap());
+        assert!(project_path_in_use(&conn, "/tmp/first", &second.id).unwrap());
+        archive_project(&conn, &first.id).unwrap();
+        assert!(!project_path_in_use(&conn, "/tmp/first", &second.id).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_project_path_in_use_resolves_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let real_path = temp.path().join("project");
+        let alias_path = temp.path().join("project-alias");
+        std::fs::create_dir(&real_path).unwrap();
+        symlink(&real_path, &alias_path).unwrap();
+
+        let conn = setup();
+        create_project(&conn, "first", alias_path.to_str().unwrap()).unwrap();
+        normalize_project_paths(&conn).unwrap();
+        let second = create_project(&conn, "second", "/tmp/second").unwrap();
+
+        let canonical_real_path = std::fs::canonicalize(&real_path).unwrap();
+        assert!(
+            project_path_in_use(&conn, canonical_real_path.to_str().unwrap(), &second.id,).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_project_has_worktree_sessions() {
+        let conn = setup();
+        let project = create_project(&conn, "myapp", "/tmp/myapp").unwrap();
+        assert!(!project_has_worktree_sessions(&conn, &project.id).unwrap());
+
+        create_session(
+            &conn,
+            &project.id,
+            "worktree session",
+            "planeai-myapp-aaa",
+            "feat/project-path",
+            Some("/tmp/worktree"),
+        )
+        .unwrap();
+
+        assert!(project_has_worktree_sessions(&conn, &project.id).unwrap());
     }
 
     #[test]

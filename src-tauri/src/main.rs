@@ -235,6 +235,7 @@ fn main() {
 
             let db_arc = Arc::new(Mutex::new(conn));
             app.manage(DbState(db_arc.clone()));
+            app.manage(ProjectOperationState::default());
             app.manage(plugins::PluginRuntimeHandle::new(
                 db_arc.clone(),
                 app.handle().clone(),

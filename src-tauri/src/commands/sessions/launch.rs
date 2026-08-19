@@ -7,7 +7,7 @@ use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use crate::config;
 use crate::db;
 use crate::git;
-use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle};
+use crate::state::{ConfigState, DaemonState, DbState, NotifyHandle, ProjectOperationState};
 #[cfg(not(windows))]
 use crate::tmux;
 use crate::util::sanitize_project_name;
@@ -33,6 +33,7 @@ pub async fn launch_session(
     state: State<'_, DbState>,
     notify: State<'_, NotifyHandle>,
     config_state: State<'_, ConfigState>,
+    operations: State<'_, ProjectOperationState>,
     project_id: String,
     project_name: String,
     repo_path: String,
@@ -46,6 +47,24 @@ pub async fn launch_session(
     task_key: Option<String>,
     task_prompt: Option<String>,
 ) -> Result<LaunchResult, String> {
+    // Tauri accepts these client-provided fields for compatibility; the authoritative values
+    // are loaded below after acquiring the project operation lock.
+    let _ = (&project_name, &repo_path);
+    let operation_lock = operations.lock_for(&project_id);
+    let _operation_guard = operation_lock.lock_owned().await;
+    let (project_name, repo_path) = crate::commands::blocking({
+        let conn = state.0.clone();
+        let project_id = project_id.clone();
+        move || {
+            let conn = conn.lock().map_err(|e| e.to_string())?;
+            let project = db::get_project(&conn, &project_id)
+                .map_err(|e| e.to_string())?
+                .filter(|project| project.status == "active")
+                .ok_or_else(|| "Project not found or archived.".to_string())?;
+            Ok((project.name, project.path))
+        }
+    })
+    .await?;
     tracing::info!(task_prompt = ?task_prompt, auto_approve, provider = ?provider, task_key = ?task_key, "launch_session called");
     // Phase 1: gather params from config (holding config lock briefly)
     let (cmd, provider_key, hook_enabled, backend, scrollback_bytes, extra_path_dirs) = {

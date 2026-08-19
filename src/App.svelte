@@ -753,13 +753,9 @@
   }
 
   async function finishProjectForm() {
-    const previousPath = projectToEdit?.path;
     showProjectForm = false;
     projectToEdit = null;
-    await projectStore.loadProjects();
-    await taskStore.refresh(
-      [...new Set([...projects.map((project) => project.path), previousPath].filter((path): path is string => Boolean(path)))],
-    );
+    await taskStore.refresh(projects.map((project) => project.path));
     focusTerminal();
   }
 

@@ -6,6 +6,7 @@
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
+  import { projectContextMenuItems } from "../lib/project-context-menu";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { ChevronDown, ChevronRight, LoaderCircle, Zap, Plus, FolderPlus, CheckCircle2, XCircle, Lightbulb, Settings, MessageSquare, Play, Square } from "@lucide/svelte";
   import PluginContributionHost from "./PluginContributionHost.svelte";
@@ -923,13 +924,17 @@
     x={projectContextMenu.x}
     y={projectContextMenu.y}
     onClose={() => (projectContextMenu = null)}
-    items={[
-      { label: "Edit project", onSelect: () => onEditProject(projectContextMenu!.project) },
-      { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
-      { label: "Hide project", onSelect: () => hideProject(projectContextMenu!.project.id) },
-      { label: "Archive project", onSelect: () => projectStore.archiveProject(projectContextMenu!.project.id) },
-      { label: "Delete project", danger: true, onSelect: () => onDeleteProject(projectContextMenu!.project) },
-    ]}
+    items={projectContextMenuItems(
+      projectContextMenu.project,
+      projectAutoMode[projectContextMenu.project.id] ?? false,
+      {
+        onEdit: onEditProject,
+        onToggleAutoDispatch: toggleAutoMode,
+        onHide: hideProject,
+        onArchive: (id) => projectStore.archiveProject(id),
+        onDelete: onDeleteProject,
+      },
+    )}
   />
 {/if}
 
