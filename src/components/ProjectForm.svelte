@@ -1,5 +1,6 @@
 <script lang="ts">
   import { projects as projectsApi, git } from "../lib/api";
+  import type { Project } from "../lib/types";
   import { open } from "@tauri-apps/plugin-dialog";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { isPlatformMod, MOD_ENTER_HINT } from "../lib/keyboard";
@@ -10,11 +11,13 @@
   import { LoaderCircle } from "@lucide/svelte";
 
   interface Props {
+    project?: Project | null;
     onCreated: () => void;
     onCancel: () => void;
   }
 
-  let { onCreated, onCancel }: Props = $props();
+  let { project = null, onCreated, onCancel }: Props = $props();
+  const isEditing = $derived(project !== null);
 
   const config = $derived(getSettings());
   const basePath = $derived(config.projects_base_path);
@@ -23,9 +26,9 @@
   let mode = $state<FormMode>("local");
 
   // Local mode fields
-  let path = $state(getSettings().projects_base_path ? getSettings().projects_base_path + "/" : "");
-  let name = $state("");
-  let nameManuallyEdited = $state(false);
+  let path = $state(project?.path ?? (getSettings().projects_base_path ? getSettings().projects_base_path + "/" : ""));
+  let name = $state(project?.name ?? "");
+  let nameManuallyEdited = $state(project !== null);
 
   // Remote mode fields
   let cloneUrl = $state("");
@@ -107,7 +110,11 @@
     }
 
     try {
-      await projectsApi.create(name.trim(), path.trim());
+      if (project) {
+        await projectsApi.update(project.id, name.trim(), path.trim());
+      } else {
+        await projectsApi.create(name.trim(), path.trim());
+      }
     } catch (e) {
       showSnackbar(String(e));
       submitting = false;
@@ -154,20 +161,26 @@
 
   // Form keyboard controller
   const fk = createFormKeyboardController(
-    () => mode === "local"
+    () => isEditing
       ? [
-          { key: "t", toggle: () => toggleMode() },
           { key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='path'] input") ?? null },
           { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
           { key: "b", toggle: () => { pickFolder(); } },
         ]
-      : [
-          { key: "t", toggle: () => toggleMode() },
-          { key: "u", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='url'] input") ?? null },
-          { key: "d", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='destination'] input") ?? null },
-          { key: "b", toggle: () => { pickFolder(); } },
-          { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
-        ],
+      : mode === "local"
+        ? [
+            { key: "t", toggle: () => toggleMode() },
+            { key: "p", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='path'] input") ?? null },
+            { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
+            { key: "b", toggle: () => { pickFolder(); } },
+          ]
+        : [
+            { key: "t", toggle: () => toggleMode() },
+            { key: "u", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='url'] input") ?? null },
+            { key: "d", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='destination'] input") ?? null },
+            { key: "b", toggle: () => { pickFolder(); } },
+            { key: "n", ref: () => wrapperEl?.querySelector<HTMLElement>("[data-field='name'] input") ?? null },
+          ],
     { wrapper: () => wrapperEl, onDismiss: () => onCancel() },
   );
 
@@ -183,6 +196,7 @@
 <div bind:this={wrapperEl} tabindex="-1" onkeydown={(e) => { if (e.key === "Enter" && isPlatformMod(e)) { e.preventDefault(); submit(); return; } fk.handleKeydown(e); }} onfocusin={fk.handleFocusin} class="outline-none" data-form-keyboard>
 <form class="px-5 pb-0 space-y-4" onsubmit={(e) => { e.preventDefault(); submit(); }}>
 
+  {#if !isEditing}
   <!-- Mode toggle -->
   <div class="flex gap-1 rounded-md bg-panel-hi p-0.5" role="tablist" aria-label="Project source">
     <button type="button" role="tab" aria-selected={mode === "local"} aria-controls="panel-local" class="flex-1 text-xs py-1 px-2 rounded transition-colors {mode === 'local' ? 'bg-accent text-on-accent' : 'bg-panel border border-border text-t2 hover:bg-panel-hi'}" onclick={() => { mode = "local"; submitAttempted = false; }}>
@@ -192,6 +206,7 @@
       Git remote {#if mode !== "remote"}<span class="font-mono text-[10px] px-1 rounded {badge}">T</span>{/if}
     </button>
   </div>
+  {/if}
 
   {#if mode === "local"}
     <!-- Local mode: path + name (same as before) -->
@@ -260,7 +275,7 @@
     <div class="flex gap-2">
       <Button type="button" onclick={() => onCancel()}>Cancel</Button>
       <Button type="submit" variant="primary" disabled={!canSubmit}>
-        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{mode === "local" ? "Add project" : "Clone & add"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
+        {#if submitting}<LoaderCircle class="size-3.5 animate-spin" />{:else}{isEditing ? "Save project" : mode === "local" ? "Add project" : "Clone & add"} <span class="ml-1 font-mono text-[10px] opacity-60">{MOD_ENTER_HINT}</span>{/if}
       </Button>
     </div>
   </div>

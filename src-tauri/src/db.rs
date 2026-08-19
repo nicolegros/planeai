@@ -156,6 +156,10 @@ pub fn create_project(conn: &Connection, name: &str, path: &str) -> Result<Proje
     planeai_core::services::ProjectService::create(conn, name, path)
 }
 
+pub fn update_project(conn: &Connection, id: &str, name: &str, path: &str) -> Result<Project> {
+    planeai_core::services::ProjectService::update(conn, id, name, path)
+}
+
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     planeai_core::services::ProjectService::list_active(conn)
 }

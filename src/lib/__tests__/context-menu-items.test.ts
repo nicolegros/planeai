@@ -83,6 +83,17 @@ function buildActiveSessionMenu(_session: Session): MenuItem[] {
   ];
 }
 
+// Replicate the project context menu logic from UnifiedSidebar
+function buildProjectMenu(): MenuItem[] {
+  return [
+    { label: "Edit project", onSelect: () => {} },
+    { label: "Auto-dispatch", onSelect: () => {} },
+    { label: "Hide project", onSelect: () => {} },
+    { label: "Archive project", onSelect: () => {} },
+    { label: "Delete project", danger: true, onSelect: () => {} },
+  ];
+}
+
 // Replicate the task context menu logic from UnifiedSidebar
 function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[] {
   const statusChildren: MenuItem[] = STATUS_OPTIONS.filter((s) => s.value !== task.status).map(
@@ -107,6 +118,17 @@ function buildTaskMenu(task: TaskItem, linkedSession: Session | null): MenuItem[
 }
 
 describe("context menu item construction", () => {
+  describe("project menu", () => {
+    it("shows Edit project as the first action", () => {
+      expect(buildProjectMenu()[0].label).toBe("Edit project");
+    });
+
+    it("keeps Delete project as a dangerous action", () => {
+      const deleteItem = buildProjectMenu().find((item) => item.label === "Delete project");
+      expect(deleteItem && !isParent(deleteItem) && deleteItem.danger).toBe(true);
+    });
+  });
+
   describe("exited session menu", () => {
     it("includes Restart, Rename, Archive, Delete", () => {
       const session = makeSession({ status: "exited" });

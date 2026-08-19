@@ -36,6 +36,7 @@
     onRenameSession: (id: string, name: string) => void;
     onStartRename: (id: string) => void;
     onDeleteProject: (project: Project) => void;
+    onEditProject: (project: Project) => void;
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
@@ -53,7 +54,7 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -465,6 +466,8 @@
       if (action.type === "select") {
         const key = `project:${current.project.id}`;
         toggleSection(key);
+      } else if (action.type === "edit") {
+        onEditProject(current.project);
       }
       return;
     }
@@ -921,6 +924,7 @@
     y={projectContextMenu.y}
     onClose={() => (projectContextMenu = null)}
     items={[
+      { label: "Edit project", onSelect: () => onEditProject(projectContextMenu!.project) },
       { label: projectAutoMode[projectContextMenu.project.id] ? "✓ Auto-dispatch" : "Auto-dispatch", onSelect: () => toggleAutoMode(projectContextMenu!.project) },
       { label: "Hide project", onSelect: () => hideProject(projectContextMenu!.project.id) },
       { label: "Archive project", onSelect: () => projectStore.archiveProject(projectContextMenu!.project.id) },

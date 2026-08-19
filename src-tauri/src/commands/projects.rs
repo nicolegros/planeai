@@ -22,6 +22,30 @@ pub fn create_project(
 }
 
 #[tauri::command]
+pub async fn update_project(
+    state: State<'_, DbState>,
+    id: String,
+    name: String,
+    path: String,
+) -> Result<db::Project, String> {
+    let path = expand_tilde(&path);
+    let conn = state.0.clone();
+    crate::commands::blocking(move || {
+        let conn = conn.lock().map_err(|e| e.to_string())?;
+        let current = db::get_project(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Project not found.".to_string())?;
+        if current.name != name
+            && db::project_name_exists(&conn, &name).map_err(|e| e.to_string())?
+        {
+            return Err(format!("A project named '{}' already exists.", name));
+        }
+        db::update_project(&conn, &id, &name, &path).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn list_projects(state: State<DbState>) -> Result<Vec<db::Project>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::list_projects(&conn).map_err(|e| e.to_string())

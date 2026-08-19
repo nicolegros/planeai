@@ -296,6 +296,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             create_project,
+            update_project,
             list_projects,
             list_archived_projects,
             archive_project,
