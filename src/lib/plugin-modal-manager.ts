@@ -5,6 +5,7 @@ import type { Project } from "./types";
 
 export interface PluginModalControls {
   close(): void;
+  dispose(): void;
   setSubmitting(submitting: boolean): void;
 }
 
@@ -18,6 +19,7 @@ type ManagedModal = {
   layer: HTMLDivElement;
   dialog: HTMLDivElement;
   body: HTMLDivElement;
+  parent: ManagedModal | null;
   restoreFocus: HTMLElement | null;
   submitting: boolean;
   cleanup: () => void;
@@ -27,6 +29,13 @@ const stack: ManagedModal[] = [];
 
 function isTop(modal: ManagedModal): boolean {
   return stack.at(-1) === modal;
+}
+
+function isDescendant(modal: ManagedModal, ancestor: ManagedModal): boolean {
+  for (let parent = modal.parent; parent; parent = parent.parent) {
+    if (parent === ancestor) return true;
+  }
+  return false;
 }
 
 function focusables(dialog: HTMLElement): HTMLElement[] {
@@ -41,12 +50,20 @@ function focusables(dialog: HTMLElement): HTMLElement[] {
     .filter((element) => element.offsetParent !== null);
 }
 
+function deepestActiveElement(): HTMLElement | null {
+  let active = document.activeElement;
+  while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
+  return active instanceof HTMLElement ? active : null;
+}
+
 function focusModal(modal: ManagedModal): void {
   const [first] = focusables(modal.dialog);
   (first ?? modal.dialog).focus();
 }
 
-function closeModal(modal: ManagedModal): void {
+function closeTopModal(modal: ManagedModal): void {
   if (!isTop(modal)) return;
   stack.pop();
   modal.cleanup();
@@ -54,6 +71,17 @@ function closeModal(modal: ManagedModal): void {
   const next = stack.at(-1);
   if (next) focusModal(next);
   else modal.restoreFocus?.focus();
+}
+
+function closeModal(modal: ManagedModal, dispose = false): void {
+  if (dispose) {
+    let top = stack.at(-1);
+    while (top && isDescendant(top, modal)) {
+      closeTopModal(top);
+      top = stack.at(-1);
+    }
+  }
+  closeTopModal(modal);
 }
 
 function trapTab(event: KeyboardEvent, modal: ManagedModal): void {
@@ -64,7 +92,7 @@ function trapTab(event: KeyboardEvent, modal: ManagedModal): void {
     modal.dialog.focus();
     return;
   }
-  const active = document.activeElement as HTMLElement | null;
+  const active = deepestActiveElement();
   const index = elements.indexOf(active ?? elements[0]);
   if (event.shiftKey && index <= 0) {
     event.preventDefault();
@@ -78,14 +106,17 @@ function trapTab(event: KeyboardEvent, modal: ManagedModal): void {
 function openShell(
   title: string,
   contentResponsive = false,
+  parent: ManagedModal | null = null,
 ): { modal: ManagedModal; controls: PluginModalControls } {
   const layer = document.createElement("div");
   layer.className = "fixed inset-0 z-50 flex items-center justify-center";
   layer.dataset.pluginModal = "";
   const dialog = document.createElement("div");
+  const dialogShellClass =
+    "flex flex-col overflow-hidden rounded-xl border border-border-s bg-panel shadow-lg";
   dialog.className = contentResponsive
-    ? "flex max-h-[90vh] w-[min(90vw,42rem)] flex-col overflow-hidden rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)]"
-    : "flex max-h-[85vh] w-[452px] flex-col overflow-hidden rounded-xl border border-border-s bg-panel shadow-[0_26px_70px_-14px_rgba(0,0,0,0.6)]";
+    ? `${dialogShellClass} max-h-[90vh] w-[min(90vw,42rem)]`
+    : `${dialogShellClass} max-h-[85vh] w-[452px]`;
   dialog.tabIndex = -1;
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
@@ -104,6 +135,7 @@ function openShell(
     close: () => {
       if (!modal.submitting) closeModal(modal);
     },
+    dispose: () => closeModal(modal, true),
     setSubmitting: (submitting) => {
       modal.submitting = submitting;
       layer.dataset.submitting = String(submitting);
@@ -113,6 +145,7 @@ function openShell(
     layer,
     dialog,
     body,
+    parent,
     restoreFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
     submitting: false,
     cleanup: () => {},
@@ -157,10 +190,12 @@ export function openPluginModal(options: PluginModalOptions): PluginModalControl
 /** Opens the existing host ProjectForm above the active plugin modal. */
 export function openProjectForm(): Promise<Project | null> {
   return new Promise((resolve) => {
-    const { modal, controls } = openShell("Add Project");
+    const { modal, controls } = openShell("Add Project", false, stack.at(-1) ?? null);
     let component: ReturnType<typeof mount> | null = null;
+    let settled = false;
     const finish = (project: Project | null) => {
-      if (!isTop(modal)) return;
+      if (settled) return;
+      settled = true;
       closeModal(modal);
       resolve(project);
     };
@@ -180,6 +215,7 @@ export function openProjectForm(): Promise<Project | null> {
     modal.cleanup = () => {
       if (component) unmount(component);
       component = null;
+      finish(null);
     };
     // ProjectForm handles its own normal/insert escape behavior. The host shell
     // remains responsible for backdrop, tab trapping, and final focus restoration.

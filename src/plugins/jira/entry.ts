@@ -25,7 +25,7 @@ type JiraStatus = {
 };
 type SyncTotals = { created: number; updated: number; departed: number; errors: number };
 type SidebarItem = { key: string; title: string; status: string; child_count: number };
-const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
+const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
@@ -120,19 +120,33 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
       body.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
+          event.stopPropagation();
           void submit();
           return;
         }
+        const consumeNormalModeKey =
+          formKeyboard.mode === "normal" &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          event.key !== "Tab";
         formKeyboard.handleKeydown(event);
+        if (consumeNormalModeKey) {
+          event.stopPropagation();
+          if (event.key !== "Enter" && event.key !== " ") event.preventDefault();
+        }
         updateKeyboardMode();
       });
 
       const selectedProject = () =>
         projects.find((project) => project.id === selectedProjectId) ?? null;
       const focusPicker = () =>
-        queueMicrotask(() =>
-          root.querySelector<HTMLInputElement>("[data-jira-project-combobox]")?.focus(),
-        );
+        queueMicrotask(() => {
+          const picker = root.querySelector<HTMLInputElement>("[data-jira-project-combobox]");
+          if (!picker) return;
+          picker.dataset.preserveSelectedValueOnFocus = "";
+          picker.focus();
+        });
       const refreshProjects = async (projectId?: string) => {
         projects = await context.host.projects.list();
         selectedProjectId = projectId ?? selectedProjectId;
@@ -713,7 +727,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
     });
     return () => {
       disposed = true;
-      assignmentModal?.close();
+      assignmentModal?.dispose();
       unregister();
       root.replaceChildren();
     };

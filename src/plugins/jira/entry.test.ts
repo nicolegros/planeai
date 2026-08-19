@@ -213,6 +213,7 @@ describe("jiraSidebarSectionEntrypoint", () => {
     const createChild = options.createChild ?? vi.fn().mockResolvedValue({ key: "PLA-99" });
     const refreshAssignment = vi.fn().mockResolvedValue(undefined);
     const close = vi.fn();
+    const dispose = vi.fn();
     const setSubmitting = vi.fn();
     const projects = vi
       .fn()
@@ -244,8 +245,8 @@ describe("jiraSidebarSectionEntrypoint", () => {
       const dialogHost = document.createElement("div");
       const dialogRoot = dialogHost.attachShadow({ mode: "open" });
       dialogRoots.push(dialogRoot);
-      modalOptions.mount(dialogRoot, { close, setSubmitting });
-      return { close, setSubmitting };
+      modalOptions.mount(dialogRoot, { close, dispose, setSubmitting });
+      return { close, dispose, setSubmitting };
     });
 
     jiraSidebarSectionEntrypoint.mount(root, {
@@ -268,6 +269,7 @@ describe("jiraSidebarSectionEntrypoint", () => {
       createChild,
       refreshAssignment,
       close,
+      dispose,
       setSubmitting,
       projects,
       openProjectForm,
@@ -286,7 +288,11 @@ describe("jiraSidebarSectionEntrypoint", () => {
       const options = sidebar.openModal.mock.calls.at(-1)?.[0];
       if (!options) throw new Error("assignment modal was not requested");
       const root = document.createElement("div").attachShadow({ mode: "open" });
-      options.mount(root, { close: sidebar.close, setSubmitting: sidebar.setSubmitting });
+      options.mount(root, {
+        close: sidebar.close,
+        dispose: sidebar.dispose,
+        setSubmitting: sidebar.setSubmitting,
+      });
       return root;
     }
     await vi.waitFor(() =>
@@ -328,7 +334,7 @@ describe("jiraSidebarSectionEntrypoint", () => {
 
     const stylesheet = sidebar.root.querySelector("style")?.textContent;
     expect(stylesheet).toContain(
-      ".section-header.selected,.issue.selected { outline:2px solid var(--color-accent);",
+      ".section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent);",
     );
     expect(stylesheet).toContain(".section-header:focus,.issue:focus { outline:none; }");
   });
@@ -470,8 +476,91 @@ describe("jiraSidebarSectionEntrypoint", () => {
         dialog.querySelector<HTMLInputElement>("input[aria-label='PlaneAI project']")?.value,
       ).toBe("Archive cleanup"),
     );
+    const replacementPicker = dialog.querySelector<HTMLInputElement>(
+      "input[aria-label='PlaneAI project']",
+    )!;
+    replacementPicker.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+    expect(replacementPicker.value).toBe("Archive cleanup");
+    expect(replacementPicker.getAttribute("aria-expanded")).toBe("false");
     expect(outsideKeydown).not.toHaveBeenCalled();
     expect(focus).toHaveBeenCalledWith();
+  });
+
+  it("keeps unbound normal-mode keys inside the assignment modal", async () => {
+    const sidebar = mountSidebar();
+    const dialog = await openAndLoad(sidebar);
+    const wrapper = dialog.querySelector<HTMLElement>("[data-form-keyboard]")!;
+    const outsideKeydown = vi.fn();
+    dialog.host.addEventListener("keydown", outsideKeydown);
+
+    wrapper.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "j",
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      }),
+    );
+
+    expect(outsideKeydown).not.toHaveBeenCalled();
+  });
+
+  it("allows normal-mode action button activation while containing its key events", async () => {
+    const sidebar = mountSidebar();
+    const dialog = await openAndLoad(sidebar);
+    await chooseProject(dialog, "PlaneAI");
+    const outsideKeydown = vi.fn();
+    dialog.host.addEventListener("keydown", outsideKeydown);
+    const newProject = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "New Project (N)",
+    )!;
+    const assign = dialog.querySelector<HTMLButtonElement>("button.primary")!;
+
+    for (const button of [newProject, assign]) {
+      for (const key of ["Enter", " "]) {
+        const event = new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        });
+        button.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+      }
+    }
+    expect(outsideKeydown).not.toHaveBeenCalled();
+  });
+
+  it("keeps combobox options out of tab order and announces the highlighted project", async () => {
+    const sidebar = mountSidebar({
+      projects: [
+        { id: "project-1", name: "PlaneAI", path: "/planeai", hidden: false },
+        { id: "project-2", name: "Archive cleanup", path: "/archive", hidden: false },
+      ],
+    });
+    const dialog = await openAndLoad(sidebar);
+    const picker = dialog.querySelector<HTMLInputElement>("input[aria-label='PlaneAI project']")!;
+
+    picker.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+    expect(
+      [...dialog.querySelectorAll<HTMLButtonElement>("[role='option']")].every(
+        (option) => option.tabIndex === -1,
+      ),
+    ).toBe(true);
+    expect(picker.getAttribute("aria-activedescendant")).toBe(
+      dialog.querySelector<HTMLElement>("[role='option'][data-highlighted='true']")?.id,
+    );
+
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    try {
+      picker.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      expect(picker.getAttribute("aria-activedescendant")).toBe(
+        dialog.querySelector<HTMLElement>("[role='option'][data-highlighted='true']")?.id,
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it("scrolls the keyboard-highlighted project option into view", async () => {
@@ -560,7 +649,11 @@ describe("jiraSidebarSectionEntrypoint", () => {
     const repeatOptions = sidebar.openModal.mock.calls.at(-1)?.[0];
     if (!repeatOptions) throw new Error("assignment modal was not requested");
     const second = document.createElement("div").attachShadow({ mode: "open" });
-    repeatOptions.mount(second, { close: sidebar.close, setSubmitting: sidebar.setSubmitting });
+    repeatOptions.mount(second, {
+      close: sidebar.close,
+      dispose: sidebar.dispose,
+      setSubmitting: sidebar.setSubmitting,
+    });
     await vi.waitFor(() =>
       expect(
         second.querySelector<HTMLInputElement>("input[aria-label='PlaneAI project']"),

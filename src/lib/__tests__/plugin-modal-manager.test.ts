@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { openPluginModal } from "../plugin-modal-manager";
+import { openPluginModal, openProjectForm } from "../plugin-modal-manager";
 
 describe("plugin modal manager", () => {
   afterEach(() => {
@@ -35,6 +35,67 @@ describe("plugin modal manager", () => {
     expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(0);
     expect(document.activeElement).toBe(origin);
     origin.remove();
+  });
+
+  it("settles ProjectForm as cancelled on host dismissal or owner disposal", async () => {
+    for (const dismiss of ["escape", "backdrop"] as const) {
+      const projectForm = openProjectForm();
+      const layer = Array.from(document.querySelectorAll<HTMLElement>("[data-plugin-modal]")).at(
+        -1,
+      )!;
+      const dialog = layer.querySelector<HTMLElement>("[role='dialog']")!;
+      if (dismiss === "escape") {
+        dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      } else {
+        layer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      }
+      await expect(projectForm).resolves.toBeNull();
+    }
+
+    const assignment = openPluginModal({
+      title: "Assignment",
+      mount: (root) => root.append(document.createElement("button")),
+    });
+    const projectForm = openProjectForm();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(2);
+
+    assignment.dispose();
+    await expect(projectForm).resolves.toBeNull();
+    expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(0);
+  });
+
+  it("wraps Tab focus between controls in a plugin ShadowRoot", () => {
+    let root!: ShadowRoot;
+    const controls = openPluginModal({
+      title: "Keyboard",
+      mount: (nextRoot) => {
+        root = nextRoot;
+        for (const label of ["First", "Last"]) {
+          const button = document.createElement("button");
+          button.textContent = label;
+          Object.defineProperty(button, "offsetParent", { value: document.body });
+          root.append(button);
+        }
+      },
+    });
+    const [first, last] = root.querySelectorAll<HTMLButtonElement>("button");
+
+    last.focus();
+    last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }));
+    expect(root.activeElement).toBe(first);
+
+    first.focus();
+    first.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    expect(root.activeElement).toBe(last);
+
+    controls.close();
   });
 
   it("uses a larger content-responsive shell when requested", () => {

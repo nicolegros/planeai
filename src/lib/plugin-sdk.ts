@@ -3,6 +3,7 @@ import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
 
 export interface PluginModalControls {
   close(): void;
+  dispose(): void;
   setSubmitting(submitting: boolean): void;
 }
 
