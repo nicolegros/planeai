@@ -11,6 +11,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "built-in",
+    capabilities: [],
     ui_contributions: [
       {
         id: "preceding-row",
@@ -37,6 +38,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "built-in",
+    capabilities: [],
     ui_contributions: [
       {
         id: "section",

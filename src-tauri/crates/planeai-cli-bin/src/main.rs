@@ -1,3 +1,5 @@
+mod plugin_test;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -25,10 +27,28 @@ enum Commands {
         #[command(subcommand)]
         action: SymphonyAction,
     },
+    /// Validate a local plugin package without launching the desktop application
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Agent eXperience Interface — TOON output for autonomous agents
     Axi {
         #[command(subcommand)]
         action: Option<AxiAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginAction {
+    /// Run the headless JSONL protocol checks for a local plugin package
+    Test {
+        /// Path to the directory containing planeai-plugin.json
+        #[arg(long)]
+        package: std::path::PathBuf,
+        /// Reserved for future scenario JSONL support
+        #[arg(long)]
+        scenario: Option<std::path::PathBuf>,
     },
 }
 
@@ -470,6 +490,24 @@ enum TaskAction {
 fn main() {
     let cli = Cli::parse();
 
+    // Plugin tests are intentionally handled before application logging and the
+    // database are initialized, so this command stays completely headless.
+    let command = match cli.command {
+        Commands::Plugin { action } => {
+            let result = match action {
+                PluginAction::Test { package, scenario } => {
+                    plugin_test::run(&package, scenario.as_deref())
+                }
+            };
+            if let Err(error) = result {
+                eprintln!("plugin test failed: {error:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        command => command,
+    };
+
     let log_dir = planeai_paths::app_data_dir().join("logs");
     let _guard = planeai::logging::init(&log_dir);
 
@@ -479,7 +517,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    match cli.command {
+    match command {
+        Commands::Plugin { .. } => {
+            unreachable!("plugin commands return before application initialization")
+        }
         Commands::Project { action } => match action {
             ProjectAction::List { pretty } => {
                 let output = planeai::cli::run_project_list(&conn);

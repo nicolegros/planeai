@@ -13,6 +13,7 @@
     "windows-x64": "bin/planeai-plugin-fixture.exe",
     "windows-arm64": "bin/planeai-plugin-fixture.exe"
   },
+  "capabilities": ["settings", "tasks.read", "task-events"],
   "ui_contributions": [
     { "id": "fixture", "label": "Fixture", "placement": "main-pane", "entrypoint": "ui/entry.js" }
   ]

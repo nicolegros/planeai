@@ -1,23 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
-
-const { pluginCall, localUiSource, eventListeners } = vi.hoisted(() => ({
-  pluginCall: vi.fn(() =>
-    Promise.resolve({
-      plugin_id: "jira",
-      plugin_name: "Jira",
-      plugin_version: "0.1.0",
-      host_api_version: "planeai.plugin-host.v1",
-      runtime_state: "running",
-      last_error: null,
-    }),
-  ),
-  localUiSource: vi.fn(),
-  eventListeners: new Map<string, (event: { payload: string }) => void>(),
-}));
+const { pluginCall, localUiSource, settingsGet, updateSettings, dataChanged, eventListeners } =
+  vi.hoisted(() => ({
+    pluginCall: vi.fn(() =>
+      Promise.resolve({
+        plugin_id: "jira",
+        plugin_name: "Jira",
+        plugin_version: "0.1.0",
+        host_api_version: "planeai.plugin-host.v1",
+        runtime_state: "running",
+        last_error: null,
+      }),
+    ),
+    localUiSource: vi.fn(),
+    settingsGet: vi.fn(() => Promise.resolve({ greeting: "Saved greeting" })),
+    updateSettings: vi.fn((_: string, settings: unknown) => Promise.resolve(settings)),
+    dataChanged: vi.fn(() => Promise.resolve()),
+    eventListeners: new Map<string, (event: { payload: string }) => void>(),
+  }));
 
 vi.mock("../../lib/api", () => ({
-  plugins: { call: pluginCall, localUiSource },
+  plugins: {
+    call: pluginCall,
+    localUiSource,
+    settings: settingsGet,
+    updateSettings,
+    dataChanged,
+  },
   pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
 }));
 
@@ -75,6 +84,8 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain("default-src 'none'");
       expect(frame?.srcdoc).toContain("script-src 'unsafe-inline' blob:");
       expect(frame?.srcdoc).toContain("postMessage");
+      expect(frame?.srcdoc).toContain("settings-get");
+      expect(frame?.srcdoc).toContain("settings-replace");
       expect(frame?.srcdoc).not.toContain("sidebar-keydown");
     });
     // jsdom does not execute iframe srcdoc. The production bridge loads source only after its frame loads.

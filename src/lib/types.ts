@@ -103,6 +103,7 @@ export interface PluginInventory {
   host_api_version: string;
   source_kind: PluginSourceKind;
   backend_entrypoint: string;
+  capabilities: string[];
   ui_contributions: PluginUiContribution[];
   installed_hash: string | null;
   installed_path: string | null;

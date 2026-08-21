@@ -128,6 +128,10 @@
         });
         const host = {
           call: (method, params = null) => request("call", { method, params }),
+          settings: {
+            get: () => request("settings-get"),
+            replace: (settings) => request("settings-replace", { params: settings }),
+          },
           navigation: {
             open: (pluginId, contributionId) => send({ type: "navigation", action: "open", pluginId, contributionId }),
             close: () => send({ type: "navigation", action: "close" }),
@@ -204,6 +208,28 @@
       if (!message || typeof message.type !== "string") return;
       if (message.type === "call" && typeof message.method === "string") {
         void callPlugin(message.method, message.params)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "settings-get") {
+        if (!plugin.capabilities.includes("settings")) {
+          respond(message.requestId, false, "plugin settings capability is not granted");
+          return;
+        }
+        void plugins
+          .settings(plugin.id)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "settings-replace") {
+        if (!plugin.capabilities.includes("settings")) {
+          respond(message.requestId, false, "plugin settings capability is not granted");
+          return;
+        }
+        if (!message.params || typeof message.params !== "object" || Array.isArray(message.params)) {
+          respond(message.requestId, false, "plugin settings must be a JSON object");
+          return;
+        }
+        void plugins
+          .updateSettings(plugin.id, message.params as Record<string, unknown>)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "data-changed") {
@@ -290,6 +316,20 @@
       };
       const host: PluginUiHost = {
         call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
+        settings: {
+          get: <T extends Record<string, unknown>>() => {
+            if (!plugin.capabilities.includes("settings")) {
+              return Promise.reject(new Error("plugin settings capability is not granted"));
+            }
+            return plugins.settings<T>(plugin.id);
+          },
+          replace: <T extends Record<string, unknown>>(settings: T) => {
+            if (!plugin.capabilities.includes("settings")) {
+              return Promise.reject(new Error("plugin settings capability is not granted"));
+            }
+            return plugins.updateSettings<T>(plugin.id, settings);
+          },
+        },
         navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
         sidebar: {
           register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
