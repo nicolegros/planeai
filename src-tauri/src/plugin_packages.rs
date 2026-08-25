@@ -277,7 +277,11 @@ fn hash_tree(root: &Path) -> Result<String, String> {
             hasher.update(&buffer[..read]);
         }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
