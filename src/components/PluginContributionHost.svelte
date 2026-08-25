@@ -58,8 +58,13 @@
   };
 
   function disposeCurrent(): void {
-    disposer?.();
+    const current = disposer;
     disposer = null;
+    try {
+      current?.();
+    } catch (error) {
+      console.error("Plugin UI disposer failed", error);
+    }
   }
 
   function getJiraChildCounts(): Map<string, number> {
@@ -377,6 +382,10 @@
         openProjectForm,
       };
       const cleanup = entrypoint.mount(root, { plugin, contribution, host });
+      if (typeof cleanup !== "function") {
+        throw new Error("plugin UI entrypoint mount must return a disposer function");
+      }
+
       if (version !== generation) {
         cleanup();
         return;

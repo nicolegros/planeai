@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const CANCELLATION_ACK_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
@@ -68,8 +69,14 @@ pub fn run(package: &Path, scenario: Option<&Path>) -> Result<()> {
         )?;
         request_id += 1;
     }
-    process.call(request_id, "plugin.shutdown", Value::Null)?;
-    process.wait_for_exit()?;
+    let shutdown_deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    process.call_before_deadline(
+        request_id,
+        "plugin.shutdown",
+        Value::Null,
+        shutdown_deadline,
+    )?;
+    process.wait_for_exit_before(shutdown_deadline)?;
 
     println!(
         "plugin test passed: {}",
@@ -320,11 +327,16 @@ impl Drop for TemporaryPluginState {
 
 struct PluginProcess {
     child: Child,
-    stdin: ChildStdin,
+    writer: Sender<WriteFrame>,
     frames: Receiver<Result<String>>,
     settings: Value,
     capabilities: HashSet<String>,
     _state: TemporaryPluginState,
+}
+
+struct WriteFrame {
+    frame: String,
+    completed: Sender<Result<()>>,
 }
 
 impl PluginProcess {
@@ -344,11 +356,13 @@ impl PluginProcess {
             .with_context(|| format!("failed to start plugin sidecar {}", executable.display()))?;
         let stdin = child.stdin.take().expect("piped child stdin exists");
         let stdout = child.stdout.take().expect("piped child stdout exists");
+        let (writer, write_frames) = mpsc::channel();
+        std::thread::spawn(move || write_frames_to_plugin(stdin, write_frames));
         let (sender, frames) = mpsc::channel();
         std::thread::spawn(move || read_frames(stdout, sender));
         Ok(Self {
             child,
-            stdin,
+            writer,
             frames,
             settings: json!({}),
             capabilities: capabilities.iter().cloned().collect(),
@@ -357,8 +371,35 @@ impl PluginProcess {
     }
 
     fn call(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
-        self.await_response(id, RPC_TIMEOUT)?
+        let deadline = Instant::now() + RPC_TIMEOUT;
+        self.send_before(
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match self.await_response(id, remaining)? {
+            Some(Ok(result)) => Ok(result),
+            Some(Err(error)) => bail!("plugin RPC error {}: {}", error.code, error.message),
+            None => {
+                self.verify_cancellation(id)?;
+                bail!("timed out waiting for plugin JSON-RPC output")
+            }
+        }
+    }
+
+    fn call_before_deadline(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value> {
+        self.send_before(
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        self.await_response(id, remaining)?
             .ok_or_else(|| anyhow!("timed out waiting for plugin JSON-RPC output"))?
             .map_err(|error| anyhow!("plugin RPC error {}: {}", error.code, error.message))
     }
@@ -370,8 +411,13 @@ impl PluginProcess {
         params: Value,
         timeout: Duration,
     ) -> Result<()> {
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
-        if let Some(response) = self.await_response(id, timeout)? {
+        let deadline = Instant::now() + timeout;
+        self.send_before(
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if let Some(response) = self.await_response(id, remaining)? {
             match response {
                 Ok(_) => bail!("plugin responded before the cancellation deadline"),
                 Err(error) => bail!(
@@ -381,13 +427,22 @@ impl PluginProcess {
                 ),
             }
         }
-        self.send(json!({
-            "jsonrpc": "2.0",
-            "method": "$/cancelRequest",
-            "params": { "id": id },
-        }))?;
+        self.verify_cancellation(id)
+    }
+
+    fn verify_cancellation(&mut self, id: u64) -> Result<()> {
+        let deadline = Instant::now() + CANCELLATION_ACK_TIMEOUT;
+        self.send_before(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": id },
+            }),
+            deadline,
+        )?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
         match self
-            .await_response(id, CANCELLATION_ACK_TIMEOUT)?
+            .await_response(id, remaining)?
             .ok_or_else(|| anyhow!("plugin did not acknowledge cancellation"))?
         {
             Err(error) if error.code == -32800 => Ok(()),
@@ -434,16 +489,27 @@ impl PluginProcess {
         }
     }
 
-    fn send(&mut self, frame: Value) -> Result<()> {
+    fn send(&self, frame: Value) -> Result<()> {
+        self.send_before(frame, Instant::now() + RPC_TIMEOUT)
+    }
+
+    fn send_before(&self, frame: Value, deadline: Instant) -> Result<()> {
         let frame = serde_json::to_string(&frame).expect("JSON value serializes");
         validate_outbound_frame_size(&frame)?;
-        self.stdin
-            .write_all(frame.as_bytes())
-            .context("failed to write plugin JSON-RPC request")?;
-        self.stdin
-            .write_all(b"\n")
-            .context("failed to terminate plugin JSON-RPC request")?;
-        self.stdin.flush().context("failed to flush plugin request")
+        let (completed, result) = mpsc::channel();
+        self.writer
+            .send(WriteFrame { frame, completed })
+            .map_err(|_| anyhow!("plugin JSON-RPC writer stopped unexpectedly"))?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match result.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                bail!("timed out writing plugin JSON-RPC request")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("plugin JSON-RPC writer stopped before completing a request")
+            }
+        }
     }
 
     fn handle_host_request(
@@ -475,8 +541,7 @@ impl PluginProcess {
         host_callback(&mut self.settings, &self.capabilities, method, params)
     }
 
-    fn wait_for_exit(&mut self) -> Result<()> {
-        let deadline = std::time::Instant::now() + RPC_TIMEOUT;
+    fn wait_for_exit_before(&mut self, deadline: Instant) -> Result<()> {
         loop {
             if let Some(status) = self
                 .child
@@ -564,7 +629,25 @@ fn settings_callback(
 impl Drop for PluginProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        let _ = self.child.wait();
+    }
+}
+
+fn write_frames_to_plugin(mut stdin: ChildStdin, frames: Receiver<WriteFrame>) {
+    for WriteFrame { frame, completed } in frames {
+        let result = (|| {
+            stdin
+                .write_all(frame.as_bytes())
+                .context("failed to write plugin JSON-RPC request")?;
+            stdin
+                .write_all(b"\n")
+                .context("failed to terminate plugin JSON-RPC request")?;
+            stdin.flush().context("failed to flush plugin request")
+        })();
+        let failed = result.is_err();
+        let _ = completed.send(result);
+        if failed {
+            break;
+        }
     }
 }
 
@@ -948,8 +1031,9 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_acknowledgement_window_matches_the_runtime_contract() {
+    fn cancellation_and_shutdown_windows_match_the_runtime_contract() {
         assert_eq!(CANCELLATION_ACK_TIMEOUT, Duration::from_secs(3));
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
     }
 
     #[test]

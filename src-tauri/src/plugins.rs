@@ -592,8 +592,17 @@ fn cancellation_acknowledgement_error(
         .unwrap_or_else(|| timed_out_request_error(method))
 }
 
-fn is_rpc_timeout_error(error: &str) -> bool {
-    error.starts_with("plugin RPC ") && error.ends_with(" timed out")
+fn request_queue_timeout_error(method: &str) -> String {
+    format!("plugin RPC {method} request queue timed out")
+}
+
+fn is_fatal_plugin_runtime_error(error: &str) -> bool {
+    // A valid JSON-RPC error is an application-level response and leaves the
+    // connection usable. A request that never acquired the local queue also
+    // leaves the sidecar untouched. Any other request failure means stdout or
+    // the request protocol can no longer be trusted, so retire this runtime
+    // before another request can consume a stale or malformed frame.
+    !error.starts_with("plugin RPC error ") && !error.ends_with(" request queue timed out")
 }
 
 pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
@@ -985,14 +994,19 @@ impl RuntimeProcess {
         params: Value,
         request_timeout: Duration,
     ) -> Result<Value, String> {
+        let deadline = Instant::now() + request_timeout;
         // JSON-RPC responses share one stdout stream. Serialize normal host
         // requests while stdin remains independently writable for cancellation.
-        let _request = self.request_lock.lock().await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let _request = timeout(remaining, self.request_lock.lock())
+            .await
+            .map_err(|_| request_queue_timeout_error(method))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
         let frame = encode_json_rpc_line(request_id, method, params)?;
-        self.write_request_frame(&frame).await?;
+        self.write_request_frame(&frame, deadline).await?;
 
-        match timeout(request_timeout, self.read_matching_response()).await {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match timeout(remaining, self.read_matching_response()).await {
             Ok(Ok(frame)) => decode_json_rpc_frame(&frame, request_id),
             Ok(Err(error)) => Err(error),
             Err(_) => self.cancel_timed_out_request(method, request_id).await,
@@ -1004,11 +1018,17 @@ impl RuntimeProcess {
         method: &str,
         request_id: u64,
     ) -> Result<Value, String> {
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         let frame = encode_json_rpc_cancel_request_line(request_id)?;
-        if self.write_cancellation_frame(&frame).await.is_err() {
+        if self
+            .write_cancellation_frame(&frame, deadline)
+            .await
+            .is_err()
+        {
             return Err(cancellation_acknowledgement_error(method, request_id, None));
         }
-        match timeout(SHUTDOWN_TIMEOUT, self.read_matching_response()).await {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match timeout(remaining, self.read_matching_response()).await {
             Ok(Ok(frame)) => Err(cancellation_acknowledgement_error(
                 method,
                 request_id,
@@ -1022,16 +1042,24 @@ impl RuntimeProcess {
         }
     }
 
-    async fn write_request_frame(&self, frame: &str) -> Result<(), String> {
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(frame.as_bytes())
+    async fn write_request_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut stdin = timeout(remaining, self.stdin.lock())
             .await
-            .map_err(|e| format!("failed to write plugin JSON-RPC request: {e}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("failed to flush plugin JSON-RPC request: {e}"))
+            .map_err(|_| "plugin RPC request timed out".to_string())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        timeout(remaining, async {
+            stdin
+                .write_all(frame.as_bytes())
+                .await
+                .map_err(|error| format!("failed to write plugin JSON-RPC request: {error}"))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|error| format!("failed to flush plugin JSON-RPC request: {error}"))
+        })
+        .await
+        .map_err(|_| "plugin RPC request timed out".to_string())?
     }
 
     async fn write_shutdown_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
@@ -1054,16 +1082,22 @@ impl RuntimeProcess {
         .map_err(|_| "plugin shutdown request timed out".to_string())?
     }
 
-    async fn write_cancellation_frame(&self, frame: &str) -> Result<(), String> {
-        let mut stdin = self.stdin.lock().await;
-        stdin
-            .write_all(frame.as_bytes())
+    async fn write_cancellation_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut stdin = timeout(remaining, self.stdin.lock())
             .await
-            .map_err(|e| format!("failed to write plugin cancellation notification: {e}"))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| format!("failed to flush plugin cancellation notification: {e}"))
+            .map_err(|_| "plugin cancellation notification timed out".to_string())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        timeout(remaining, async {
+            stdin.write_all(frame.as_bytes()).await.map_err(|error| {
+                format!("failed to write plugin cancellation notification: {error}")
+            })?;
+            stdin.flush().await.map_err(|error| {
+                format!("failed to flush plugin cancellation notification: {error}")
+            })
+        })
+        .await
+        .map_err(|_| "plugin cancellation notification timed out".to_string())?
     }
 
     async fn read_matching_response(&self) -> Result<String, String> {
@@ -1104,25 +1138,7 @@ impl RuntimeProcess {
             params,
         )
         .await;
-        let response = match result {
-            Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err(message) => {
-                serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": message } })
-            }
-        };
-        let mut frame = serde_json::to_string(&response)
-            .map_err(|error| format!("failed to encode host callback response: {error}"))?;
-        if !host_callback_response_fits(&frame) {
-            frame = serde_json::to_string(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {
-                    "code": -32000,
-                    "message": "host callback response exceeded the frame limit",
-                },
-            }))
-            .map_err(|error| format!("failed to encode bounded host callback error: {error}"))?;
-        }
+        let frame = encode_host_callback_response(id, result)?;
         let mut stdin = self.stdin.lock().await;
         stdin
             .write_all(frame.as_bytes())
@@ -1184,6 +1200,37 @@ impl RuntimeProcess {
             }
         }
     }
+}
+
+fn encode_host_callback_response(
+    id: Value,
+    result: Result<Value, String>,
+) -> Result<String, String> {
+    let response = match result {
+        Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        Err(message) => {
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": message } })
+        }
+    };
+    let mut frame = serde_json::to_string(&response)
+        .map_err(|error| format!("failed to encode host callback response: {error}"))?;
+    if !host_callback_response_fits(&frame) {
+        frame = serde_json::to_string(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": response["id"],
+            "error": {
+                "code": -32000,
+                "message": "host callback response exceeded the frame limit",
+            },
+        }))
+        .map_err(|error| format!("failed to encode bounded host callback error: {error}"))?;
+        if !host_callback_response_fits(&frame) {
+            return Err(
+                "plugin callback id leaves no room for a bounded host response".to_string(),
+            );
+        }
+    }
+    Ok(frame)
 }
 
 fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
@@ -1512,7 +1559,18 @@ impl PluginRuntimeSupervisor {
                     &original_path,
                 )
             })
-            .await?;
+            .await;
+        let inventory = match inventory {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                if let Err(cleanup_error) =
+                    commands::blocking(move || imported.discard_if_newly_published()).await
+                {
+                    tracing::warn!(%cleanup_error, "failed to discard unreferenced local plugin package");
+                }
+                return Err(error);
+            }
+        };
         self.emit_change(&inventory.id).await;
         Ok(inventory)
     }
@@ -1592,7 +1650,7 @@ impl PluginRuntimeSupervisor {
         let Err(error) = result else {
             return result;
         };
-        if !is_rpc_timeout_error(&error) {
+        if !is_fatal_plugin_runtime_error(&error) {
             return Err(error);
         }
 
@@ -2681,6 +2739,19 @@ mod tests {
     }
 
     #[test]
+    fn fatal_runtime_errors_exclude_valid_json_rpc_errors() {
+        assert!(!is_fatal_plugin_runtime_error(
+            "plugin RPC error -32000: rejected"
+        ));
+        assert!(is_fatal_plugin_runtime_error(
+            "malformed plugin JSON-RPC frame: bad JSON"
+        ));
+        assert!(is_fatal_plugin_runtime_error(
+            "failed to write plugin JSON-RPC request: broken pipe"
+        ));
+    }
+
+    #[test]
     fn shutdown_uses_the_documented_three_second_grace() {
         assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
     }
@@ -2898,6 +2969,17 @@ mod tests {
     }
 
     #[test]
+    fn oversized_callback_id_is_rejected_before_an_oversized_fallback_is_written() {
+        let id = Value::String("x".repeat(MAX_RPC_FRAME_BYTES as usize - 100));
+        assert!(encode_host_callback_response(
+            id,
+            Ok(serde_json::json!({ "large": "x".repeat(MAX_RPC_FRAME_BYTES as usize) }))
+        )
+        .unwrap_err()
+        .contains("leaves no room"));
+    }
+
+    #[test]
     fn callback_requests_require_json_rpc_version_scalar_ids_and_valid_request_shape() {
         let callback = parse_json_rpc_callback_request(serde_json::json!({
             "jsonrpc": "2.0",
@@ -3007,7 +3089,7 @@ mod tests {
         ] {
             let error = cancellation_acknowledgement_error("jira.status", 7, acknowledgement);
             assert_eq!(error, timeout_error);
-            assert!(is_rpc_timeout_error(&error));
+            assert!(is_fatal_plugin_runtime_error(&error));
         }
         assert_eq!(
             cancellation_acknowledgement_error(
