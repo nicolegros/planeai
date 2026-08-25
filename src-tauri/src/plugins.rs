@@ -13,13 +13,15 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, timeout_at, Duration, Instant};
 
 use crate::commands;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(120);
+// Synchronization can legitimately fetch up to 100 Jira pages before its first
+// nested host task request. Keep a finite watchdog, but allow that bounded fetch.
+const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
@@ -795,10 +797,11 @@ impl RuntimeProcess {
             .await
             .map_err(|e| format!("failed to flush plugin JSON-RPC request: {e}"))?;
 
+        let deadline = Instant::now() + request_timeout;
         loop {
             let mut bytes = Vec::new();
-            let bytes_read = timeout(
-                request_timeout,
+            let bytes_read = timeout_at(
+                deadline,
                 (&mut self.stdout)
                     .take(MAX_RPC_FRAME_BYTES)
                     .read_until(b'\n', &mut bytes),
@@ -1079,6 +1082,11 @@ impl PluginRuntimeSupervisor {
     pub async fn update_settings(&self, plugin_id: &str, settings: Value) -> Result<Value, String> {
         if !settings.is_object() {
             return Err("plugin settings must be a JSON object".to_string());
+        }
+        // Jira settings govern cache ownership and connected-site invariants, so only
+        // its sidecar may persist them. Generic host persistence would bypass both.
+        if plugin_id == JIRA_PLUGIN_ID {
+            return self.call(plugin_id, "jira.settings.update", settings).await;
         }
         self.inventory(plugin_id)
             .await?
