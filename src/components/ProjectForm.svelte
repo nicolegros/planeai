@@ -14,9 +14,10 @@
   interface Props {
     onCreated: (project: Project) => void | Promise<void>;
     onCancel: () => void;
+    onSubmittingChange?: (submitting: boolean) => void;
   }
 
-  let { onCreated, onCancel }: Props = $props();
+  let { onCreated, onCancel, onSubmittingChange }: Props = $props();
 
   const config = $derived(getSettings());
   const basePath = $derived(config.projects_base_path);
@@ -38,6 +39,10 @@
   let submitting = $state(false);
   let submitAttempted = $state(false);
   let wrapperEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    onSubmittingChange?.(submitting);
+  });
 
   // Auto-derive name from path (local mode)
   $effect(() => {
@@ -101,9 +106,15 @@
   }
 
   async function submitLocal() {
-    const valid = await projectsApi.validateGitRepo(path.trim());
-    if (!valid) {
-      showSnackbar("Not a valid git repository (no .git found).");
+    try {
+      const valid = await projectsApi.validateGitRepo(path.trim());
+      if (!valid) {
+        showSnackbar("Not a valid git repository (no .git found).");
+        submitting = false;
+        return;
+      }
+    } catch (e) {
+      showSnackbar(`Could not validate repository: ${String(e)}`);
       submitting = false;
       return;
     }

@@ -1,19 +1,8 @@
+import type { PluginModalControls, PluginModalOptions } from "./plugin-sdk";
 import { mount, unmount } from "svelte";
 import ProjectForm from "../components/ProjectForm.svelte";
 import * as projectStore from "./project-store.svelte";
 import type { Project } from "./types";
-
-export interface PluginModalControls {
-  close(): void;
-  dispose(): void;
-  setSubmitting(submitting: boolean): void;
-}
-
-export interface PluginModalOptions {
-  title: string;
-  contentResponsive?: boolean;
-  mount(root: ShadowRoot, controls: PluginModalControls): (() => void) | void;
-}
 
 type ManagedModal = {
   layer: HTMLDivElement;
@@ -26,6 +15,14 @@ type ManagedModal = {
 };
 
 const stack: ManagedModal[] = [];
+
+function updateStackAccessibility(): void {
+  for (const modal of stack) {
+    const top = isTop(modal);
+    modal.layer.inert = !top;
+    modal.layer.toggleAttribute("aria-hidden", !top);
+  }
+}
 
 function isTop(modal: ManagedModal): boolean {
   return stack.at(-1) === modal;
@@ -68,6 +65,7 @@ function closeTopModal(modal: ManagedModal): void {
   stack.pop();
   modal.cleanup();
   modal.layer.remove();
+  updateStackAccessibility();
   const next = stack.at(-1);
   if (next) focusModal(next);
   else modal.restoreFocus?.focus();
@@ -170,6 +168,7 @@ function openShell(
   });
   document.body.append(layer);
   stack.push(modal);
+  updateStackAccessibility();
   queueMicrotask(() => focusModal(modal));
   return { modal, controls };
 }
@@ -209,7 +208,10 @@ export function openProjectForm(): Promise<Project | null> {
             finish(project);
           }
         },
-        onCancel: () => finish(null),
+        onCancel: () => {
+          if (!modal.submitting) finish(null);
+        },
+        onSubmittingChange: controls.setSubmitting,
       },
     });
     modal.cleanup = () => {

@@ -72,7 +72,12 @@ type JiraIssue = { key: string; title: string; description: string };
 type AssignmentProject = { id: string; name: string; path: string; hidden: boolean };
 
 function openAssignment(context: PluginUiContext, key: string): PluginModalControls {
-  return context.host.interaction.openModal({
+  const { interaction, projects: projectApi, tasks } = context.host;
+  const refreshAssignment = context.host.data.refreshAssignment;
+  if (!interaction || !projectApi || !tasks || !refreshAssignment) {
+    throw new Error("Jira assignment requires trusted host capabilities.");
+  }
+  return interaction.openModal({
     title: "Assign Jira issue",
     contentResponsive: true,
     mount(root, controls) {
@@ -148,7 +153,7 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
           picker.focus();
         });
       const refreshProjects = async (projectId?: string) => {
-        projects = await context.host.projects.list();
+        projects = await projectApi.list();
         selectedProjectId = projectId ?? selectedProjectId;
         if (!selectedProject()) selectedProjectId = "";
       };
@@ -248,7 +253,7 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
         updateKeyboardMode();
       };
       const createProject = async () => {
-        const project = await context.host.interaction.openProjectForm();
+        const project = await interaction.openProjectForm();
         if (!project || disposed) return;
         try {
           await refreshProjects(project.id);
@@ -274,13 +279,13 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
         controls.setSubmitting(true);
         render();
         try {
-          await context.host.tasks.createChild({
+          await tasks.createChild({
             project,
             title: issue.title,
             description: issue.description,
             parentKey: issue.key,
           });
-          await context.host.data.refreshAssignment(project);
+          await refreshAssignment(project);
           controls.setSubmitting(false);
           controls.close();
         } catch (nextError) {
@@ -717,16 +722,38 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
           : []),
       ]);
     };
+    let refreshRunning = false;
+    let refreshAgain = false;
     const refresh = async () => {
-      const value = await call<{ items: SidebarItem[] }>(context, "jira.sidebar.items");
-      items = value.items;
-      if (!disposed) render();
+      if (refreshRunning) {
+        refreshAgain = true;
+        return;
+      }
+      refreshRunning = true;
+      try {
+        do {
+          refreshAgain = false;
+          const value = await call<{ items: SidebarItem[] }>(context, "jira.sidebar.items");
+          items = value.items;
+          if (!disposed) render();
+        } while (refreshAgain && !disposed);
+      } finally {
+        refreshRunning = false;
+      }
     };
-    void refresh().catch(() => {
-      if (!disposed) render();
-    });
+    const requestRefresh = () => {
+      void refresh().catch(() => {
+        if (!disposed) render();
+      });
+    };
+    const unsubscribeDataChanged = context.host.data.onChanged?.(requestRefresh) ?? (() => {});
+    const unsubscribeTaskDataChanged =
+      context.host.data.onTaskDataChanged?.(requestRefresh) ?? (() => {});
+    requestRefresh();
     return () => {
       disposed = true;
+      unsubscribeDataChanged();
+      unsubscribeTaskDataChanged();
       assignmentModal?.dispose();
       unregister();
       root.replaceChildren();

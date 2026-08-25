@@ -7,6 +7,7 @@ import type { TaskItem } from "./types";
 
 let tasksByProject = $state<Record<string, TaskItem[]>>({});
 let loading = $state(false);
+let taskRequestGeneration = 0;
 
 export function getTasksByProject(): Record<string, TaskItem[]> {
   return tasksByProject;
@@ -34,6 +35,29 @@ export function isLoading(): boolean {
 
 export async function loadTasks(projectPaths: string[]): Promise<void> {
   if (projectPaths.length === 0) return;
+  const requestGeneration = ++taskRequestGeneration;
+  loading = true;
+  try {
+    const previous = tasksByProject;
+    const results: Record<string, TaskItem[]> = {};
+    await Promise.all(
+      projectPaths.map(async (path) => {
+        try {
+          results[path] = await tasksApi.listAll(path);
+        } catch {
+          results[path] = previous[path] ?? [];
+        }
+      }),
+    );
+    if (requestGeneration === taskRequestGeneration) tasksByProject = results;
+  } finally {
+    if (requestGeneration === taskRequestGeneration) loading = false;
+  }
+}
+
+export async function refresh(projectPaths: string[]): Promise<void> {
+  if (projectPaths.length === 0) return;
+  const requestGeneration = ++taskRequestGeneration;
   loading = true;
   try {
     const results: Record<string, TaskItem[]> = {};
@@ -42,18 +66,16 @@ export async function loadTasks(projectPaths: string[]): Promise<void> {
         try {
           results[path] = await tasksApi.listAll(path);
         } catch {
-          results[path] = [];
+          // Keep the last successful snapshot for this project on refresh failure.
         }
       }),
     );
-    tasksByProject = results;
+    if (requestGeneration === taskRequestGeneration) {
+      tasksByProject = { ...tasksByProject, ...results };
+    }
   } finally {
-    loading = false;
+    if (requestGeneration === taskRequestGeneration) loading = false;
   }
-}
-
-export async function refresh(projectPaths: string[]): Promise<void> {
-  await loadTasks(projectPaths);
 }
 
 export async function moveTask(key: string, status: string, repoPath: string): Promise<void> {

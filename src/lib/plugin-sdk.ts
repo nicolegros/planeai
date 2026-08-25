@@ -31,13 +31,15 @@ export interface PluginUiHost {
   };
   data: {
     changed(): Promise<void>;
-    refreshAssignment(project: Project): Promise<void>;
+    onChanged?(listener: () => void): () => void;
+    onTaskDataChanged?(listener: () => void): () => void;
+    refreshAssignment?(project: Project): Promise<void>;
     notify(message: string, kind?: "success" | "error"): void;
   };
-  projects: {
+  projects?: {
     list(): Promise<Project[]>;
   };
-  tasks: {
+  tasks?: {
     createChild(params: {
       project: Project;
       title: string;
@@ -45,7 +47,7 @@ export interface PluginUiHost {
       parentKey: string;
     }): Promise<TaskItem>;
   };
-  interaction: {
+  interaction?: {
     openModal(options: PluginModalOptions): PluginModalControls;
     openProjectForm(): Promise<Project | null>;
   };

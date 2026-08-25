@@ -15,10 +15,14 @@ describe("plugin modal manager", () => {
       title: "First",
       mount: (root) => root.append(document.createElement("button")),
     });
+    const firstLayer = document.querySelector<HTMLElement>("[data-plugin-modal]")!;
     const second = openPluginModal({
       title: "Second",
       mount: (root) => root.append(document.createElement("button")),
     });
+
+    expect(firstLayer.inert).toBe(true);
+    expect(firstLayer.getAttribute("aria-hidden")).toBe("");
 
     first.close();
     expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(2);
@@ -30,6 +34,8 @@ describe("plugin modal manager", () => {
     second.setSubmitting(false);
     second.close();
     expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(1);
+    expect(firstLayer.inert).toBe(false);
+    expect(firstLayer.hasAttribute("aria-hidden")).toBe(false);
 
     first.close();
     expect(document.querySelectorAll("[data-plugin-modal]")).toHaveLength(0);
