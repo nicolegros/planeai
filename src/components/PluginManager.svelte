@@ -5,6 +5,9 @@
   import type { PluginInventory } from "../lib/types";
   import { Button, Dialog } from "./ui";
 
+  let { onInventoryChange = (_inventory: PluginInventory[]) => {} }: {
+    onInventoryChange?: (inventory: PluginInventory[]) => void;
+  } = $props();
   let inventory = $state<PluginInventory[]>([]);
   let busyId = $state<string | null>(null);
   let installing = $state(false);
@@ -14,6 +17,7 @@
   async function refresh() {
     try {
       inventory = await plugins.list();
+      onInventoryChange(inventory);
       loadError = null;
     } catch (error) {
       loadError = String(error);
