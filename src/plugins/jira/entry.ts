@@ -1,4 +1,11 @@
-import type { PluginUiContext, PluginUiEntrypoint } from "../../lib/plugin-sdk";
+import { createFormKeyboardController } from "../../lib/form-keyboard.svelte";
+import { MOD_ENTER_HINT } from "../../lib/keyboard";
+import type {
+  PluginModalControls,
+  PluginUiContext,
+  PluginUiEntrypoint,
+} from "../../lib/plugin-sdk";
+import { createSearchableCombobox } from "./searchable-combobox";
 
 type JiraSource = {
   jql: string;
@@ -18,7 +25,7 @@ type JiraStatus = {
 };
 type SyncTotals = { created: number; updated: number; departed: number; errors: number };
 type SidebarItem = { key: string; title: string; status: string; child_count: number };
-const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .selected { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
+const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
@@ -41,8 +48,9 @@ function input(
 function field(label: string, element: HTMLElement): HTMLElement {
   const wrap = document.createElement("div");
   const heading = document.createElement("label");
-  const id = element.id || `jira-field-${++nextFieldId}`;
-  element.id = id;
+  const control = element.querySelector<HTMLElement>("[data-field-control]") ?? element;
+  const id = control.id || `jira-field-${++nextFieldId}`;
+  control.id = id;
   heading.htmlFor = id;
   heading.textContent = label;
   wrap.append(heading, element);
@@ -58,6 +66,257 @@ function sidebarStatusLabel(status: string): string {
       done: "Done",
     }[status] ?? status
   );
+}
+
+type JiraIssue = { key: string; title: string; description: string };
+type AssignmentProject = { id: string; name: string; path: string; hidden: boolean };
+
+function openAssignment(context: PluginUiContext, key: string): PluginModalControls {
+  const { interaction, projects: projectApi, tasks } = context.host;
+  const refreshAssignment = context.host.data.refreshAssignment;
+  if (!interaction || !projectApi || !tasks || !refreshAssignment) {
+    throw new Error("Jira assignment requires trusted host capabilities.");
+  }
+  return interaction.openModal({
+    title: "Assign Jira issue",
+    contentResponsive: true,
+    mount(root, controls) {
+      const style = document.createElement("style");
+      style.textContent = `${styles} .assignment { padding:0 20px 20px; display:grid; gap:14px; } .preview { border:1px solid var(--color-border); border-radius:8px; padding:10px; } .preview h3 { margin:4px 0; font-size:14px; } .preview p { white-space:pre-wrap; margin:0; color:var(--color-t2); font-size:12px; } .actions { display:flex; justify-content:space-between; align-items:center; gap:8px; } .keyboard-mode { display:flex; align-items:center; gap:8px; font-size:10px; color:var(--color-t3); } .keyboard-mode strong { font-family:var(--font-mono); font-size:10px; padding:2px 6px; border-radius:4px; background:var(--color-panel-hi); color:var(--color-t2); } .keyboard-mode.insert strong { background:var(--color-accent-bg); color:var(--color-accent); } .submit-hint { margin-left:4px; font-family:var(--font-mono); font-size:10px; opacity:.6; } .empty { color:var(--color-t2); font-size:12px; }`;
+      const body = document.createElement("div");
+      let issue: JiraIssue | null = null;
+      let projects: AssignmentProject[] = [];
+      let selectedProjectId = "";
+      let error = "";
+      let loading = true;
+      let submitting = false;
+      let disposed = false;
+      body.tabIndex = -1;
+      body.dataset.formKeyboard = "";
+
+      const updateKeyboardMode = () => {
+        const status = body.querySelector<HTMLElement>("[data-assignment-keyboard-mode]");
+        if (!status) return;
+        const insert = formKeyboard.mode === "insert";
+        status.classList.toggle("insert", insert);
+        status.innerHTML = insert
+          ? "<strong>INSERT</strong><span>esc → normal mode</span>"
+          : "<strong>NORMAL</strong><span>press a key to focus field</span>";
+      };
+      const formKeyboard = createFormKeyboardController(
+        () => [
+          {
+            key: "p",
+            ref: () => body.querySelector<HTMLElement>("[data-jira-project-combobox]") ?? null,
+          },
+          {
+            key: "n",
+            toggle: () => {
+              if (!submitting) void createProject();
+            },
+          },
+        ],
+        { wrapper: () => body, onDismiss: () => controls.close() },
+      );
+      body.addEventListener("focusin", (event) => {
+        formKeyboard.handleFocusin(event);
+        updateKeyboardMode();
+      });
+      body.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          event.stopPropagation();
+          void submit();
+          return;
+        }
+        const consumeNormalModeKey =
+          formKeyboard.mode === "normal" &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.altKey &&
+          event.key !== "Tab";
+        formKeyboard.handleKeydown(event);
+        if (consumeNormalModeKey) {
+          event.stopPropagation();
+          if (event.key !== "Enter" && event.key !== " ") event.preventDefault();
+        }
+        updateKeyboardMode();
+      });
+
+      const selectedProject = () =>
+        projects.find((project) => project.id === selectedProjectId) ?? null;
+      const focusPicker = () =>
+        queueMicrotask(() => {
+          const picker = root.querySelector<HTMLInputElement>("[data-jira-project-combobox]");
+          if (!picker) return;
+          picker.dataset.preserveSelectedValueOnFocus = "";
+          picker.focus();
+        });
+      const refreshProjects = async (projectId?: string) => {
+        projects = await projectApi.list();
+        selectedProjectId = projectId ?? selectedProjectId;
+        if (!selectedProject()) selectedProjectId = "";
+      };
+      const render = () => {
+        const form = document.createElement("form");
+        form.className = "assignment";
+        form.setAttribute("aria-label", "Assign Jira issue to PlaneAI project");
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          void submit();
+        });
+        if (loading) {
+          const message = document.createElement("p");
+          message.className = "muted";
+          message.textContent = "Loading Jira issue…";
+          form.append(message);
+        } else if (!issue) {
+          const message = document.createElement("p");
+          message.className = "error";
+          message.setAttribute("role", "alert");
+          message.textContent = error || "This Jira issue is no longer available.";
+          form.append(message);
+        } else {
+          const preview = document.createElement("section");
+          preview.className = "preview";
+          const issueKey = document.createElement("span");
+          issueKey.className = "key";
+          issueKey.textContent = issue.key;
+          const title = document.createElement("h3");
+          title.textContent = issue.title;
+          const description = document.createElement("p");
+          description.textContent = issue.description || "No description";
+          preview.append(issueKey, title, description);
+          form.append(preview);
+
+          if (projects.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "empty";
+            empty.textContent = "No PlaneAI projects available. Press N to create one.";
+            form.append(empty);
+          } else {
+            const picker = createSearchableCombobox({
+              ariaLabel: "PlaneAI project",
+              items: projects.map((project) => ({ value: project.id, label: project.name })),
+              value: selectedProjectId,
+              disabled: submitting,
+              placeholder: "Search projects…",
+              emptyText: "No projects found",
+              onValueChange: (projectId) => {
+                selectedProjectId = projectId;
+                error = "";
+                render();
+                focusPicker();
+              },
+            });
+            form.append(field("PlaneAI project (P)", picker));
+          }
+          if (error) {
+            const message = document.createElement("p");
+            message.className = "error";
+            message.setAttribute("role", "alert");
+            message.textContent = error;
+            form.append(message);
+          }
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const keyboardMode = document.createElement("div");
+          keyboardMode.className = "keyboard-mode";
+          keyboardMode.dataset.assignmentKeyboardMode = "";
+          actions.append(keyboardMode);
+          const actionButtons = document.createElement("div");
+          actionButtons.className = "row";
+          const newProject = document.createElement("button");
+          newProject.type = "button";
+          newProject.textContent = "New Project (N)";
+          newProject.disabled = submitting;
+          newProject.onclick = () => void createProject();
+          const assign = document.createElement("button");
+          assign.type = "submit";
+          assign.className = "primary";
+          if (submitting) {
+            assign.textContent = "Assigning…";
+          } else {
+            assign.append("Assign ");
+            const submitHint = document.createElement("span");
+            submitHint.className = "submit-hint";
+            submitHint.textContent = MOD_ENTER_HINT;
+            assign.append(submitHint);
+          }
+          assign.disabled = submitting || !selectedProject();
+          assign.title = MOD_ENTER_HINT;
+          actionButtons.append(newProject, assign);
+          actions.append(actionButtons);
+          form.append(actions);
+        }
+        body.replaceChildren(form);
+        updateKeyboardMode();
+      };
+      const createProject = async () => {
+        const project = await interaction.openProjectForm();
+        if (!project || disposed) return;
+        try {
+          await refreshProjects(project.id);
+          error = "";
+          render();
+          focusPicker();
+        } catch (nextError) {
+          error = String(nextError);
+          render();
+        }
+      };
+      const submit = async () => {
+        if (submitting || !issue) return;
+        const project = selectedProject();
+        if (!project) {
+          error = "Choose a PlaneAI project.";
+          render();
+          focusPicker();
+          return;
+        }
+        submitting = true;
+        error = "";
+        controls.setSubmitting(true);
+        render();
+        try {
+          await tasks.createChild({
+            project,
+            title: issue.title,
+            description: issue.description,
+            parentKey: issue.key,
+          });
+          await refreshAssignment(project);
+          controls.setSubmitting(false);
+          controls.close();
+        } catch (nextError) {
+          error = String(nextError);
+          submitting = false;
+          controls.setSubmitting(false);
+          render();
+        }
+      };
+      root.append(style, body);
+      void Promise.all([call<JiraIssue>(context, "jira.issue.get", { key }), refreshProjects()])
+        .then(([nextIssue]) => {
+          issue = nextIssue;
+          loading = false;
+          if (!disposed) {
+            render();
+            queueMicrotask(() => body.focus());
+          }
+        })
+        .catch((nextError) => {
+          loading = false;
+          error = String(nextError);
+          if (!disposed) render();
+        });
+      render();
+      return () => {
+        disposed = true;
+        root.replaceChildren();
+      };
+    },
+  });
 }
 
 export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
@@ -388,6 +647,7 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
     let collapsed = false;
     let selected = "";
     let unregister = () => {};
+    let assignmentModal: PluginModalControls | null = null;
     let disposed = false;
     const render = (focusRowId: string | null = null) => {
       unregister();
@@ -429,8 +689,18 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
             context.host.sidebar.select(rowId);
             selected = item.key;
             render(rowId);
+            assignmentModal?.close();
+            assignmentModal = openAssignment(context, item.key);
           };
-          row.onkeydown = context.host.sidebar.handleKeydown;
+          row.onkeydown = (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              row.click();
+              return;
+            }
+            context.host.sidebar.handleKeydown(event);
+          };
           issueRegion.append(row);
           if (focusRowId === rowId) row.focus();
         }
@@ -492,16 +762,39 @@ export const jiraSidebarSectionEntrypoint: PluginUiEntrypoint = {
           : []),
       ]);
     };
+    let refreshRunning = false;
+    let refreshAgain = false;
     const refresh = async () => {
-      const value = await call<{ items: SidebarItem[] }>(context, "jira.sidebar.items");
-      items = value.items;
-      if (!disposed) render();
+      if (refreshRunning) {
+        refreshAgain = true;
+        return;
+      }
+      refreshRunning = true;
+      try {
+        do {
+          refreshAgain = false;
+          const value = await call<{ items: SidebarItem[] }>(context, "jira.sidebar.items");
+          items = value.items;
+          if (!disposed) render();
+        } while (refreshAgain && !disposed);
+      } finally {
+        refreshRunning = false;
+      }
     };
-    void refresh().catch(() => {
-      if (!disposed) render();
-    });
+    const requestRefresh = () => {
+      void refresh().catch(() => {
+        if (!disposed) render();
+      });
+    };
+    const unsubscribeDataChanged = context.host.data.onChanged?.(requestRefresh) ?? (() => {});
+    const unsubscribeTaskDataChanged =
+      context.host.data.onTaskDataChanged?.(requestRefresh) ?? (() => {});
+    requestRefresh();
     return () => {
       disposed = true;
+      unsubscribeDataChanged();
+      unsubscribeTaskDataChanged();
+      assignmentModal?.dispose();
       unregister();
       root.replaceChildren();
     };

@@ -13,11 +13,12 @@
 
   interface Props {
     project?: Project | null;
-    onCreated: () => void;
+    onCreated: (project: Project) => void | Promise<void>;
     onCancel: () => void;
+    onSubmittingChange?: (submitting: boolean) => void;
   }
 
-  let { project = null, onCreated, onCancel }: Props = $props();
+  let { project = null, onCreated, onCancel, onSubmittingChange }: Props = $props();
   const isEditing = $derived(project !== null);
 
   const config = $derived(getSettings());
@@ -40,6 +41,10 @@
   let submitting = $state(false);
   let submitAttempted = $state(false);
   let wrapperEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    onSubmittingChange?.(submitting);
+  });
 
   // Auto-derive name from path (local mode)
   $effect(() => {
@@ -103,25 +108,29 @@
   }
 
   async function submitLocal() {
-    const valid = await projectsApi.validateGitRepo(path.trim());
-    if (!valid) {
-      showSnackbar("Not a valid git repository (no .git found).");
+    try {
+      const valid = await projectsApi.validateGitRepo(path.trim());
+      if (!valid) {
+        showSnackbar("Not a valid git repository (no .git found).");
+        submitting = false;
+        return;
+      }
+    } catch (e) {
+      showSnackbar(`Could not validate repository: ${String(e)}`);
       submitting = false;
       return;
     }
 
     try {
-      if (project) {
-        await projectStore.updateProject(project.id, name.trim(), path.trim());
-      } else {
-        await projectStore.createProject(name.trim(), path.trim());
-      }
+      const savedProject = project
+        ? await projectsApi.update(project.id, name.trim(), path.trim())
+        : await projectsApi.create(name.trim(), path.trim());
+      await projectStore.loadProjects();
+      await onCreated(savedProject);
     } catch (e) {
       showSnackbar(String(e));
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   async function submitRemote() {
@@ -143,13 +152,13 @@
     }
 
     try {
-      await projectStore.createProject(repoName, fullPath);
+      const project = await projectsApi.create(repoName, fullPath);
+      await projectStore.loadProjects();
+      await onCreated(project);
     } catch (e) {
       showSnackbar(`Clone succeeded but project creation failed: ${String(e)}. The cloned directory remains at ${fullPath}.`);
       submitting = false;
-      return;
     }
-    onCreated();
   }
 
   function toggleMode() {

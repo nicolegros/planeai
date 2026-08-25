@@ -186,4 +186,4 @@ Tasks are stored locally in planeai's SQLite database, scoped to each project. F
 
 ## Jira Integration
 
-The bundled Jira plugin manages OAuth connection and manual configured JQL-source synchronization. Syncing imports matching Jira issues as PlaneAI tasks and displays them in the Jira sidebar. Assignment, task writeback, and periodic synchronization are deferred to a later parity slice.
+The bundled Jira plugin manages OAuth connection and manual configured JQL-source synchronization. Syncing imports matching Jira issues as PlaneAI tasks and displays them in the Jira sidebar. Select an issue, choose a PlaneAI project, and PlaneAI creates a child task under the synced Jira task. Jira task writeback and periodic synchronization are deferred to a later parity slice.

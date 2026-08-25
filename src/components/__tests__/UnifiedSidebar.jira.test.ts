@@ -82,7 +82,7 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps pointer and keyboard selection synchronized with Jira issue rows", async () => {
+  it("opens a host-managed assignment modal when a Jira issue is clicked", async () => {
     component = mount(UnifiedSidebarJiraHarness, { target });
 
     await vi.waitFor(() => {
@@ -99,25 +99,52 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
 
     await vi.waitFor(() => {
       expect(getSelectedIndex()).toBe(2);
-      expect(host.shadowRoot?.querySelectorAll(".selected")).toHaveLength(1);
+      expect(document.querySelector("[data-plugin-modal]")).toBeTruthy();
       expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-42");
     });
+    expect(host.shadowRoot?.activeElement).not.toBe(issue);
+  });
 
-    const selectedIssue = host.shadowRoot!.querySelector<HTMLButtonElement>(".issue.selected")!;
-    expect(host.shadowRoot?.activeElement).toBe(selectedIssue);
-    selectedIssue.dispatchEvent(
+  it("opens assignment when Enter activates a focused Jira issue", async () => {
+    component = mount(UnifiedSidebarJiraHarness, { target });
+
+    await vi.waitFor(() => {
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+    const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution='jira:section']")!;
+    await vi.waitFor(() =>
+      expect(
+        host.shadowRoot?.querySelector<HTMLButtonElement>(".section-header.selected"),
+      ).toBeTruthy(),
+    );
+    const header = host.shadowRoot!.querySelector<HTMLButtonElement>(".section-header.selected")!;
+    header.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, composed: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(host.shadowRoot?.querySelector<HTMLButtonElement>(".issue.selected")).toBeTruthy(),
+    );
+
+    const issue = host.shadowRoot!.querySelector<HTMLButtonElement>(".issue.selected")!;
+    issue.dispatchEvent(
       new KeyboardEvent("keydown", {
-        key: "ArrowDown",
+        key: "Enter",
         bubbles: true,
         composed: true,
         cancelable: true,
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(getSelectedIndex()).toBe(3);
-      expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-43");
-    });
+    await vi.waitFor(() => expect(document.querySelector("[data-plugin-modal]")).toBeTruthy());
+    expect(host.shadowRoot?.querySelector(".issue.selected")?.textContent).toContain("PLA-42");
   });
 
   it("enters and traverses Jira rows from focused sidebar keyboard navigation", async () => {
@@ -225,6 +252,34 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
       expect(getSelectedIndex()).toBe(0);
       expect(host.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0);
     });
+  });
+
+  it("clears Jira row selection when focus leaves the sidebar", async () => {
+    component = mount(UnifiedSidebarJiraHarness, { target });
+
+    await vi.waitFor(() => {
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+
+    const jiraHost = target.querySelector<HTMLElement>(
+      "[data-plugin-ui-contribution='jira:section']",
+    )!;
+    await vi.waitFor(() =>
+      expect(jiraHost.shadowRoot?.querySelector(".section-header.selected")).toBeTruthy(),
+    );
+
+    focusTerminal();
+
+    await vi.waitFor(() =>
+      expect(jiraHost.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0),
+    );
   });
 
   it("does not reset to the active session when Jira focus rerenders its rows", async () => {

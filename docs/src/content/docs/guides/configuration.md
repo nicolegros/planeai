@@ -181,7 +181,7 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-Jira is a bundled plugin with manual configured-source synchronization. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar. Writeback and periodic polling remain deferred. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
+Jira is a bundled plugin with manual configured-source synchronization. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. Writeback and periodic polling remain deferred. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
 
 Writeback and periodic polling are deferred to a later parity slice. On startup, existing `integrations.jira` public configuration is migrated once into plugin settings; legacy OAuth tokens are intentionally not imported.
 

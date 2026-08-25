@@ -362,7 +362,7 @@
 
   let focusedPluginRow = "";
   $effect(() => {
-    const current = flatNav[getSelectedIndex()];
+    const current = zone === "sidebar" ? flatNav[getSelectedIndex()] : undefined;
     const key = current?.type === "plugin" ? `${current.contributionKey}:${current.row.id}` : "";
     if (key === focusedPluginRow) return;
     for (const item of flatNav) {

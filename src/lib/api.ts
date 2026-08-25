@@ -54,7 +54,7 @@ export const sessions = {
 export const projects = {
   list: () => invoke<Project[]>("list_projects"),
   listArchived: () => invoke<Project[]>("list_archived_projects"),
-  create: (name: string, path: string) => invoke("create_project", { name, path }),
+  create: (name: string, path: string) => invoke<Project>("create_project", { name, path }),
   update: (id: string, name: string, path: string) =>
     invoke<Project>("update_project", { id, name, path }),
   delete: (id: string) => invoke("delete_project", { id }),

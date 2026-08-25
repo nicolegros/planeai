@@ -18,6 +18,7 @@ const { pluginCall, localUiSource, eventListeners } = vi.hoisted(() => ({
 
 vi.mock("../../lib/api", () => ({
   plugins: { call: pluginCall, localUiSource },
+  pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
 }));
 
 import PluginContributionHostHarness from "./PluginContributionHostHarness.svelte";
@@ -29,6 +30,7 @@ vi.mock("@tauri-apps/api/event", () => ({
     return Promise.resolve(() => eventListeners.delete(eventName));
   }),
 }));
+
 describe("PluginContributionHost", () => {
   let target: HTMLElement;
   let component:
@@ -60,76 +62,23 @@ describe("PluginContributionHost", () => {
     expect(pluginCall).toHaveBeenCalledWith("jira", "jira.status", null);
   });
 
-  it("mounts an imported local ESM bundle and scopes calls to its sidecar", async () => {
-    localUiSource.mockResolvedValue(`
-      export default {
-        mount(root, context) {
-          const page = document.createElement("p");
-          page.className = "fixture-page";
-          page.textContent = "Loading…";
-          root.replaceChildren(page);
-          context.host.call("fixture.status").then((value) => { page.textContent = value.runtime_state; });
-          return () => root.replaceChildren();
-        }
-      };
-    `);
-    pluginCall.mockResolvedValueOnce({ runtime_state: "running" } as never);
+  it("isolates local UI bundles in an opaque, script-only iframe with a message bridge", async () => {
     target = document.createElement("div");
     document.body.append(target);
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
 
     await vi.waitFor(() => {
       const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
-      expect(host?.shadowRoot?.querySelector(".fixture-page")?.textContent).toBe("running");
+      const frame = host?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(frame).toBeTruthy();
+      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(frame?.srcdoc).toContain("default-src 'none'");
+      expect(frame?.srcdoc).toContain("script-src 'unsafe-inline' blob:");
+      expect(frame?.srcdoc).toContain("postMessage");
+      expect(frame?.srcdoc).not.toContain("sidebar-keydown");
     });
-    expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture");
-    expect(pluginCall).toHaveBeenCalledWith("local-fixture", "fixture.status", null);
-  });
-
-  it("remounts a sidebar section when its plugin data changes", async () => {
-    localUiSource.mockResolvedValue(`
-      export default {
-        mount(root) {
-          const page = document.createElement("p");
-          page.className = "fixture-page";
-          page.textContent = "sidebar item";
-          root.replaceChildren(page);
-          return () => root.replaceChildren();
-        }
-      };
-    `);
-    target = document.createElement("div");
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
-
-    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
-      expect(eventListeners.get("plugin-data-changed")).toBeTypeOf("function"),
-    );
-    eventListeners.get("plugin-data-changed")?.({ payload: "local-fixture" });
-    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledTimes(2));
-  });
-
-  it("bubbles a sidebar selection request from plugin UI", async () => {
-    localUiSource.mockResolvedValue(`
-      export default {
-        mount(root, context) {
-          context.host.sidebar.select("issue:ABC-1");
-          return () => root.replaceChildren();
-        }
-      };
-    `);
-    const onSelection = vi.fn();
-    target = document.createElement("div");
-    target.addEventListener("plugin-sidebar-select", onSelection);
-    document.body.append(target);
-    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
-
-    await vi.waitFor(() => expect(onSelection).toHaveBeenCalledOnce());
-    const [selectionEvent] = onSelection.mock.calls[0]!;
-    expect((selectionEvent as CustomEvent).detail).toEqual({
-      rowId: "issue:ABC-1",
-    });
+    // jsdom does not execute iframe srcdoc. The production bridge loads source only after its frame loads.
+    expect(localUiSource).not.toHaveBeenCalled();
   });
 
   it("disposes the old UI before remounting and on host destruction", async () => {

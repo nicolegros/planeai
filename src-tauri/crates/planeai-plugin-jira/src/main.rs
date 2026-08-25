@@ -431,6 +431,30 @@ impl JiraPlugin {
         Ok(json!({ "items": items }))
     }
 
+    fn issue(&self, params: &Value) -> Result<Value, String> {
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or("jira issue get requires key")?;
+        let conn = self.database()?;
+        conn.query_row(
+            "SELECT issue_key, summary, description FROM jira_issues WHERE issue_key = ?1 AND sync_status = 'synced'",
+            [key],
+            |row| {
+                Ok(json!({
+                    "key": row.get::<_, String>(0)?,
+                    "title": row.get::<_, String>(1)?,
+                    "description": row.get::<_, String>(2)?,
+                }))
+            },
+        )
+        .map_err(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => "Jira issue is no longer available".to_string(),
+            _ => format!("failed to get Jira issue: {error}"),
+        })
+    }
+
     async fn sync_now<R, W>(&self, input: &mut R, output: &mut W) -> Result<Value, String>
     where
         R: tokio::io::AsyncBufRead + Unpin,
@@ -1132,6 +1156,85 @@ mod sync_tests {
         assert_eq!(version, 3);
     }
 
+    fn plugin_for_test(data_dir: PathBuf) -> JiraPlugin {
+        let secrets_dir = data_dir.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        JiraPlugin {
+            data_dir,
+            secrets_dir,
+            pending_auth: None,
+            completion: None,
+            authorization_error: None,
+            completed_attempt: None,
+            client: Client::builder().build().unwrap(),
+            token_url: TOKEN_URL.to_string(),
+            resources_url: RESOURCES_URL.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn issue_rpc_returns_only_synced_issues_and_validates_keys() {
+        let data_dir = std::env::temp_dir().join(format!("planeai-jira-rpc-{}", generate_state()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let mut plugin = plugin_for_test(data_dir.clone());
+        let conn = plugin.database().unwrap();
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, sync_status, last_synced_at) VALUES ('SYNC-1', 'Synced summary', 'Synced description', 'Open', 'todo', 'source', 'synced', 'now')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, sync_status, last_synced_at) VALUES ('OLD-1', 'Departed summary', '', 'Open', 'todo', 'source', 'departed', 'now')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let mut input = BufReader::new(tokio::io::empty());
+        let mut output = tokio::io::sink();
+
+        let synced = dispatch(
+            &mut plugin,
+            Request {
+                jsonrpc: "2.0".to_string(),
+                id: json!(1),
+                method: "jira.issue.get".to_string(),
+                params: json!({ "key": "SYNC-1" }),
+            },
+            &mut input,
+            &mut output,
+        )
+        .await;
+        assert_eq!(
+            synced.result,
+            Some(
+                json!({ "key": "SYNC-1", "title": "Synced summary", "description": "Synced description" })
+            )
+        );
+
+        for params in [
+            json!({ "key": "OLD-1" }),
+            json!({ "key": "MISSING-1" }),
+            json!({ "key": "" }),
+        ] {
+            let response = dispatch(
+                &mut plugin,
+                Request {
+                    jsonrpc: "2.0".to_string(),
+                    id: json!(2),
+                    method: "jira.issue.get".to_string(),
+                    params,
+                },
+                &mut input,
+                &mut output,
+            )
+            .await;
+            assert_eq!(response.error.unwrap().code, -32000);
+        }
+
+        drop(plugin);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
     #[test]
     fn migration_backfills_source_memberships_from_v1_records() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1569,6 +1672,7 @@ where
         "jira.settings.update" => plugin.update_source_settings(&request.params),
         "jira.sources.rename" => plugin.rename_source(&request.params),
         "jira.sidebar.items" => plugin.sidebar_items(),
+        "jira.issue.get" => plugin.issue(&request.params),
         "jira.syncNow" => plugin.sync_now(input, output).await,
         "jira.open_browser" => request
             .params

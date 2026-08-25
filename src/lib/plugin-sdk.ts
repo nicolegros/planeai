@@ -1,5 +1,17 @@
-import type { PluginInventory, PluginUiContribution } from "./types";
+import type { PluginInventory, PluginUiContribution, Project, TaskItem } from "./types";
 import type { PluginSidebarNavRow } from "./plugin-sidebar-navigation.svelte";
+
+export interface PluginModalControls {
+  close(): void;
+  dispose(): void;
+  setSubmitting(submitting: boolean): void;
+}
+
+export interface PluginModalOptions {
+  title: string;
+  contentResponsive?: boolean;
+  mount(root: ShadowRoot, controls: PluginModalControls): (() => void) | void;
+}
 
 /**
  * Plugin UI modules use only this host-injected bridge. The host scopes every
@@ -19,6 +31,25 @@ export interface PluginUiHost {
   };
   data: {
     changed(): Promise<void>;
+    onChanged?(listener: () => void): () => void;
+    onTaskDataChanged?(listener: () => void): () => void;
+    refreshAssignment?(project: Project): Promise<void>;
+    notify(message: string, kind?: "success" | "error"): void;
+  };
+  projects?: {
+    list(): Promise<Project[]>;
+  };
+  tasks?: {
+    createChild(params: {
+      project: Project;
+      title: string;
+      description: string;
+      parentKey: string;
+    }): Promise<TaskItem>;
+  };
+  interaction?: {
+    openModal(options: PluginModalOptions): PluginModalControls;
+    openProjectForm(): Promise<Project | null>;
   };
 }
 
