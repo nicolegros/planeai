@@ -186,6 +186,59 @@ pub fn build_wsl_login_shell(distro: &str, cwd: Option<&str>) -> (String, Vec<St
     build_wsl_command(distro, cwd, "bash", &["-l"])
 }
 
+// ─── Process lifecycle ────────────────────────────────────────────────────────
+
+/// Pre-warm a WSL distro by running a no-op command.
+///
+/// First WSL invocation after boot has cold-start latency (1–4 seconds for WSL2).
+/// Running this at app startup ensures subsequent session spawns are fast (~100ms).
+///
+/// This is async-friendly — callers should spawn it in the background.
+#[cfg(windows)]
+pub fn warm_distro(distro: &str) -> Result<(), WslError> {
+    use std::process::Command;
+
+    let mut cmd = Command::new("wsl");
+    cmd.args(["-d", distro, "--", "true"]);
+    crate::command::no_window(&mut cmd);
+
+    let output = cmd
+        .output()
+        .map_err(|e| WslError::SpawnFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(WslError::CommandFailed(stderr));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn warm_distro(_distro: &str) -> Result<(), WslError> {
+    Ok(())
+}
+
+/// The ETX byte (Ctrl+C) — writing this to a PTY stdin sends SIGINT to the
+/// foreground process group inside WSL.
+pub const ETX: u8 = 0x03;
+
+/// Graceful shutdown sequence for WSL sessions:
+/// 1. Write ETX (Ctrl+C) to the PTY to signal the Linux foreground process
+/// 2. Wait briefly for the process to handle the signal
+/// 3. If still alive, the caller should kill the `wsl.exe` process
+///
+/// This prevents orphaned Linux processes inside WSL when sessions are destroyed.
+///
+/// Returns the ETX byte that should be written to the PTY writer before killing.
+pub fn graceful_shutdown_bytes() -> &'static [u8] {
+    &[ETX]
+}
+
+/// Duration to wait after sending ETX before force-killing the process.
+/// This gives the Linux process time to handle SIGINT and exit cleanly.
+pub const GRACEFUL_SHUTDOWN_DELAY_MS: u64 = 100;
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
@@ -484,5 +537,33 @@ mod tests {
         // On non-Windows, this returns NotAvailable since default_distro is a stub
         #[cfg(not(windows))]
         assert_eq!(resolve_distro(&config), Err(WslError::NotAvailable));
+    }
+
+    // ── Process lifecycle ──
+
+    #[test]
+    fn etx_constant_is_ctrl_c() {
+        assert_eq!(ETX, 0x03);
+    }
+
+    #[test]
+    fn graceful_shutdown_bytes_returns_etx() {
+        let bytes = graceful_shutdown_bytes();
+        assert_eq!(bytes, &[0x03]);
+    }
+
+    #[test]
+    fn graceful_shutdown_delay_is_reasonable() {
+        // Should be long enough for signal propagation but not so long it blocks UX
+        let delay = GRACEFUL_SHUTDOWN_DELAY_MS;
+        assert!(delay >= 50, "delay too short: {delay}ms");
+        assert!(delay <= 500, "delay too long: {delay}ms");
+    }
+
+    #[test]
+    fn warm_distro_on_non_windows_is_noop() {
+        // On non-Windows, warm_distro should succeed without doing anything
+        #[cfg(not(windows))]
+        assert_eq!(warm_distro("Ubuntu"), Ok(()));
     }
 }
