@@ -186,6 +186,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         disconnect.textContent = "Disconnect";
         disconnect.onclick = async () => {
           await call(context, "jira.disconnect");
+          await context.host.data.changed();
           await refresh();
         };
         const now = document.createElement("button");

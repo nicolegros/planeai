@@ -84,8 +84,6 @@ enum AuthError {
     MissingRefreshToken,
     #[error("Jira plugin secrets are unavailable: {0}")]
     Secrets(String),
-    #[error("Jira plugin cache is unavailable: {0}")]
-    Cache(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -346,9 +344,6 @@ impl JiraPlugin {
 
     async fn disconnect(&mut self) -> Result<Value, AuthError> {
         self.cancel_authorization(None).await;
-        // Jira keys are only unique within one cloud site. Dropping the per-connection
-        // cache prevents a subsequently connected site from reusing its task links.
-        self.clear_sync_cache().map_err(AuthError::Cache)?;
         self.delete_credentials()?;
         Ok(json!({ "connected": false }))
     }
@@ -375,11 +370,6 @@ impl JiraPlugin {
             .map_err(|error| format!("failed to open Jira plugin database: {error}"))?;
         migrate_database(&conn)?;
         Ok(conn)
-    }
-
-    fn clear_sync_cache(&self) -> Result<(), String> {
-        let conn = self.database()?;
-        clear_sync_cache(&conn)
     }
 
     fn update_source_settings(&self, settings: &Value) -> Result<Value, String> {
@@ -424,7 +414,14 @@ impl JiraPlugin {
     }
 
     fn sidebar_items(&self) -> Result<Value, String> {
+        let credentials = match self.read_credentials() {
+            Ok(credentials) => credentials,
+            Err(_) => return Ok(json!({ "items": [] })),
+        };
         let conn = self.database()?;
+        if !cache_matches_site(&conn, &credentials.cloud_id)? {
+            return Ok(json!({ "items": [] }));
+        }
         let mut statement = conn.prepare("SELECT issue_key, summary, mapped_status FROM jira_issues WHERE sync_status = 'synced' ORDER BY last_synced_at DESC, issue_key").map_err(|error| format!("failed to list Jira sidebar items: {error}"))?;
         let rows = statement.query_map([], |row| Ok(json!({ "key": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?, "status": row.get::<_, String>(2)?, "child_count": 0 }))).map_err(|error| format!("failed to query Jira sidebar items: {error}"))?;
         let mut items = Vec::new();
@@ -454,6 +451,7 @@ impl JiraPlugin {
         }
         let access_token = token.access_token;
         let conn = self.database()?;
+        ensure_cache_site(&conn, &credentials.cloud_id)?;
         let mut result = SyncTotals::default();
         let mut request_id = 0_u64;
         let mut sources: Vec<_> = settings.sources.iter().collect();
@@ -752,6 +750,17 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("failed to apply Jira plugin migration 2: {error}"))?;
     }
 
+    if current_version < 3 {
+        conn.execute_batch(
+            "CREATE TABLE jira_cache_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO jira_plugin_schema_migrations (version) VALUES (3);",
+        )
+        .map_err(|error| format!("failed to apply Jira plugin migration 3: {error}"))?;
+    }
+
     Ok(())
 }
 
@@ -762,6 +771,37 @@ fn clear_sync_cache(conn: &Connection) -> Result<(), String> {
          DELETE FROM jira_issues;",
     )
     .map_err(|error| format!("failed to clear Jira synchronization cache: {error}"))
+}
+
+fn cache_matches_site(conn: &Connection, cloud_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT value FROM jira_cache_metadata WHERE key = 'cloud_id'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|stored| stored.as_deref() == Some(cloud_id))
+    .map_err(|error| format!("failed to read Jira cache site: {error}"))
+}
+
+fn ensure_cache_site(conn: &Connection, cloud_id: &str) -> Result<(), String> {
+    if cache_matches_site(conn, cloud_id)? {
+        return Ok(());
+    }
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("failed to start Jira cache site update: {error}"))?;
+    clear_sync_cache(&transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO jira_cache_metadata (key, value) VALUES ('cloud_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![cloud_id],
+        )
+        .map_err(|error| format!("failed to persist Jira cache site: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("failed to commit Jira cache site update: {error}"))
 }
 
 fn upsert_issue(
@@ -1089,7 +1129,7 @@ mod sync_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -1809,9 +1849,10 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_cache_clear_prevents_cross_site_task_link_reuse() {
+    fn cache_is_retained_for_a_same_site_reconnect_and_cleared_for_a_new_site() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_database(&conn).unwrap();
+        ensure_cache_site(&conn, "cloud-a").unwrap();
         conn.execute("INSERT INTO jira_issues (issue_key, summary, jira_status, mapped_status, source_name, last_synced_at) VALUES ('ABC-1', 'Old site issue', 'To Do', 'todo', 'source', 'now')", []).unwrap();
         conn.execute(
             "INSERT INTO jira_task_links (task_key, issue_key) VALUES ('ABC-1', 'ABC-1')",
@@ -1824,15 +1865,15 @@ mod tests {
         )
         .unwrap();
 
-        clear_sync_cache(&conn).unwrap();
-
-        assert_eq!(linked_task_key(&conn, "ABC-1").unwrap(), None);
+        ensure_cache_site(&conn, "cloud-a").unwrap();
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM jira_issues", [], |row| row
-                .get::<_, i64>(0))
-                .unwrap(),
-            0
+            linked_task_key(&conn, "ABC-1").unwrap(),
+            Some("ABC-1".to_string())
         );
+
+        ensure_cache_site(&conn, "cloud-b").unwrap();
+        assert_eq!(linked_task_key(&conn, "ABC-1").unwrap(), None);
+        assert!(cache_matches_site(&conn, "cloud-b").unwrap());
     }
 
     #[test]
