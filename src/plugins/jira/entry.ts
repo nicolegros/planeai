@@ -132,6 +132,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
           status = await call<JiraStatus>(context, "jira.status");
           if (!status.authorizing && authorizationAttempt === attemptId) {
             authorizationAttempt = null;
+            if (status.connected) await context.host.data.changed();
           }
           if (!disposed) render();
           if (status.authorizing && !disposed) setTimeout(() => void poll(), 500);

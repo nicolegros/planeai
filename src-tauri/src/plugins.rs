@@ -21,7 +21,7 @@ const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
 // Synchronization can legitimately fetch up to 100 Jira pages before its first
 // nested host task request. Keep a finite watchdog, but allow that bounded fetch.
-const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
@@ -1531,10 +1531,17 @@ impl PluginRuntimeSupervisor {
         };
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
+        // Publish the ready runtime before emitting the running lifecycle event so
+        // mounted UI contributions cannot observe `running` without a callable handle.
+        self.processes
+            .lock()
+            .await
+            .insert(id.clone(), process.clone());
         if let Err(error) = self
             .update_state(&id, true, PluginRuntimeState::Running, None)
             .await
         {
+            self.processes.lock().await.remove(&id);
             if let Err(stop_error) = stop_process(process).await {
                 tracing::warn!(plugin_id = %id, %stop_error, "failed to stop plugin after startup persistence failure");
             }
@@ -1546,10 +1553,6 @@ impl PluginRuntimeSupervisor {
             }
             return Err(error);
         }
-        self.processes
-            .lock()
-            .await
-            .insert(id.clone(), process.clone());
         self.monitor_process(id.clone(), process);
         self.inventory(&id)
             .await?
