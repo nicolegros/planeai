@@ -618,7 +618,7 @@ impl JiraPlugin {
         let Some(source_name) = source_name else {
             return Ok(None);
         };
-        let settings = settings_from_value(&self.settings()?);
+        let settings = settings_from_value(&self.settings()?)?;
         let writeback = settings
             .sources
             .get(&source_name)
@@ -1381,6 +1381,7 @@ mod sync_tests {
             completion: None,
             authorization_error: None,
             completed_attempt: None,
+            last_writeback: None,
             client: Client::builder().build().unwrap(),
             token_url: TOKEN_URL.to_string(),
             resources_url: RESOURCES_URL.to_string(),
