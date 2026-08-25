@@ -798,10 +798,17 @@ impl JiraPlugin {
                 continue;
             };
             if let Some((source_name, config)) = self.selected_writeback_source(issue_key)? {
-                outcomes.push(
-                    self.writeback_lifecycle(issue_key, &source_name, action, &config)
-                        .await,
-                );
+                let configured = match action {
+                    "start" => config.on_start.is_some(),
+                    "complete" => config.on_complete.is_some(),
+                    _ => false,
+                } || config.comment;
+                if configured {
+                    outcomes.push(
+                        self.writeback_lifecycle(issue_key, &source_name, action, &config)
+                            .await,
+                    );
+                }
             }
         }
         Ok(json!({"outcomes": outcomes}))

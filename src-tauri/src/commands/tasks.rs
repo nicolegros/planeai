@@ -6,7 +6,6 @@ use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
 use crate::db;
-use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, PtyState};
 use crate::task_lifecycle::{
     StatusChangeCause, TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin,
@@ -110,7 +109,6 @@ pub fn list_all_task_items(
 #[allow(clippy::too_many_arguments)]
 pub fn create_task_item(
     db_state: State<DbState>,
-    runtime: State<PluginRuntimeHandle>,
     repo_path: String,
     title: String,
     description: String,
@@ -140,7 +138,7 @@ pub fn create_task_item(
     if let (Some(parent_key), Some(is_first_child_assignment)) =
         (&task.parent_key, first_child_assignment)
     {
-        runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
+        planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
             TaskLifecycleOrigin::Ui,
             project.id,
             project.prefix,
@@ -158,7 +156,6 @@ pub fn create_task_item(
 #[allow(clippy::too_many_arguments)]
 pub fn edit_task_item(
     db_state: State<DbState>,
-    runtime: State<PluginRuntimeHandle>,
     repo_path: String,
     key: String,
     title: Option<String>,
@@ -175,13 +172,12 @@ pub fn edit_task_item(
 ) -> Result<TaskItem, String> {
     let project = resolve_project(&db_state, &repo_path)?;
     let repo = resolve_repo(&db_state, &repo_path)?;
-    let before = repo.get(&key).map_err(|e| e.to_string())?;
     let resolved_parent_key = if clear_parent.unwrap_or(false) {
         Some(None)
     } else {
         parent_key.map(Some)
     };
-    let task = repo
+    let mut task = repo
         .update(
             &key,
             UpdateParams {
@@ -190,32 +186,36 @@ pub fn edit_task_item(
                 priority,
                 tags,
                 blocked_by,
-                parent_key: resolved_parent_key,
+                // Parent changes are handled in their own transaction below so
+                // first-child detection observes a single committed assignment.
+                parent_key: None,
                 base_branch,
                 ..Default::default()
             },
         )
         .map_err(|e| e.to_string())?;
-    if task.parent_key != before.parent_key {
-        if let Some(parent_key) = &task.parent_key {
-            let child_count = repo
-                .list(ListFilter {
-                    parent_key: Some(Some(parent_key.clone())),
-                    ..Default::default()
-                })
-                .map_err(|e| e.to_string())?
-                .len();
-            runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
-                TaskLifecycleOrigin::Ui,
-                project.id,
-                project.prefix,
-                vec![TaskLifecycleEvent::ChildAssigned {
-                    child_key: task.key.clone(),
-                    parent_key: parent_key.clone(),
-                    is_first_child_assignment: child_count == 1,
-                }],
-            ));
-        }
+    let first_child_assignment = if let Some(parent_key) = resolved_parent_key {
+        let (updated, first) = repo
+            .set_parent_with_first_child_assignment(&key, parent_key)
+            .map_err(|e| e.to_string())?;
+        task = updated;
+        first
+    } else {
+        None
+    };
+    if let (Some(parent_key), Some(is_first_child_assignment)) =
+        (&task.parent_key, first_child_assignment)
+    {
+        planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
+            TaskLifecycleOrigin::Ui,
+            project.id,
+            project.prefix,
+            vec![TaskLifecycleEvent::ChildAssigned {
+                child_key: task.key.clone(),
+                parent_key: parent_key.clone(),
+                is_first_child_assignment,
+            }],
+        ));
     }
     Ok(TaskItem::from(task))
 }
@@ -226,7 +226,6 @@ pub async fn move_task_item(
     db_state: State<'_, DbState>,
     config_state: State<'_, ConfigState>,
     pty_state: State<'_, PtyState>,
-    runtime: State<'_, PluginRuntimeHandle>,
     app: AppHandle,
     key: String,
     status: String,
@@ -315,7 +314,7 @@ pub async fn move_task_item(
     .await?;
 
     if !events.is_empty() {
-        runtime.0.dispatch_task_lifecycle(TaskLifecycleBatch::new(
+        planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
             TaskLifecycleOrigin::Ui,
             project.id,
             project.prefix,

@@ -238,6 +238,56 @@ impl SqliteRepository {
         Ok((task, parent_key_for_result.map(|_| is_first)))
     }
 
+    /// Change a task's parent and atomically report whether the new parent had
+    /// no children before this assignment committed.
+    pub fn set_parent_with_first_child_assignment(
+        &self,
+        key: &str,
+        parent_key: Option<String>,
+    ) -> Result<(Task, Option<bool>), Error> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let existing_parent: Option<String> = tx
+            .query_row(
+                "SELECT parent_key FROM tasks WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
+                _ => Error::Storage(error.to_string()),
+            })?;
+        if existing_parent == parent_key {
+            tx.commit()
+                .map_err(|error| Error::Storage(error.to_string()))?;
+            return Ok((self.query_task(&conn, key, None)?, None));
+        }
+        let is_first = match &parent_key {
+            Some(parent_key) => !tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+                    params![parent_key],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| Error::Storage(error.to_string()))?,
+            None => false,
+        };
+        tx.execute(
+            "UPDATE tasks SET parent_key = ?1, updated_at = ?2 WHERE key = ?3",
+            params![parent_key, Utc::now().to_rfc3339(), key],
+        )
+        .map_err(|error| Error::Storage(error.to_string()))?;
+        tx.commit()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let task = self.query_task(&conn, key, None)?;
+        Ok((task, parent_key.map(|_| is_first)))
+    }
+
     fn next_key(&self, conn: &Connection) -> Result<String, Error> {
         let seq: i32 = conn
             .query_row(
@@ -435,6 +485,21 @@ impl TaskProvider for SqliteRepository {
                 updated_at: now,
             },
         )
+    }
+
+    fn create_with_first_child_assignment(
+        &self,
+        params: CreateParams,
+    ) -> Result<(Task, Option<bool>), Error> {
+        SqliteRepository::create_with_first_child_assignment(self, params)
+    }
+
+    fn set_parent_with_first_child_assignment(
+        &self,
+        key: &str,
+        parent_key: Option<String>,
+    ) -> Result<(Task, Option<bool>), Error> {
+        SqliteRepository::set_parent_with_first_child_assignment(self, key, parent_key)
     }
 
     fn get(&self, key: &str) -> Result<Task, Error> {

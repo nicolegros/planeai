@@ -536,3 +536,34 @@ fn create_with_first_child_assignment_reports_only_the_first_child() {
     assert_eq!(first, Some(true));
     assert_eq!(second, Some(false));
 }
+
+#[test]
+fn set_parent_with_first_child_assignment_reports_only_the_first_assignment() {
+    let r = repo();
+    let parent = r
+        .create(CreateParams {
+            title: "parent".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let first = r
+        .create(CreateParams {
+            title: "first".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let second = r
+        .create(CreateParams {
+            title: "second".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let (_, first_assignment) = r
+        .set_parent_with_first_child_assignment(&first.key, Some(parent.key.clone()))
+        .unwrap();
+    let (_, second_assignment) = r
+        .set_parent_with_first_child_assignment(&second.key, Some(parent.key))
+        .unwrap();
+    assert_eq!(first_assignment, Some(true));
+    assert_eq!(second_assignment, Some(false));
+}

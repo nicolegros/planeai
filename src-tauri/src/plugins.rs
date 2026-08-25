@@ -20,6 +20,10 @@ use crate::task_lifecycle::TaskLifecycleBatch;
 
 const HOST_API_VERSION: &str = "planeai.plugin-host.v1";
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+// A Jira lifecycle writeback may refresh credentials, look up a transition,
+// perform that transition, and add a comment. Each network request is bounded
+// by the Jira client at 20 seconds, so this must cover the full sequence.
+const JIRA_LIFECYCLE_RPC_TIMEOUT: Duration = Duration::from_secs(90);
 // Synchronization can legitimately fetch up to 100 Jira pages before its first
 // nested host task request. Keep a finite watchdog, but allow that bounded fetch.
 const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
@@ -770,10 +774,10 @@ struct RuntimeProcess {
 }
 
 fn request_timeout(method: &str) -> Duration {
-    if method == "jira.syncNow" {
-        JIRA_SYNC_RPC_TIMEOUT
-    } else {
-        RPC_TIMEOUT
+    match method {
+        "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
+        "plugin.taskLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
+        _ => RPC_TIMEOUT,
     }
 }
 
@@ -1295,7 +1299,7 @@ impl PluginRuntimeSupervisor {
             return;
         }
         let supervisor = Arc::clone(self);
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let processes = supervisor
                 .processes
                 .lock()
@@ -2268,8 +2272,12 @@ mod tests {
     }
 
     #[test]
-    fn jira_sync_uses_the_extended_rpc_timeout() {
+    fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
+        assert_eq!(
+            request_timeout("plugin.taskLifecycle"),
+            JIRA_LIFECYCLE_RPC_TIMEOUT
+        );
         assert_eq!(request_timeout("jira.status"), RPC_TIMEOUT);
     }
 

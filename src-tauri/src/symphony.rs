@@ -9,7 +9,7 @@ use planeai_core::orchestrator::{AutoProject, OrchestratorConfig};
 use planeai_core::session::{Backend, DispatchConfig, NewSession, OnStartHook};
 use planeai_core::task::{Task, TaskSource};
 
-use planeai_tasks::model::{Status, DEFAULT_BASE_BRANCH};
+use planeai_tasks::model::DEFAULT_BASE_BRANCH;
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
@@ -301,13 +301,24 @@ impl Backend for TauriBackend {
 pub struct SqliteTaskSource {
     repo: SqliteRepository,
     terminal_states: Vec<String>,
+    lifecycle_context: planeai::task_cli::TaskLifecycleContext,
 }
 
 impl SqliteTaskSource {
-    pub fn new(repo: SqliteRepository, terminal_states: Vec<String>) -> Self {
+    pub fn new(
+        repo: SqliteRepository,
+        terminal_states: Vec<String>,
+        project_id: String,
+        project_prefix: String,
+    ) -> Self {
         Self {
             repo,
             terminal_states,
+            lifecycle_context: planeai::task_cli::TaskLifecycleContext {
+                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Symphony,
+                project_id,
+                project_prefix,
+            },
         }
     }
 }
@@ -348,18 +359,13 @@ impl TaskSource for SqliteTaskSource {
 
     fn move_task(&self, key: &str, status: &str) -> Result<(), String> {
         tracing::info!(task_key = %key, status = %status, "moving task via internal provider");
-        let new_status =
-            Status::parse(status).ok_or_else(|| format!("invalid status: {status}"))?;
-        self.repo
-            .update(
-                key,
-                planeai_tasks::model::UpdateParams {
-                    status: Some(new_status),
-                    ..Default::default()
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(())
+        planeai::task_cli::run_task_move_with_lifecycle(
+            &self.repo,
+            key,
+            status,
+            &self.lifecycle_context,
+        )
+        .map(|_| ())
     }
 
     fn is_terminal(&self, status: &str) -> bool {
@@ -433,7 +439,12 @@ pub fn build_orchestrator_config(
             Err(_) => continue,
         };
 
-        let task_source = Arc::new(SqliteTaskSource::new(task_repo, terminal_states));
+        let task_source = Arc::new(SqliteTaskSource::new(
+            task_repo,
+            terminal_states,
+            project.id.clone(),
+            project.prefix.clone(),
+        ));
 
         let on_start = tm.on_start.as_ref().map(|h| OnStartHook {
             move_to: h.move_to.clone(),
@@ -670,7 +681,8 @@ mod tests {
             })
             .unwrap();
 
-        let source = SqliteTaskSource::new(repo, vec!["done".into()]);
+        let source =
+            SqliteTaskSource::new(repo, vec!["done".into()], "project-1".into(), "TST".into());
         let tasks = source.list_tasks().unwrap();
 
         let parent_task = tasks.iter().find(|t| t.key == parent.key).unwrap();
