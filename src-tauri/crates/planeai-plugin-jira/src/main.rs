@@ -94,6 +94,11 @@ struct TokenResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct TokenErrorResponse {
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AccessibleResource {
     id: String,
     url: String,
@@ -471,8 +476,13 @@ impl JiraPlugin {
         let mut credentials = self
             .read_credentials()
             .map_err(|error| format!("Jira is not connected: {error}"))?;
-        let token =
-            refresh_access_token(&self.client, &self.token_url, &credentials.refresh_token).await?;
+        let token = refresh_access_token(
+            &self.secrets_dir,
+            &self.client,
+            &self.token_url,
+            &credentials.refresh_token,
+        )
+        .await?;
         if let Some(refresh_token) = token.refresh_token {
             persist_rotated_refresh_token(&self.secrets_dir, &mut credentials, refresh_token)
                 .map_err(|error| {
@@ -663,6 +673,7 @@ impl JiraPlugin {
         {
             Err(error) => errors.push(error),
             Ok(mut credentials) => match refresh_access_token(
+                &self.secrets_dir,
                 &self.client,
                 &self.token_url,
                 &credentials.refresh_token,
@@ -1168,21 +1179,49 @@ fn persist_rotated_refresh_token(
 }
 
 async fn refresh_access_token(
+    secrets_dir: &std::path::Path,
     client: &Client,
     token_url: &str,
     refresh_token: &str,
 ) -> Result<TokenResponse, String> {
-    client
+    let response = client
         .post(token_url)
         .json(&json!({ "grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": refresh_token }))
         .send()
         .await
-        .map_err(|error| format!("failed to refresh Jira token: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("Jira token refresh failed: {error}"))?
-        .json::<TokenResponse>()
+        .map_err(|error| format!("failed to refresh Jira token: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
         .await
+        .map_err(|error| format!("failed to read Jira token response: {error}"))?;
+
+    if !status.is_success() {
+        let rejected = status == reqwest::StatusCode::BAD_REQUEST
+            && serde_json::from_str::<TokenErrorResponse>(&body)
+                .ok()
+                .and_then(|error| error.error)
+                .as_deref()
+                == Some("invalid_grant");
+        if rejected {
+            clear_rejected_refresh_credentials(secrets_dir)?;
+            return Err("Jira OAuth refresh token was rejected; reconnect to Jira".to_string());
+        }
+        return Err(format!("Jira token refresh failed: HTTP {status}"));
+    }
+
+    serde_json::from_str::<TokenResponse>(&body)
         .map_err(|error| format!("invalid Jira token response: {error}"))
+}
+
+fn clear_rejected_refresh_credentials(secrets_dir: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(secrets_dir.join("credentials.json")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Jira OAuth refresh token was rejected, but credentials could not be cleared: {error}"
+        )),
+    }
 }
 async fn fetch_issues(
     client: &Client,
@@ -2280,6 +2319,47 @@ mod tests {
             .unwrap(),
             "cloud"
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn rejected_refresh_clears_credentials_for_reconnect() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"error":"invalid_grant"})),
+            )
+            .mount(&server)
+            .await;
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        write_credentials_to(
+            &secrets_dir,
+            &Credentials {
+                refresh_token: "rejected-refresh".to_string(),
+                cloud_id: "cloud".to_string(),
+                site: "https://example.atlassian.net".to_string(),
+            },
+        )
+        .unwrap();
+
+        let error = refresh_access_token(
+            &secrets_dir,
+            &Client::new(),
+            &format!("{}/oauth/token", server.uri()),
+            "rejected-refresh",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Jira OAuth refresh token was rejected; reconnect to Jira"
+        );
+        assert!(!secrets_dir.join("credentials.json").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
