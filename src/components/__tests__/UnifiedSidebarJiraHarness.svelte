@@ -74,6 +74,7 @@
   onRenameSession={noop}
   onStartRename={noop}
   onDeleteProject={noop}
+  onEditProject={noop}
   onPickTask={noop}
   pluginContributions={[
     { plugin: precedingPlugin, contribution: precedingPlugin.ui_contributions[0] },
