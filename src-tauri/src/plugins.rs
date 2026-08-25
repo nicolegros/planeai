@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::time::{timeout, timeout_at, Duration, Instant};
+use tokio::time::{timeout, Duration};
 
 use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
