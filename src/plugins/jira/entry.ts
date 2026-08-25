@@ -333,6 +333,8 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
     let disposed = false;
     let saveGeneration = 0;
     let saveChain: Promise<boolean> = Promise.resolve(true);
+    let authorizationAttempt: string | null = null;
+    let connecting = false;
     const save = (next: JiraSettings) => {
       settings = next;
       const generation = ++saveGeneration;
@@ -373,19 +375,46 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
       if (!disposed) render();
     };
     const connect = async () => {
+      if (connecting || authorizationAttempt) return;
+      connecting = true;
+      const attemptId = crypto.randomUUID();
+      render();
       try {
-        if (!(await save(settings))) return;
+        if (!(await save(settings)) || disposed) return;
+        authorizationAttempt = attemptId;
         const started = await call<{ authorization_url: string }>(context, "jira.connect.start", {
-          attempt_id: crypto.randomUUID(),
+          attempt_id: attemptId,
         });
         await call(context, "jira.open_browser", { url: started.authorization_url });
-        await call(context, "jira.connect.complete", {});
+        await call(context, "jira.connect.complete", { attempt_id: attemptId });
         const poll = async () => {
           status = await call<JiraStatus>(context, "jira.status");
+          if (!status.authorizing && authorizationAttempt === attemptId) {
+            authorizationAttempt = null;
+          }
           if (!disposed) render();
           if (status.authorizing && !disposed) setTimeout(() => void poll(), 500);
         };
         await poll();
+      } catch (error) {
+        try {
+          await call(context, "jira.connect.cancel", { attempt_id: attemptId });
+        } catch {
+          // Preserve the initiating failure while making best effort to release the listener.
+        }
+        if (authorizationAttempt === attemptId) authorizationAttempt = null;
+        status = { ...status, last_error: String(error) };
+        if (!disposed) render();
+      } finally {
+        connecting = false;
+        if (!disposed) render();
+      }
+    };
+    const cancelAuthorization = async () => {
+      try {
+        await call(context, "jira.connect.cancel", { attempt_id: authorizationAttempt });
+        authorizationAttempt = null;
+        await refresh();
       } catch (error) {
         status = { ...status, last_error: String(error) };
         render();
@@ -416,6 +445,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         disconnect.textContent = "Disconnect";
         disconnect.onclick = async () => {
           await call(context, "jira.disconnect");
+          await context.host.data.changed();
           await refresh();
         };
         const now = document.createElement("button");
@@ -428,9 +458,15 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         const connectButton = document.createElement("button");
         connectButton.className = "primary";
         connectButton.textContent = status.authorizing ? "Authorizing…" : "Connect";
-        connectButton.disabled = !settings.site.trim() || status.authorizing;
+        connectButton.disabled = !settings.site.trim() || status.authorizing || connecting;
         connectButton.onclick = () => void connect();
         actions.append(connectButton);
+        if (status.authorizing) {
+          const cancel = document.createElement("button");
+          cancel.textContent = "Cancel authorization";
+          cancel.onclick = () => void cancelAuthorization();
+          actions.append(cancel);
+        }
       }
       connection.append(actions);
       if (result) {
@@ -591,6 +627,9 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
     });
     return () => {
       disposed = true;
+      const attemptId = authorizationAttempt;
+      authorizationAttempt = null;
+      if (attemptId) void call(context, "jira.connect.cancel", { attempt_id: attemptId });
       root.replaceChildren();
     };
   },

@@ -182,12 +182,120 @@ describe("jiraPreferencesEntrypoint", () => {
         [...root.querySelectorAll("button")].find((button) => button.textContent === "Connect"),
       ).toBeTruthy(),
     );
+
     [...root.querySelectorAll("button")]
       .find((button) => button.textContent === "Connect")!
       .click();
 
     await vi.waitFor(() => expect(root.textContent).toContain("JQL must not be blank"));
     expect(context.host.call).not.toHaveBeenCalledWith("jira.connect.start", expect.anything());
+  });
+  it("allows an in-flight OAuth attempt to be cancelled with its correlated attempt ID", async () => {
+    host = document.createElement("div");
+    const root = host.attachShadow({ mode: "open" });
+    let authorizing = false;
+    const call = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "jira.settings.get") return initialSettings();
+      if (method === "jira.settings.update") return initialSettings();
+      if (method === "jira.status") {
+        return { connected: false, authorizing, site: null, last_error: null };
+      }
+      if (method === "jira.connect.start")
+        return { authorization_url: "https://auth.atlassian.com/authorize" };
+      if (method === "jira.open_browser") return { opened: true };
+      if (method === "jira.connect.complete") {
+        authorizing = true;
+        return { authorizing: true };
+      }
+      if (method === "jira.connect.cancel") {
+        authorizing = false;
+        return { cancelled: true };
+      }
+      throw new Error(`unexpected Jira call: ${method}`);
+    });
+    const context = {
+      call,
+      plugin: { id: "jira" },
+      contribution: { id: "jira-preferences" },
+      host: {
+        call,
+        navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
+        sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
+        data: { changed: vi.fn() },
+      },
+    } as unknown as PluginUiContext;
+    jiraPreferencesEntrypoint.mount(root, context);
+
+    await vi.waitFor(() =>
+      expect(
+        [...root.querySelectorAll("button")].find((button) => button.textContent === "Connect"),
+      ).toBeTruthy(),
+    );
+    [...root.querySelectorAll("button")]
+      .find((button) => button.textContent === "Connect")!
+      .click();
+    await vi.waitFor(() =>
+      expect(
+        [...root.querySelectorAll("button")].find(
+          (button) => button.textContent === "Cancel authorization",
+        ),
+      ).toBeTruthy(),
+    );
+    const start = vi
+      .mocked(context.host.call)
+      .mock.calls.find(([method]) => method === "jira.connect.start")!;
+    const complete = vi
+      .mocked(context.host.call)
+      .mock.calls.find(([method]) => method === "jira.connect.complete")!;
+    expect(complete[1]).toEqual(start[1]);
+
+    [...root.querySelectorAll("button")]
+      .find((button) => button.textContent === "Cancel authorization")!
+      .click();
+    await vi.waitFor(() =>
+      expect(context.host.call).toHaveBeenCalledWith("jira.connect.cancel", start[1]),
+    );
+  });
+  it("cancels the backend OAuth attempt when launching the browser fails", async () => {
+    host = document.createElement("div");
+    const root = host.attachShadow({ mode: "open" });
+    const call = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "jira.settings.get" || method === "jira.settings.update")
+        return initialSettings();
+      if (method === "jira.status")
+        return { connected: false, authorizing: false, site: null, last_error: null };
+      if (method === "jira.connect.start")
+        return { authorization_url: "https://auth.atlassian.com/authorize" };
+      if (method === "jira.open_browser") throw new Error("browser unavailable");
+      if (method === "jira.connect.cancel") return { cancelled: true };
+      throw new Error(`unexpected Jira call: ${method}`);
+    });
+    const context = {
+      call,
+      plugin: { id: "jira" },
+      contribution: { id: "jira-preferences" },
+      host: {
+        call,
+        navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
+        sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
+        data: { changed: vi.fn() },
+      },
+    } as unknown as PluginUiContext;
+    jiraPreferencesEntrypoint.mount(root, context);
+
+    await vi.waitFor(() =>
+      expect(
+        [...root.querySelectorAll("button")].find((button) => button.textContent === "Connect"),
+      ).toBeTruthy(),
+    );
+    [...root.querySelectorAll("button")]
+      .find((button) => button.textContent === "Connect")!
+      .click();
+    await vi.waitFor(() => expect(root.textContent).toContain("browser unavailable"));
+    const start = vi
+      .mocked(context.host.call)
+      .mock.calls.find(([method]) => method === "jira.connect.start")!;
+    expect(context.host.call).toHaveBeenCalledWith("jira.connect.cancel", start[1]);
   });
 });
 

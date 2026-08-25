@@ -555,7 +555,7 @@
 
     {#if activeTab === "Plugins"}
     <section class="space-y-4">
-      <PluginManager />
+      <PluginManager onInventoryChange={(inventory) => pluginInventory = inventory} />
       {#each preferenceContributions as item (`${item.plugin.id}:${item.contribution.id}`)}
         <div class="border-t border-border pt-4" data-plugin-preference-contribution={`${item.plugin.id}:${item.contribution.id}`}>
           <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={() => {}} onClose={() => {}} />

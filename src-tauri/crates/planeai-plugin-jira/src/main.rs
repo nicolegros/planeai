@@ -374,8 +374,8 @@ impl JiraPlugin {
 
     fn update_source_settings(&self, settings: &Value) -> Result<Value, String> {
         let old_value = self.settings()?;
-        let old = settings_from_value(&old_value);
-        let new = settings_from_value(settings);
+        let old = settings_from_value(&old_value)?;
+        let new = settings_from_value(settings)?;
         validate_settings(&new)?;
         if let Ok(credentials) = self.read_credentials() {
             let configured_site = canonicalize_site(&new.site)
@@ -414,7 +414,14 @@ impl JiraPlugin {
     }
 
     fn sidebar_items(&self) -> Result<Value, String> {
+        let credentials = match self.read_credentials() {
+            Ok(credentials) => credentials,
+            Err(_) => return Ok(json!({ "items": [] })),
+        };
         let conn = self.database()?;
+        if !cache_matches_site(&conn, &credentials.cloud_id)? {
+            return Ok(json!({ "items": [] }));
+        }
         let mut statement = conn.prepare("SELECT issue_key, summary, mapped_status FROM jira_issues WHERE sync_status = 'synced' ORDER BY last_synced_at DESC, issue_key").map_err(|error| format!("failed to list Jira sidebar items: {error}"))?;
         let rows = statement.query_map([], |row| Ok(json!({ "key": row.get::<_, String>(0)?, "title": row.get::<_, String>(1)?, "status": row.get::<_, String>(2)?, "child_count": 0 }))).map_err(|error| format!("failed to query Jira sidebar items: {error}"))?;
         let mut items = Vec::new();
@@ -453,7 +460,7 @@ impl JiraPlugin {
         R: tokio::io::AsyncBufRead + Unpin,
         W: tokio::io::AsyncWrite + Unpin,
     {
-        let settings = settings_from_value(&self.settings()?);
+        let settings = settings_from_value(&self.settings()?)?;
         validate_settings(&settings)?;
         let mut credentials = self
             .read_credentials()
@@ -468,6 +475,7 @@ impl JiraPlugin {
         }
         let access_token = token.access_token;
         let conn = self.database()?;
+        ensure_cache_site(&conn, &credentials.cloud_id)?;
         let mut result = SyncTotals::default();
         let mut request_id = 0_u64;
         let mut sources: Vec<_> = settings.sources.iter().collect();
@@ -666,8 +674,9 @@ struct RawName {
 struct StoredIssue {
     key: String,
 }
-fn settings_from_value(value: &Value) -> JiraSettings {
-    serde_json::from_value(value.clone()).unwrap_or_default()
+fn settings_from_value(value: &Value) -> Result<JiraSettings, String> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid Jira plugin settings: {error}"))
 }
 
 fn validate_settings(settings: &JiraSettings) -> Result<(), String> {
@@ -765,7 +774,58 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("failed to apply Jira plugin migration 2: {error}"))?;
     }
 
+    if current_version < 3 {
+        conn.execute_batch(
+            "CREATE TABLE jira_cache_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO jira_plugin_schema_migrations (version) VALUES (3);",
+        )
+        .map_err(|error| format!("failed to apply Jira plugin migration 3: {error}"))?;
+    }
+
     Ok(())
+}
+
+fn clear_sync_cache(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "DELETE FROM jira_task_links;
+         DELETE FROM jira_issue_sources;
+         DELETE FROM jira_issues;",
+    )
+    .map_err(|error| format!("failed to clear Jira synchronization cache: {error}"))
+}
+
+fn cache_matches_site(conn: &Connection, cloud_id: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT value FROM jira_cache_metadata WHERE key = 'cloud_id'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|stored| stored.as_deref() == Some(cloud_id))
+    .map_err(|error| format!("failed to read Jira cache site: {error}"))
+}
+
+fn ensure_cache_site(conn: &Connection, cloud_id: &str) -> Result<(), String> {
+    if cache_matches_site(conn, cloud_id)? {
+        return Ok(());
+    }
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("failed to start Jira cache site update: {error}"))?;
+    clear_sync_cache(&transaction)?;
+    transaction
+        .execute(
+            "INSERT INTO jira_cache_metadata (key, value) VALUES ('cloud_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![cloud_id],
+        )
+        .map_err(|error| format!("failed to persist Jira cache site: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("failed to commit Jira cache site update: {error}"))
 }
 
 fn upsert_issue(
@@ -998,12 +1058,13 @@ fn map_status(
     .to_string()
 }
 fn map_priority(priority: Option<&str>) -> i32 {
+    // PlaneAI dispatches larger values first; preserve Jira's descending priority.
     match priority {
-        Some("Highest") => 1,
-        Some("High") => 2,
+        Some("Highest") => 5,
+        Some("High") => 4,
         Some("Medium") => 3,
-        Some("Low") => 4,
-        Some("Lowest") => 5,
+        Some("Low") => 2,
+        Some("Lowest") => 1,
         _ => 0,
     }
 }
@@ -1092,7 +1153,7 @@ mod sync_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     fn plugin_for_test(data_dir: PathBuf) -> JiraPlugin {
@@ -1238,6 +1299,11 @@ mod sync_tests {
     }
 
     #[test]
+    fn malformed_settings_are_rejected_instead_of_defaulting() {
+        assert!(settings_from_value(&json!({ "sources": [] })).is_err());
+    }
+
+    #[test]
     fn settings_reject_blank_source_jql() {
         let settings = JiraSettings {
             sources: HashMap::from([(
@@ -1333,11 +1399,11 @@ mod sync_tests {
 
     #[test]
     fn priority_mapping_preserves_legacy_priority_order() {
-        assert_eq!(map_priority(Some("Highest")), 1);
-        assert_eq!(map_priority(Some("High")), 2);
+        assert_eq!(map_priority(Some("Highest")), 5);
+        assert_eq!(map_priority(Some("High")), 4);
         assert_eq!(map_priority(Some("Medium")), 3);
-        assert_eq!(map_priority(Some("Low")), 4);
-        assert_eq!(map_priority(Some("Lowest")), 5);
+        assert_eq!(map_priority(Some("Low")), 2);
+        assert_eq!(map_priority(Some("Lowest")), 1);
         assert_eq!(map_priority(Some("Unknown")), 0);
     }
 
@@ -1614,6 +1680,7 @@ where
             .and_then(Value::as_str)
             .ok_or("missing browser URL".to_string())
             .and_then(|url| {
+                validate_authorization_url(url)?;
                 open::that(url).map_err(|error| format!("failed to open browser: {error}"))
             })
             .map(|_| json!({ "opened": true })),
@@ -1699,6 +1766,37 @@ fn generate_pkce() -> (String, String) {
 fn generate_state() -> String {
     let bytes: Vec<u8> = (0..16).map(|_| rand::rng().random()).collect();
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn validate_authorization_url(value: &str) -> Result<(), String> {
+    let url = Url::parse(value).map_err(|_| "invalid Jira authorization URL".to_string())?;
+    let expected = Url::parse(AUTH_URL).expect("AUTH_URL is a valid URL");
+    if url.scheme() != "https"
+        || url.origin() != expected.origin()
+        || url.path() != expected.path()
+        || url.username() != ""
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return Err(
+            "Jira browser capability only permits Atlassian authorization URLs".to_string(),
+        );
+    }
+    let query: HashMap<_, _> = url.query_pairs().collect();
+    if query.get("audience").map(|value| value.as_ref()) != Some("api.atlassian.com")
+        || query.get("client_id").map(|value| value.as_ref()) != Some(CLIENT_ID)
+        || query.get("response_type").map(|value| value.as_ref()) != Some("code")
+        || query.get("redirect_uri").map(|value| value.as_ref()) != Some(REDIRECT_URI)
+        || query
+            .get("code_challenge_method")
+            .map(|value| value.as_ref())
+            != Some("S256")
+        || !query.contains_key("code_challenge")
+        || !query.contains_key("state")
+    {
+        return Err("invalid Jira authorization URL".to_string());
+    }
+    Ok(())
 }
 
 fn build_auth_url(redirect_uri: &str, challenge: &str, state: &str) -> Result<Url, AuthError> {
@@ -1843,6 +1941,44 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn browser_capability_accepts_only_generated_atlassian_authorization_urls() {
+        let url = build_auth_url(REDIRECT_URI, "challenge", "state").unwrap();
+        assert!(validate_authorization_url(url.as_str()).is_ok());
+        assert!(validate_authorization_url("https://example.com/authorize?state=state").is_err());
+        assert!(
+            validate_authorization_url("https://auth.atlassian.com/authorize?state=state").is_err()
+        );
+    }
+
+    #[test]
+    fn cache_is_retained_for_a_same_site_reconnect_and_cleared_for_a_new_site() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        ensure_cache_site(&conn, "cloud-a").unwrap();
+        conn.execute("INSERT INTO jira_issues (issue_key, summary, jira_status, mapped_status, source_name, last_synced_at) VALUES ('ABC-1', 'Old site issue', 'To Do', 'todo', 'source', 'now')", []).unwrap();
+        conn.execute(
+            "INSERT INTO jira_task_links (task_key, issue_key) VALUES ('ABC-1', 'ABC-1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO jira_issue_sources (issue_key, source_name) VALUES ('ABC-1', 'source')",
+            [],
+        )
+        .unwrap();
+
+        ensure_cache_site(&conn, "cloud-a").unwrap();
+        assert_eq!(
+            linked_task_key(&conn, "ABC-1").unwrap(),
+            Some("ABC-1".to_string())
+        );
+
+        ensure_cache_site(&conn, "cloud-b").unwrap();
+        assert_eq!(linked_task_key(&conn, "ABC-1").unwrap(), None);
+        assert!(cache_matches_site(&conn, "cloud-b").unwrap());
+    }
 
     #[test]
     fn pkce_is_url_safe_and_uses_s256() {
