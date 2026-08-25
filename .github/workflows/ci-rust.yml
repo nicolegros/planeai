@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "src-tauri/**"
+      - "Makefile"
+      - ".github/workflows/ci-rust.yml"
       - "!src-tauri/icons/**"
 
 env:
@@ -42,6 +44,9 @@ jobs:
 
       - run: cargo test
 
+      - name: Test shipped local plugin fixture scenarios
+        run: make -C .. test-plugin-fixture
+
       - name: Audit dependencies
         run: |
           cargo install cargo-audit --quiet
@@ -72,3 +77,6 @@ jobs:
         run: ./scripts/ensure-sidecars.sh --placeholders-only
       - run: cargo check
       - run: cargo test
+      - name: Test shipped local plugin fixture scenarios
+        shell: bash
+        run: make -C .. test-plugin-fixture

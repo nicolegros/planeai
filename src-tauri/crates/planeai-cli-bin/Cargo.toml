@@ -15,6 +15,7 @@ planeai-toon = { path = "../../planeai-toon" }
 planeai-ipc = { path = "../../planeai-ipc", features = ["async"] }
 planeai-daemon = { path = "../../planeai-daemon" }
 planeai-paths = { path = "../../planeai-paths" }
+planeai-plugin-contract = { path = "../../planeai-plugin-contract" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

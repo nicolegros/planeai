@@ -364,8 +364,10 @@ impl JiraPlugin {
                 .map_err(|error| format!("failed to serialize settings: {error}"))?,
         )
         .map_err(|error| format!("failed to write settings: {error}"))?;
-        std::fs::rename(&temporary, &path)
-            .map_err(|error| format!("failed to save settings: {error}"))?;
+        if let Err(error) = planeai_paths::replace_file_atomically(&temporary, &path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("failed to save settings: {error}"));
+        }
         Ok(settings.clone())
     }
 
@@ -1713,7 +1715,9 @@ fn write_credentials_to(
         let _ = std::fs::remove_file(&temporary);
         return Err(AuthError::Secrets(error.to_string()));
     }
-    if let Err(error) = std::fs::rename(&temporary, secrets_dir.join("credentials.json")) {
+    if let Err(error) =
+        planeai_paths::replace_file_atomically(&temporary, &secrets_dir.join("credentials.json"))
+    {
         let _ = std::fs::remove_file(&temporary);
         return Err(AuthError::Secrets(error.to_string()));
     }
@@ -1879,7 +1883,7 @@ where
                 "plugin_name": PLUGIN_NAME,
                 "plugin_version": PLUGIN_VERSION,
                 "host_api_version": HOST_API_VERSION,
-                "lifecycle_event_subscriptions": ["task.lifecycle"],
+                "lifecycle_event_subscriptions": [],
             })),
             _ => Err("unsupported plugin host API version".to_string()),
         },
@@ -2291,6 +2295,7 @@ mod tests {
             site: "https://example.atlassian.net".to_string(),
         };
 
+        write_credentials_to(&secrets_dir, &credentials).unwrap();
         persist_rotated_refresh_token(&secrets_dir, &mut credentials, "new-refresh".to_string())
             .unwrap();
         let stored: Credentials = serde_json::from_reader(

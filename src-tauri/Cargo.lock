@@ -3288,6 +3288,7 @@ dependencies = [
  "planeai-ipc",
  "planeai-jira",
  "planeai-paths",
+ "planeai-plugin-contract",
  "planeai-pty",
  "planeai-tasks",
  "planeai-toon",
@@ -3324,6 +3325,7 @@ dependencies = [
  "planeai-daemon",
  "planeai-ipc",
  "planeai-paths",
+ "planeai-plugin-contract",
  "planeai-tasks",
  "planeai-toon",
  "rusqlite",
@@ -3420,6 +3422,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "planeai-plugin-contract"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "planeai-plugin-fixture"
 version = "0.1.0"
 dependencies = [
@@ -3435,6 +3445,7 @@ dependencies = [
  "chrono",
  "open",
  "planeai-jira",
+ "planeai-paths",
  "rand 0.10.2",
  "reqwest",
  "rusqlite",

@@ -46,7 +46,7 @@ enum PluginAction {
         /// Path to the directory containing planeai-plugin.json
         #[arg(long)]
         package: std::path::PathBuf,
-        /// Reserved for future scenario JSONL support
+        /// JSONL scenario of plugin RPC requests to run after handshake
         #[arg(long)]
         scenario: Option<std::path::PathBuf>,
     },
@@ -1519,4 +1519,21 @@ fn symphony_command(cmd: &str) -> Result<String, String> {
         }
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn plugin_test_scenario_help_describes_supported_jsonl_requests() {
+        let mut command = Cli::command();
+        let plugin = command.find_subcommand_mut("plugin").unwrap();
+        let test = plugin.find_subcommand_mut("test").unwrap();
+        let help = test.render_long_help().to_string();
+        assert!(help.contains("JSONL scenario of plugin RPC requests to run after handshake"));
+        assert!(!help.contains("Reserved for future scenario JSONL support"));
+    }
 }

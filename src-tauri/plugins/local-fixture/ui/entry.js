@@ -14,7 +14,7 @@ const fixtureEntrypoint = {
       </style>
       <section class="card">
         <h1>Local Fixture</h1>
-        <p data-status>Loading…</p>
+        <p data-status role="status" aria-live="polite">Loading…</p>
         <label>Greeting <input data-greeting type="text" /></label>
         <button data-save type="button">Save greeting</button>
       </section>`;
@@ -37,7 +37,8 @@ const fixtureEntrypoint = {
         ]);
         if (disposed) return;
         settings = savedSettings;
-        greeting.value = typeof settings.greeting === "string" ? settings.greeting : "Hello from the fixture";
+        greeting.value =
+          typeof settings.greeting === "string" ? settings.greeting : "Hello from the fixture";
         setStatus(`${runtime.runtime_state} · public settings loaded`);
       } catch (error) {
         setStatus(String(error));

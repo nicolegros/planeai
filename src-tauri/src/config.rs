@@ -513,7 +513,10 @@ pub fn migrate_legacy_jira_plugin_settings(
         serde_json::to_vec_pretty(&imported).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+    if let Err(error) = planeai_paths::replace_file_atomically(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
     config.integrations = None;
     save(config_dir, config)?;
     Ok(true)

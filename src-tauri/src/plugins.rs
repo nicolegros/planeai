@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use planeai_tasks::model::{CreateParams, Status, UpdateParams};
 use planeai_tasks::provider::TaskProvider;
@@ -51,7 +52,43 @@ pub struct PluginManifest {
     #[serde(default)]
     pub capabilities: Vec<PluginHostCapability>,
     #[serde(default, rename = "ui_entrypoint")]
-    legacy_ui_entrypoint: Option<String>,
+    legacy_ui_entrypoint: LegacyUiEntrypoint,
+}
+
+/// Keeps the legacy field's three wire states distinct: missing fields are
+/// accepted for bundled-manifest migration, while local manifests can reject a
+/// deliberately supplied `null` just as they reject a legacy string value.
+#[derive(Debug, Clone, Default)]
+enum LegacyUiEntrypoint {
+    #[default]
+    Absent,
+    Null,
+    Value(String),
+}
+
+impl<'de> Deserialize<'de> for LegacyUiEntrypoint {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(match Option::<String>::deserialize(deserializer)? {
+            Some(entrypoint) => Self::Value(entrypoint),
+            None => Self::Null,
+        })
+    }
+}
+
+impl LegacyUiEntrypoint {
+    fn as_deref(&self) -> Option<&str> {
+        match self {
+            Self::Value(entrypoint) => Some(entrypoint),
+            Self::Absent | Self::Null => None,
+        }
+    }
+
+    fn is_present(&self) -> bool {
+        !matches!(self, Self::Absent)
+    }
 }
 
 impl PluginManifest {
@@ -160,7 +197,7 @@ impl PluginManifest {
                 self.id, self.host_api_version
             ));
         }
-        if self.source_kind == PluginSourceKind::Local && self.legacy_ui_entrypoint.is_some() {
+        if self.source_kind == PluginSourceKind::Local && self.legacy_ui_entrypoint.is_present() {
             return Err(
                 "local plugin manifests must use ui_contributions instead of legacy ui_entrypoint"
                     .to_string(),
@@ -178,7 +215,28 @@ impl PluginManifest {
             PluginSourceKind::Local if self.backend_entrypoints.is_empty() => {
                 return Err("local plugin backend_entrypoints is required".to_string());
             }
-            PluginSourceKind::Local => {}
+            PluginSourceKind::Local => {
+                let platform = self
+                    .backend_entrypoints
+                    .keys()
+                    .next()
+                    .expect("nonempty local backend entrypoints were checked");
+                let manifest = serde_json::json!({
+                    "schema": self.schema,
+                    "id": self.id,
+                    "name": self.name,
+                    "version": self.version,
+                    "host_api_version": self.host_api_version,
+                    "source_kind": "local",
+                    "backend_entrypoint": self.backend_entrypoint,
+                    "backend_entrypoints": self.backend_entrypoints,
+                    "ui_contributions": self.ui_contributions,
+                    "capabilities": self.capabilities,
+                });
+                planeai_plugin_contract::validate_local_manifest(&manifest, platform)
+                    .map_err(|error| error.to_string())?;
+                return Ok(());
+            }
         }
         if self
             .legacy_ui_entrypoint
@@ -248,14 +306,14 @@ fn validate_ui_contributions(
             &contribution.entrypoint,
             "UI contribution entrypoint",
         )?;
-        if contribution.placement.is_sidebar() && contribution.shortcut.is_some() {
+        if !matches!(contribution.placement, PluginUiPlacement::MainPane)
+            && contribution.shortcut.is_some()
+        {
             return Err(
                 "UI contribution shortcuts are only valid for main-pane contributions".to_string(),
             );
         }
-        if matches!(contribution.placement, PluginUiPlacement::MainPane)
-            && contribution.order.is_some()
-        {
+        if !contribution.placement.is_sidebar() && contribution.order.is_some() {
             return Err(
                 "UI contribution order is only valid for sidebar contributions".to_string(),
             );
@@ -418,8 +476,6 @@ struct JsonRpcResponse {
     jsonrpc: String,
     id: Value,
     #[serde(default)]
-    result: Option<Value>,
-    #[serde(default)]
     error: Option<JsonRpcError>,
 }
 
@@ -427,6 +483,13 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i64,
     message: String,
+}
+
+#[derive(Debug)]
+struct JsonRpcCallbackRequest {
+    id: Value,
+    method: String,
+    params: Value,
 }
 
 /// Encode one complete JSON-RPC message frame. The process transport is JSONL,
@@ -460,33 +523,48 @@ fn encode_json_rpc_frame(value: String, kind: &str) -> Result<String, String> {
     Ok(frame)
 }
 
-fn parse_json_rpc_response(line: &str, expected_id: u64) -> Result<JsonRpcResponse, String> {
-    let response: JsonRpcResponse =
+fn parse_json_rpc_response(
+    line: &str,
+    expected_id: u64,
+) -> Result<(JsonRpcResponse, Option<Value>), String> {
+    let value: Value =
         serde_json::from_str(line).map_err(|e| format!("malformed JSON-RPC response: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "malformed JSON-RPC response: expected an object".to_string())?;
+    let has_result = object.contains_key("result");
+    if has_result == object.contains_key("error") {
+        return Err(
+            "malformed JSON-RPC response: expected exactly one of result or error".to_string(),
+        );
+    }
+    // Preserve member presence separately from its JSON value: `result: null`
+    // is a valid JSON-RPC success response and must not look like a missing field.
+    let result = has_result.then(|| object["result"].clone());
+    let response: JsonRpcResponse =
+        serde_json::from_value(value).map_err(|e| format!("malformed JSON-RPC response: {e}"))?;
     if response.jsonrpc != "2.0" {
         return Err("malformed JSON-RPC response: expected jsonrpc 2.0".to_string());
     }
     if response.id.as_u64() != Some(expected_id) {
         return Err("malformed JSON-RPC response: response id did not match request".to_string());
     }
-    Ok(response)
+    Ok((response, result))
 }
 
 fn decode_json_rpc_response(line: &str, expected_id: u64) -> Result<Value, String> {
-    let response = parse_json_rpc_response(line, expected_id)?;
+    let (response, result) = parse_json_rpc_response(line, expected_id)?;
     if let Some(error) = response.error {
         return Err(format!(
             "plugin RPC error {}: {}",
             error.code, error.message
         ));
     }
-    response
-        .result
-        .ok_or_else(|| "malformed JSON-RPC response: missing result".to_string())
+    result.ok_or_else(|| "malformed JSON-RPC response: missing result".to_string())
 }
 
 fn decode_json_rpc_cancellation_response(line: &str, expected_id: u64) -> Result<String, String> {
-    let response = parse_json_rpc_response(line, expected_id)?;
+    let (response, _) = parse_json_rpc_response(line, expected_id)?;
     match response.error {
         Some(error) if error.code == -32800 => Ok(format!(
             "plugin RPC error {}: {}",
@@ -498,6 +576,24 @@ fn decode_json_rpc_cancellation_response(line: &str, expected_id: u64) -> Result
         )),
         None => Err("plugin cancellation response must use error code -32800".to_string()),
     }
+}
+
+fn timed_out_request_error(method: &str) -> String {
+    format!("plugin RPC {method} timed out")
+}
+
+fn cancellation_acknowledgement_error(
+    method: &str,
+    request_id: u64,
+    frame: Option<&str>,
+) -> String {
+    frame
+        .and_then(|frame| decode_json_rpc_cancellation_response(frame, request_id).ok())
+        .unwrap_or_else(|| timed_out_request_error(method))
+}
+
+fn is_rpc_timeout_error(error: &str) -> bool {
+    error.starts_with("plugin RPC ") && error.ends_with(" timed out")
 }
 
 pub fn bundled_manifests() -> Result<Vec<PluginManifest>, String> {
@@ -862,6 +958,13 @@ struct RuntimeProcess {
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
 }
 
+fn is_host_controlled_plugin_method(method: &str) -> bool {
+    matches!(
+        method,
+        "plugin.handshake" | "plugin.shutdown" | "plugin.taskLifecycle" | "$/cancelRequest"
+    )
+}
+
 fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
@@ -902,12 +1005,20 @@ impl RuntimeProcess {
         request_id: u64,
     ) -> Result<Value, String> {
         let frame = encode_json_rpc_cancel_request_line(request_id)?;
-        self.write_cancellation_frame(&frame).await?;
+        if self.write_cancellation_frame(&frame).await.is_err() {
+            return Err(cancellation_acknowledgement_error(method, request_id, None));
+        }
         match timeout(SHUTDOWN_TIMEOUT, self.read_matching_response()).await {
-            Ok(Ok(frame)) => Err(decode_json_rpc_cancellation_response(&frame, request_id)?),
+            Ok(Ok(frame)) => Err(cancellation_acknowledgement_error(
+                method,
+                request_id,
+                Some(&frame),
+            )),
             // The original timeout remains the externally meaningful error when
-            // the plugin does not acknowledge cancellation in time.
-            Ok(Err(_)) | Err(_) => Err(format!("plugin RPC {method} timed out")),
+            // the plugin cannot acknowledge cancellation correctly or in time.
+            Ok(Err(_)) | Err(_) => {
+                Err(cancellation_acknowledgement_error(method, request_id, None))
+            }
         }
     }
 
@@ -921,6 +1032,26 @@ impl RuntimeProcess {
             .flush()
             .await
             .map_err(|e| format!("failed to flush plugin JSON-RPC request: {e}"))
+    }
+
+    async fn write_shutdown_frame(&self, frame: &str, deadline: Instant) -> Result<(), String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut stdin = timeout(remaining, self.stdin.lock())
+            .await
+            .map_err(|_| "plugin shutdown request timed out".to_string())?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        timeout(remaining, async {
+            stdin
+                .write_all(frame.as_bytes())
+                .await
+                .map_err(|error| format!("failed to write plugin shutdown request: {error}"))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|error| format!("failed to flush plugin shutdown request: {error}"))
+        })
+        .await
+        .map_err(|_| "plugin shutdown request timed out".to_string())?
     }
 
     async fn write_cancellation_frame(&self, frame: &str) -> Result<(), String> {
@@ -941,7 +1072,7 @@ impl RuntimeProcess {
             let bytes_read = {
                 let mut stdout = self.stdout.lock().await;
                 (&mut *stdout)
-                    .take(MAX_RPC_FRAME_BYTES)
+                    .take(MAX_RPC_FRAME_BYTES + 1)
                     .read_until(b'\n', &mut bytes)
                     .await
                     .map_err(|e| format!("failed to read plugin JSON-RPC response: {e}"))?
@@ -949,30 +1080,27 @@ impl RuntimeProcess {
             if bytes_read == 0 {
                 return Err("plugin process closed stdout unexpectedly".to_string());
             }
+            validate_plugin_response_frame(&bytes)?;
             let frame = String::from_utf8(bytes)
                 .map_err(|e| format!("plugin JSON-RPC response was not valid UTF-8: {e}"))?;
             let value: Value = serde_json::from_str(frame.trim_end())
                 .map_err(|e| format!("malformed plugin JSON-RPC frame: {e}"))?;
             if value.get("method").is_some() {
-                self.handle_plugin_request(value).await?;
+                self.handle_plugin_request(parse_json_rpc_callback_request(value)?)
+                    .await?;
                 continue;
             }
             return Ok(frame);
         }
     }
 
-    async fn handle_plugin_request(&self, request: Value) -> Result<(), String> {
-        let id = request.get("id").cloned().unwrap_or(Value::Null);
-        let method = request
-            .get("method")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let params = request.get("params").cloned().unwrap_or(Value::Null);
+    async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
+        let JsonRpcCallbackRequest { id, method, params } = request;
         let result = execute_host_task(
             &self.plugin_id,
             &self.capabilities,
             &self.data_dir,
-            method,
+            &method,
             params,
         )
         .await;
@@ -984,7 +1112,7 @@ impl RuntimeProcess {
         };
         let mut frame = serde_json::to_string(&response)
             .map_err(|error| format!("failed to encode host callback response: {error}"))?;
-        if frame.len() >= MAX_RPC_FRAME_BYTES as usize {
+        if !host_callback_response_fits(&frame) {
             frame = serde_json::to_string(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -1021,10 +1149,27 @@ impl RuntimeProcess {
             })
     }
 
+    async fn request_shutdown(&self, deadline: Instant) -> Result<Value, String> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let _request = timeout(remaining, self.request_lock.lock())
+            .await
+            .map_err(|_| "plugin shutdown request timed out".to_string())?;
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let frame = encode_json_rpc_line(request_id, "plugin.shutdown", Value::Null)?;
+        self.write_shutdown_frame(&frame, deadline).await?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let frame = timeout(remaining, self.read_matching_response())
+            .await
+            .map_err(|_| "plugin shutdown request timed out".to_string())??;
+        decode_json_rpc_frame(&frame, request_id)
+    }
+
     async fn stop(&self) -> Result<(), String> {
-        let _ = self.request("plugin.shutdown", Value::Null).await;
+        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+        let _ = self.request_shutdown(deadline).await;
         let mut child = self.child.lock().await;
-        match timeout(SHUTDOWN_TIMEOUT, child.wait()).await {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match timeout(remaining, child.wait()).await {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => Err(format!("failed waiting for plugin shutdown: {e}")),
             Err(_) => {
@@ -1039,6 +1184,43 @@ impl RuntimeProcess {
             }
         }
     }
+}
+
+fn read_plugin_settings(data_dir: &Path) -> Result<Value, String> {
+    let path = data_dir.join("settings.json");
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let settings: Value =
+        serde_json::from_reader(std::fs::File::open(&path).map_err(|error| {
+            format!("failed to read plugin settings {}: {error}", path.display())
+        })?)
+        .map_err(|error| format!("failed to parse plugin settings: {error}"))?;
+    if !settings.is_object() {
+        return Err("plugin settings must be a JSON object".to_string());
+    }
+    Ok(settings)
+}
+
+fn replace_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, String> {
+    if !settings.is_object() {
+        return Err("plugin settings must be a JSON object".to_string());
+    }
+    std::fs::create_dir_all(data_dir)
+        .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
+    let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
+    let path = data_dir.join("settings.json");
+    let serialized = serde_json::to_vec_pretty(&settings)
+        .map_err(|error| format!("failed to serialize plugin settings: {error}"))?;
+    if let Err(error) = std::fs::write(&temporary, serialized) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("failed to write plugin settings: {error}"));
+    }
+    if let Err(error) = planeai_paths::replace_file_atomically(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("failed to save plugin settings: {error}"));
+    }
+    Ok(settings)
 }
 
 async fn execute_host_task(
@@ -1065,40 +1247,12 @@ async fn execute_host_task(
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
         return commands::blocking(move || match method.as_str() {
-            "host.settings.get" => {
-                let path = data_dir.join("settings.json");
-                if !path.exists() {
-                    return Ok(serde_json::json!({ "settings": {} }));
-                }
-                let settings: Value =
-                    serde_json::from_reader(std::fs::File::open(&path).map_err(|error| {
-                        format!("failed to read plugin settings {}: {error}", path.display())
-                    })?)
-                    .map_err(|error| format!("failed to parse plugin settings: {error}"))?;
-                if !settings.is_object() {
-                    return Err("plugin settings must be a JSON object".to_string());
-                }
-                Ok(serde_json::json!({ "settings": settings }))
-            }
+            "host.settings.get" => read_plugin_settings(&data_dir)
+                .map(|settings| serde_json::json!({ "settings": settings })),
             "host.settings.replace" => {
                 let settings = params.get("settings").cloned().unwrap_or(params);
-                if !settings.is_object() {
-                    return Err("plugin settings must be a JSON object".to_string());
-                }
-                std::fs::create_dir_all(&data_dir).map_err(|error| {
-                    format!("failed to create plugin settings directory: {error}")
-                })?;
-                let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
-                let path = data_dir.join("settings.json");
-                std::fs::write(
-                    &temporary,
-                    serde_json::to_vec_pretty(&settings)
-                        .map_err(|error| format!("failed to serialize plugin settings: {error}"))?,
-                )
-                .map_err(|error| format!("failed to write plugin settings: {error}"))?;
-                std::fs::rename(&temporary, &path)
-                    .map_err(|error| format!("failed to save plugin settings: {error}"))?;
-                Ok(serde_json::json!({ "settings": settings }))
+                replace_plugin_settings(&data_dir, settings)
+                    .map(|settings| serde_json::json!({ "settings": settings }))
             }
             _ => unreachable!(),
         })
@@ -1112,7 +1266,7 @@ async fn execute_host_task(
             .to_string();
         return commands::blocking(move || {
             let path = planeai_paths::db_path();
-            let repo = SqliteRepository::open(
+            let repo = SqliteRepository::open_read_only(
                 path.to_str().ok_or("invalid PlaneAI task database path")?,
                 "PLUGIN",
             )
@@ -1265,22 +1419,7 @@ impl PluginRuntimeSupervisor {
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
         let root = plugin_state_root(&self.app, plugin_id).await?;
-        commands::blocking(move || {
-            let path = root.join("data").join("settings.json");
-            if !path.exists() {
-                return Ok(serde_json::json!({}));
-            }
-            let value: Value =
-                serde_json::from_reader(std::fs::File::open(&path).map_err(|error| {
-                    format!("failed to read plugin settings {}: {error}", path.display())
-                })?)
-                .map_err(|error| format!("failed to parse plugin settings: {error}"))?;
-            if !value.is_object() {
-                return Err("plugin settings must be a JSON object".to_string());
-            }
-            Ok(value)
-        })
-        .await
+        commands::blocking(move || read_plugin_settings(&root.join("data"))).await
     }
 
     /// Replace public structured settings atomically. Plugin secrets are never
@@ -1298,23 +1437,7 @@ impl PluginRuntimeSupervisor {
             .await?
             .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
         let root = plugin_state_root(&self.app, plugin_id).await?;
-        commands::blocking(move || {
-            let data_dir = root.join("data");
-            std::fs::create_dir_all(&data_dir)
-                .map_err(|error| format!("failed to create plugin settings directory: {error}"))?;
-            let temporary = data_dir.join(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
-            let path = data_dir.join("settings.json");
-            std::fs::write(
-                &temporary,
-                serde_json::to_vec_pretty(&settings)
-                    .map_err(|error| format!("failed to serialize plugin settings: {error}"))?,
-            )
-            .map_err(|error| format!("failed to write plugin settings: {error}"))?;
-            std::fs::rename(&temporary, &path)
-                .map_err(|error| format!("failed to save plugin settings: {error}"))?;
-            Ok(settings)
-        })
-        .await
+        commands::blocking(move || replace_plugin_settings(&root.join("data"), settings)).await
     }
 
     async fn update_state(
@@ -1439,7 +1562,17 @@ impl PluginRuntimeSupervisor {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
-        if matches!(method, "plugin.handshake" | "plugin.shutdown") {
+        self.call_internal(plugin_id, method, params, false).await
+    }
+
+    async fn call_internal(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+        host_controlled: bool,
+    ) -> Result<Value, String> {
+        if !host_controlled && is_host_controlled_plugin_method(method) {
             return Err("plugin lifecycle methods are reserved for PlaneAI".to_string());
         }
         let process = {
@@ -1459,7 +1592,7 @@ impl PluginRuntimeSupervisor {
         let Err(error) = result else {
             return result;
         };
-        if !error.starts_with("plugin RPC ") || !error.ends_with(" timed out") {
+        if !is_rpc_timeout_error(&error) {
             return Err(error);
         }
 
@@ -1512,10 +1645,11 @@ impl PluginRuntimeSupervisor {
                     continue;
                 }
                 if let Err(error) = supervisor
-                    .call(
+                    .call_internal(
                         &plugin_id,
                         "plugin.taskLifecycle",
                         serde_json::json!({ "batch": batch }),
+                        true,
                     )
                     .await
                 {
@@ -1913,6 +2047,58 @@ impl PluginRuntimeSupervisor {
     }
 }
 
+fn host_callback_response_fits(frame: &str) -> bool {
+    frame.len() < MAX_RPC_FRAME_BYTES as usize
+}
+
+fn validate_plugin_response_frame(frame: &[u8]) -> Result<(), String> {
+    if frame.len() > MAX_RPC_FRAME_BYTES as usize {
+        return Err("plugin JSON-RPC response exceeded the frame limit".to_string());
+    }
+    if !frame.ends_with(b"\n") {
+        return Err("plugin JSON-RPC response was not newline terminated".to_string());
+    }
+    Ok(())
+}
+
+fn parse_json_rpc_callback_request(value: Value) -> Result<JsonRpcCallbackRequest, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "malformed plugin JSON-RPC callback: expected an object".to_string())?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err("malformed plugin JSON-RPC callback: expected jsonrpc 2.0".to_string());
+    }
+    if object.contains_key("result") || object.contains_key("error") {
+        return Err(
+            "malformed plugin JSON-RPC callback: request cannot contain result or error"
+                .to_string(),
+        );
+    }
+    let id = object
+        .get("id")
+        .filter(|id| matches!(id, Value::String(_) | Value::Number(_)))
+        .cloned()
+        .ok_or_else(|| {
+            "malformed plugin JSON-RPC callback: id must be a string or number".to_string()
+        })?;
+    let method = object
+        .get("method")
+        .and_then(Value::as_str)
+        .filter(|method| !method.is_empty())
+        .ok_or_else(|| {
+            "malformed plugin JSON-RPC callback: method must be a nonempty string".to_string()
+        })?
+        .to_owned();
+    let params = object.get("params").cloned().unwrap_or(Value::Null);
+    if !params.is_null() && !params.is_array() && !params.is_object() {
+        return Err(
+            "malformed plugin JSON-RPC callback: params must be null, an array, or an object"
+                .to_string(),
+        );
+    }
+    Ok(JsonRpcCallbackRequest { id, method, params })
+}
+
 fn decode_json_rpc_frame(frame: &str, request_id: u64) -> Result<Value, String> {
     let line = frame
         .strip_suffix('\n')
@@ -2281,7 +2467,7 @@ mod tests {
                 shortcut: None,
             }],
             capabilities: vec![],
-            legacy_ui_entrypoint: None,
+            legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
         insert_local_inventory(
@@ -2299,6 +2485,20 @@ mod tests {
         let mut invalid_shortcut = manifest.clone();
         invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
         assert!(invalid_shortcut
+            .validate()
+            .unwrap_err()
+            .contains("shortcuts"));
+
+        let mut invalid_preferences = manifest;
+        invalid_preferences.ui_contributions[0].placement = PluginUiPlacement::Preferences;
+        invalid_preferences.ui_contributions[0].order = Some(0);
+        assert!(invalid_preferences
+            .validate()
+            .unwrap_err()
+            .contains("order"));
+        invalid_preferences.ui_contributions[0].order = None;
+        invalid_preferences.ui_contributions[0].shortcut = Some("Mod+L".into());
+        assert!(invalid_preferences
             .validate()
             .unwrap_err()
             .contains("shortcuts"));
@@ -2343,7 +2543,7 @@ mod tests {
             )]),
             ui_contributions: vec![],
             capabilities: vec![],
-            legacy_ui_entrypoint: None,
+            legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
         set_state(
@@ -2376,7 +2576,7 @@ mod tests {
             )]),
             ui_contributions: vec![],
             capabilities: vec![],
-            legacy_ui_entrypoint: None,
+            legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
         insert_local_inventory(
@@ -2481,6 +2681,11 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_uses_the_documented_three_second_grace() {
+        assert_eq!(SHUTDOWN_TIMEOUT, Duration::from_secs(3));
+    }
+
+    #[test]
     fn jira_sync_and_lifecycle_use_extended_rpc_timeouts() {
         assert_eq!(request_timeout("jira.syncNow"), JIRA_SYNC_RPC_TIMEOUT);
         assert_eq!(
@@ -2491,15 +2696,64 @@ mod tests {
     }
 
     #[test]
-    fn v1_manifest_rejects_unknown_fields_and_local_legacy_ui_entrypoints() {
+    fn local_manifest_validates_backend_paths_for_every_declared_platform() {
+        let manifest = PluginManifest {
+            schema: "planeai.plugin.v1".into(),
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            version: "1".into(),
+            host_api_version: HOST_API_VERSION.into(),
+            source_kind: PluginSourceKind::Local,
+            backend_entrypoint: None,
+            backend_entrypoints: HashMap::from([
+                (
+                    crate::plugin_packages::current_platform_key().to_string(),
+                    "bin/plugin".into(),
+                ),
+                ("windows-x64".into(), "../unsafe.exe".into()),
+            ]),
+            ui_contributions: vec![],
+            capabilities: vec![],
+            legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
+        };
+        assert!(manifest
+            .validate()
+            .unwrap_err()
+            .contains("backend entrypoint"));
+    }
+
+    #[test]
+    fn v1_manifest_rejects_unknown_fields_and_supplied_local_legacy_ui_entrypoints() {
         let unknown = serde_json::from_str::<PluginManifest>(
             r#"{"schema":"planeai.plugin.v1","id":"fixture","name":"Fixture","version":"1","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{},"unexpected":true}"#,
         );
         assert!(unknown.is_err());
+
         let legacy: PluginManifest = serde_json::from_str(
             r#"{"schema":"planeai.plugin.v1","id":"fixture","name":"Fixture","version":"1","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{},"ui_entrypoint":"ui/legacy.js"}"#,
         ).unwrap();
         assert!(legacy.validate().unwrap_err().contains("ui_contributions"));
+
+        let explicit_null: PluginManifest = serde_json::from_str(
+            r#"{"schema":"planeai.plugin.v1","id":"fixture","name":"Fixture","version":"1","host_api_version":"planeai.plugin-host.v1","source_kind":"local","backend_entrypoints":{},"ui_entrypoint":null}"#,
+        ).unwrap();
+        assert!(matches!(
+            &explicit_null.legacy_ui_entrypoint,
+            LegacyUiEntrypoint::Null
+        ));
+        assert!(explicit_null
+            .validate()
+            .unwrap_err()
+            .contains("ui_contributions"));
+
+        let absent_builtin: PluginManifest = serde_json::from_str(
+            r#"{"schema":"planeai.plugin.v1","id":"jira","name":"Jira","version":"1","host_api_version":"planeai.plugin-host.v1","source_kind":"builtin","backend_entrypoint":"planeai-plugin-jira"}"#,
+        ).unwrap();
+        assert!(matches!(
+            &absent_builtin.legacy_ui_entrypoint,
+            LegacyUiEntrypoint::Absent
+        ));
+        absent_builtin.validate().unwrap();
     }
 
     #[test]
@@ -2523,7 +2777,7 @@ mod tests {
                 PluginHostCapability::TasksRead,
                 PluginHostCapability::TaskEvents,
             ],
-            legacy_ui_entrypoint: None,
+            legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
         insert_local_inventory(
@@ -2555,6 +2809,46 @@ mod tests {
             .capabilities
             .push(PluginHostCapability::TasksCreate);
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn plugin_settings_helpers_read_replace_and_validate_object_values() {
+        let data = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            read_plugin_settings(data.path()).unwrap(),
+            serde_json::json!({})
+        );
+        assert!(
+            replace_plugin_settings(data.path(), serde_json::json!(["invalid"]))
+                .unwrap_err()
+                .contains("JSON object")
+        );
+
+        let settings = serde_json::json!({ "mode": "local" });
+        assert_eq!(
+            replace_plugin_settings(data.path(), settings.clone()).unwrap(),
+            settings
+        );
+        assert_eq!(read_plugin_settings(data.path()).unwrap(), settings);
+
+        let replacement = serde_json::json!({ "mode": "remote" });
+        assert_eq!(
+            replace_plugin_settings(data.path(), replacement.clone()).unwrap(),
+            replacement
+        );
+        assert_eq!(read_plugin_settings(data.path()).unwrap(), replacement);
+        assert!(!std::fs::read_dir(data.path())
+            .unwrap()
+            .flatten()
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".settings-")));
+
+        std::fs::write(data.path().join("settings.json"), "[]").unwrap();
+        assert!(read_plugin_settings(data.path())
+            .unwrap_err()
+            .contains("JSON object"));
     }
 
     #[tokio::test]
@@ -2594,6 +2888,54 @@ mod tests {
     }
 
     #[test]
+    fn callback_response_frame_limit_includes_its_newline_terminator() {
+        assert!(host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize - 1)
+        ));
+        assert!(!host_callback_response_fits(
+            &"x".repeat(MAX_RPC_FRAME_BYTES as usize)
+        ));
+    }
+
+    #[test]
+    fn callback_requests_require_json_rpc_version_scalar_ids_and_valid_request_shape() {
+        let callback = parse_json_rpc_callback_request(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "settings",
+            "method": "host.settings.get",
+            "params": null,
+        }))
+        .unwrap();
+        assert_eq!(callback.id, "settings");
+        assert_eq!(callback.method, "host.settings.get");
+        assert_eq!(callback.params, Value::Null);
+
+        for callback in [
+            serde_json::json!({ "id": 1, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": null, "method": "host.settings.get" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "", "params": null }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "result": {} }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "host.settings.get", "params": true }),
+        ] {
+            assert!(parse_json_rpc_callback_request(callback).is_err());
+        }
+    }
+
+    #[test]
+    fn host_controlled_plugin_methods_are_not_exposed_to_plugin_ui_calls() {
+        for method in [
+            "plugin.handshake",
+            "plugin.shutdown",
+            "plugin.taskLifecycle",
+            "$/cancelRequest",
+        ] {
+            assert!(is_host_controlled_plugin_method(method), "{method}");
+        }
+        assert!(!is_host_controlled_plugin_method("fixture.status"));
+    }
+
+    #[test]
     fn json_rpc_uses_newline_frames_and_validates_responses() {
         let frame = encode_json_rpc_line(7, "jira.status", Value::Null).unwrap();
         assert!(frame.ends_with('\n'));
@@ -2609,6 +2951,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(value["ok"], true);
+        assert_eq!(
+            decode_json_rpc_response(r#"{"jsonrpc":"2.0","id":7,"result":null}"#, 7).unwrap(),
+            Value::Null
+        );
+        let exact_limit = [vec![b'x'; MAX_RPC_FRAME_BYTES as usize - 1], vec![b'\n']].concat();
+        assert!(validate_plugin_response_frame(&exact_limit).is_ok());
+        let over_limit = [vec![b'x'; MAX_RPC_FRAME_BYTES as usize], vec![b'\n']].concat();
+        assert!(validate_plugin_response_frame(&over_limit).is_err());
+        assert!(validate_plugin_response_frame(&vec![b'x'; MAX_RPC_FRAME_BYTES as usize]).is_err());
         assert!(decode_json_rpc_response("not json", 7)
             .unwrap_err()
             .contains("malformed"));
@@ -2638,6 +2989,34 @@ mod tests {
         )
         .unwrap_err()
         .contains("expected -32800"));
+        for response in [
+            r#"{"jsonrpc":"2.0","id":7,"result":{},"error":{"code":-32800,"message":"cancelled"}}"#,
+            r#"{"jsonrpc":"2.0","id":7}"#,
+        ] {
+            assert!(decode_json_rpc_response(response, 7)
+                .unwrap_err()
+                .contains("exactly one"));
+        }
+
+        let timeout_error = timed_out_request_error("jira.status");
+        for acknowledgement in [
+            Some("not json"),
+            Some(r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32800,"message":"cancelled"}}"#),
+            Some(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#),
+            None,
+        ] {
+            let error = cancellation_acknowledgement_error("jira.status", 7, acknowledgement);
+            assert_eq!(error, timeout_error);
+            assert!(is_rpc_timeout_error(&error));
+        }
+        assert_eq!(
+            cancellation_acknowledgement_error(
+                "jira.status",
+                7,
+                Some(r#"{"jsonrpc":"2.0","id":7,"error":{"code":-32800,"message":"cancelled"}}"#),
+            ),
+            "plugin RPC error -32800: cancelled"
+        );
     }
 }
 

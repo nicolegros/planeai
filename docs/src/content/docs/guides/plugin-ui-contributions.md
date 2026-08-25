@@ -34,12 +34,12 @@ Every backend and UI path must be a package-relative file path: no absolute path
   "host_api_version": "planeai.plugin-host.v1",
   "source_kind": "local",
   "backend_entrypoints": {
-    "macos-arm64": "bin/planeai-plugin-fixture",
-    "macos-x64": "bin/planeai-plugin-fixture",
-    "linux-x64": "bin/planeai-plugin-fixture",
-    "linux-arm64": "bin/planeai-plugin-fixture",
-    "windows-x64": "bin/planeai-plugin-fixture.exe",
-    "windows-arm64": "bin/planeai-plugin-fixture.exe"
+    "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
+    "macos-x64": "bin/macos-x64/planeai-plugin-fixture",
+    "linux-x64": "bin/linux-x64/planeai-plugin-fixture",
+    "linux-arm64": "bin/linux-arm64/planeai-plugin-fixture",
+    "windows-x64": "bin/windows-x64/planeai-plugin-fixture.exe",
+    "windows-arm64": "bin/windows-arm64/planeai-plugin-fixture.exe"
   },
   "capabilities": ["settings", "tasks.read", "task-events"],
   "ui_contributions": [
@@ -60,7 +60,7 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 Capabilities are an explicit contract for host callbacks. Local plugins may request only `settings`, `tasks.read`, and `task-events`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
-- `tasks.read` permits `host.tasks.read` and `host.task.get` (each requires `{ "key": "TASK-123" }`).
+- `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
 
 Settings are a JSON object that PlaneAI owns and persists atomically; its on-disk implementation location is not a plugin API. `host.settings.get` returns `{ "settings": { ... } }`; `host.settings.replace` accepts either `{ "settings": { ... } }` or an object directly and returns the same envelope. Both the fixture's `fixture.persistSettings` sidecar example and its UI settings bridge use that public host API. Do not place credentials or tokens in it.
@@ -144,10 +144,26 @@ Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, 
 After staging the current-platform executable, run the shipped harness without launching the desktop UI:
 
 ```bash
+# Standard handshake, event-delivery, and shutdown checks.
 planeai-cli plugin test --package src-tauri/plugins/local-fixture
+
+# Replay declared sidecar RPC calls, including nested host callbacks.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --scenario src-tauri/plugins/local-fixture/scenarios/persist-settings.jsonl
+
+# Verify host-owned data and secrets directories are supplied to the sidecar.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --scenario src-tauri/plugins/local-fixture/scenarios/state-environment.jsonl
+
+# Verify cooperative cancellation returns JSON-RPC error -32800.
+planeai-cli plugin test \
+  --package src-tauri/plugins/local-fixture \
+  --scenario src-tauri/plugins/local-fixture/scenarios/cancellation.jsonl
 ```
 
-The command validates the local manifest and executable, drives handshake, handles nested settings callbacks, delivers a task lifecycle batch when subscribed, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. Use it as the baseline test before manually installing a package; browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
+The command validates every declared local backend path and the current-platform executable, creates temporary host-owned `PLANEAI_PLUGIN_DATA_DIR` and `PLANEAI_PLUGIN_SECRETS_DIR` directories, forwards only manifest-granted host capabilities during handshake, delivers a task lifecycle batch only when both sides opt in, rejects malformed or mismatched JSON-RPC output, and verifies clean shutdown. A scenario is newline-delimited JSON objects containing `method`, optional `params`, and optional `timeout_ms`. A positive `timeout_ms` (at most 5000) makes the harness send `$/cancelRequest` when the call remains pending and requires the original request to finish with error code `-32800`. Use the checked-in scenarios as executable examples. Browser UI lifecycle remains covered by your own DOM test using the documented `mount` context and disposer.
 
 ## v1 limitations and author checklist
 
@@ -156,5 +172,5 @@ The command validates the local manifest and executable, drives handshake, handl
 - UI is a single self-contained ESM file loaded into a ShadowRoot. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
 - UI settings are public JSON objects; secrets are backend-only. Never log secrets, including to stderr.
 - Stdout must remain newline-framed JSON-RPC. Correlate IDs, stay below 64 KiB, respond to shutdown, and treat host callbacks as nested RPC.
-- Task events require both the manifest capability and handshake subscription; delivery is best-effort, so handlers must tolerate retries and errors.
+- Task events require both the manifest capability and handshake subscription; delivery is best-effort, so handlers must tolerate missed batches and reconcile with `tasks.read`.
 - Test all declared platforms and binary executable bits before distributing a package. The fixture's `make local-plugin-fixture` target validates only the current platform.

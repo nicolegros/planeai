@@ -1,4 +1,6 @@
 use serde_json::{json, Value};
+use std::path::Path;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines, Stdin, Stdout};
 
 const PLUGIN_ID: &str = "local-fixture";
@@ -31,16 +33,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(result) => success(id, result),
                 Err(message) => error(id, -32000, &message),
             }
+        } else if method == "fixture.awaitCancellation" {
+            await_cancellation(&request, &mut input).await
+        } else if method == "fixture.requireStateDirectories" {
+            match required_state_directories() {
+                Ok(result) => success(id, result),
+                Err(message) => error(id, -32000, &message),
+            }
         } else {
             dispatch(&request).0
         };
-        write_frame(&mut output, &response).await?;
+        if request.get("id").is_some() {
+            write_frame(&mut output, &response).await?;
+        }
         if method == "plugin.shutdown" {
             eprintln!("{PLUGIN_ID} shutting down");
             break;
         }
     }
     Ok(())
+}
+
+async fn await_cancellation(request: &Value, input: &mut Lines<BufReader<Stdin>>) -> Value {
+    let request_id = request.get("id").cloned().unwrap_or(Value::Null);
+    loop {
+        let line = match input.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => return error(request_id, -32000, "host closed stdin before cancellation"),
+            Err(read_error) => {
+                return error(
+                    request_id,
+                    -32000,
+                    &format!("failed to read cancellation: {read_error}"),
+                )
+            }
+        };
+        let notification: Value = match serde_json::from_str(&line) {
+            Ok(notification) => notification,
+            Err(_) => continue,
+        };
+        if cancellation_matches(&notification, &request_id) {
+            return error(request_id, -32800, "request cancelled");
+        }
+    }
+}
+
+fn cancellation_matches(notification: &Value, request_id: &Value) -> bool {
+    notification.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+        && notification.get("method").and_then(Value::as_str) == Some("$/cancelRequest")
+        && notification
+            .get("params")
+            .and_then(|params| params.get("id"))
+            == Some(request_id)
+}
+
+fn required_state_directories() -> Result<Value, String> {
+    let data_dir = std::env::var("PLANEAI_PLUGIN_DATA_DIR")
+        .map_err(|_| "PLANEAI_PLUGIN_DATA_DIR was not provided by the host".to_string())?;
+    let secrets_dir = std::env::var("PLANEAI_PLUGIN_SECRETS_DIR")
+        .map_err(|_| "PLANEAI_PLUGIN_SECRETS_DIR was not provided by the host".to_string())?;
+    if !Path::new(&data_dir).is_dir() || !Path::new(&secrets_dir).is_dir() {
+        return Err("host-provided plugin state directories must exist".to_string());
+    }
+    Ok(json!({ "state_directories_present": true }))
 }
 
 async fn persist_settings(
@@ -237,6 +292,27 @@ mod tests {
             json!({ "greeting": "hello" })
         );
         assert!(settings_from(&json!({ "params": ["not", "an", "object"] })).is_err());
+    }
+
+    #[test]
+    fn cancellation_notifications_match_only_the_active_request_id() {
+        let request_id = json!(7);
+        assert!(cancellation_matches(
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": 7 },
+            }),
+            &request_id,
+        ));
+        assert!(!cancellation_matches(
+            &json!({
+                "jsonrpc": "2.0",
+                "method": "$/cancelRequest",
+                "params": { "id": 8 },
+            }),
+            &request_id,
+        ));
     }
 
     #[test]

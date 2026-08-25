@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const APP_ID: &str = "ca.nicolegros.planeai";
 
@@ -38,6 +38,69 @@ pub fn notify_socket_path() -> PathBuf {
     app_data_dir().join("notify.sock")
 }
 
+/// Atomically replace `path` with `temporary`. The temporary file must be in
+/// the destination directory and is consumed on success.
+#[cfg(not(windows))]
+pub fn replace_file_atomically(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary, path)
+}
+
+/// Atomically replace `path` with `temporary`. Windows cannot rename over an
+/// existing file, so use `ReplaceFileW` when the destination already exists.
+#[cfg(windows)]
+pub fn replace_file_atomically(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    match std::fs::metadata(path) {
+        Ok(_) => replace_existing_file_windows(path, temporary),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::rename(temporary, path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn replace_existing_file_windows(path: &Path, temporary: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn ReplaceFileW(
+            replaced_file_name: *const u16,
+            replacement_file_name: *const u16,
+            backup_file_name: *const u16,
+            replace_flags: u32,
+            exclude: *mut std::ffi::c_void,
+            reserved: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let temporary = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    if unsafe {
+        ReplaceFileW(
+            path.as_ptr(),
+            temporary.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 /// Raise the process file descriptor soft limit to min(hard_limit, 10240).
 ///
 /// On macOS the default soft limit is 256, which is far too low for processes
@@ -54,5 +117,31 @@ pub fn raise_fd_limit() {
                 let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_replacement_overwrites_an_existing_file() {
+        let root = std::env::temp_dir().join(format!(
+            "planeai-paths-replace-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        let temporary = root.join(".settings.tmp");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::write(&temporary, "new").unwrap();
+        replace_file_atomically(&temporary, &path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert!(!temporary.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

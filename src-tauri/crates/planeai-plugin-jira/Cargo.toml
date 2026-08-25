@@ -19,6 +19,7 @@ sha2 = "=0.11.0"
 thiserror = "=2.0.19"
 rusqlite = { version = "0.40", features = ["bundled"] }
 planeai-jira = { path = "../../planeai-jira" }
+planeai-paths = { path = "../../planeai-paths" }
 chrono = { version = "0.4", features = ["serde"] }
 open = "=5.4.1"
 
