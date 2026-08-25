@@ -61,6 +61,7 @@ fn load_reads_existing_config_file() {
         auto_open_review: Some(true),
         sound_enabled: Some(true),
         integrations: None,
+        wsl: None,
     };
 
     let json = serde_json::to_string_pretty(&custom).unwrap();
