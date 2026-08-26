@@ -85,7 +85,8 @@ export type PluginUiPlacement =
   | "sidebar.section"
   | "sidebar.footer"
   | "preferences"
-  | "main-pane";
+  | "main-pane"
+  | "interaction";
 
 export interface PluginUiContribution {
   id: string;
@@ -104,6 +105,11 @@ export interface PluginInventory {
   source_kind: PluginSourceKind;
   backend_entrypoint: string;
   capabilities: string[];
+  background_service?: {
+    method: string;
+    interval_setting: string;
+    default_interval_ms: number;
+  } | null;
   ui_contributions: PluginUiContribution[];
   installed_hash: string | null;
   installed_path: string | null;

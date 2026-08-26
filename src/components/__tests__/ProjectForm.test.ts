@@ -7,13 +7,14 @@ const { updateProject, validateGitRepo } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../lib/api", () => ({
-  projects: { validateGitRepo },
+  projects: { validateGitRepo, update: updateProject },
   git: { cloneRepository: vi.fn() },
 }));
 
 vi.mock("../../lib/project-store.svelte", () => ({
   createProject: vi.fn(() => Promise.resolve()),
   updateProject,
+  loadProjects: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));

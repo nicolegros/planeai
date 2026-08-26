@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 use std::time::Instant;
 
 use planeai_tasks::model::{CreateParams, Status, UpdateParams};
@@ -13,8 +14,10 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
+use tokio_util::sync::CancellationToken;
 
 use crate::commands;
 use crate::task_lifecycle::TaskLifecycleBatch;
@@ -51,6 +54,8 @@ pub struct PluginManifest {
     pub ui_contributions: Vec<PluginUiContribution>,
     #[serde(default)]
     pub capabilities: Vec<PluginHostCapability>,
+    #[serde(default)]
+    pub background_service: Option<PluginBackgroundService>,
     #[serde(default, rename = "ui_entrypoint")]
     legacy_ui_entrypoint: LegacyUiEntrypoint,
 }
@@ -131,6 +136,14 @@ pub enum PluginHostCapability {
     SidebarNavigation,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginBackgroundService {
+    pub method: String,
+    pub interval_setting: String,
+    pub default_interval_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum PluginUiPlacement {
     #[serde(rename = "sidebar.header")]
@@ -145,6 +158,8 @@ pub enum PluginUiPlacement {
     Preferences,
     #[serde(rename = "main-pane")]
     MainPane,
+    #[serde(rename = "interaction")]
+    Interaction,
 }
 
 impl PluginUiPlacement {
@@ -232,6 +247,7 @@ impl PluginManifest {
                     "backend_entrypoints": self.backend_entrypoints,
                     "ui_contributions": self.ui_contributions,
                     "capabilities": self.capabilities,
+                    "background_service": self.background_service,
                 });
                 planeai_plugin_contract::validate_local_manifest(&manifest, platform)
                     .map_err(|error| error.to_string())?;
@@ -246,8 +262,25 @@ impl PluginManifest {
             return Err("legacy ui_entrypoint must not be empty".to_string());
         }
         validate_ui_contributions(&self.id, &self.effective_ui_contributions())?;
+        validate_background_service(self.background_service.as_ref())?;
         validate_capabilities(self.source_kind, &self.capabilities)
     }
+}
+
+fn validate_background_service(service: Option<&PluginBackgroundService>) -> Result<(), String> {
+    let Some(service) = service else {
+        return Ok(());
+    };
+    if service.method.trim().is_empty() || service.interval_setting.trim().is_empty() {
+        return Err("background service method and interval_setting are required".to_string());
+    }
+    if service.method.starts_with("plugin.") || service.method.starts_with('$') {
+        return Err("background service method is reserved for PlaneAI".to_string());
+    }
+    if service.default_interval_ms == 0 {
+        return Err("background service default_interval_ms must be positive".to_string());
+    }
+    Ok(())
 }
 
 fn validate_capabilities(
@@ -437,6 +470,7 @@ pub struct PluginInventory {
     pub backend_entrypoint: String,
     pub ui_contributions: Vec<PluginUiContribution>,
     pub capabilities: Vec<PluginHostCapability>,
+    pub background_service: Option<PluginBackgroundService>,
     pub installed_hash: Option<String>,
     pub installed_path: Option<String>,
     pub original_display_path: Option<String>,
@@ -624,6 +658,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             backend_entrypoint TEXT NOT NULL,
             ui_contributions TEXT NOT NULL DEFAULT '[]',
             capabilities TEXT NOT NULL DEFAULT '[]',
+            background_service TEXT,
             installed_hash TEXT,
             installed_path TEXT,
             original_display_path TEXT,
@@ -641,6 +676,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ("original_display_path", "TEXT"),
         ("ui_contributions", "TEXT NOT NULL DEFAULT '[]'"),
         ("capabilities", "TEXT NOT NULL DEFAULT '[]'"),
+        ("background_service", "TEXT"),
     ] {
         let has_column = conn
             .prepare("PRAGMA table_info(plugin_inventory)")?
@@ -716,10 +752,12 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
             .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
         let capabilities = serde_json::to_string(&manifest.capabilities)
             .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
+        let background_service = serde_json::to_string(&manifest.background_service)
+            .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
         conn.execute(
             "INSERT INTO plugin_inventory (
-                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 version = excluded.version,
@@ -728,6 +766,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 backend_entrypoint = excluded.backend_entrypoint,
                 ui_contributions = excluded.ui_contributions,
                 capabilities = excluded.capabilities,
+                background_service = excluded.background_service,
                 updated_at = CURRENT_TIMESTAMP",
             params![
                 manifest.id,
@@ -738,6 +777,7 @@ pub fn sync_inventory(conn: &Connection, manifests: &[PluginManifest]) -> Result
                 manifest.backend_entrypoint.as_deref().unwrap_or_default(),
                 ui_contributions,
                 capabilities,
+                background_service,
             ],
         )
         .map_err(|e| format!("failed to persist plugin inventory: {e}"))?;
@@ -776,11 +816,13 @@ pub fn insert_local_inventory(
         .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
     let capabilities = serde_json::to_string(&manifest.capabilities)
         .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
+    let background_service = serde_json::to_string(&manifest.background_service)
+        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
     conn.execute(
         "INSERT INTO plugin_inventory (
-            id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities,
+            id, name, version, host_api_version, source_kind, backend_entrypoint, ui_contributions, capabilities, background_service,
             installed_hash, installed_path, original_display_path, enabled, runtime_state
-        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, 0, 'disabled')",
+        ) VALUES (?1, ?2, ?3, ?4, 'local', ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 'disabled')",
         params![
             manifest.id,
             manifest.name,
@@ -789,6 +831,7 @@ pub fn insert_local_inventory(
             backend_entrypoint,
             ui_contributions,
             capabilities,
+            background_service,
             content_hash,
             package_dir.display().to_string(),
             original_display_path,
@@ -803,7 +846,7 @@ pub fn insert_local_inventory(
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory ORDER BY name COLLATE NOCASE",
     )?;
     let rows = statement.query_map([], row_to_inventory)?;
@@ -816,7 +859,7 @@ pub fn get_inventory(
 ) -> rusqlite::Result<Option<PluginInventory>> {
     conn.query_row(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
-                ui_contributions, capabilities, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
+                ui_contributions, capabilities, background_service, installed_hash, installed_path, original_display_path, enabled, runtime_state, last_error, log_path
          FROM plugin_inventory WHERE id = ?1",
         [plugin_id],
         row_to_inventory,
@@ -842,7 +885,7 @@ pub fn delete_local_inventory(conn: &Connection, plugin_id: &str) -> Result<(), 
 fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory> {
     let id: String = row.get(0)?;
     let source_kind: String = row.get(4)?;
-    let state: String = row.get(12)?;
+    let state: String = row.get(13)?;
     let ui_contributions = serde_json::from_str::<Vec<PluginUiContribution>>(
         &row.get::<_, String>(6)?,
     )
@@ -882,13 +925,20 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         backend_entrypoint: row.get(5)?,
         ui_contributions,
         capabilities,
-        installed_hash: row.get(8)?,
-        installed_path: row.get(9)?,
-        original_display_path: row.get(10)?,
-        enabled: row.get(11)?,
+        background_service: serde_json::from_str(&row.get::<_, String>(8)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        installed_hash: row.get(9)?,
+        installed_path: row.get(10)?,
+        original_display_path: row.get(11)?,
+        enabled: row.get(12)?,
         state: PluginRuntimeState::from_db(&state),
-        last_error: row.get(13)?,
-        log_path: row.get(14)?,
+        last_error: row.get(14)?,
+        log_path: row.get(15)?,
     })
 }
 
@@ -939,6 +989,8 @@ impl PluginRuntimeHandle {
             db,
             app,
             processes: Arc::new(AsyncMutex::new(HashMap::new())),
+            background_workers: Arc::new(AsyncMutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(0),
             lifecycle: Arc::new(AsyncMutex::new(())),
             shutting_down: AtomicBool::new(false),
             exit_permitted: AtomicBool::new(false),
@@ -950,9 +1002,18 @@ pub struct PluginRuntimeSupervisor {
     db: Arc<Mutex<Connection>>,
     app: AppHandle,
     processes: Arc<AsyncMutex<HashMap<String, Arc<RuntimeProcess>>>>,
+    background_workers: Arc<AsyncMutex<HashMap<String, BackgroundWorker>>>,
+    next_generation: AtomicU64,
     lifecycle: Arc<AsyncMutex<()>>,
     shutting_down: AtomicBool,
     exit_permitted: AtomicBool,
+}
+
+struct BackgroundWorker {
+    generation: u64,
+    cancel: CancellationToken,
+    wake: Arc<Notify>,
+    task: JoinHandle<()>,
 }
 
 struct RuntimeProcess {
@@ -1475,16 +1536,19 @@ impl PluginRuntimeSupervisor {
         if !settings.is_object() {
             return Err("plugin settings must be a JSON object".to_string());
         }
-        // Jira settings govern cache ownership and connected-site invariants, so only
-        // its sidecar may persist them. Generic host persistence would bypass both.
-        if plugin_id == JIRA_PLUGIN_ID {
-            return self.call(plugin_id, "jira.settings.update", settings).await;
-        }
-        self.inventory(plugin_id)
-            .await?
-            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
-        let root = plugin_state_root(&self.app, plugin_id).await?;
-        commands::blocking(move || replace_plugin_settings(&root.join("data"), settings)).await
+        let updated = if plugin_id == JIRA_PLUGIN_ID {
+            // Jira settings govern cache ownership and connected-site invariants, so only
+            // its sidecar may persist them. Generic host persistence would bypass both.
+            self.call(plugin_id, "jira.settings.update", settings).await
+        } else {
+            self.inventory(plugin_id)
+                .await?
+                .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+            let root = plugin_state_root(&self.app, plugin_id).await?;
+            commands::blocking(move || replace_plugin_settings(&root.join("data"), settings)).await
+        }?;
+        self.wake_background_worker(plugin_id).await;
+        Ok(updated)
     }
 
     async fn update_state(
@@ -1620,7 +1684,11 @@ impl PluginRuntimeSupervisor {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
-        self.call_internal(plugin_id, method, params, false).await
+        let result = self.call_internal(plugin_id, method, params, false).await;
+        if result.is_ok() && plugin_id == JIRA_PLUGIN_ID && method == "jira.connect.complete" {
+            self.wake_background_worker(plugin_id).await;
+        }
+        result
     }
 
     async fn call_internal(
@@ -1852,6 +1920,7 @@ impl PluginRuntimeSupervisor {
             inventory.last_error.clone(),
         )
         .await?;
+        self.stop_background_worker(plugin_id).await;
         if let Some(process) = self.processes.lock().await.remove(plugin_id) {
             if let Err(error) = stop_process(process).await {
                 self.update_state(
@@ -2007,6 +2076,8 @@ impl PluginRuntimeSupervisor {
             }
             return Err(error);
         }
+        self.start_background_worker(&inventory, process.clone())
+            .await;
         self.monitor_process(id.clone(), process);
         self.inventory(&id)
             .await?
@@ -2037,6 +2108,7 @@ impl PluginRuntimeSupervisor {
             inventory.last_error.clone(),
         )
         .await?;
+        self.stop_background_worker(plugin_id).await;
         let process = self.processes.lock().await.remove(plugin_id);
         if let Some(process) = process {
             if let Err(error) = stop_process(process).await {
@@ -2066,10 +2138,102 @@ impl PluginRuntimeSupervisor {
         self.enable_inner(plugin_id).await
     }
 
+    async fn wake_background_worker(&self, plugin_id: &str) {
+        if let Some(worker) = self.background_workers.lock().await.get(plugin_id) {
+            worker.wake.notify_one();
+        }
+    }
+
+    async fn stop_background_worker(&self, plugin_id: &str) {
+        let worker = self.background_workers.lock().await.remove(plugin_id);
+        if let Some(worker) = worker {
+            tracing::debug!(
+                plugin_id,
+                generation = worker.generation,
+                "cancelling plugin background worker"
+            );
+            worker.cancel.cancel();
+            let _ = worker.task.await;
+        }
+    }
+
+    async fn start_background_worker(
+        &self,
+        plugin: &PluginInventory,
+        process: Arc<RuntimeProcess>,
+    ) {
+        let Some(service) = plugin.background_service.clone() else {
+            return;
+        };
+        let plugin_id = plugin.id.clone();
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.stop_background_worker(&plugin_id).await;
+        let cancel = CancellationToken::new();
+        let worker_cancel = cancel.clone();
+        let wake = Arc::new(Notify::new());
+        let worker_wake = wake.clone();
+        let app = self.app.clone();
+        let data_dir = process.data_dir.clone();
+        let worker_plugin_id = plugin_id.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = worker_cancel.cancelled() => return,
+                    outcome = process.request(&service.method, Value::Null) => match outcome {
+                        Ok(totals) => {
+                            tracing::info!(plugin_id = %plugin_id, generation, method = %service.method, totals = ?totals, "plugin background service complete");
+                            let event = serde_json::json!({
+                                "plugin_id": plugin_id,
+                                "generation": generation,
+                                "method": service.method,
+                                "totals": totals,
+                            });
+                            if let Err(error) = app.emit("plugin-background-service-complete", event.clone()) {
+                                tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin service completion event");
+                            }
+                            if event["totals"]["departed"].as_u64().unwrap_or_default() > 0 {
+                                if let Err(error) = app.emit("plugin-background-service-departed", event) {
+                                    tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin departure event");
+                                }
+                            }
+                            if let Err(error) = app.emit("plugin-data-changed", plugin_id.clone()) {
+                                tracing::warn!(plugin_id = %plugin_id, %error, "failed to emit plugin refresh event");
+                            }
+                        }
+                        Err(error) => tracing::warn!(plugin_id = %plugin_id, generation, method = %service.method, %error, "plugin background service failed"),
+                    }
+                }
+                let interval = match read_plugin_settings(&data_dir).ok().and_then(|settings| {
+                    settings
+                        .get(&service.interval_setting)
+                        .and_then(Value::as_u64)
+                }) {
+                    Some(value) if value > 0 => value,
+                    _ => service.default_interval_ms,
+                };
+                tokio::select! {
+                    _ = worker_cancel.cancelled() => return,
+                    _ = worker_wake.notified() => {},
+                    _ = tokio::time::sleep(StdDuration::from_millis(interval)) => {}
+                }
+            }
+        });
+        self.background_workers.lock().await.insert(
+            worker_plugin_id,
+            BackgroundWorker {
+                generation,
+                cancel,
+                wake,
+                task,
+            },
+        );
+    }
+
     fn monitor_process(&self, plugin_id: String, process: Arc<RuntimeProcess>) {
         let db = self.db.clone();
         let app = self.app.clone();
         let processes = self.processes.clone();
+        let background_workers = self.background_workers.clone();
         let lifecycle = self.lifecycle.clone();
         tokio::spawn(async move {
             loop {
@@ -2088,6 +2252,10 @@ impl PluginRuntimeSupervisor {
                 };
                 if !owns_process {
                     return;
+                }
+                if let Some(worker) = background_workers.lock().await.remove(&plugin_id) {
+                    worker.cancel.cancel();
+                    worker.task.abort();
                 }
                 if stop_process_after_removal {
                     if let Err(stop_error) = stop_process(process.clone()).await {
@@ -2482,6 +2650,16 @@ mod tests {
         let jira = get_inventory(&conn, "jira").unwrap().unwrap();
         assert!(!jira.enabled);
         assert_eq!(jira.state, PluginRuntimeState::Disabled);
+        assert_eq!(
+            jira.background_service
+                .as_ref()
+                .map(|service| service.method.as_str()),
+            Some("jira.syncNow")
+        );
+        assert!(jira
+            .ui_contributions
+            .iter()
+            .any(|contribution| contribution.placement == PluginUiPlacement::Interaction));
     }
 
     #[test]
@@ -2525,6 +2703,7 @@ mod tests {
                 shortcut: None,
             }],
             capabilities: vec![],
+            background_service: None,
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -2601,6 +2780,7 @@ mod tests {
             )]),
             ui_contributions: vec![],
             capabilities: vec![],
+            background_service: None,
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         sync_inventory(&conn, &[local]).unwrap();
@@ -2634,6 +2814,7 @@ mod tests {
             )]),
             ui_contributions: vec![],
             capabilities: vec![],
+            background_service: None,
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();
@@ -2785,6 +2966,7 @@ mod tests {
             ]),
             ui_contributions: vec![],
             capabilities: vec![],
+            background_service: None,
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         assert!(manifest
@@ -2848,6 +3030,7 @@ mod tests {
                 PluginHostCapability::TasksRead,
                 PluginHostCapability::TaskEvents,
             ],
+            background_service: None,
             legacy_ui_entrypoint: LegacyUiEntrypoint::Absent,
         };
         let package = tempfile::TempDir::new().unwrap();

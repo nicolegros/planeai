@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
+  import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
@@ -55,6 +55,7 @@
     "jira:jira-status": async () => jiraStatusEntrypoint,
     "jira:jira-preferences": async () => jiraPreferencesEntrypoint,
     "jira:jira-sidebar-section": async () => jiraSidebarSectionEntrypoint,
+    "jira:jira-departed-interaction": async () => jiraDepartedInteractionEntrypoint,
   };
 
   function disposeCurrent(): void {
@@ -417,7 +418,7 @@
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || contribution.placement !== "sidebar.section") return;
+      if (event.payload !== plugin.id || !["sidebar.section", "interaction"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
       } else {
@@ -440,11 +441,16 @@
 </script>
 
 <div
-  class="h-full w-full"
+  class={`h-full w-full ${contribution.placement === "interaction" ? "pointer-events-auto" : ""}`}
   tabindex="-1"
   role="region"
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
   data-plugin-sidebar-contribution={contribution.placement === "sidebar.section" ? "" : undefined}
   bind:this={container}
+  onfocus={() => {
+    if (contribution.placement === "interaction") {
+      container?.shadowRoot?.querySelector<HTMLElement>("[data-plugin-interaction]")?.focus();
+    }
+  }}
 ></div>

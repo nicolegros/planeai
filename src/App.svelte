@@ -227,6 +227,11 @@
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
+  const interactionPluginContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
   const activeSessionName = $derived(activeSession ? (activeSession.name || activeSession.branch) : null);
   const ciStatus = $derived.by(() => {
@@ -803,6 +808,13 @@
     activeContributionId = null;
   }
 
+  function focusPluginInteraction(): boolean {
+    const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
+    if (!interaction) return false;
+    interaction.focus();
+    return true;
+  }
+
   function invalidatePluginPage(pluginId: string): void {
     if (activePluginId === pluginId) leavePluginWorkspace();
   }
@@ -943,7 +955,14 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
+        else if (action.type === "focus_merge_prompt") {
+          if (getPrompt()) focusMergePrompt();
+          else {
+            const u = getUpdateState();
+            if (u.updateAvailable && !u.dismissed) focusUpdateToast();
+            else focusPluginInteraction();
+          }
+        }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
@@ -1547,5 +1566,10 @@
   </div>
 {/if}
 
+{#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
+  <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
+    <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} />
+  </div>
+{/each}
 <PostMergePrompt />
 <UpdateToast />

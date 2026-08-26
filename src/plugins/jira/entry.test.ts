@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint } from "./entry";
+import {
+  jiraDepartedInteractionEntrypoint,
+  jiraPreferencesEntrypoint,
+  jiraSidebarSectionEntrypoint,
+} from "./entry";
 import type { PluginUiContext } from "../../lib/plugin-sdk";
 
 type Settings = {
@@ -780,5 +784,72 @@ describe("jiraSidebarSectionEntrypoint", () => {
       }),
     );
     await vi.waitFor(() => expect(sidebar.createChild).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("jiraDepartedInteractionEntrypoint", () => {
+  let host: HTMLElement | undefined;
+
+  afterEach(() => host?.remove());
+
+  function mountInteraction(
+    resolve: () => Promise<unknown> = () => Promise.resolve({ dequeued: true }),
+  ) {
+    host = document.createElement("div");
+    const root = host.attachShadow({ mode: "open" });
+    let items = [{ key: "PLA-42", summary: "A departed issue" }];
+    const notify = vi.fn();
+    const call = vi.fn(async (method: string) => {
+      if (method === "jira.departures.list") return { items };
+      if (method === "jira.departures.resolve") {
+        await resolve();
+        items = [];
+        return { dequeued: true };
+      }
+      if (method === "jira.departures.dequeue") {
+        items = [];
+        return { dequeued: true };
+      }
+      throw new Error(`unexpected Jira call: ${method}`);
+    });
+    jiraDepartedInteractionEntrypoint.mount(root, {
+      plugin: { id: "jira" },
+      contribution: { id: "departed-interaction" },
+      host: {
+        call,
+        navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
+        sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
+        data: { changed: vi.fn(), notify },
+      },
+    } as unknown as PluginUiContext);
+    return { root, call, notify };
+  }
+
+  it("does not steal focus and resolves D through the sidecar", async () => {
+    const before = document.activeElement;
+    const interaction = mountInteraction();
+    await vi.waitFor(() => expect(interaction.root.textContent).toContain("PLA-42"));
+    expect(document.activeElement).toBe(before);
+    const surface = interaction.root.querySelector<HTMLElement>(".interaction")!;
+    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(interaction.call).toHaveBeenCalledWith("jira.departures.resolve", { key: "PLA-42" }),
+    );
+    await vi.waitFor(() => expect(interaction.root.textContent).not.toContain("PLA-42"));
+  });
+
+  it("keeps the item queued when Done fails, while N and Escape dismiss it", async () => {
+    const failed = mountInteraction(() => Promise.reject(new Error("task update failed")));
+    await vi.waitFor(() => expect(failed.root.textContent).toContain("PLA-42"));
+    const surface = failed.root.querySelector<HTMLElement>(".interaction")!;
+    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(failed.notify).toHaveBeenCalledWith(expect.stringContaining("task update failed")),
+    );
+    expect(failed.call).not.toHaveBeenCalledWith("jira.departures.dequeue", expect.anything());
+    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(failed.call).toHaveBeenCalledWith("jira.departures.dequeue", { key: "PLA-42" }),
+    );
   });
 });
