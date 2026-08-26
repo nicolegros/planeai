@@ -62,9 +62,10 @@ describe("task store", () => {
   it("ignores an older response that completes after a newer refresh", async () => {
     let resolveStale!: (tasks: TaskItem[]) => void;
     listAll.mockImplementationOnce(
-      () => new Promise<TaskItem[]>((resolve) => {
-        resolveStale = resolve;
-      }),
+      () =>
+        new Promise<TaskItem[]>((resolve) => {
+          resolveStale = resolve;
+        }),
     );
     const staleLoad = taskStore.loadTasks(["/repo"]);
 
