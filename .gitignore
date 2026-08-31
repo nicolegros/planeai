@@ -29,3 +29,6 @@ src-tauri/planeai-iced-spike/:memory-shared:
 
 # Generated local plugin fixture sidecars
 src-tauri/plugins/local-fixture/bin/
+
+# Kiro CLI metadata
+.kiro/
