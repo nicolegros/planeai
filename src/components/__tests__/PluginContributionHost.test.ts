@@ -30,8 +30,13 @@ vi.mock("../../lib/api", () => ({
   pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
 }));
 
+import PluginContributionHost from "../PluginContributionHost.svelte";
 import PluginContributionHostHarness from "./PluginContributionHostHarness.svelte";
 import PluginContributionHostLocalHarness from "./PluginContributionHostLocalHarness.svelte";
+import { getPluginSidebarRows } from "../../lib/plugin-sidebar-navigation.svelte";
+import type { PluginInventory, PluginUiContribution } from "../../lib/types";
+import { focusTerminal, getActiveZone } from "../../lib/focus.svelte";
+import { shouldBypassSidebarKeyboard } from "../../lib/sidebar-nav.svelte";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((eventName: string, handler: (event: { payload: string }) => void) => {
@@ -48,9 +53,13 @@ describe("PluginContributionHost", () => {
         setState(state: "disabled" | "starting" | "running" | "stopping" | "error"): void;
       }
     | undefined;
+  let interactionComponent: ReturnType<typeof mount> | undefined;
 
   afterEach(() => {
     if (component) unmount(component);
+    if (interactionComponent) unmount(interactionComponent);
+    component = undefined;
+    interactionComponent = undefined;
     target?.remove();
     vi.clearAllMocks();
     eventListeners.clear();
@@ -71,6 +80,50 @@ describe("PluginContributionHost", () => {
     expect(pluginCall).toHaveBeenCalledWith("jira", "jira.status", null);
   });
 
+  it("leaves an idle built-in interaction host transparent to pointer input", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    const plugin: PluginInventory = {
+      id: "jira",
+      name: "Jira",
+      version: "0.1.0",
+      host_api_version: "planeai.plugin-host.v1",
+      source_kind: "builtin",
+      backend_entrypoint: "planeai-plugin-jira",
+      capabilities: [],
+      ui_contributions: [],
+      installed_hash: null,
+      installed_path: null,
+      original_display_path: null,
+      enabled: true,
+      state: "running",
+      last_error: null,
+      log_path: null,
+    };
+    const contribution: PluginUiContribution = {
+      id: "jira-departed-interaction",
+      label: "Departed Jira issues",
+      placement: "interaction",
+      entrypoint: "jira-departed-interaction",
+      order: null,
+      shortcut: null,
+    };
+    interactionComponent = mount(PluginContributionHost, {
+      target,
+      props: { plugin, contribution, onNavigate: () => {}, onClose: () => {} },
+    });
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next?.shadowRoot?.querySelector("[data-plugin-interaction]")).toBeTruthy();
+      return next!;
+    });
+
+    expect(host.className).toContain("pointer-events-none");
+    expect(host.shadowRoot?.querySelector("style")?.textContent).toContain(".interaction");
+    expect(host.shadowRoot?.querySelector("style")?.textContent).toContain("pointer-events:auto");
+  });
+
   it("isolates local UI bundles in an opaque, script-only iframe with a message bridge", async () => {
     target = document.createElement("div");
     document.body.append(target);
@@ -86,10 +139,157 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain("postMessage");
       expect(frame?.srcdoc).toContain("settings-get");
       expect(frame?.srcdoc).toContain("settings-replace");
-      expect(frame?.srcdoc).not.toContain("sidebar-keydown");
+      expect(frame?.srcdoc).toContain("sidebar-keydown");
+      expect(frame?.srcdoc).toContain("sidebarNavigationKeys");
+      expect(frame?.srcdoc).toContain('addEventListener("keydown", forwardSidebarKeydown)');
     });
     // jsdom does not execute iframe srcdoc. The production bridge loads source only after its frame loads.
     expect(localUiSource).not.toHaveBeenCalled();
+  });
+
+  it("keeps local sidebar iframes out of the shared navigation height", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    expect(frame.className).not.toContain("h-full");
+    expect(frame.style.height).toBe("160px");
+  });
+
+  it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "sidebar.footer" },
+    }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    expect(host.dataset.pluginSidebarContribution).toBe("");
+    expect(shouldBypassSidebarKeyboard(host)).toBe(false);
+  });
+
+  it("sends only structured-cloneable context when initializing a local UI iframe", async () => {
+    localUiSource.mockResolvedValue("export default { mount() { return () => {}; } };");
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    const postMessage = vi.fn((message: unknown) => {
+      structuredClone(message);
+    });
+    Object.defineProperty(frame, "contentWindow", {
+      configurable: true,
+      value: { postMessage },
+    });
+
+    frame.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledWith("local-fixture", "fixture"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "init" }), "*"),
+    );
+    expect(
+      target.querySelector<HTMLElement>("[data-plugin-ui-contribution]")?.shadowRoot?.textContent,
+    ).not.toContain("Failed to load");
+  });
+
+  it("registers local sidebar rows under the contribution key used by UnifiedSidebar", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          type: "sidebar-register",
+          registrationId: "registration:1",
+          rows: [{ id: "log-entry" }],
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(getPluginSidebarRows("local-fixture:fixture").map((row) => row.id)).toEqual([
+        "log-entry",
+      ]),
+    );
+  });
+
+  it("focuses the shared sidebar when a local sidebar iframe is entered", async () => {
+    focusTerminal();
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    frame.dispatchEvent(new FocusEvent("focus"));
+    expect(getActiveZone()).toBe("sidebar");
+  });
+
+  it("forwards local sidebar keyboard commands to the shared sidebar event boundary", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const host = await vi.waitFor(() => {
+      const next = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");
+      expect(next?.shadowRoot?.querySelector("iframe")).toBeTruthy();
+      return next!;
+    });
+    const frame = host.shadowRoot!.querySelector<HTMLIFrameElement>("iframe")!;
+    const handleSidebarKeydown = vi.fn((event: Event) => {
+      const detail = (event as CustomEvent<{ event: KeyboardEvent; handled: boolean }>).detail;
+      expect(detail.event.key).toBe("j");
+      detail.event.preventDefault();
+      detail.handled = detail.event.defaultPrevented;
+    });
+    host.addEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "sidebar-keydown", key: "j" },
+      }),
+    );
+
+    await vi.waitFor(() => expect(handleSidebarKeydown).toHaveBeenCalledOnce());
+    host.removeEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
   });
 
   it("disposes the old UI before remounting and on host destruction", async () => {

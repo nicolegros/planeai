@@ -925,13 +925,16 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         backend_entrypoint: row.get(5)?,
         ui_contributions,
         capabilities,
-        background_service: serde_json::from_str(&row.get::<_, String>(8)?).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                8,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?,
+        background_service: match row.get::<_, Option<String>>(8)? {
+            Some(json) => serde_json::from_str(&json).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+            None => None,
+        },
         installed_hash: row.get(9)?,
         installed_path: row.get(10)?,
         original_display_path: row.get(11)?,
@@ -2639,6 +2642,9 @@ mod tests {
             serde_json::from_str(&ui_contributions).unwrap();
         assert_eq!(contributions[0].id, "legacy-main-pane");
         assert_eq!(contributions[0].entrypoint, "ui/entry.js");
+
+        let inventory = get_inventory(&conn, "legacy").unwrap().unwrap();
+        assert!(inventory.background_service.is_none());
     }
 
     #[test]
