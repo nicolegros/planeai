@@ -310,9 +310,10 @@
     // Check if the active session is already in the tree
     const allLeaves = splitTree.getAllLeaves();
     const hasActive = allLeaves.some((leaf) =>
-      leaf.tabs.some((t) => ptyKeyToSessionId(t.ptyKey) === activeSessionId)
+      leaf.tabs.some((t) => t.ptyKey === activeSessionId)
     );
     if (hasActive) {
+      splitTree.focusTab(activeSessionId);
       lastTreeSessionId = activeSessionId;
       return;
     }
@@ -1218,7 +1219,7 @@
                 <Terminal
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
