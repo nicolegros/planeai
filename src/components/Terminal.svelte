@@ -25,9 +25,10 @@
     skipAttach?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
+    onFocused?: () => void;
   }
 
-  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached }: Props = $props();
+  let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached, onFocused }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let term: Terminal;
@@ -429,9 +430,13 @@
 
 </script>
 
+<!-- xterm owns its interactive canvas/textarea; this boundary forwards focus to the host. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={containerEl}
   class="w-full h-full"
   class:hidden={!visible}
   style="background-color: {termBg}"
+  onpointerdown={onFocused}
+  onfocusin={onFocused}
 ></div>
