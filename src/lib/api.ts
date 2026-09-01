@@ -12,6 +12,7 @@ import type {
   PrStatus,
   CommitEntry,
   PluginInventory,
+  JiraMigrationStatus,
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
@@ -241,6 +242,8 @@ export const plugins = {
   enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
   disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
+  jiraMigrationStatus: () => invoke<JiraMigrationStatus>("jira_migration_status"),
+  migrateLegacyJira: () => invoke<JiraMigrationStatus>("migrate_legacy_jira"),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
   settings: <T>(pluginId: string) => invoke<T>("plugin_settings", { pluginId }),

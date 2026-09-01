@@ -120,6 +120,19 @@ export interface PluginInventory {
   log_path: string | null;
 }
 
+export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";
+
+export interface JiraMigrationStatus {
+  state: JiraMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_issues: number;
+  imported_links: number;
+  snapshot_path: string | null;
+}
+
 export interface JiraPluginStatus {
   plugin_id: string;
   plugin_name: string;
