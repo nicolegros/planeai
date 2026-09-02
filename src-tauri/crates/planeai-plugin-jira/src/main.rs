@@ -577,13 +577,17 @@ impl JiraPlugin {
             .await
             {
                 Ok(issues) => issues,
-                Err(_) => {
+                Err(error) => {
+                    eprintln!("jira sync source={source_name} failed to fetch issues: {error}");
                     result.errors += 1;
+                    result
+                        .error_messages
+                        .push(format!("{source_name}: {error}"));
                     continue;
                 }
             };
             let mut seen = HashSet::new();
-            let mut source_failed = false;
+            let mut source_failure: Option<String> = None;
             for issue in issues {
                 seen.insert(issue.key.clone());
                 let mapped_status = map_status(
@@ -601,8 +605,11 @@ impl JiraPlugin {
                 .await
                 {
                     Ok(value) => value.get("task").cloned().unwrap_or(Value::Null),
-                    Err(_) => {
-                        source_failed = true;
+                    Err(error) => {
+                        source_failure = Some(format!(
+                            "failed to read local task for {}: {error}",
+                            issue.key
+                        ));
                         break;
                     }
                 };
@@ -650,16 +657,20 @@ impl JiraPlugin {
                         Ok(())
                     }
                 };
-                if task_result.is_err() {
-                    source_failed = true;
+                if let Err(error) = task_result {
+                    source_failure = Some(error);
                     break;
                 }
                 upsert_issue(&conn, &issue, source_name, &mapped_status)?;
                 sync_issue_source(&conn, &issue.key, source_name)?;
                 conn.execute("INSERT INTO jira_task_links (task_key, issue_key) VALUES (?1, ?2) ON CONFLICT(issue_key) DO UPDATE SET task_key = excluded.task_key", params![issue.key, issue.key]).map_err(|error| format!("failed to persist Jira task link: {error}"))?;
             }
-            if source_failed {
+            if let Some(error) = source_failure {
+                eprintln!("jira sync source={source_name} failed: {error}");
                 result.errors += 1;
+                result
+                    .error_messages
+                    .push(format!("{source_name}: {error}"));
                 continue;
             }
             for departed in active_source_issues(&conn, source_name)? {
@@ -917,6 +928,8 @@ struct SyncTotals {
     updated: usize,
     departed: usize,
     errors: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    error_messages: Vec<String>,
 }
 #[derive(Debug)]
 struct FetchedIssue {
@@ -2391,6 +2404,34 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn sync_totals_serializes_error_messages_when_present() {
+        let totals = SyncTotals {
+            created: 0,
+            updated: 0,
+            departed: 0,
+            errors: 1,
+            error_messages: vec!["backlog: Jira search failed: HTTP status 400".to_string()],
+        };
+        let value = serde_json::to_value(&totals).unwrap();
+        assert_eq!(value["errors"], serde_json::json!(1));
+        assert_eq!(
+            value["error_messages"],
+            serde_json::json!(["backlog: Jira search failed: HTTP status 400"])
+        );
+    }
+
+    #[test]
+    fn sync_totals_omits_error_messages_when_empty() {
+        let totals = SyncTotals::default();
+        let value = serde_json::to_value(&totals).unwrap();
+        assert_eq!(value["errors"], serde_json::json!(0));
+        assert!(
+            value.get("error_messages").is_none(),
+            "error_messages should be skipped when empty, got {value}"
+        );
+    }
 
     #[test]
     fn browser_capability_accepts_only_generated_atlassian_authorization_urls() {

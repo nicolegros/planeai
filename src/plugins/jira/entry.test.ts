@@ -131,6 +131,51 @@ describe("jiraPreferencesEntrypoint", () => {
     expect(saved.sources.source.jql).toBe("key = __PLANEAI_CONFIGURE_SOURCE__");
   });
 
+  it("renders captured sync error messages after a failed sync", async () => {
+    host = document.createElement("div");
+    const root = host.attachShadow({ mode: "open" });
+    const call = vi.fn(async (method: string) => {
+      if (method === "jira.settings.get") return initialSettings();
+      if (method === "jira.status")
+        return { connected: true, authorizing: false, site: "https://example.atlassian.net", last_error: null };
+      if (method === "jira.syncNow")
+        return {
+          created: 0,
+          updated: 0,
+          departed: 0,
+          errors: 1,
+          error_messages: ["backlog: Jira search failed: HTTP status 400 Bad Request"],
+        };
+      throw new Error(`unexpected Jira call: ${method}`);
+    });
+    const context = {
+      call,
+      plugin: { id: "jira" },
+      contribution: { id: "jira-preferences" },
+      host: {
+        call,
+        navigation: { open: vi.fn(), close: vi.fn(), openPreferences: vi.fn() },
+        sidebar: { register: vi.fn(() => () => {}), select: vi.fn() },
+        data: { changed: vi.fn() },
+      },
+    } as unknown as PluginUiContext;
+    jiraPreferencesEntrypoint.mount(root, context);
+
+    await vi.waitFor(() =>
+      expect(
+        [...root.querySelectorAll("button")].find((button) => button.textContent === "Sync Now"),
+      ).toBeTruthy(),
+    );
+    [...root.querySelectorAll("button")]
+      .find((button) => button.textContent === "Sync Now")!
+      .click();
+
+    await vi.waitFor(() => expect(root.querySelector("ul.error")).toBeTruthy());
+    const items = [...root.querySelectorAll("ul.error li")].map((li) => li.textContent);
+    expect(items).toEqual(["backlog: Jira search failed: HTTP status 400 Bad Request"]);
+    expect(root.querySelector(".warning")?.textContent).toContain("1 error");
+  });
+
   it("serializes updates without dropping an earlier optimistic change", async () => {
     host = document.createElement("div");
     const root = host.attachShadow({ mode: "open" });

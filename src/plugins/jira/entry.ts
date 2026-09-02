@@ -23,7 +23,13 @@ type JiraStatus = {
   site: string | null;
   last_error: string | null;
 };
-type SyncTotals = { created: number; updated: number; departed: number; errors: number };
+type SyncTotals = {
+  created: number;
+  updated: number;
+  departed: number;
+  errors: number;
+  error_messages?: string[];
+};
 type SidebarItem = { key: string; title: string; status: string; child_count: number };
 
 const preferencesStyles = `
@@ -551,7 +557,13 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         result = await call<SyncTotals>(context, "jira.syncNow");
         await context.host.data.changed();
       } catch (error) {
-        result = { created: 0, updated: 0, departed: 0, errors: 1 };
+        result = {
+          created: 0,
+          updated: 0,
+          departed: 0,
+          errors: 1,
+          error_messages: [String(error)],
+        };
         status = { ...status, last_error: String(error) };
       } finally {
         syncing = false;
@@ -598,6 +610,16 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         totals.className = result.errors ? "warning" : "muted";
         totals.textContent = `${result.created} created · ${result.updated} updated · ${result.departed} departed · ${result.errors} error${result.errors === 1 ? "" : "s"}`;
         connection.append(totals);
+        if (result.error_messages && result.error_messages.length > 0) {
+          const details = document.createElement("ul");
+          details.className = "error";
+          for (const message of result.error_messages) {
+            const item = document.createElement("li");
+            item.textContent = message;
+            details.append(item);
+          }
+          connection.append(details);
+        }
       }
       if (status.last_error) {
         const error = document.createElement("p");
