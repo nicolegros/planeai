@@ -1,19 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, tick } from "svelte";
 
-const { updateProject, validateGitRepo } = vi.hoisted(() => ({
-  updateProject: vi.fn(() => Promise.resolve()),
+const { updateProject, createProject, validateGitRepo } = vi.hoisted(() => ({
+  updateProject: vi.fn(() =>
+    Promise.resolve({ id: "p1", name: "New project", path: "/projects/new", hidden: false }),
+  ),
+  createProject: vi.fn(() =>
+    Promise.resolve({ id: "p2", name: "New project", path: "/projects/new", hidden: false }),
+  ),
   validateGitRepo: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("../../lib/api", () => ({
-  projects: { validateGitRepo, update: updateProject },
+  projects: { validateGitRepo, update: updateProject, create: createProject },
   git: { cloneRepository: vi.fn() },
 }));
 
 vi.mock("../../lib/project-store.svelte", () => ({
-  createProject: vi.fn(() => Promise.resolve()),
-  updateProject,
   loadProjects: vi.fn(() => Promise.resolve()),
 }));
 
