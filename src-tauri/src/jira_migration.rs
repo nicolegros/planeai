@@ -809,6 +809,9 @@ fn write_json_atomically<T: Serialize>(
         std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
             .map_err(|error| error.to_string())?;
     }
+    // `ReplaceFileW` cannot replace a file while its replacement is open.
+    // Close the temporary file before atomically installing it on Windows.
+    drop(file);
     planeai_paths::replace_file_atomically(&temporary, path).map_err(|error| error.to_string())
 }
 
