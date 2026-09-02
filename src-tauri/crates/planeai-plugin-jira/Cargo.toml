@@ -20,7 +20,7 @@ thiserror = "=2.0.19"
 rusqlite = { version = "0.40", features = ["bundled"] }
 planeai-paths = { path = "../../planeai-paths" }
 chrono = { version = "0.4", features = ["serde"] }
-open = "=5.4.1"
+open = "=5.4.2"
 
 [dev-dependencies]
 wiremock = "=0.6.5"
