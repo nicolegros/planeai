@@ -18,6 +18,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "ui_contributions",
     "capabilities",
     "ui_entrypoint",
+    "background_service",
 ];
 const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "id",
@@ -28,6 +29,7 @@ const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "shortcut",
 ];
 const LOCAL_CAPABILITIES: &[&str] = &["settings", "tasks.read", "task-events"];
+const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
 const UI_PLACEMENTS: &[&str] = &[
     "sidebar.header",
     "sidebar.navigation",
@@ -35,6 +37,7 @@ const UI_PLACEMENTS: &[&str] = &[
     "sidebar.footer",
     "preferences",
     "main-pane",
+    "interaction",
 ];
 
 pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<String> {
@@ -77,6 +80,7 @@ pub fn validate_local_manifest(manifest: &Value, platform: &str) -> Result<Strin
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("plugin manifest has no backend entrypoint for {platform}"))?;
     validate_capabilities(object)?;
+    validate_background_service(object)?;
     validate_ui_contributions(object, id)?;
     Ok(entrypoint.to_owned())
 }
@@ -122,6 +126,25 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_background_service(object: &Map<String, Value>) -> Result<()> {
+    let Some(value) = object.get("background_service") else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let service = value
+        .as_object()
+        .ok_or_else(|| anyhow!("plugin manifest background_service must be an object"))?;
+    reject_unknown_fields(service, BACKGROUND_SERVICE_FIELDS, "background service")?;
+    required_string(service, "method")?;
+    required_string(service, "interval_setting")?;
+    match service.get("default_interval_ms") {
+        Some(Value::Number(value)) if value.as_u64().is_some_and(|value| value > 0) => Ok(()),
+        _ => bail!("background service default_interval_ms must be a positive integer"),
+    }
 }
 
 fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Result<()> {
