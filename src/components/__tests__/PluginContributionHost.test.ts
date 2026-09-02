@@ -1,23 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
-const { pluginCall, localUiSource, settingsGet, updateSettings, dataChanged, eventListeners } =
-  vi.hoisted(() => ({
-    pluginCall: vi.fn(() =>
-      Promise.resolve({
-        plugin_id: "jira",
-        plugin_name: "Jira",
-        plugin_version: "0.1.0",
-        host_api_version: "planeai.plugin-host.v1",
-        runtime_state: "running",
-        last_error: null,
-      }),
-    ),
-    localUiSource: vi.fn(),
-    settingsGet: vi.fn(() => Promise.resolve({ greeting: "Saved greeting" })),
-    updateSettings: vi.fn((_: string, settings: unknown) => Promise.resolve(settings)),
-    dataChanged: vi.fn(() => Promise.resolve()),
-    eventListeners: new Map<string, (event: { payload: string }) => void>(),
-  }));
+const {
+  pluginCall,
+  localUiSource,
+  settingsGet,
+  updateSettings,
+  dataChanged,
+  eventListeners,
+  showSnackbar,
+} = vi.hoisted(() => ({
+  pluginCall: vi.fn(() =>
+    Promise.resolve({
+      plugin_id: "jira",
+      plugin_name: "Jira",
+      plugin_version: "0.1.0",
+      host_api_version: "planeai.plugin-host.v1",
+      runtime_state: "running",
+      last_error: null,
+    }),
+  ),
+  localUiSource: vi.fn(),
+  settingsGet: vi.fn(() => Promise.resolve({ greeting: "Saved greeting" })),
+  updateSettings: vi.fn((_: string, settings: unknown) => Promise.resolve(settings)),
+  dataChanged: vi.fn(() => Promise.resolve()),
+  eventListeners: new Map<string, (event: { payload: string }) => void>(),
+  showSnackbar: vi.fn(),
+}));
 
 vi.mock("../../lib/api", () => ({
   plugins: {
@@ -28,6 +36,10 @@ vi.mock("../../lib/api", () => ({
     dataChanged,
   },
   pr: { getPrStatus: vi.fn(), getPrComments: vi.fn() },
+}));
+
+vi.mock("../../lib/snackbar.svelte", () => ({
+  showSnackbar,
 }));
 
 import PluginContributionHost from "../PluginContributionHost.svelte";
@@ -147,10 +159,46 @@ describe("PluginContributionHost", () => {
     expect(localUiSource).not.toHaveBeenCalled();
   });
 
-  it("keeps local sidebar iframes out of the shared navigation height", async () => {
+  it("uses a compact iframe for local sidebar footers while retaining section space", async () => {
     target = document.createElement("div");
     document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "sidebar.footer" },
+    }) as typeof component;
+
+    const footerFrame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    expect(footerFrame.className).not.toContain("h-full");
+    expect(footerFrame.style.height).toBe("34px");
+
+    unmount(component!);
+    target.replaceChildren();
+
     component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+    const sectionFrame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(sectionFrame.style.height).toBe("160px");
+  });
+
+  it("fills the main-pane host with a local plugin iframe", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "main-pane" },
+    }) as typeof component;
 
     const frame = await vi.waitFor(() => {
       const next = target
@@ -159,9 +207,7 @@ describe("PluginContributionHost", () => {
       expect(next).toBeTruthy();
       return next!;
     });
-
-    expect(frame.className).not.toContain("h-full");
-    expect(frame.style.height).toBe("160px");
+    expect(frame.className).toContain("h-full");
   });
 
   it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {
@@ -292,9 +338,33 @@ describe("PluginContributionHost", () => {
     host.removeEventListener("plugin-sidebar-keydown", handleSidebarKeydown);
   });
 
+  it("ignores blank local plugin notifications", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, { target }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "notify", message: "   ", kind: "error" },
+      }),
+    );
+
+    expect(showSnackbar).not.toHaveBeenCalled();
+  });
+
   it("disposes the old UI before remounting and on host destruction", async () => {
     target = document.createElement("div");
     document.body.append(target);
+
     component = mount(PluginContributionHostHarness, { target }) as typeof component;
     await vi.waitFor(() => {
       const host = target.querySelector<HTMLElement>("[data-plugin-ui-contribution]");

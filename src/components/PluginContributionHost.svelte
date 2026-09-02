@@ -123,9 +123,12 @@
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className = contribution.placement === "interaction" ? "h-full w-full border-0" : "block w-full border-0";
+    frame.className =
+      contribution.placement === "interaction" || contribution.placement === "main-pane"
+        ? "block h-full w-full border-0"
+        : "block w-full border-0";
     if (contribution.placement.startsWith("sidebar.")) {
-      frame.style.height = "160px";
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
       frame.addEventListener("focus", focusSidebar);
       frame.addEventListener("pointerdown", focusSidebar);
     }
@@ -313,7 +316,8 @@
         } else if (message.action === "close") onClose();
         else if (message.action === "preferences") onOpenPreferences();
       } else if (message.type === "notify" && typeof message.message === "string") {
-        showSnackbar(message.message, message.kind ?? "error");
+        const notification = message.message.trim();
+        if (notification) showSnackbar(notification, message.kind ?? "error");
       } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
@@ -521,7 +525,9 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : "w-full"
+      : contribution.placement === "main-pane"
+        ? "h-full w-full"
+        : "w-full"
   }
   tabindex="-1"
   role="region"
