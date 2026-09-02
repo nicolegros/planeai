@@ -853,6 +853,7 @@ describe("jiraDepartedInteractionEntrypoint", () => {
       expect(interaction.call).toHaveBeenCalledWith("jira.departures.resolve", { key: "PLA-42" }),
     );
     await vi.waitFor(() => expect(interaction.root.textContent).not.toContain("PLA-42"));
+    expect(surface.hidden).toBe(true);
   });
 
   it("keeps the item queued when Done fails, while N and Escape dismiss it", async () => {

@@ -356,6 +356,7 @@ export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
     interaction.className = "interaction";
     interaction.dataset.pluginInteraction = "";
     interaction.tabIndex = -1;
+    interaction.hidden = true;
     interaction.setAttribute("role", "status");
     interaction.setAttribute("aria-live", "polite");
     root.replaceChildren(style, interaction);
@@ -365,9 +366,11 @@ export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
     const render = () => {
       const item = items[0];
       if (!item) {
+        interaction.hidden = true;
         interaction.replaceChildren();
         return;
       }
+      interaction.hidden = false;
       const title = document.createElement("div");
       title.textContent = `Issue left Jira query — ${item.key}`;
       const summary = document.createElement("div");
