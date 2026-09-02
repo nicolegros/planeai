@@ -1,3 +1,5 @@
+mod plugin_test;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -25,10 +27,28 @@ enum Commands {
         #[command(subcommand)]
         action: SymphonyAction,
     },
+    /// Validate a local plugin package without launching the desktop application
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Agent eXperience Interface — TOON output for autonomous agents
     Axi {
         #[command(subcommand)]
         action: Option<AxiAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PluginAction {
+    /// Run the headless JSONL protocol checks for a local plugin package
+    Test {
+        /// Path to the directory containing planeai-plugin.json
+        #[arg(long)]
+        package: std::path::PathBuf,
+        /// JSONL scenario of plugin RPC requests to run after handshake
+        #[arg(long)]
+        scenario: Option<std::path::PathBuf>,
     },
 }
 
@@ -470,6 +490,24 @@ enum TaskAction {
 fn main() {
     let cli = Cli::parse();
 
+    // Plugin tests are intentionally handled before application logging and the
+    // database are initialized, so this command stays completely headless.
+    let command = match cli.command {
+        Commands::Plugin { action } => {
+            let result = match action {
+                PluginAction::Test { package, scenario } => {
+                    plugin_test::run(&package, scenario.as_deref())
+                }
+            };
+            if let Err(error) = result {
+                eprintln!("plugin test failed: {error:#}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        command => command,
+    };
+
     let log_dir = planeai_paths::app_data_dir().join("logs");
     let _guard = planeai::logging::init(&log_dir);
 
@@ -479,7 +517,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    match cli.command {
+    match command {
+        Commands::Plugin { .. } => {
+            unreachable!("plugin commands return before application initialization")
+        }
         Commands::Project { action } => match action {
             ProjectAction::List { pretty } => {
                 let output = planeai::cli::run_project_list(&conn);
@@ -765,6 +806,19 @@ fn main() {
                 }
             };
 
+            let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
+                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Cli,
+                project_id: conn
+                    .query_row(
+                        "SELECT id FROM projects WHERE prefix = ?1",
+                        [&prefix],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| error.to_string())
+                    .unwrap_or_default(),
+                project_prefix: prefix.clone(),
+            };
+
             let (result, pretty, key_for_notify) = match action {
                 TaskAction::Add {
                     title,
@@ -777,7 +831,7 @@ fn main() {
                     pretty,
                     ..
                 } => {
-                    let r = planeai::task_cli::run_task_add(
+                    let r = planeai::task_cli::run_task_add_with_lifecycle(
                         &repo,
                         planeai::task_cli::AddParams {
                             title: &title,
@@ -788,6 +842,7 @@ fn main() {
                             parent: parent.as_deref(),
                             base_branch: base_branch.as_deref(),
                         },
+                        &lifecycle_context,
                     );
                     let key = r.as_ref().ok().and_then(|json| {
                         serde_json::from_str::<serde_json::Value>(json)
@@ -817,7 +872,12 @@ fn main() {
                     pretty,
                     ..
                 } => {
-                    let r = planeai::task_cli::run_task_move(&repo, &key, &status);
+                    let r = planeai::task_cli::run_task_move_with_lifecycle(
+                        &repo,
+                        &key,
+                        &status,
+                        &lifecycle_context,
+                    );
                     (r, pretty, Some(key))
                 }
                 TaskAction::Edit {
@@ -834,7 +894,7 @@ fn main() {
                 } => {
                     let parent_opt = parent.map(|s| if s.is_empty() { None } else { Some(s) });
                     let parent_ref = parent_opt.as_ref().map(|o| o.as_deref());
-                    let r = planeai::task_cli::run_task_edit(
+                    let r = planeai::task_cli::run_task_edit_with_lifecycle(
                         &repo,
                         planeai::task_cli::EditParams {
                             key: &key,
@@ -846,6 +906,7 @@ fn main() {
                             parent: parent_ref,
                             base_branch: base_branch.as_deref(),
                         },
+                        &lifecycle_context,
                     );
                     (r, pretty, Some(key))
                 }
@@ -947,6 +1008,19 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             }
         };
 
+    let lifecycle_context = planeai::task_cli::TaskLifecycleContext {
+        origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::Axi,
+        project_id: conn
+            .query_row(
+                "SELECT id FROM projects WHERE prefix = ?1",
+                [&prefix],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+            .unwrap_or_default(),
+        project_prefix: prefix.clone(),
+    };
+
     let (output, code) = match action {
         AxiTaskAction::List { status, tags, .. } => {
             planeai::axi::task_ls(&repo, status.as_deref(), &tags)
@@ -962,7 +1036,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             base_branch,
             ..
         } => {
-            let result = planeai::axi::task_add(
+            let result = planeai::axi::task_add_with_lifecycle(
                 &repo,
                 planeai::task_cli::AddParams {
                     title: &title,
@@ -973,6 +1047,7 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
                     parent: parent.as_deref(),
                     base_branch: base_branch.as_deref(),
                 },
+                &lifecycle_context,
             );
             if code_of(&result) == 0 {
                 if let Some(key) = extract_key(&result.0) {
@@ -982,7 +1057,8 @@ fn run_axi_task(conn: &rusqlite::Connection, action: AxiTaskAction, cwd: &str) -
             result
         }
         AxiTaskAction::Move { key, status, .. } => {
-            let result = planeai::axi::task_move(&repo, &key, &status);
+            let result =
+                planeai::axi::task_move_with_lifecycle(&repo, &key, &status, &lifecycle_context);
             if code_of(&result) == 0 {
                 planeai::task_cli::notify_task_changed(&key);
             }
@@ -1443,4 +1519,21 @@ fn symphony_command(cmd: &str) -> Result<String, String> {
         }
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn plugin_test_scenario_help_describes_supported_jsonl_requests() {
+        let mut command = Cli::command();
+        let plugin = command.find_subcommand_mut("plugin").unwrap();
+        let test = plugin.find_subcommand_mut("test").unwrap();
+        let help = test.render_long_help().to_string();
+        assert!(help.contains("JSONL scenario of plugin RPC requests to run after handshake"));
+        assert!(!help.contains("Reserved for future scenario JSONL support"));
+    }
 }

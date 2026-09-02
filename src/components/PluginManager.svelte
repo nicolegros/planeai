@@ -2,10 +2,14 @@
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { plugins } from "../lib/api";
-  import type { PluginInventory } from "../lib/types";
+  import type { JiraMigrationStatus, PluginInventory } from "../lib/types";
   import { Button, Dialog } from "./ui";
 
+  let { onInventoryChange = (_inventory: PluginInventory[]) => {} }: {
+    onInventoryChange?: (inventory: PluginInventory[]) => void;
+  } = $props();
   let inventory = $state<PluginInventory[]>([]);
+  let jiraMigration = $state<JiraMigrationStatus | null>(null);
   let busyId = $state<string | null>(null);
   let installing = $state(false);
   let loadError = $state<string | null>(null);
@@ -13,7 +17,13 @@
 
   async function refresh() {
     try {
-      inventory = await plugins.list();
+      const [nextInventory, migration] = await Promise.all([
+        plugins.list(),
+        plugins.jiraMigrationStatus(),
+      ]);
+      inventory = nextInventory;
+      jiraMigration = migration;
+      onInventoryChange(inventory);
       loadError = null;
     } catch (error) {
       loadError = String(error);
@@ -66,6 +76,19 @@
     }
   }
 
+  async function migrateLegacyJira() {
+    busyId = "jira";
+    try {
+      jiraMigration = await plugins.migrateLegacyJira();
+      await refresh();
+    } catch (error) {
+      loadError = String(error);
+      await refresh();
+    } finally {
+      busyId = null;
+    }
+  }
+
 
   onMount(() => { void refresh(); });
 </script>
@@ -107,11 +130,30 @@
       {#if plugin.log_path}
         <p class="font-mono text-[11px] text-t3 break-all">Log: {plugin.log_path}</p>
       {/if}
+      {#if plugin.id === "jira" && jiraMigration && jiraMigration.state !== "not_needed" && jiraMigration.state !== "completed"}
+        <section class="rounded border border-status-review/30 bg-status-review/10 p-3 space-y-2" aria-live="polite">
+          <div>
+            <h4 class="text-xs font-medium text-t1">Migrate existing Jira state</h4>
+            <p class="mt-1 text-xs text-t2">{jiraMigration.message}</p>
+            <p class="mt-1 text-[11px] text-t3">Migration imports sites, sources, writeback settings, credentials, issues, links, and departed prompts. Legacy Jira remains disabled until the validated plugin import is enabled.</p>
+          </div>
+          {#if jiraMigration.error}
+            <p class="text-xs text-status-exited break-words">{jiraMigration.error}</p>
+          {/if}
+          {#if jiraMigration.can_migrate}
+            <Button type="button" disabled={busyId === "jira"} onclick={() => void migrateLegacyJira()}>
+              {busyId === "jira" ? "Migrating…" : jiraMigration.state === "failed" ? "Retry migration" : "Migrate and enable Jira plugin"}
+            </Button>
+          {:else}
+            <p class="text-xs text-t3">Migration is fenced until its current operation finishes or the app is restarted.</p>
+          {/if}
+        </section>
+      {/if}
       {#if plugin.ui_contributions.length > 0}
         <p class="text-xs text-t3">Contributions: {plugin.ui_contributions.map((contribution) => `${contribution.label} (${contribution.placement})`).join(", ")}</p>
       {/if}
       <div class="flex flex-wrap gap-2">
-        {#if plugin.state === "disabled" || plugin.state === "error"}
+        {#if (plugin.state === "disabled" || plugin.state === "error") && !(plugin.id === "jira" && jiraMigration && jiraMigration.state !== "not_needed" && jiraMigration.state !== "completed")}
           <Button type="button" disabled={busyId === plugin.id} onclick={() => void run(plugin.id, "enable")}>
             {busyId === plugin.id ? "Starting…" : "Enable"}
           </Button>

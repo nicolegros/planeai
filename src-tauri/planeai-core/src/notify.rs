@@ -3,6 +3,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::task_lifecycle::TaskLifecycleBatch;
+
 pub const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 pub const DEBOUNCE_THRESHOLD: Duration = Duration::from_secs(2);
 
@@ -20,6 +22,7 @@ pub enum NotifyEvent {
     SessionCreated,
     SessionChanged,
     SendPrompt,
+    TaskLifecycle,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +30,7 @@ pub struct NotifyMessage {
     pub session_id: String,
     pub event: NotifyEvent,
     pub text: Option<String>,
+    pub lifecycle_batch: Option<TaskLifecycleBatch>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,22 +242,29 @@ pub fn parse_notify_message(line: &str) -> NotifyMessage {
             Some("session_created") => NotifyEvent::SessionCreated,
             Some("session_changed") => NotifyEvent::SessionChanged,
             Some("send_prompt") => NotifyEvent::SendPrompt,
+            Some("task_lifecycle") => NotifyEvent::TaskLifecycle,
             _ => NotifyEvent::Stop,
         };
         let text = v
             .get("text")
             .and_then(|t| t.as_str())
             .map(|s| s.to_string());
+        let lifecycle_batch = v
+            .get("batch")
+            .cloned()
+            .and_then(|batch| serde_json::from_value(batch).ok());
         NotifyMessage {
             session_id,
             event,
             text,
+            lifecycle_batch,
         }
     } else {
         NotifyMessage {
             session_id: line.trim().to_string(),
             event: NotifyEvent::Stop,
             text: None,
+            lifecycle_batch: None,
         }
     }
 }
@@ -1111,5 +1122,30 @@ mod tests {
         .unwrap();
         assert_eq!(settings["permissions"]["allow"][0], "Read");
         assert!(settings["hooks"]["Stop"].is_array());
+    }
+
+    #[test]
+    fn parse_task_lifecycle_message_preserves_batch_without_session_id() {
+        let batch = TaskLifecycleBatch::new(
+            crate::task_lifecycle::TaskLifecycleOrigin::Cli,
+            "project-1",
+            "PLA",
+            vec![crate::task_lifecycle::TaskLifecycleEvent::StatusChanged {
+                task_key: "PLA-1".into(),
+                parent_key: None,
+                previous_status: "todo".into(),
+                new_status: "done".into(),
+                cause: crate::task_lifecycle::StatusChangeCause::Direct,
+            }],
+        );
+        let message = serde_json::json!({"event":"task_lifecycle","batch":batch});
+        let parsed = parse_notify_message(&message.to_string());
+
+        assert!(matches!(parsed.event, NotifyEvent::TaskLifecycle));
+        assert!(parsed.session_id.is_empty());
+        assert_eq!(
+            parsed.lifecycle_batch.unwrap().project.project_prefix,
+            "PLA"
+        );
     }
 }

@@ -74,7 +74,7 @@ pub fn start_socket_listener(app_dir: &Path, state: SharedNotifyState, app: AppH
             }
             tracing::debug!(raw_line = %line, "socket message received");
             let msg = parse_notify_message(&line);
-            if msg.session_id.is_empty() {
+            if msg.session_id.is_empty() && !matches!(msg.event, NotifyEvent::TaskLifecycle) {
                 continue;
             }
             dispatch_message(&msg, &state, &app);
@@ -137,6 +137,15 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
                     fire_notification(app, &msg.session_id, state);
                 }
             }
+        }
+        NotifyEvent::TaskLifecycle => {
+            let Some(batch) = msg.lifecycle_batch.clone() else {
+                tracing::warn!("discarding malformed task lifecycle notify message without batch");
+                return;
+            };
+            app.state::<crate::plugins::PluginRuntimeHandle>()
+                .0
+                .dispatch_task_lifecycle(batch);
         }
         NotifyEvent::SendPrompt => {
             if let Some(text) = &msg.text {

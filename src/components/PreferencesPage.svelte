@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { preferences } from "../lib/api";
+  import { preferences, plugins } from "../lib/api";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -8,8 +8,9 @@
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
-  import { Palette, Bot, ListTodo, Settings, Cable, RefreshCw, Puzzle } from "@lucide/svelte";
-  import JiraSettings from "./JiraSettings.svelte";
+  import { Palette, Bot, ListTodo, Settings, RefreshCw, Puzzle } from "@lucide/svelte";
+  import PluginContributionHost from "./PluginContributionHost.svelte";
+  import type { PluginInventory, PluginUiContribution } from "../lib/types";
   import PluginManager from "./PluginManager.svelte";
 
   const config = $derived(getSettings());
@@ -23,6 +24,13 @@
   let tmuxAvailable = $state(true);
   let cliInstalled = $state(false);
   let activeTab = $state("Appearance");
+  let pluginInventory = $state<PluginInventory[]>([]);
+  const preferenceContributions = $derived(
+    pluginInventory
+      .filter((plugin) => plugin.state === "running")
+      .flatMap((plugin) => plugin.ui_contributions.filter((contribution) => contribution.placement === "preferences").map((contribution) => ({ plugin, contribution })))
+      .sort((left, right) => (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name)),
+  );
 
   let staleWorktrees = $state<{ session_name: string; worktree_path: string; branch: string }[]>([]);
   let showCleanupDialog = $state(false);
@@ -79,6 +87,7 @@
   onMount(async () => {
     window.addEventListener("keydown", handleKeydown, true);
     await loadSettings();
+    pluginInventory = await plugins.list();
     loadTheme();
     preferences.listMonospaceFonts().then((fonts) => {
       fontItems = fonts.map((f) => ({ value: f, label: f }));
@@ -224,7 +233,7 @@
 
 <div class="h-screen flex flex-col overflow-hidden bg-panel">
   <nav class="flex justify-center gap-1 border-b border-border px-8 pt-4">
-    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Integrations", icon: Cable}, {name: "Plugins", icon: Puzzle}, {name: "More", icon: Settings}] as tab (tab.name)}
+    {#each [{name: "Appearance", icon: Palette}, {name: "Models", icon: Bot}, {name: "Task Management", icon: ListTodo}, {name: "Plugins", icon: Puzzle}, {name: "More", icon: Settings}] as tab (tab.name)}
       <button
         class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium transition-colors border-b-2 -mb-px {activeTab === tab.name ? 'border-accent text-accent' : 'border-transparent text-t3 hover:text-t1'}"
         onclick={() => activeTab = tab.name}
@@ -544,12 +553,15 @@
     </section>
     {/if}
 
-    {#if activeTab === "Integrations"}
-    <JiraSettings />
-    {/if}
-
     {#if activeTab === "Plugins"}
-    <PluginManager />
+    <section class="space-y-4">
+      <PluginManager onInventoryChange={(inventory) => pluginInventory = inventory} />
+      {#each preferenceContributions as item (`${item.plugin.id}:${item.contribution.id}`)}
+        <div class="border-t border-border pt-4" data-plugin-preference-contribution={`${item.plugin.id}:${item.contribution.id}`}>
+          <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={() => {}} onClose={() => {}} />
+        </div>
+      {/each}
+    </section>
     {/if}
 
     {#if activeTab === "More"}

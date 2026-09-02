@@ -168,15 +168,17 @@ Tauri still owns:
 
 ## Jira Integration
 
-The bundled `planeai-plugin-jira` currently owns Jira Cloud connection setup only. It stores the configured site and future sync interval in plugin-scoped settings and OAuth refresh credentials in its backend-only secrets namespace.
+The bundled `planeai-plugin-jira` owns Jira Cloud connection setup and manual configured-source synchronization. It stores the configured site and sources in plugin-scoped settings, OAuth refresh credentials in its backend-only secrets namespace, and synced issue membership/cache state in its plugin database.
 
 ### Authentication
 
 OAuth 2.0 authorization uses PKCE. Configure the Jira Cloud site and connect from **Preferences → Jira**. Development builds require `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, OAuth is unavailable at runtime.
 
-### Deferred parity workflows
+### Legacy migration and ownership
 
-JQL sources, Jira issue caching, task import, sidebar workflows, departed-issue handling, writeback, and periodic synchronization are intentionally deferred. Legacy `integrations.jira` values and legacy tokens are not imported.
+A profile with legacy `integrations.jira` state is migrated only after the user selects **Migrate and enable Jira plugin** in Plugins. The host records a durable migration ledger and private snapshot, fences legacy ownership, imports public settings, refresh token/cloud identity, issue/source/sync state, task links, and departed prompts into the plugin namespace, validates equivalence, and enables the plugin as the final step.
+
+An incomplete or failed migration remains fail-closed: neither legacy nor plugin Jira sync/writeback runs until the user retries. Retry reuses the frozen snapshot and converges idempotently. After completion, the bundled plugin is the sole owner of sync, writeback, sidebar, preferences, and departed-issue prompts; the host retains only the legacy reader needed to identify or retry unmigrated state.
 
 ## Loop Runs
 

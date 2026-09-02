@@ -10,6 +10,7 @@ mod daemon_client;
 mod db;
 mod file_explorer;
 mod git;
+mod jira_migration;
 mod logging;
 mod notify;
 mod output_observer;
@@ -26,6 +27,7 @@ mod session_restart;
 mod startup;
 mod state;
 mod symphony;
+mod task_lifecycle;
 mod template;
 #[cfg(not(windows))]
 mod tmux;
@@ -118,7 +120,6 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
             planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
-            planeai_jira::db::migrate(&conn).expect("failed to run jira migrations");
             plugins::migrate(&conn).expect("failed to run plugin runtime migrations");
             let bundled_plugins =
                 plugins::bundled_manifests().expect("invalid bundled plugin manifest");
@@ -140,6 +141,8 @@ fn main() {
                 let _ = config::migrate_from_db(&config_dir, &settings);
             }
             let (cfg, _warnings) = config::load(&config_dir);
+            jira_migration::initialize(&conn, &cfg)
+                .expect("failed to initialize Jira migration state");
             if std::env::var("PLANEAI_SESSION_LOG_DIR").is_err() {
                 if let Some(ref dir) = cfg.session_log_dir {
                     std::env::set_var("PLANEAI_SESSION_LOG_DIR", dir);
@@ -403,11 +406,12 @@ fn main() {
             plugin_settings,
             update_plugin_settings,
             local_plugin_ui_source,
+            plugin_data_changed,
+            jira_migration_status,
+            migrate_legacy_jira,
             enable_plugin,
             disable_plugin,
             reload_plugin,
-            jira_plugin_status,
-            open_jira_authorization_url,
             list_loop_runs,
             get_loop_run_detail,
             list_loop_recipes,

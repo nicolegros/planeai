@@ -82,8 +82,11 @@ export type PluginRuntimeState = "disabled" | "starting" | "running" | "stopping
 export type PluginUiPlacement =
   | "sidebar.header"
   | "sidebar.navigation"
+  | "sidebar.section"
   | "sidebar.footer"
-  | "main-pane";
+  | "preferences"
+  | "main-pane"
+  | "interaction";
 
 export interface PluginUiContribution {
   id: string;
@@ -101,6 +104,12 @@ export interface PluginInventory {
   host_api_version: string;
   source_kind: PluginSourceKind;
   backend_entrypoint: string;
+  capabilities: string[];
+  background_service?: {
+    method: string;
+    interval_setting: string;
+    default_interval_ms: number;
+  } | null;
   ui_contributions: PluginUiContribution[];
   installed_hash: string | null;
   installed_path: string | null;
@@ -109,6 +118,19 @@ export interface PluginInventory {
   state: PluginRuntimeState;
   last_error: string | null;
   log_path: string | null;
+}
+
+export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";
+
+export interface JiraMigrationStatus {
+  state: JiraMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_issues: number;
+  imported_links: number;
+  snapshot_path: string | null;
 }
 
 export interface JiraPluginStatus {

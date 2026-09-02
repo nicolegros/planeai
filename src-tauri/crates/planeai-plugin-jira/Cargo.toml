@@ -11,12 +11,16 @@ path = "src/main.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-reqwest = { version = "=0.13.4", features = ["json"] }
+reqwest = { version = "=0.13.4", features = ["json", "query"] }
 rand = "=0.10.2"
 base64 = "=0.23.1"
 url = "=2.5.8"
 sha2 = "=0.11.0"
 thiserror = "=2.0.19"
+rusqlite = { version = "0.40", features = ["bundled"] }
+planeai-paths = { path = "../../planeai-paths" }
+chrono = { version = "0.4", features = ["serde"] }
+open = "=5.4.1"
 
 [dev-dependencies]
 wiremock = "=0.6.5"

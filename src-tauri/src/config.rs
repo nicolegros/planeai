@@ -8,8 +8,10 @@ static TMUX_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IntegrationsConfig {
+    /// Legacy Jira settings retained only until they are imported into the
+    /// bundled Jira plugin. The host no longer interprets or runs them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub jira: Option<planeai_jira::config::JiraConfig>,
+    pub jira: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

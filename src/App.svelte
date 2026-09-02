@@ -219,12 +219,17 @@
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   const sidebarPluginContributions = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
-      plugin.ui_contributions.filter((contribution) => contribution.placement !== "main-pane").map((contribution) => ({ plugin, contribution })),
+      plugin.ui_contributions.filter((contribution) => ["sidebar.header", "sidebar.navigation", "sidebar.section", "sidebar.footer"].includes(contribution.placement)).map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
   const mainPaneCommands = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
+    ).sort(comparePluginContribution),
+  );
+  const interactionPluginContributions = $derived(
+    pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+      plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
   const activeProjectName = $derived(activeSession ? (projects.find((p) => p.id === activeSession.project_id)?.name ?? null) : null);
@@ -305,9 +310,10 @@
     // Check if the active session is already in the tree
     const allLeaves = splitTree.getAllLeaves();
     const hasActive = allLeaves.some((leaf) =>
-      leaf.tabs.some((t) => ptyKeyToSessionId(t.ptyKey) === activeSessionId)
+      leaf.tabs.some((t) => t.ptyKey === activeSessionId)
     );
     if (hasActive) {
+      splitTree.focusTab(activeSessionId);
       lastTreeSessionId = activeSessionId;
       return;
     }
@@ -803,6 +809,13 @@
     activeContributionId = null;
   }
 
+  function focusPluginInteraction(): boolean {
+    const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
+    if (!interaction) return false;
+    interaction.focus();
+    return true;
+  }
+
   function invalidatePluginPage(pluginId: string): void {
     if (activePluginId === pluginId) leavePluginWorkspace();
   }
@@ -943,7 +956,14 @@
         else if (action.type === "open_file") { commandMenuFileMode = true; commandMenuOpen = true; }
         else if (action.type === "save_file") { orchestrator.saveActiveEditor(); }
         else if (action.type === "toggle_pr_panel") { togglePrPanel(); }
-        else if (action.type === "focus_merge_prompt") { if (getPrompt()) focusMergePrompt(); else { const u = getUpdateState(); if (u.updateAvailable && !u.dismissed) focusUpdateToast(); } }
+        else if (action.type === "focus_merge_prompt") {
+          if (getPrompt()) focusMergePrompt();
+          else {
+            const u = getUpdateState();
+            if (u.updateAvailable && !u.dismissed) focusUpdateToast();
+            else focusPluginInteraction();
+          }
+        }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
       () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
@@ -1199,10 +1219,16 @@
                 <Terminal
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                  onFocused={(event) => {
+                    if (event.type === "focusin" && sessionId !== activeSessionId) return;
+                    splitTree.setFocusedLeaf(leaf.id);
+                    selectWorkspaceSession(sessionId);
+                    focusTerminal();
+                  }}
                   onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
               </div>
@@ -1547,5 +1573,10 @@
   </div>
 {/if}
 
+{#each interactionPluginContributions as { plugin, contribution } (`${plugin.id}:${contribution.id}`)}
+  <div class="pointer-events-none fixed inset-0 z-[90]" data-plugin-interaction-host={`${plugin.id}:${contribution.id}`}>
+    <PluginContributionHost {plugin} {contribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} />
+  </div>
+{/each}
 <PostMergePrompt />
 <UpdateToast />

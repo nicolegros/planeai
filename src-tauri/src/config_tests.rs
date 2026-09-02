@@ -578,7 +578,7 @@ fn config_without_integrations_field_deserializes() {
 }
 
 #[test]
-fn config_with_integrations_jira_deserializes() {
+fn config_with_legacy_jira_payload_deserializes() {
     let dir = tempfile::tempdir().unwrap();
     let json = r#"{
         "providers": {"kiro": {"command": "kiro-cli chat"}},
@@ -601,12 +601,8 @@ fn config_with_integrations_jira_deserializes() {
     let (config, warnings) = load(dir.path());
     assert!(warnings.is_empty());
     let jira = config.integrations.unwrap().jira.unwrap();
-    assert_eq!(jira.site, "https://test.atlassian.net");
-    assert_eq!(jira.sync_interval_ms, 60_000);
-    let source = jira.sources.get("myapp").unwrap();
-    assert_eq!(
-        source.writeback.as_ref().unwrap().on_start,
-        Some("In Progress".to_string())
-    );
-    assert!(source.writeback.as_ref().unwrap().comment);
+    assert_eq!(jira["site"], "https://test.atlassian.net");
+    let source = &jira["sources"]["myapp"];
+    assert_eq!(source["writeback"]["on_start"], "In Progress");
+    assert_eq!(source["writeback"]["comment"], true);
 }

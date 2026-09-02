@@ -181,12 +181,16 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-Jira is currently a **connection-only** bundled plugin. Configure the Jira Cloud site in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
+Jira is a bundled plugin with configured-source synchronization, periodic refresh, lifecycle writeback, a sidebar, and departed-issue prompts. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. The plugin stores public settings in its own namespace, OAuth credentials in backend-only plugin secrets, and its cache/link state in its plugin database.
 
-Source sync, JQL filters, task import, writeback, and periodic polling are deferred to a later parity slice. Existing `integrations.jira` configuration and legacy tokens are intentionally not imported.
+#### Migrating legacy Jira
+
+Profiles that still contain `integrations.jira`, legacy Jira tokens, and legacy issue/link state are never migrated or enabled automatically. Open **Preferences → Plugins** and choose **Migrate and enable Jira plugin**. PlaneAI first freezes legacy ownership, creates a private on-disk backup, imports settings, refresh credentials/cloud identity, issue/source/sync state, links, and departed prompts, validates the target, then enables the bundled plugin.
+
+If PlaneAI is interrupted or validation/enablement fails, Jira remains safely fenced so legacy and plugin workers cannot run together. The same Plugins card shows diagnostics and **Retry migration**; retry reuses the frozen backup and is idempotent. The backup is retained for diagnostics/recovery and never exposed through the UI.
 
 #### Authentication
 
 Connect via **Preferences → Jira → Connect**. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, the build succeeds but OAuth cannot work at runtime.
 
-Jira source synchronization, including departed-issue handling, is not available in this release.
+Jira source synchronization includes departed-issue handling: when an issue no longer matches a configured source, its membership for that source is marked departed. An issue remains in the Jira sidebar while it matches any configured source.
