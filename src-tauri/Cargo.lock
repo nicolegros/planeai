@@ -1092,12 +1092,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dotenvy"
-version = "0.15.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
-
-[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3286,8 +3280,8 @@ dependencies = [
  "planeai-core",
  "planeai-daemon",
  "planeai-ipc",
- "planeai-jira",
  "planeai-paths",
+ "planeai-plugin-contract",
  "planeai-pty",
  "planeai-tasks",
  "planeai-toon",
@@ -3324,6 +3318,7 @@ dependencies = [
  "planeai-daemon",
  "planeai-ipc",
  "planeai-paths",
+ "planeai-plugin-contract",
  "planeai-tasks",
  "planeai-toon",
  "rusqlite",
@@ -3389,34 +3384,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "planeai-jira"
-version = "0.0.0"
-dependencies = [
- "base64 0.23.1",
- "chrono",
- "dotenvy",
- "open",
- "planeai-tasks",
- "rand 0.10.2",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "wiremock",
-]
-
-[[package]]
 name = "planeai-paths"
 version = "0.1.0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "planeai-plugin-contract"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
 ]
 
 [[package]]
@@ -3434,6 +3413,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "open",
+ "planeai-paths",
  "rand 0.10.2",
  "reqwest",
  "rusqlite",

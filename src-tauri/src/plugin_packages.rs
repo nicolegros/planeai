@@ -17,6 +17,24 @@ pub struct ImportedLocalPackage {
     pub content_hash: String,
     pub package_dir: PathBuf,
     pub original_display_path: String,
+    package_was_published: bool,
+}
+
+impl ImportedLocalPackage {
+    /// Removes the content-addressed snapshot only when this import published it.
+    /// A matching pre-existing snapshot may belong to an installed plugin and must
+    /// survive a later inventory validation failure.
+    pub(crate) fn discard_if_newly_published(&self) -> Result<(), String> {
+        if self.package_was_published && self.package_dir.exists() {
+            fs::remove_dir_all(&self.package_dir).map_err(|error| {
+                format!(
+                    "failed to discard unreferenced imported plugin package {}: {error}",
+                    self.package_dir.display()
+                )
+            })?;
+        }
+        Ok(())
+    }
 }
 
 pub fn current_platform_key() -> &'static str {
@@ -96,14 +114,16 @@ pub fn import_local_package(
     }
     let content_hash = hash_tree(&staging)?;
     let package_dir = packages_dir.join(&content_hash);
-    if package_dir.exists() {
+    let package_was_published = if package_dir.exists() {
         fs::remove_dir_all(&staging).map_err(|error| {
             format!("failed to discard existing package staging directory: {error}")
         })?;
+        false
     } else {
         fs::rename(&staging, &package_dir)
             .map_err(|error| format!("failed to publish imported plugin package: {error}"))?;
-    }
+        true
+    };
 
     Ok(ImportedLocalPackage {
         manifest,
@@ -111,6 +131,7 @@ pub fn import_local_package(
         content_hash,
         package_dir,
         original_display_path: source.display().to_string(),
+        package_was_published,
     })
 }
 
@@ -137,6 +158,9 @@ pub fn remove_local_artifacts(
     plugin_id: &str,
     package_path: Option<&Path>,
 ) -> Result<(), String> {
+    if let Some(package) = package_path.filter(|path| path.exists()) {
+        validate_imported_package_path(app_data_dir, package)?;
+    }
     let state = state_root(app_data_dir, plugin_id);
     if state.exists() {
         fs::remove_dir_all(&state)
@@ -145,6 +169,30 @@ pub fn remove_local_artifacts(
     if let Some(package) = package_path.filter(|path| path.exists()) {
         fs::remove_dir_all(package)
             .map_err(|error| format!("failed to delete imported plugin package: {error}"))?;
+    }
+    Ok(())
+}
+
+fn validate_imported_package_path(app_data_dir: &Path, package: &Path) -> Result<(), String> {
+    let root = app_data_dir.join("plugins").join("packages").join("sha256");
+    let relative = package.strip_prefix(&root).map_err(|_| {
+        format!(
+            "refusing to delete local plugin package outside host-owned storage: {}",
+            package.display()
+        )
+    })?;
+    if relative.components().count() != 1
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!(
+            "refusing to delete invalid local plugin package path: {}",
+            package.display()
+        ));
     }
     Ok(())
 }
@@ -441,6 +489,24 @@ mod tests {
         assert!(original.join("keep.txt").is_file());
         assert!(!imported.exists());
         assert!(!state.exists());
+    }
+
+    #[test]
+    fn discarding_a_failed_import_removes_only_a_new_snapshot() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        write_package(&source, "fixture");
+
+        let first = import_local_package(temp.path(), &source).unwrap();
+        assert!(first.package_was_published);
+        first.discard_if_newly_published().unwrap();
+        assert!(!first.package_dir.exists());
+
+        let retained = import_local_package(temp.path(), &source).unwrap();
+        let duplicate = import_local_package(temp.path(), &source).unwrap();
+        assert!(!duplicate.package_was_published);
+        duplicate.discard_if_newly_published().unwrap();
+        assert!(retained.package_dir.exists());
     }
 
     #[test]

@@ -438,6 +438,22 @@
             </Command.Empty>
 
             <Command.Group>
+              <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Quick actions</Command.GroupHeading>
+              <Command.GroupItems>
+                <Command.Item
+                  value="create new session"
+                  keywords={["new", "create", "add"]}
+                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
+                  onSelect={() => { onNewSession(); close(); }}
+                >
+                  New session
+                </Command.Item>
+              </Command.GroupItems>
+            </Command.Group>
+
+            <Command.Separator class="my-1 h-px bg-border" />
+
+            <Command.Group>
               <Command.GroupHeading class="px-3 pb-1 pt-3 text-[10px] font-semibold text-t3 uppercase tracking-[.05em]">Sessions</Command.GroupHeading>
               <Command.GroupItems>
                 {#each sessions as session (session.id)}
@@ -508,14 +524,6 @@
                   onSelect={() => { onDeleteSession(); close(); }}
                 >
                   Delete current session
-                </Command.Item>
-                <Command.Item
-                  value="create new session"
-                  keywords={["new", "create", "add"]}
-                  class="flex h-9 cursor-pointer items-center gap-2 rounded-lg px-3 text-[13px] text-t1 data-selected:bg-accent-bg"
-                  onSelect={() => { onNewSession(); close(); }}
-                >
-                  New session
                 </Command.Item>
                 <Command.Item
                   value="pick task"

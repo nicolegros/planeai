@@ -1,15 +1,21 @@
 <script lang="ts">
   import PluginContributionHost from "../PluginContributionHost.svelte";
-  import type { PluginInventory } from "../../lib/types";
+  import type { PluginInventory, PluginUiContribution } from "../../lib/types";
 
-  const plugin: PluginInventory = {
+  interface Props {
+    placement?: PluginUiContribution["placement"];
+  }
+
+  let { placement = "sidebar.section" }: Props = $props();
+  let plugin = $state<PluginInventory>({
     id: "local-fixture",
     name: "Local Fixture",
     version: "0.1.0",
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "local",
     backend_entrypoint: "bin/planeai-plugin-fixture",
-    ui_contributions: [{ id: "fixture", label: "Fixture", placement: "sidebar.section", entrypoint: "ui/entry.js", order: null, shortcut: null }],
+    capabilities: ["settings", "tasks.read", "task-events"],
+    ui_contributions: [],
     installed_hash: "fixture-hash",
     installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
     original_display_path: "/source/local-fixture",
@@ -17,7 +23,15 @@
     state: "running",
     last_error: null,
     log_path: null,
-  };
+  });
+  const contribution = $derived<PluginUiContribution>({
+    id: "fixture",
+    label: "Fixture",
+    placement,
+    entrypoint: "ui/entry.js",
+    order: null,
+    shortcut: null,
+  });
 </script>
 
-<PluginContributionHost {plugin} contribution={plugin.ui_contributions[0]} onNavigate={() => {}} onClose={() => {}} />
+<PluginContributionHost {plugin} {contribution} onNavigate={() => {}} onClose={() => {}} />

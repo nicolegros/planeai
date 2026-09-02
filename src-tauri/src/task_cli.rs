@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 
+use planeai_core::task_lifecycle::{TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin};
 use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAULT_BASE_BRANCH};
 use planeai_tasks::provider::TaskProvider;
 
@@ -400,4 +401,150 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(v["parent_key"].is_null());
     }
+}
+
+/// Forward a committed lifecycle batch to the desktop host. This is intentionally
+/// best-effort: standalone CLI processes cannot own plugin runtimes, so an absent
+/// host is logged and the event is dropped rather than rolling back the task change.
+pub fn notify_task_lifecycle(batch: &TaskLifecycleBatch) {
+    use crate::ipc::{self, Channel};
+    use std::io::Write;
+
+    let app_dir = planeai_paths::app_data_dir();
+    if !ipc::channel_exists(Channel::Notify, &app_dir) {
+        tracing::debug!(batch_id = %batch.batch_id, "desktop host unavailable; dropping task lifecycle batch");
+        return;
+    }
+    let Ok(mut stream) = ipc::connect(Channel::Notify, &app_dir) else {
+        tracing::warn!(batch_id = %batch.batch_id, "failed to connect to desktop host for task lifecycle batch");
+        return;
+    };
+    let message = serde_json::json!({"event": "task_lifecycle", "batch": batch});
+    if let Err(error) = writeln!(stream, "{message}") {
+        tracing::warn!(batch_id = %batch.batch_id, %error, "failed to forward task lifecycle batch to desktop host");
+    }
+}
+
+/// Project-scoped metadata carried by every lifecycle producer.
+#[derive(Debug, Clone)]
+pub struct TaskLifecycleContext {
+    pub origin: TaskLifecycleOrigin,
+    pub project_id: String,
+    pub project_prefix: String,
+}
+
+impl TaskLifecycleContext {
+    pub fn batch(&self, events: Vec<TaskLifecycleEvent>) -> Option<TaskLifecycleBatch> {
+        (!events.is_empty()).then(|| {
+            TaskLifecycleBatch::new(
+                self.origin.clone(),
+                self.project_id.clone(),
+                self.project_prefix.clone(),
+                events,
+            )
+        })
+    }
+}
+
+/// Construct and forward one ordered batch after a local task mutation commits.
+pub fn emit_task_lifecycle(context: &TaskLifecycleContext, events: Vec<TaskLifecycleEvent>) {
+    if let Some(batch) = context.batch(events) {
+        notify_task_lifecycle(&batch);
+    }
+}
+
+/// Create a task using the transaction-safe first-child helper and emit the
+/// resulting lifecycle batch after commit.
+pub fn run_task_add_with_lifecycle(
+    repo: &dyn TaskProvider,
+    params: AddParams,
+    context: &TaskLifecycleContext,
+) -> Result<String, String> {
+    let (task, first_child_assignment) = repo
+        .create_with_first_child_assignment(CreateParams {
+            key: None,
+            title: params.title.to_string(),
+            description: params.description.to_string(),
+            status: None,
+            priority: params.priority,
+            tags: params.tags.to_vec(),
+            blocked_by: params.blocked_by.to_vec(),
+            parent_key: params.parent.map(str::to_string),
+            base_branch: params
+                .base_branch
+                .unwrap_or(DEFAULT_BASE_BRANCH)
+                .to_string(),
+        })
+        .map_err(|e| e.to_string())?;
+    if let (Some(parent_key), Some(is_first_child_assignment)) =
+        (&task.parent_key, first_child_assignment)
+    {
+        emit_task_lifecycle(
+            context,
+            vec![TaskLifecycleEvent::ChildAssigned {
+                child_key: task.key.clone(),
+                parent_key: parent_key.clone(),
+                is_first_child_assignment,
+            }],
+        );
+    }
+    serde_json::to_string(&task).map_err(|e| e.to_string())
+}
+
+/// Move a task and emit all committed status transitions, including automatic
+/// parent completion, in their causal order.
+pub fn run_task_move_with_lifecycle(
+    repo: &dyn TaskProvider,
+    key: &str,
+    status: &str,
+    context: &TaskLifecycleContext,
+) -> Result<String, String> {
+    let status = Status::parse(status).ok_or_else(|| format!("invalid status: {status}"))?;
+    let (task, events) = planeai_core::task_lifecycle::move_task_with_lifecycle(repo, key, status)
+        .map_err(|e| e.to_string())?;
+    emit_task_lifecycle(context, events);
+    serde_json::to_string(&task).map_err(|e| e.to_string())
+}
+
+/// Apply a parent assignment with transaction-safe first-child detection and
+/// emit the assignment event after commit. Other edits remain unchanged.
+pub fn run_task_edit_with_lifecycle(
+    repo: &dyn TaskProvider,
+    params: EditParams,
+    context: &TaskLifecycleContext,
+) -> Result<String, String> {
+    let mut task = repo
+        .update(
+            params.key,
+            UpdateParams {
+                title: params.title.map(str::to_string),
+                description: params.description.map(str::to_string),
+                priority: params.priority,
+                tags: params.tags.map(ToOwned::to_owned),
+                blocked_by: params.blocked_by.map(ToOwned::to_owned),
+                parent_key: None,
+                base_branch: params.base_branch.map(str::to_string),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    if let Some(parent_key) = params.parent {
+        let (updated, first_child_assignment) = repo
+            .set_parent_with_first_child_assignment(params.key, parent_key.map(str::to_string))
+            .map_err(|e| e.to_string())?;
+        task = updated;
+        if let (Some(parent_key), Some(is_first_child_assignment)) =
+            (&task.parent_key, first_child_assignment)
+        {
+            emit_task_lifecycle(
+                context,
+                vec![TaskLifecycleEvent::ChildAssigned {
+                    child_key: task.key.clone(),
+                    parent_key: parent_key.clone(),
+                    is_first_child_assignment,
+                }],
+            );
+        }
+    }
+    serde_json::to_string(&task).map_err(|e| e.to_string())
 }

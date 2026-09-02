@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
 const disabledPlugin = {
@@ -27,15 +27,19 @@ const disabledPlugin = {
   log_path: null,
 };
 
-const { list, enable } = vi.hoisted(() => ({
+const { list, enable, jiraMigrationStatus, migrateLegacyJira } = vi.hoisted(() => ({
   list: vi.fn(),
   enable: vi.fn(),
+  jiraMigrationStatus: vi.fn(),
+  migrateLegacyJira: vi.fn(),
 }));
 
 vi.mock("../../lib/api", () => ({
   plugins: {
     list,
     enable,
+    jiraMigrationStatus,
+    migrateLegacyJira,
     disable: vi.fn(),
     reload: vi.fn(),
     installLocal: vi.fn(),
@@ -46,6 +50,19 @@ vi.mock("../../lib/api", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 import PluginManager from "../PluginManager.svelte";
+
+beforeEach(() => {
+  jiraMigrationStatus.mockResolvedValue({
+    state: "not_needed",
+    legacy_detected: false,
+    can_migrate: false,
+    message: "No legacy Jira state was found.",
+    error: null,
+    imported_issues: 0,
+    imported_links: 0,
+    snapshot_path: null,
+  });
+});
 
 describe("PluginManager", () => {
   let target: HTMLElement;
@@ -75,5 +92,40 @@ describe("PluginManager", () => {
 
     await vi.waitFor(() => expect(enable).toHaveBeenCalledWith("jira"));
     await vi.waitFor(() => expect(onInventoryChange).toHaveBeenLastCalledWith([runningPlugin]));
+  });
+
+  it("requires explicit confirmation and exposes retry for legacy Jira migration", async () => {
+    const pending = {
+      state: "available",
+      legacy_detected: true,
+      can_migrate: true,
+      message: "Legacy Jira data is ready to migrate into the bundled Jira plugin.",
+      error: null,
+      imported_issues: 2,
+      imported_links: 1,
+      snapshot_path: "/tmp/legacy-jira-v1.json",
+    };
+    const failed = { ...pending, state: "failed", error: "simulated interruption" };
+    list.mockResolvedValue([disabledPlugin]);
+    jiraMigrationStatus.mockResolvedValueOnce(pending).mockResolvedValueOnce(failed);
+    migrateLegacyJira.mockRejectedValueOnce(new Error("simulated interruption"));
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginManager, { target });
+
+    await vi.waitFor(() => expect(target.textContent).toContain("Migrate existing Jira state"));
+    expect(target.textContent).toContain("Migrate and enable Jira plugin");
+    expect(
+      Array.from(target.querySelectorAll("button")).some(
+        (button) => button.textContent?.trim() === "Enable",
+      ),
+    ).toBe(false);
+    Array.from(target.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Migrate and enable"))
+      ?.click();
+
+    await vi.waitFor(() => expect(migrateLegacyJira).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(target.textContent).toContain("Retry migration"));
+    expect(target.textContent).toContain("simulated interruption");
   });
 });

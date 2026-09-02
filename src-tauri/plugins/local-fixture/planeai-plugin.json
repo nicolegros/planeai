@@ -6,13 +6,14 @@
   "host_api_version": "planeai.plugin-host.v1",
   "source_kind": "local",
   "backend_entrypoints": {
-    "macos-arm64": "bin/planeai-plugin-fixture",
-    "macos-x64": "bin/planeai-plugin-fixture",
-    "linux-x64": "bin/planeai-plugin-fixture",
-    "linux-arm64": "bin/planeai-plugin-fixture",
-    "windows-x64": "bin/planeai-plugin-fixture.exe",
-    "windows-arm64": "bin/planeai-plugin-fixture.exe"
+    "macos-arm64": "bin/macos-arm64/planeai-plugin-fixture",
+    "macos-x64": "bin/macos-x64/planeai-plugin-fixture",
+    "linux-x64": "bin/linux-x64/planeai-plugin-fixture",
+    "linux-arm64": "bin/linux-arm64/planeai-plugin-fixture",
+    "windows-x64": "bin/windows-x64/planeai-plugin-fixture.exe",
+    "windows-arm64": "bin/windows-arm64/planeai-plugin-fixture.exe"
   },
+  "capabilities": ["settings", "tasks.read", "task-events"],
   "ui_contributions": [
     { "id": "fixture", "label": "Fixture", "placement": "main-pane", "entrypoint": "ui/entry.js" }
   ]

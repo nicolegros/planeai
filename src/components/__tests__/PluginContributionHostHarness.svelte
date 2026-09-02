@@ -9,6 +9,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "planeai-plugin-jira",
+    capabilities: [],
     ui_contributions: [{ id: "dashboard", label: "Dashboard", placement: "main-pane", entrypoint: "jira-status", order: null, shortcut: null }],
     installed_hash: null,
     installed_path: null,

@@ -4,9 +4,20 @@ use crate::model::{CreateParams, ListFilter, Task, UpdateParams};
 /// Implementations can back onto SQLite, an external CLI, or any other storage.
 pub trait TaskProvider {
     fn create(&self, params: CreateParams) -> Result<Task, Error>;
+    /// Create atomically and report whether the assigned parent had no children.
+    fn create_with_first_child_assignment(
+        &self,
+        params: CreateParams,
+    ) -> Result<(Task, Option<bool>), Error>;
     fn get(&self, key: &str) -> Result<Task, Error>;
     fn list(&self, filter: ListFilter) -> Result<Vec<Task>, Error>;
     fn update(&self, key: &str, params: UpdateParams) -> Result<Task, Error>;
+    /// Change a parent atomically and report whether the new parent had no children.
+    fn set_parent_with_first_child_assignment(
+        &self,
+        key: &str,
+        parent_key: Option<String>,
+    ) -> Result<(Task, Option<bool>), Error>;
     fn delete(&self, key: &str) -> Result<(), Error>;
 }
 
