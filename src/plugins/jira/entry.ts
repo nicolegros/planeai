@@ -25,7 +25,35 @@ type JiraStatus = {
 };
 type SyncTotals = { created: number; updated: number; departed: number; errors: number };
 type SidebarItem = { key: string; title: string; status: string; child_count: number };
-const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
+
+const preferencesStyles = `
+  .page { max-width:564px; padding:0; display:grid; gap:32px; }
+  .page .card { display:grid; gap:12px; margin:0; padding:0; border:0; border-radius:0; background:transparent; }
+  .page .card > h2 { margin:0; color:var(--color-t3); font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; }
+  .page .card > .muted { margin:-6px 0 0; color:var(--color-t3); font-size:12px; }
+  .page .field { display:grid; gap:4px; }
+  .page label { margin:0; color:var(--color-t2); font-size:12px; }
+  .page input, .page select { min-height:38px; padding:8px 12px; border-radius:4px; background:var(--color-panel); color:var(--color-t1); font-size:14px; }
+  .page input:focus, .page select:focus { outline:none; box-shadow:0 0 0 1px var(--color-accent); }
+  .page button { min-height:34px; padding:6px 12px; border:1px solid var(--color-border); border-radius:4px; background:transparent; color:var(--color-t2); font-size:14px; font-weight:500; transition:background-color .15s,color .15s,border-color .15s; }
+  .page button:hover:not(:disabled) { background:var(--color-panel-hi); color:var(--color-t1); }
+  .page button.primary { border-color:var(--color-accent); background:var(--color-accent); color:var(--color-on-accent); }
+  .page button.primary:hover:not(:disabled) { background:var(--color-accent); opacity:.9; }
+  .page button.danger { border-color:transparent; color:var(--color-status-exited); }
+  .page button.danger:hover:not(:disabled) { border-color:color-mix(in srgb, var(--color-status-exited) 28%, transparent); background:color-mix(in srgb, var(--color-status-exited) 10%, transparent); }
+  .page .row { gap:8px; }
+  .page .row > .field { flex:1; }
+  .page .source { display:grid; gap:12px; margin:0; padding:16px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-panel); }
+  .page .source > .row { align-items:end; }
+  .page .mapping { display:grid; gap:8px; padding-top:4px; }
+  .page .mapping > label { color:var(--color-t3); font-size:10px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; }
+  .page .mapping .row { align-items:center; }
+  .page .mapping .row button { width:34px; padding:0; font-size:18px; line-height:1; }
+  .page .add-source, .page .add-mapping { justify-self:start; }
+  .page .error, .page .warning { margin:0; font-size:12px; }
+`;
+type DepartedItem = { key: string; summary: string };
+const styles = `:host { color: var(--color-t1); font-family: var(--font-sans); display:block; } .page { max-width:700px; padding:12px 0; } .card { border:1px solid var(--color-border); border-radius:10px; padding:16px; margin-bottom:12px; background:var(--color-panel); } h2 { font-size:13px; margin:0 0 10px; } label { display:block; color:var(--color-t2); font-size:12px; margin:8px 0 4px; } input,select { width:100%; box-sizing:border-box; border:1px solid var(--color-border); border-radius:6px; background:var(--color-main); color:var(--color-t1); padding:7px; } button { border:0; border-radius:6px; padding:7px 10px; background:var(--color-panel-hi); color:var(--color-t1); cursor:pointer; font:inherit; } button.primary { background:var(--color-accent); color:var(--color-on-accent); } button.danger { color:var(--color-status-exited); } button:disabled { opacity:.55; cursor:default; } .row { display:flex; gap:8px; align-items:center; } .row>* { flex:1; } .row button { flex:0 0 auto; } .muted { color:var(--color-t3); font-size:12px; } .error { color:var(--color-status-exited); font-size:12px; } .warning { color:var(--color-status-review); font-size:12px; } .source { border-top:1px solid var(--color-border); margin-top:12px; padding-top:12px; } .sidebar-section { margin-top:8px; } .section-header,.issue { width:100%; display:flex; align-items:center; gap:7px; text-align:left; background:transparent; } .section-header { padding:5px 8px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; } .issue { padding:6px 8px; font-size:12px; } .issue:hover,.section-header:hover { background:var(--color-panel-hi); } .section-header:focus,.issue:focus { outline:none; } .section-header.selected,.issue.selected,.section-header:focus-visible,.issue:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; } .dot { width:7px; height:7px; border-radius:99px; background:var(--color-t3); flex:0 0 auto; } .dot.active,.dot.done { background:var(--color-status-running); } .key { color:var(--color-t3); font-family:var(--font-mono); font-size:10px; flex:0 0 auto; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .interaction { position:fixed; bottom:16px; left:16px; pointer-events:auto; max-width:32rem; border-radius:8px; background:var(--color-status-review); color:var(--color-main); padding:12px 16px; box-shadow:0 8px 24px rgba(0,0,0,.3); outline:none; } .interaction .summary { color:color-mix(in srgb, var(--color-main) 80%, transparent); font-size:12px; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .interaction .actions { margin-top:8px; display:flex; gap:8px; } .interaction button { background:color-mix(in srgb, var(--color-main) 18%, transparent); color:var(--color-main); } .count { margin-left:auto; color:var(--color-t3); font-size:10px; }`;
 function call<T>(context: PluginUiContext, method: string, params: unknown = null): Promise<T> {
   return context.host.call<T>(method, params);
 }
@@ -47,6 +75,7 @@ function input(
 }
 function field(label: string, element: HTMLElement): HTMLElement {
   const wrap = document.createElement("div");
+  wrap.className = "field";
   const heading = document.createElement("label");
   const control = element.querySelector<HTMLElement>("[data-field-control]") ?? element;
   const id = control.id || `jira-field-${++nextFieldId}`;
@@ -319,10 +348,104 @@ function openAssignment(context: PluginUiContext, key: string): PluginModalContr
   });
 }
 
-export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
+export const jiraDepartedInteractionEntrypoint: PluginUiEntrypoint = {
   mount(root, context) {
     const style = document.createElement("style");
     style.textContent = styles;
+    const interaction = document.createElement("section");
+    interaction.className = "interaction";
+    interaction.dataset.pluginInteraction = "";
+    interaction.tabIndex = -1;
+    interaction.hidden = true;
+    interaction.setAttribute("role", "status");
+    interaction.setAttribute("aria-live", "polite");
+    root.replaceChildren(style, interaction);
+    let items: DepartedItem[] = [];
+    let disposed = false;
+    let resolving = false;
+    const render = () => {
+      const item = items[0];
+      if (!item) {
+        interaction.hidden = true;
+        interaction.replaceChildren();
+        return;
+      }
+      interaction.hidden = false;
+      const title = document.createElement("div");
+      title.textContent = `Issue left Jira query — ${item.key}`;
+      const summary = document.createElement("div");
+      summary.className = "summary";
+      summary.textContent = item.summary;
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const done = document.createElement("button");
+      done.type = "button";
+      done.textContent = resolving ? "Marking done…" : "Done (D)";
+      done.disabled = resolving;
+      done.onclick = () => void resolve();
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.textContent = "Dismiss (N)";
+      dismiss.disabled = resolving;
+      dismiss.onclick = () => void dequeue();
+      actions.append(done, dismiss);
+      interaction.replaceChildren(title, summary, actions);
+    };
+    const refresh = async () => {
+      const value = await call<{ items: DepartedItem[] }>(context, "jira.departures.list");
+      items = value.items;
+      if (!disposed) render();
+    };
+    const dequeue = async () => {
+      const item = items[0];
+      if (!item || resolving) return;
+      await call(context, "jira.departures.dequeue", { key: item.key });
+      await refresh();
+    };
+    const resolve = async () => {
+      const item = items[0];
+      if (!item || resolving) return;
+      resolving = true;
+      render();
+      try {
+        // The sidecar dequeues only after its host task update succeeds.
+        await call(context, "jira.departures.resolve", { key: item.key });
+        await refresh();
+      } catch (error) {
+        context.host.data.notify(`Could not mark ${item.key} done: ${String(error)}`);
+      } finally {
+        resolving = false;
+        if (!disposed) render();
+      }
+    };
+    interaction.addEventListener("keydown", (event) => {
+      if (event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        void resolve();
+      } else if (event.key.toLowerCase() === "n" || event.key === "Escape") {
+        event.preventDefault();
+        void dequeue();
+      }
+    });
+    const unsubscribe =
+      context.host.data.onChanged?.(() => {
+        void refresh();
+      }) ?? (() => {});
+    void refresh().catch((error) =>
+      context.host.data.notify(`Could not load departed Jira issues: ${String(error)}`),
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
+      root.replaceChildren();
+    };
+  },
+};
+
+export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
+  mount(root, context) {
+    const style = document.createElement("style");
+    style.textContent = `${styles}${preferencesStyles}`;
     const page = document.createElement("section");
     page.className = "page";
     root.replaceChildren(style, page);
@@ -536,6 +659,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         );
         const map = source.status_map ?? {};
         const mapWrap = document.createElement("div");
+        mapWrap.className = "mapping";
         const mapLabel = document.createElement("label");
         mapLabel.textContent = "Status mapping";
         mapWrap.append(mapLabel);
@@ -587,6 +711,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
           mapWrap.append(row);
         }
         const addMap = document.createElement("button");
+        addMap.className = "add-mapping";
         addMap.textContent = "Add status mapping";
         addMap.onclick = () => {
           let key = "Jira status";
@@ -602,6 +727,7 @@ export const jiraPreferencesEntrypoint: PluginUiEntrypoint = {
         config.append(card);
       }
       const add = document.createElement("button");
+      add.className = "add-source";
       add.textContent = "Add source";
       add.onclick = () => {
         let name = "source";

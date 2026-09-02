@@ -7,6 +7,11 @@
   "source_kind": "builtin",
   "backend_entrypoint": "planeai-plugin-jira",
   "capabilities": ["tasks.read", "tasks.create", "tasks.update", "storage", "sidebar.navigation"],
+  "background_service": {
+    "method": "jira.syncNow",
+    "interval_setting": "sync_interval_ms",
+    "default_interval_ms": 60000
+  },
   "ui_contributions": [
     {
       "id": "preferences",
@@ -20,6 +25,12 @@
       "placement": "sidebar.section",
       "entrypoint": "jira-sidebar-section",
       "order": 100
+    },
+    {
+      "id": "departed-interaction",
+      "label": "Departed Jira issues",
+      "placement": "interaction",
+      "entrypoint": "jira-departed-interaction"
     },
     {
       "id": "dashboard",

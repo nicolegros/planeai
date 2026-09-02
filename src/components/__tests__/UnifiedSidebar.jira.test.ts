@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 
-const { pluginCall, projectList, sessionList } = vi.hoisted(() => ({
+const { pluginCall, localUiSource, projectList, sessionList } = vi.hoisted(() => ({
   pluginCall: vi.fn(),
+  localUiSource: vi.fn(),
   projectList: vi.fn(),
   sessionList: vi.fn(),
 }));
@@ -10,6 +11,7 @@ const { pluginCall, projectList, sessionList } = vi.hoisted(() => ({
 vi.mock("../../lib/api", () => ({
   plugins: {
     call: pluginCall,
+    localUiSource,
     dataChanged: vi.fn().mockResolvedValue(undefined),
   },
   pr: {
@@ -44,7 +46,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import UnifiedSidebarJiraHarness from "./UnifiedSidebarJiraHarness.svelte";
-import { focusSidebar, focusTerminal } from "../../lib/focus.svelte";
+import { focusSidebar, focusTerminal, getActiveZone } from "../../lib/focus.svelte";
 import { loadProjects } from "../../lib/project-store.svelte";
 import { _resetForTests, loadSessions } from "../../lib/session-orchestrator.svelte";
 import { getSelectedIndex, setSelectedIndex } from "../../lib/sidebar-nav.svelte";
@@ -57,6 +59,7 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     _resetForTests();
     projectList.mockResolvedValue([]);
     sessionList.mockResolvedValue([]);
+    localUiSource.mockReset();
     pluginCall.mockResolvedValue({
       items: [
         { key: "PLA-42", title: "Selected Jira issue", status: "todo", child_count: 0 },
@@ -80,6 +83,32 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     focusTerminal();
     setSelectedIndex(0);
     vi.clearAllMocks();
+  });
+
+  it("activates sidebar keyboard navigation when a built-in sidebar control is clicked", async () => {
+    focusTerminal();
+    component = mount(UnifiedSidebarJiraHarness, { target });
+
+    await vi.waitFor(() => {
+      expect(
+        target
+          .querySelector("[data-plugin-ui-contribution='jira:section']")
+          ?.shadowRoot?.querySelectorAll(".issue"),
+      ).toHaveLength(2);
+    });
+
+    const addProject = await vi.waitFor(() => {
+      const button = target.querySelector<HTMLButtonElement>("button[aria-label='New project']");
+      expect(button).toBeTruthy();
+      return button!;
+    });
+    addProject.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+
+    expect(getActiveZone()).toBe("sidebar");
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() => expect(getSelectedIndex()).toBe(1));
   });
 
   it("opens a host-managed assignment modal when a Jira issue is clicked", async () => {
@@ -251,6 +280,41 @@ describe("UnifiedSidebar Jira sidebar integration", () => {
     await vi.waitFor(() => {
       expect(getSelectedIndex()).toBe(0);
       expect(host.shadowRoot?.querySelectorAll(".selected")).toHaveLength(0);
+    });
+  });
+
+  it("removes a failed local contribution without blocking sidebar navigation", async () => {
+    localUiSource.mockRejectedValue(new Error("DataCloneError: object could not be cloned"));
+    component = mount(UnifiedSidebarJiraHarness, {
+      target,
+      props: { includeLocalContribution: true },
+    });
+
+    const localHost = await vi.waitFor(() => {
+      const host = target.querySelector<HTMLElement>(
+        "[data-plugin-ui-contribution='local-fixture:log']",
+      );
+      expect(host).toBeTruthy();
+      return host!;
+    });
+    const frame = localHost.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+    expect(frame).toBeTruthy();
+    frame!.dispatchEvent(new Event("load"));
+
+    await vi.waitFor(() => expect(localUiSource).toHaveBeenCalledWith("local-fixture", "log"));
+    await vi.waitFor(() =>
+      expect(target.querySelector("[data-plugin-ui-contribution='local-fixture:log']")).toBeNull(),
+    );
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "j", bubbles: true, cancelable: true }),
+    );
+    const jiraHost = target.querySelector<HTMLElement>(
+      "[data-plugin-ui-contribution='jira:section']",
+    )!;
+    await vi.waitFor(() => {
+      expect(getSelectedIndex()).toBe(1);
+      expect(jiraHost.shadowRoot?.querySelector(".section-header.selected")).toBeTruthy();
     });
   });
 
