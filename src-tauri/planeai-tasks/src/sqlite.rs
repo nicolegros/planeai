@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -109,6 +109,17 @@ impl SqliteRepository {
     pub fn open(db_path: &str, prefix: &str) -> Result<Self, Error> {
         let conn = Connection::open(db_path).map_err(|e| Error::Storage(e.to_string()))?;
         Self::new(conn, prefix)
+    }
+
+    /// Open an existing file-backed DB for reads without running migrations or
+    /// creating the repository's project row.
+    pub fn open_read_only(db_path: &str, prefix: &str) -> Result<Self, Error> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+            prefix: prefix.to_string(),
+        })
     }
 
     /// Convenience: open an in-memory DB (for testing).
@@ -704,3 +715,36 @@ impl TaskProvider for SqliteRepository {
 #[cfg(test)]
 #[path = "sqlite_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+
+    #[test]
+    fn read_only_open_does_not_create_a_project() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("tasks.db");
+        let writer = SqliteRepository::open(path.to_str().unwrap(), "TASK").unwrap();
+        writer
+            .create(CreateParams {
+                title: "existing task".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(writer);
+
+        let reader = SqliteRepository::open_read_only(path.to_str().unwrap(), "PLUGIN").unwrap();
+        assert_eq!(reader.get("TASK-1").unwrap().title, "existing task");
+        drop(reader);
+
+        let conn = Connection::open(path).unwrap();
+        let projects = conn
+            .prepare("SELECT prefix FROM task_projects ORDER BY prefix")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(projects, ["TASK"]);
+    }
+}

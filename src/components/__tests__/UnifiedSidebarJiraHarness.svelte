@@ -4,6 +4,8 @@
   import { registerPluginSidebarContribution } from "../../lib/plugin-sidebar-navigation.svelte";
   import type { PluginInventory } from "../../lib/types";
 
+  let { includeLocalContribution = false }: { includeLocalContribution?: boolean } = $props();
+
   const precedingPlugin: PluginInventory = {
     id: "sidebar-fixture",
     name: "Sidebar Fixture",
@@ -11,6 +13,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "built-in",
+    capabilities: [],
     ui_contributions: [
       {
         id: "preceding-row",
@@ -30,6 +33,33 @@
     log_path: null,
   };
 
+  const failingLocalPlugin: PluginInventory = {
+    id: "local-fixture",
+    name: "Local Fixture",
+    version: "0.1.0",
+    host_api_version: "planeai.plugin-host.v1",
+    source_kind: "local",
+    backend_entrypoint: "bin/planeai-plugin-fixture",
+    capabilities: [],
+    ui_contributions: [
+      {
+        id: "log",
+        label: "Log",
+        placement: "sidebar.section",
+        entrypoint: "ui/entry.js",
+        order: null,
+        shortcut: null,
+      },
+    ],
+    installed_hash: "fixture-hash",
+    installed_path: "/planeai/plugins/packages/sha256/fixture-hash",
+    original_display_path: "/source/local-fixture",
+    enabled: true,
+    state: "running",
+    last_error: null,
+    log_path: null,
+  };
+
   const jiraPlugin: PluginInventory = {
     id: "jira",
     name: "Jira",
@@ -37,6 +67,7 @@
     host_api_version: "planeai.plugin-host.v1",
     source_kind: "builtin",
     backend_entrypoint: "built-in",
+    capabilities: [],
     ui_contributions: [
       {
         id: "section",
@@ -78,6 +109,9 @@
   onPickTask={noop}
   pluginContributions={[
     { plugin: precedingPlugin, contribution: precedingPlugin.ui_contributions[0] },
+    ...(includeLocalContribution
+      ? [{ plugin: failingLocalPlugin, contribution: failingLocalPlugin.ui_contributions[0] }]
+      : []),
     { plugin: jiraPlugin, contribution: jiraPlugin.ui_contributions[0] },
   ]}
 />

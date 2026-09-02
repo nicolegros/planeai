@@ -17,8 +17,20 @@ export interface PluginModalOptions {
  * Plugin UI modules use only this host-injected bridge. The host scopes every
  * request to the selected plugin runtime; modules never invoke Tauri directly.
  */
+export type PluginSettings = Record<string, unknown>;
+
 export interface PluginUiHost {
+  /** Calls the owning plugin sidecar; lifecycle methods remain reserved for PlaneAI. */
   call<T>(method: string, params?: unknown): Promise<T>;
+  /**
+   * Public, JSON-object settings shared with the plugin sidecar's capability-gated
+   * `host.settings.get` and `host.settings.replace` callbacks. Secrets are never
+   * available through this bridge.
+   */
+  settings: {
+    get<T extends PluginSettings = PluginSettings>(): Promise<T>;
+    replace<T extends PluginSettings = PluginSettings>(settings: T): Promise<T>;
+  };
   navigation: {
     open(pluginId: string, contributionId: string): void;
     close(): void;

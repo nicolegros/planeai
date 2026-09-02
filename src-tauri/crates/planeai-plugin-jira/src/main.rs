@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
-use planeai_jira::config::WritebackConfig;
 use rand::RngExt;
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -94,6 +93,11 @@ struct TokenResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct TokenErrorResponse {
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AccessibleResource {
     id: String,
     url: String,
@@ -104,6 +108,16 @@ struct Credentials {
     refresh_token: String,
     cloud_id: String,
     site: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WritebackConfig {
+    #[serde(default)]
+    on_start: Option<String>,
+    #[serde(default)]
+    on_complete: Option<String>,
+    #[serde(default)]
+    comment: bool,
 }
 
 struct PendingAuth {
@@ -364,8 +378,10 @@ impl JiraPlugin {
                 .map_err(|error| format!("failed to serialize settings: {error}"))?,
         )
         .map_err(|error| format!("failed to write settings: {error}"))?;
-        std::fs::rename(&temporary, &path)
-            .map_err(|error| format!("failed to save settings: {error}"))?;
+        if let Err(error) = planeai_paths::replace_file_atomically(&temporary, &path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("failed to save settings: {error}"));
+        }
         Ok(settings.clone())
     }
 
@@ -459,6 +475,68 @@ impl JiraPlugin {
         })
     }
 
+    fn departed_queue(&self) -> Result<Value, String> {
+        let conn = self.database()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT issue_key, summary FROM jira_departure_queue ORDER BY queued_at, issue_key",
+            )
+            .map_err(|error| format!("failed to list departed Jira issues: {error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(json!({ "key": row.get::<_, String>(0)?, "summary": row.get::<_, String>(1)? }))
+            })
+            .map_err(|error| format!("failed to query departed Jira issues: {error}"))?;
+        let mut items = Vec::new();
+        for row in rows {
+            items
+                .push(row.map_err(|error| format!("failed to read departed Jira issue: {error}"))?);
+        }
+        Ok(json!({ "items": items }))
+    }
+
+    fn dequeue_departure(&self, params: &Value) -> Result<Value, String> {
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or("jira departed dequeue requires key")?;
+        let conn = self.database()?;
+        conn.execute(
+            "DELETE FROM jira_departure_queue WHERE issue_key = ?1",
+            params![key],
+        )
+        .map_err(|error| format!("failed to dequeue departed Jira issue: {error}"))?;
+        Ok(json!({ "dequeued": true }))
+    }
+
+    async fn resolve_departure<R, W>(
+        &self,
+        params: &Value,
+        input: &mut R,
+        output: &mut W,
+    ) -> Result<Value, String>
+    where
+        R: tokio::io::AsyncBufRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let key = params
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or("jira departed resolve requires key")?;
+        let mut request_id = 0;
+        host_call(
+            input,
+            output,
+            &mut request_id,
+            "host.task.update",
+            json!({ "key": key, "status": "done" }),
+        )
+        .await?;
+        self.dequeue_departure(&json!({ "key": key }))
+    }
+
     async fn sync_now<R, W>(&self, input: &mut R, output: &mut W) -> Result<Value, String>
     where
         R: tokio::io::AsyncBufRead + Unpin,
@@ -469,8 +547,13 @@ impl JiraPlugin {
         let mut credentials = self
             .read_credentials()
             .map_err(|error| format!("Jira is not connected: {error}"))?;
-        let token =
-            refresh_access_token(&self.client, &self.token_url, &credentials.refresh_token).await?;
+        let token = refresh_access_token(
+            &self.secrets_dir,
+            &self.client,
+            &self.token_url,
+            &credentials.refresh_token,
+        )
+        .await?;
         if let Some(refresh_token) = token.refresh_token {
             persist_rotated_refresh_token(&self.secrets_dir, &mut credentials, refresh_token)
                 .map_err(|error| {
@@ -580,25 +663,16 @@ impl JiraPlugin {
                 continue;
             }
             for departed in active_source_issues(&conn, source_name)? {
-                if seen.contains(&departed.key) {
-                    continue;
-                }
-                let task = host_call(
-                    input,
-                    output,
-                    &mut request_id,
-                    "host.task.get",
-                    json!({ "key": departed.key }),
-                )
-                .await
-                .ok()
-                .and_then(|value| value.get("task").cloned())
-                .unwrap_or(Value::Null);
-                mark_departed(&conn, &departed.key, source_name)?;
-                if task.get("status").and_then(Value::as_str) != Some("done") {
-                    result.departed += 1;
+                if !seen.contains(&departed.key) {
+                    mark_departed(&conn, &departed.key, source_name)?;
                 }
             }
+        }
+        // Only a fully successful snapshot may replace the unresolved queue. This
+        // evaluates all source memberships together, so an issue disappearing from
+        // one source and reappearing in another never prompts transiently.
+        if result.errors == 0 {
+            rebuild_departure_queue(&conn, input, output, &mut request_id, &mut result).await?;
         }
         serde_json::to_value(result).map_err(|error| error.to_string())
     }
@@ -661,6 +735,7 @@ impl JiraPlugin {
         {
             Err(error) => errors.push(error),
             Ok(mut credentials) => match refresh_access_token(
+                &self.secrets_dir,
                 &self.client,
                 &self.token_url,
                 &credentials.refresh_token,
@@ -1000,12 +1075,26 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("failed to apply Jira plugin migration 3: {error}"))?;
     }
 
+    if current_version < 4 {
+        conn.execute_batch(
+            "ALTER TABLE jira_issue_sources ADD COLUMN departure_prompt_eligible INTEGER NOT NULL DEFAULT 0;
+             CREATE TABLE jira_departure_queue (
+                issue_key TEXT PRIMARY KEY REFERENCES jira_issues(issue_key),
+                summary TEXT NOT NULL,
+                queued_at TEXT NOT NULL
+             );
+             INSERT INTO jira_plugin_schema_migrations (version) VALUES (4);",
+        )
+        .map_err(|error| format!("failed to apply Jira plugin migration 4: {error}"))?;
+    }
+
     Ok(())
 }
 
 fn clear_sync_cache(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "DELETE FROM jira_task_links;
+         DELETE FROM jira_departure_queue;
          DELETE FROM jira_issue_sources;
          DELETE FROM jira_issues;",
     )
@@ -1096,7 +1185,7 @@ fn linked_task_key(conn: &Connection, issue_key: &str) -> Result<Option<String>,
 
 fn sync_issue_source(conn: &Connection, key: &str, source_name: &str) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status) VALUES (?1, ?2, 'synced') ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status = 'synced'",
+        "INSERT INTO jira_issue_sources (issue_key, source_name, sync_status, departure_prompt_eligible) VALUES (?1, ?2, 'synced', 0) ON CONFLICT(issue_key, source_name) DO UPDATE SET sync_status = 'synced', departure_prompt_eligible = 0",
         params![key, source_name],
     )
     .map_err(|error| format!("failed to persist Jira source membership: {error}"))?;
@@ -1120,7 +1209,7 @@ fn active_source_issues(conn: &Connection, source_name: &str) -> Result<Vec<Stor
 
 fn mark_departed(conn: &Connection, key: &str, source_name: &str) -> Result<(), String> {
     conn.execute(
-        "UPDATE jira_issue_sources SET sync_status = 'departed' WHERE issue_key = ?1 AND source_name = ?2",
+        "UPDATE jira_issue_sources SET sync_status = 'departed', departure_prompt_eligible = 1 WHERE issue_key = ?1 AND source_name = ?2",
         params![key, source_name],
     )
     .map_err(|error| format!("failed to mark Jira source membership departed: {error}"))?;
@@ -1130,7 +1219,7 @@ fn mark_departed(conn: &Connection, key: &str, source_name: &str) -> Result<(), 
 fn depart_source(conn: &Connection, source_name: &str) -> Result<(), String> {
     let issues = active_source_issues(conn, source_name)?;
     conn.execute(
-        "UPDATE jira_issue_sources SET sync_status = 'departed' WHERE source_name = ?1 AND sync_status = 'synced'",
+        "UPDATE jira_issue_sources SET sync_status = 'departed', departure_prompt_eligible = 0 WHERE source_name = ?1 AND sync_status = 'synced'",
         params![source_name],
     )
     .map_err(|error| format!("failed to depart removed Jira source: {error}"))?;
@@ -1156,6 +1245,62 @@ fn refresh_issue_sync_status(conn: &Connection, key: &str) -> Result<(), String>
     Ok(())
 }
 
+async fn rebuild_departure_queue<R, W>(
+    conn: &Connection,
+    input: &mut R,
+    output: &mut W,
+    request_id: &mut u64,
+    result: &mut SyncTotals,
+) -> Result<(), String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut statement = conn.prepare(
+            "SELECT issue_key, summary FROM jira_issues WHERE sync_status = 'departed' AND EXISTS (
+                SELECT 1 FROM jira_issue_sources source WHERE source.issue_key = jira_issues.issue_key
+                AND source.departure_prompt_eligible = 1
+            ) ORDER BY issue_key"
+        ).map_err(|error| format!("failed to list globally departed Jira issues: {error}"))?;
+    let candidates = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| format!("failed to query globally departed Jira issues: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    conn.execute("DELETE FROM jira_departure_queue", [])
+        .map_err(|error| format!("failed to rebuild departed Jira queue: {error}"))?;
+    for (key, summary) in candidates {
+        let task = match host_call(
+            input,
+            output,
+            request_id,
+            "host.task.get",
+            json!({ "key": key }),
+        )
+        .await
+        {
+            Ok(value) => value.get("task").cloned().unwrap_or(Value::Null),
+            Err(error) => {
+                result.errors += 1;
+                eprintln!("jira departed task lookup failed issue={key}: {error}");
+                continue;
+            }
+        };
+        if task.get("status").and_then(Value::as_str) == Some("done") {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO jira_departure_queue (issue_key, summary, queued_at) VALUES (?1, ?2, ?3)",
+            params![key, summary, Utc::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("failed to queue departed Jira issue: {error}"))?;
+        result.departed += 1;
+    }
+    Ok(())
+}
+
 fn persist_rotated_refresh_token(
     secrets_dir: &std::path::Path,
     credentials: &mut Credentials,
@@ -1166,21 +1311,49 @@ fn persist_rotated_refresh_token(
 }
 
 async fn refresh_access_token(
+    secrets_dir: &std::path::Path,
     client: &Client,
     token_url: &str,
     refresh_token: &str,
 ) -> Result<TokenResponse, String> {
-    client
+    let response = client
         .post(token_url)
         .json(&json!({ "grant_type": "refresh_token", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "refresh_token": refresh_token }))
         .send()
         .await
-        .map_err(|error| format!("failed to refresh Jira token: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("Jira token refresh failed: {error}"))?
-        .json::<TokenResponse>()
+        .map_err(|error| format!("failed to refresh Jira token: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
         .await
+        .map_err(|error| format!("failed to read Jira token response: {error}"))?;
+
+    if !status.is_success() {
+        let rejected = status == reqwest::StatusCode::BAD_REQUEST
+            && serde_json::from_str::<TokenErrorResponse>(&body)
+                .ok()
+                .and_then(|error| error.error)
+                .as_deref()
+                == Some("invalid_grant");
+        if rejected {
+            clear_rejected_refresh_credentials(secrets_dir)?;
+            return Err("Jira OAuth refresh token was rejected; reconnect to Jira".to_string());
+        }
+        return Err(format!("Jira token refresh failed: HTTP {status}"));
+    }
+
+    serde_json::from_str::<TokenResponse>(&body)
         .map_err(|error| format!("invalid Jira token response: {error}"))
+}
+
+fn clear_rejected_refresh_credentials(secrets_dir: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(secrets_dir.join("credentials.json")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Jira OAuth refresh token was rejected, but credentials could not be cleared: {error}"
+        )),
+    }
 }
 async fn fetch_issues(
     client: &Client,
@@ -1368,7 +1541,7 @@ mod sync_tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     fn plugin_for_test(data_dir: PathBuf) -> JiraPlugin {
@@ -1512,6 +1685,56 @@ mod sync_tests {
             )
             .unwrap();
         assert_eq!(status, "departed");
+    }
+
+    #[test]
+    fn source_removal_never_marks_a_departure_prompt_eligible() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_database(&conn).unwrap();
+        upsert_issue(&conn, &issue("ONE-1", "Open"), "removed", "todo").unwrap();
+        sync_issue_source(&conn, "ONE-1", "removed").unwrap();
+        depart_source(&conn, "removed").unwrap();
+        let eligible: i64 = conn.query_row(
+            "SELECT departure_prompt_eligible FROM jira_issue_sources WHERE issue_key = 'ONE-1' AND source_name = 'removed'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(eligible, 0);
+
+        sync_issue_source(&conn, "ONE-1", "removed").unwrap();
+        mark_departed(&conn, "ONE-1", "removed").unwrap();
+        let eligible: i64 = conn.query_row(
+            "SELECT departure_prompt_eligible FROM jira_issue_sources WHERE issue_key = 'ONE-1' AND source_name = 'removed'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(eligible, 1);
+    }
+
+    #[test]
+    fn departure_queue_api_lists_and_dismisses_unresolved_items() {
+        let data_dir =
+            std::env::temp_dir().join(format!("planeai-jira-queue-{}", generate_state()));
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let plugin = plugin_for_test(data_dir.clone());
+        let conn = plugin.database().unwrap();
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, summary, description, jira_status, mapped_status, source_name, sync_status, last_synced_at) VALUES ('ONE-1', 'Summary', '', 'Open', 'todo', 'source', 'departed', 'now')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO jira_departure_queue (issue_key, summary, queued_at) VALUES ('ONE-1', 'Summary', 'now')",
+            [],
+        ).unwrap();
+        drop(conn);
+        assert_eq!(plugin.departed_queue().unwrap()["items"][0]["key"], "ONE-1");
+        plugin
+            .dequeue_departure(&json!({ "key": "ONE-1" }))
+            .unwrap();
+        assert!(plugin.departed_queue().unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        drop(plugin);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     #[test]
@@ -1714,7 +1937,9 @@ fn write_credentials_to(
         let _ = std::fs::remove_file(&temporary);
         return Err(AuthError::Secrets(error.to_string()));
     }
-    if let Err(error) = std::fs::rename(&temporary, secrets_dir.join("credentials.json")) {
+    if let Err(error) =
+        planeai_paths::replace_file_atomically(&temporary, &secrets_dir.join("credentials.json"))
+    {
         let _ = std::fs::remove_file(&temporary);
         return Err(AuthError::Secrets(error.to_string()));
     }
@@ -1880,7 +2105,7 @@ where
                 "plugin_name": PLUGIN_NAME,
                 "plugin_version": PLUGIN_VERSION,
                 "host_api_version": HOST_API_VERSION,
-                "lifecycle_event_subscriptions": ["task.lifecycle"],
+                "lifecycle_event_subscriptions": [],
             })),
             _ => Err("unsupported plugin host API version".to_string()),
         },
@@ -1890,6 +2115,13 @@ where
         "jira.sources.rename" => plugin.rename_source(&request.params),
         "jira.sidebar.items" => plugin.sidebar_items(),
         "jira.issue.get" => plugin.issue(&request.params),
+        "jira.departures.list" => plugin.departed_queue(),
+        "jira.departures.dequeue" => plugin.dequeue_departure(&request.params),
+        "jira.departures.resolve" => {
+            plugin
+                .resolve_departure(&request.params, input, output)
+                .await
+        }
         "jira.syncNow" => plugin.sync_now(input, output).await,
         "plugin.taskLifecycle" => plugin.task_lifecycle(&request.params).await,
         "jira.open_browser" => request
@@ -2280,6 +2512,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[tokio::test]
+    async fn rejected_refresh_clears_credentials_for_reconnect() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_json(json!({"error":"invalid_grant"})),
+            )
+            .mount(&server)
+            .await;
+        let root =
+            std::env::temp_dir().join(format!("planeai-jira-plugin-test-{}", generate_state()));
+        let secrets_dir = root.join("secrets");
+        std::fs::create_dir_all(&secrets_dir).unwrap();
+        write_credentials_to(
+            &secrets_dir,
+            &Credentials {
+                refresh_token: "rejected-refresh".to_string(),
+                cloud_id: "cloud".to_string(),
+                site: "https://example.atlassian.net".to_string(),
+            },
+        )
+        .unwrap();
+
+        let error = refresh_access_token(
+            &secrets_dir,
+            &Client::new(),
+            &format!("{}/oauth/token", server.uri()),
+            "rejected-refresh",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Jira OAuth refresh token was rejected; reconnect to Jira"
+        );
+        assert!(!secrets_dir.join("credentials.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn rotated_refresh_token_replaces_persisted_credentials() {
         let root =
@@ -2292,6 +2565,7 @@ mod tests {
             site: "https://example.atlassian.net".to_string(),
         };
 
+        write_credentials_to(&secrets_dir, &credentials).unwrap();
         persist_rotated_refresh_token(&secrets_dir, &mut credentials, "new-refresh".to_string())
             .unwrap();
         let stored: Credentials = serde_json::from_reader(

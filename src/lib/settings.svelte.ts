@@ -40,28 +40,6 @@ export interface TaskManager {
   auto_dispatch?: AutoDispatchConfig | null;
 }
 
-export interface JiraWriteback {
-  on_start?: string | null;
-  on_complete?: string | null;
-  comment?: boolean;
-}
-
-export interface JiraSyncSource {
-  jql: string;
-  status_map?: Record<string, string>;
-  writeback?: JiraWriteback | null;
-}
-
-export interface JiraConfig {
-  site: string;
-  sync_interval_ms?: number;
-  sources?: Record<string, JiraSyncSource>;
-}
-
-export interface IntegrationsConfig {
-  jira?: JiraConfig | null;
-}
-
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
@@ -86,7 +64,6 @@ export interface AppConfig {
   auto_open_review?: boolean | null;
   sound_enabled?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;
-  integrations?: IntegrationsConfig | null;
 }
 
 let config = $state<AppConfig>({
