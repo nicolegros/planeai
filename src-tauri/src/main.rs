@@ -120,7 +120,6 @@ fn main() {
             let conn = Connection::open(db_path).expect("failed to open database");
             db::migrate(&conn).expect("failed to run migrations");
             planeai_tasks::sqlite::migrate(&conn).expect("failed to run task migrations");
-            planeai_jira::db::migrate(&conn).expect("failed to run jira migrations");
             plugins::migrate(&conn).expect("failed to run plugin runtime migrations");
             let bundled_plugins =
                 plugins::bundled_manifests().expect("invalid bundled plugin manifest");

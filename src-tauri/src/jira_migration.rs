@@ -101,12 +101,67 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     .map_err(|error| format!("failed to initialize Jira migration ledger: {error}"))
 }
 
+/// Prepares the historical Jira tables only so their contents can be snapshotted
+/// into the bundled plugin. This is compatibility support, not a legacy runtime.
+pub fn migrate_legacy_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS jira_schema_version (version INTEGER NOT NULL);
+         INSERT OR IGNORE INTO jira_schema_version (version)
+             SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM jira_schema_version);",
+    )
+    .map_err(|error| format!("failed to initialize legacy Jira schema version: {error}"))?;
+
+    let version: i32 = conn
+        .query_row("SELECT version FROM jira_schema_version", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| format!("failed to read legacy Jira schema version: {error}"))?;
+    let migrations = [
+        "CREATE TABLE IF NOT EXISTS jira_issues (
+            issue_key TEXT PRIMARY KEY, jira_project TEXT NOT NULL,
+            summary TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL, priority TEXT, labels TEXT NOT NULL DEFAULT '[]',
+            sync_status TEXT NOT NULL DEFAULT 'synced', last_synced_at TEXT NOT NULL
+        );",
+        "CREATE TABLE IF NOT EXISTS jira_task_links (
+            task_key TEXT NOT NULL, issue_key TEXT NOT NULL REFERENCES jira_issues(issue_key),
+            PRIMARY KEY (task_key), UNIQUE (issue_key)
+        );",
+        "ALTER TABLE jira_issues ADD COLUMN source_name TEXT NOT NULL DEFAULT '';",
+    ];
+    for (index, sql) in migrations.iter().enumerate() {
+        if index as i32 >= version {
+            let transaction = conn.unchecked_transaction().map_err(|error| {
+                format!("failed to start legacy Jira schema migration: {error}")
+            })?;
+            transaction
+                .execute_batch(sql)
+                .map_err(|error| format!("failed to migrate legacy Jira schema: {error}"))?;
+            transaction
+                .execute(
+                    "UPDATE jira_schema_version SET version = ?1",
+                    [(index + 1) as i64],
+                )
+                .map_err(|error| {
+                    format!("failed to record legacy Jira schema migration: {error}")
+                })?;
+            transaction.commit().map_err(|error| {
+                format!("failed to commit legacy Jira schema migration: {error}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Called before enabled plugin processes are revived. A profile with legacy Jira
 /// state is deliberately kept offline until the user performs the explicit import.
 pub fn initialize(conn: &Connection, config: &Config) -> Result<(), String> {
     migrate(conn)?;
     let record = read_record(conn)?;
     let legacy_detected = legacy_settings(config).is_some();
+    if legacy_detected {
+        migrate_legacy_schema(conn)?;
+    }
     let incomplete = record.as_ref().is_some_and(|record| {
         !matches!(
             record.state,
@@ -314,12 +369,7 @@ pub fn mark_failed(conn: &Connection, error: &str) -> Result<(), String> {
 }
 
 fn legacy_settings(config: &Config) -> Option<Value> {
-    config
-        .integrations
-        .as_ref()?
-        .jira
-        .as_ref()
-        .and_then(|jira| serde_json::to_value(jira).ok())
+    config.integrations.as_ref()?.jira.clone()
 }
 
 fn normalize_legacy_source_name(
@@ -877,7 +927,6 @@ fn write_record(conn: &Connection, record: &MigrationRecord) -> Result<(), Strin
 mod tests {
     use super::*;
     use crate::config::{Appearance, IntegrationsConfig, Terminal};
-    use planeai_jira::config::{JiraConfig, JiraSyncSource};
 
     fn config() -> Config {
         Config {
@@ -911,21 +960,17 @@ mod tests {
             auto_open_review: None,
             sound_enabled: None,
             integrations: Some(IntegrationsConfig {
-                jira: Some(JiraConfig {
-                    site: "https://legacy.atlassian.net".to_string(),
-                    sync_interval_ms: 120_000,
-                    sources: HashMap::from([(
-                        "legacy".to_string(),
-                        JiraSyncSource {
-                            jql: "project = LEGACY".to_string(),
-                            status_map: HashMap::from([(
-                                "In Progress".to_string(),
-                                "in_progress".to_string(),
-                            )]),
-                            writeback: None,
-                        },
-                    )]),
-                }),
+                jira: Some(serde_json::json!({
+                    "site": "https://legacy.atlassian.net",
+                    "sync_interval_ms": 120_000,
+                    "sources": {
+                        "legacy": {
+                            "jql": "project = LEGACY",
+                            "status_map": {"In Progress": "in_progress"},
+                            "writeback": null
+                        }
+                    }
+                })),
             }),
         }
     }
@@ -933,7 +978,7 @@ mod tests {
     fn legacy_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         planeai_tasks::sqlite::migrate(&conn).unwrap();
-        planeai_jira::db::migrate(&conn).unwrap();
+        migrate_legacy_schema(&conn).unwrap();
         conn.execute("INSERT INTO task_projects (prefix) VALUES ('LEG')", [])
             .unwrap();
         conn.execute("INSERT INTO tasks (key, project_prefix, title, description, status, priority, created_at, updated_at) VALUES ('LEG-1', 'LEG', 'Legacy issue', '', 'in_progress', 0, 'now', 'now')", []).unwrap();
@@ -946,6 +991,41 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn upgrades_legacy_database_schema_for_import() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE jira_schema_version (version INTEGER NOT NULL);
+             INSERT INTO jira_schema_version (version) VALUES (1);
+             CREATE TABLE jira_issues (
+                issue_key TEXT PRIMARY KEY, jira_project TEXT NOT NULL,
+                summary TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL, priority TEXT, labels TEXT NOT NULL DEFAULT '[]',
+                sync_status TEXT NOT NULL DEFAULT 'synced', last_synced_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+
+        migrate_legacy_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO jira_issues (issue_key, jira_project, summary, status, labels, sync_status, last_synced_at, source_name)
+             VALUES ('LEG-1', 'LEG', 'Legacy issue', 'Open', '[]', 'synced', 'now', 'legacy')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT version FROM jira_schema_version", [], |row| row
+                .get::<_, i32>(0))
+                .unwrap(),
+            3
+        );
+        assert!(conn
+            .query_row("SELECT COUNT(*) FROM jira_task_links", [], |row| row
+                .get::<_, i64>(0),)
+            .is_ok());
     }
 
     #[test]
