@@ -9,22 +9,22 @@
 
 These are normal options users should configure.
 
-| Field                     | Type     | Default      | Description                                                         |
-| ------------------------- | -------- | ------------ | ------------------------------------------------------------------- |
-| `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}                           |
-| `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions                       |
-| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon`                       |
-| `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs                          |
-| `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions                           |
-| `appearance`              | object   | —            | Theme, dark/light mode, terminal themes                             |
-| `terminal`                | object   | —            | font_family, font_size, option_as_meta                              |
-| `projects_base_path`      | string   | unset        | Base directory for project worktrees                                |
-| `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config                            |
-| `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                             |
-| `integrations`            | object   | unset        | External service integrations (currently: `jira`)                   |
-| `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                      |
-| `sound_enabled`           | bool     | `true`       | Play a chime when an agent finishes a task                          |
-| `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep` |
+| Field                     | Type     | Default      | Description                                                               |
+| ------------------------- | -------- | ------------ | ------------------------------------------------------------------------- |
+| `providers`               | map      | kiro, claude | Provider name → {command, yolo_flag, ...}                                 |
+| `default_provider`        | string   | `"kiro"`     | Which provider to use when launching sessions                             |
+| `session_backend`         | string   | `"local"`    | Where sessions run: `local`, `tmux`, `daemon`                             |
+| `session_log_dir`         | string   | unset        | Directory for durable `.ansi` session logs                                |
+| `extra_path_dirs`         | string[] | `[]`         | Extra dirs prepended to PATH for sessions                                 |
+| `appearance`              | object   | —            | Theme, dark/light mode, terminal themes                                   |
+| `terminal`                | object   | —            | font_family, font_size, option_as_meta                                    |
+| `projects_base_path`      | string   | unset        | Base directory for project worktrees                                      |
+| `task_management`         | object   | unset        | Task lifecycle hooks and dispatch config                                  |
+| `daemon_scrollback_bytes` | number   | 1MB          | Daemon ring buffer size                                                   |
+| `integrations`            | object   | unset        | Reserved legacy integration config; Jira is configured in plugin settings |
+| `scrollback_lines`        | number   | —            | Terminal scrollback line limit                                            |
+| `sound_enabled`           | bool     | `true`       | Play a chime when an agent finishes a task                                |
+| `post_merge_action`       | string   | `"archive"`  | Default action after PR merge timeout: `archive`, `destroy`, `keep`       |
 
 ### 2. Advanced compatibility config
 
@@ -214,37 +214,19 @@ Specific examples:
 
 ---
 
-## integrations.jira
+## Jira plugin settings
 
-### Definition
+Jira connection settings are owned by the bundled `planeai-plugin-jira`, not by `integrations.jira`. Configure the Jira Cloud site and connect from **Preferences → Jira**. OAuth credentials are stored only in the plugin secrets namespace.
 
-Optional Jira Cloud integration that syncs issues into planeai's task board and writes back status transitions.
+The Jira plugin supports configured JQL sources, task synchronization, periodic refresh, lifecycle writeback, a sidebar section, departed prompts, and assigning a Jira issue to a PlaneAI project as a child task.
 
-### Schema
+For a profile with legacy `integrations.jira` data, migration is explicit: **Preferences → Plugins → Migrate and enable Jira plugin**. The host takes a private backup, fences legacy Jira, transfers public settings, refresh token/cloud identity, issue/source/sync state, and task links to the plugin namespace, validates the import, then enables the bundled plugin. A failed or interrupted migration stays fenced and exposes **Retry migration**, which resumes idempotently from the same backup. No profile runs legacy and plugin Jira workers concurrently.
 
-| Field                                | Type   | Default | Description                                   |
-| ------------------------------------ | ------ | ------- | --------------------------------------------- |
-| `integrations.jira.site`             | string | —       | Jira Cloud site URL (required to enable)      |
-| `integrations.jira.sync_interval_ms` | number | 60000   | Polling interval in milliseconds              |
-| `integrations.jira.sources`          | map    | `{}`    | Named JQL sync sources (key = source alias)   |
-| `sources.<name>.jql`                 | string | —       | JQL filter selecting issues to sync           |
-| `sources.<name>.status_map`          | map    | `{}`    | Jira status name → planeai status             |
-| `sources.<name>.writeback`           | object | null    | Optional writeback config                     |
-| `writeback.on_start`                 | string | null    | Jira status to transition to on work start    |
-| `writeback.on_complete`              | string | null    | Jira status to transition to on work complete |
-| `writeback.comment`                  | bool   | false   | Add a timestamped comment on each transition  |
+### Build-time environment variables
 
-### Build-time env vars
+| Variable             | Required | Description             |
+| -------------------- | -------- | ----------------------- |
+| `JIRA_CLIENT_ID`     | Yes*     | OAuth 2.0 client ID     |
+| `JIRA_CLIENT_SECRET` | Yes*     | OAuth 2.0 client secret |
 
-| Variable             | Required | Description                                      |
-| -------------------- | -------- | ------------------------------------------------ |
-| `JIRA_CLIENT_ID`     | Yes\*    | OAuth 2.0 client ID (from Atlassian dev console) |
-| `JIRA_CLIENT_SECRET` | Yes\*    | OAuth 2.0 client secret                          |
-
-\* Build succeeds without them (placeholder values used) but OAuth will not work at runtime.
-
-### Policy
-
-- Jira is entirely optional. Absent `integrations.jira` config means the feature is inactive.
-- Auth tokens are stored in the app data directory (file-based, `0600` permissions on Unix).
-- All Jira network calls are async and never block the main thread.
+*Without these values the development build uses placeholders and OAuth is unavailable.

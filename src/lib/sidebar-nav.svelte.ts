@@ -36,9 +36,11 @@ export function clampIndex(length: number): void {
 /** Native controls must retain their browser keyboard semantics while the sidebar has focus. */
 export function shouldBypassSidebarKeyboard(element: Element | null): boolean {
   return Boolean(
-    element?.matches("input, textarea, select, [data-plugin-ui-contribution]") ||
+    element?.matches(
+      "input, textarea, select, [data-plugin-ui-contribution]:not([data-plugin-sidebar-contribution])",
+    ) ||
     element?.closest(
-      "[role='combobox'], [role='dialog'], [data-plugin-sidebar-action], [data-plugin-ui-contribution]",
+      "[role='combobox'], [role='dialog'], [data-plugin-sidebar-action], [data-plugin-ui-contribution]:not([data-plugin-sidebar-contribution])",
     ),
   );
 }
@@ -57,13 +59,13 @@ export function handleSidebarKey(e: KeyboardEvent, listLength: number): SidebarN
   if (key === "ArrowDown" || key === "j") {
     e.preventDefault();
     clearPending();
-    selectedIndex = Math.min(selectedIndex + 1, listLength - 1);
+    setSelectedIndex(Math.min(selectedIndex + 1, listLength - 1));
     return null;
   }
   if (key === "ArrowUp" || key === "k") {
     e.preventDefault();
     clearPending();
-    selectedIndex = Math.max(selectedIndex - 1, 0);
+    setSelectedIndex(Math.max(selectedIndex - 1, 0));
     return null;
   }
 

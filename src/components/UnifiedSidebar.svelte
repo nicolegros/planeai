@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { projects as projectsApi, jira as jiraApi } from "../lib/api";
+  import { projects as projectsApi } from "../lib/api";
   import { listen } from "@tauri-apps/api/event";
   import type { TaskItem, Session, Project, PluginInventory, PluginUiContribution } from "../lib/types";
-  import { focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
+  import { focusSidebar, focusTerminal, getActiveZone, getSidebarSubZone } from "../lib/focus.svelte";
   import { getSelectedIndex, setSelectedIndex, clampIndex, handleSidebarKey, shouldBypassSidebarKeyboard } from "../lib/sidebar-nav.svelte";
   import { getSettings } from "../lib/settings.svelte";
   import { shouldHideProject, isLoopId, parseLoopId } from "../lib/sidebar-session-order";
@@ -16,15 +16,13 @@
   import { getPreviewId } from "../lib/session-nav-cycle.svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import TaskPanel from "./TaskPanel.svelte";
-  import JiraSidebarSection from "./JiraSidebarSection.svelte";
-  import AssignJiraDialog from "./AssignJiraDialog.svelte";
   import * as orchestrator from "../lib/session-orchestrator.svelte";
   import { getCiStatus } from "../lib/ci-checks.svelte";
   import { getCommentCount } from "../lib/pr-comments.svelte";
   import * as projectStore from "../lib/project-store.svelte";
   import * as taskStore from "../lib/task-store.svelte";
-  import * as jiraTaskStore from "../lib/jira-task-store.svelte";
   import * as loopStore from "../lib/loop-store.svelte";
+  import { getPluginSidebarRows, type PluginSidebarNavRow } from "../lib/plugin-sidebar-navigation.svelte";
 
   interface Props {
     renamingSessionId: string | null;
@@ -41,7 +39,6 @@
     onPickTask: (task: TaskItem, repoPath: string) => void;
     onCreateSession?: () => void;
     onSessionsChanged?: () => void;
-    onAssignJiraTask?: (jiraTaskKey: string) => void;
     onSelectLoop?: (loopId: string) => void;
     onStartLoop?: (loopId: string) => void;
     onTickLoop?: (loopId: string) => void;
@@ -55,7 +52,22 @@
     onPluginClose?: () => void;
   }
 
-  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onAssignJiraTask, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let failedSidebarContributions = $state<Set<string>>(new Set());
+
+  function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
+    return `${item.plugin.id}:${item.contribution.id}`;
+  }
+
+  function markSidebarContributionFailed(item: { plugin: PluginInventory; contribution: PluginUiContribution }): void {
+    const key = pluginContributionKey(item);
+    if (failedSidebarContributions.has(key)) return;
+    failedSidebarContributions = new Set([...failedSidebarContributions, key]);
+  }
+
+  const activePluginContributions = $derived(
+    pluginContributions.filter((item) => !failedSidebarContributions.has(pluginContributionKey(item))),
+  );
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -64,8 +76,6 @@
   const agentStates = $derived(orchestrator.getAgentStates());
   const zone = $derived(getActiveZone());
   const tasksByProject = $derived(taskStore.getTasksByProject());
-  const jiraTasks = $derived(jiraTaskStore.getJiraTasks());
-  const jiraChildCounts = $derived(jiraTaskStore.getChildCounts());
 
   // Aggregate all loops across all projects
   const allLoops = $derived(projects.flatMap((p) => loopStore.getLoopsForProject(p.id)));
@@ -114,12 +124,6 @@
     }
   }
   $effect(() => { if (projects.length) loadAutoModes(); });
-  let jiraConnected = $state(false);
-  $effect(() => { jiraApi.status().then(s => { jiraConnected = s.connected; if (s.connected) jiraTaskStore.loadJiraTasks(); }); });
-  $effect(() => {
-    const unlisten = listen("jira-sync-complete", () => { jiraTaskStore.loadJiraTasks(); });
-    return () => { unlisten.then(fn => fn()); };
-  });
   async function toggleAutoMode(project: Project) {
     const current = projectAutoMode[project.id] ?? false;
     await projectsApi.setAutoMode(project.id, !current);
@@ -178,34 +182,6 @@
     failed: "text-status-exited", cancelled: "text-status-exited",
   };
   function shortId(id: string): string { return id.slice(0, 8); }
-
-  // Jira task assignment
-  let assignTask = $state<TaskItem | null>(null);
-  let assignPreselectedProjectId = $state("");
-  let pendingAssignTask = $state<TaskItem | null>(null);
-  let projectIdsBeforeCreate = $state<Set<string>>(new Set());
-
-  function openAssignDialog(task: TaskItem) { assignTask = task; assignPreselectedProjectId = ""; }
-
-  function startNewProjectForAssign() {
-    if (assignTask) {
-      pendingAssignTask = assignTask;
-      projectIdsBeforeCreate = new Set(projects.map(p => p.id));
-    }
-    assignTask = null;
-    onAddProject();
-  }
-
-  // Re-open assign dialog after project creation with the new project pre-selected
-  $effect(() => {
-    if (!pendingAssignTask) return;
-    const newProject = projects.find(p => !projectIdsBeforeCreate.has(p.id));
-    if (newProject) {
-      assignTask = pendingAssignTask;
-      assignPreselectedProjectId = newProject.id;
-      pendingAssignTask = null;
-    }
-  });
 
   async function hideProject(id: string) {
     try {
@@ -307,7 +283,7 @@
   );
 
   // Flat nav list for keyboard navigation
-  type NavItem = { type: "project_header"; project: Project } | { type: "loop"; loop: import("../lib/types").LoopRunSummary } | { type: "loop_session"; session: Session; loopId: string; item: import("../lib/types").LoopSessionItem } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "jira_header" } | { type: "jira_task"; task: TaskItem };
+  type NavItem = { type: "project_header"; project: Project } | { type: "loop"; loop: import("../lib/types").LoopRunSummary } | { type: "loop_session"; session: Session; loopId: string; item: import("../lib/types").LoopSessionItem } | { type: "orphan"; session: Session } | { type: "status_header"; projectPath: string; status: string } | { type: "task"; task: TaskItem; projectPath: string } | { type: "plugin"; contributionKey: string; row: PluginSidebarNavRow };
   const flatNav = $derived.by(() => {
     const result: NavItem[] = [];
     for (const project of visibleProjects) {
@@ -340,11 +316,10 @@
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
     }
-    // Jira section
-    if (jiraTasks.length > 0) {
-      result.push({ type: "jira_header" });
-      if (!collapsedSections["jira"]) {
-        for (const t of jiraTasks) result.push({ type: "jira_task", task: t });
+    for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
+      const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
+      for (const row of getPluginSidebarRows(contributionKey)) {
+        result.push({ type: "plugin", contributionKey, row });
       }
     }
     return result;
@@ -360,10 +335,35 @@
       else if (item.type === "orphan") map.set(`orphan:${item.session.id}`, i);
       else if (item.type === "status_header") map.set(`status:${item.projectPath}:${item.status}`, i);
       else if (item.type === "task") map.set(`task:${item.task.key}`, i);
-      else if (item.type === "jira_header") map.set("jira_header", i);
-      else if (item.type === "jira_task") map.set(`jira:${item.task.key}`, i);
+      else if (item.type === "plugin") map.set(`plugin:${item.contributionKey}:${item.row.id}`, i);
     });
     return map;
+  });
+
+  function selectPluginSidebarRow(contributionKey: string, rowId: string): void {
+    const index = flatNavIndex.get(`plugin:${contributionKey}:${rowId}`);
+    if (index !== undefined) setSelectedIndex(index);
+  }
+
+  $effect(() => {
+    if (!navRef) return;
+    const handlePluginSidebarSelect = (event: Event) => {
+      const contributionKey = (event.target as HTMLElement | null)?.dataset.pluginUiContribution;
+      const rowId = (event as CustomEvent<{ rowId?: unknown }>).detail?.rowId;
+      if (contributionKey && typeof rowId === "string") selectPluginSidebarRow(contributionKey, rowId);
+    };
+    const handlePluginSidebarKeydown = (event: Event) => {
+      const detail = (event as CustomEvent<{ event?: unknown; handled?: boolean }>).detail;
+      if (!(detail?.event instanceof KeyboardEvent)) return;
+      handleKeydown(detail.event);
+      detail.handled = detail.event.defaultPrevented;
+    };
+    navRef.addEventListener("plugin-sidebar-select", handlePluginSidebarSelect);
+    navRef.addEventListener("plugin-sidebar-keydown", handlePluginSidebarKeydown);
+    return () => {
+      navRef?.removeEventListener("plugin-sidebar-select", handlePluginSidebarSelect);
+      navRef?.removeEventListener("plugin-sidebar-keydown", handlePluginSidebarKeydown);
+    };
   });
 
   $effect(() => { clampIndex(flatNav.length); });
@@ -371,36 +371,69 @@
   // Scroll selected item into view on keyboard navigation
   $effect(() => {
     const idx = getSelectedIndex();
-    if (zone !== "sidebar" || !navRef) return;
+    if (skipNextAutoFocus || zone !== "sidebar" || !navRef) return;
     navRef.querySelector(`[data-nav-index="${idx}"]`)?.scrollIntoView({ block: "nearest" });
   });
 
-  // Auto-focus active session/loop when sessions panel is toggled
+  let focusedPluginRow = "";
   $effect(() => {
-    if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") return;
-    // If viewing a loop dashboard, highlight the loop item
-    if (selectedLoopId) {
-      const idx = flatNavIndex.get(`loop:${selectedLoopId}`);
-      if (idx !== undefined) setSelectedIndex(idx);
+    const current = zone === "sidebar" ? flatNav[getSelectedIndex()] : undefined;
+    const key = current?.type === "plugin" ? `${current.contributionKey}:${current.row.id}` : "";
+    if (key === focusedPluginRow) return;
+    for (const item of flatNav) {
+      if (item.type === "plugin" && `${item.contributionKey}:${item.row.id}` === focusedPluginRow) item.row.onFocus?.(false);
+    }
+    focusedPluginRow = key;
+    if (current?.type === "plugin") current.row.onFocus?.(true);
+  });
+
+  // Auto-focus active session/loop when sessions panel is toggled or its target changes.
+  // A pointerdown precedes a row click. Do not scroll the active row between
+  // those events or the release can target a different row.
+  let autoFocusedSidebarTarget = "";
+  let skipNextAutoFocus = $state(false);
+
+  function handleSidebarPointerDown(): void {
+    skipNextAutoFocus = true;
+    focusSidebar();
+  }
+
+  $effect(() => {
+    if (zone !== "sidebar" || getSidebarSubZone() !== "sessions") {
+      autoFocusedSidebarTarget = "";
       return;
     }
-    if (!activeSessionId) return;
-    // Try loop_session lookup first
-    let idx = flatNavIndex.get(`loop_session:${activeSessionId}`);
-    // Then orphan lookup
-    if (idx === undefined) idx = flatNavIndex.get(`orphan:${activeSessionId}`);
-    // If not found, look up via task_key
-    if (idx === undefined) {
-      const active = sessions.find(s => s.id === activeSessionId);
-      if (active?.task_key) idx = flatNavIndex.get(`task:${active.task_key}`);
+    if (skipNextAutoFocus) {
+      skipNextAutoFocus = false;
+      return;
     }
-    if (idx !== undefined) setSelectedIndex(idx);
+
+    let target: string | undefined;
+    if (selectedLoopId) {
+      target = `loop:${selectedLoopId}`;
+    } else if (activeSessionId) {
+      target = flatNavIndex.has(`loop_session:${activeSessionId}`)
+        ? `loop_session:${activeSessionId}`
+        : flatNavIndex.has(`orphan:${activeSessionId}`)
+          ? `orphan:${activeSessionId}`
+          : (() => {
+              const active = sessions.find((session) => session.id === activeSessionId);
+              return active?.task_key ? `task:${active.task_key}` : undefined;
+            })();
+    }
+
+    if (!target || target === autoFocusedSidebarTarget) return;
+    const idx = flatNavIndex.get(target);
+    if (idx === undefined) return;
+    setSelectedIndex(idx);
+    autoFocusedSidebarTarget = target;
   });
 
   function handleKeydown(e: KeyboardEvent) {
     if (zone !== "sidebar") return;
     if (flatNav.length === 0) return;
-    if (shouldBypassSidebarKeyboard(document.activeElement)) return;
+    const origin = e.composedPath().find((node): node is Element => node instanceof Element);
+    if (shouldBypassSidebarKeyboard(origin ?? document.activeElement)) return;
 
     const action = handleSidebarKey(e, flatNav.length);
     if (!action) return;
@@ -437,12 +470,8 @@
             break;
           }
         }
-      } else if (current.type === "jira_header") {
-        if (!collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: true };
-      } else if (current.type === "jira_task") {
-        // First press jumps to header; if already on header it will collapse
-        const jiraIdx = flatNav.findIndex(n => n.type === "jira_header");
-        if (jiraIdx >= 0) setSelectedIndex(jiraIdx);
+      } else if (current.type === "plugin") {
+        current.row.onCollapse?.();
       }
       return;
     }
@@ -457,8 +486,8 @@
       } else if (current.type === "status_header") {
         const sectionKey = `${current.projectPath}:${current.status}`;
         if (collapsedSections[sectionKey]) collapsedSections = { ...collapsedSections, [sectionKey]: false };
-      } else if (current.type === "jira_header") {
-        if (collapsedSections["jira"]) collapsedSections = { ...collapsedSections, jira: false };
+      } else if (current.type === "plugin") {
+        current.row.onExpand?.();
       }
       return;
     }
@@ -478,16 +507,6 @@
         const sectionKey = `${current.projectPath}:${current.status}`;
         toggleSection(sectionKey);
       }
-      return;
-    }
-
-    if (current.type === "jira_header") {
-      if (action.type === "select") toggleSection("jira");
-      return;
-    }
-
-    if (current.type === "jira_task") {
-      if (action.type === "select") openAssignDialog(current.task);
       return;
     }
 
@@ -523,6 +542,8 @@
       else if (action.type === "delete") { const linked = sessionForTask(task.key); if (linked) onDeleteSession(linked); }
       else if (action.type === "rename") { const linked = sessionForTask(task.key); if (linked) startRename(linked); }
       else if (action.type === "restart") { const linked = sessionForTask(task.key); if (linked) onRestartSession(linked); }
+    } else if (current.type === "plugin" && action.type === "select") {
+      current.row.onSelect?.();
     }
   }
 
@@ -534,7 +555,6 @@
     if (now - lastFocusRefresh < FOCUS_REFRESH_COOLDOWN_MS) return;
     lastFocusRefresh = now;
     taskStore.refresh(projects.map(p => p.path));
-    if (jiraConnected) jiraTaskStore.loadJiraTasks();
   }
 </script>
 
@@ -560,7 +580,12 @@
   {/if}
 {/snippet}
 
-<aside class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}" style:width="{sidebarWidth}px">
+<aside
+  class="relative shrink-0 flex flex-col border-r bg-sidebar {zone === 'sidebar' ? 'border-accent' : 'border-border'}"
+  style:width="{sidebarWidth}px"
+  onpointerdown={handleSidebarPointerDown}
+  onfocusin={focusSidebar}
+>
   <ResizeHandle side="right" bind:width={sidebarWidth} min={160} max={Infinity} defaultWidth={266} onResizeEnd={(w) => setLayoutWidth("sidebar", w)} />
 
   <!-- Header: new session + new project buttons -->
@@ -591,8 +616,8 @@
     </button>
   </div>
 
-  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+  {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Main content -->
@@ -847,28 +872,21 @@
         </div>
       {/each}
 
-      <!-- Jira section -->
-      <JiraSidebarSection
-        tasks={jiraTasks}
-        childCounts={jiraChildCounts}
-        collapsed={collapsedSections["jira"] ?? false}
-        {zone}
-        {flatNavIndex}
-        onToggleSection={() => toggleSection("jira")}
-        onAssignJiraTask={(key) => {
-          const task = jiraTasks.find(t => t.key === key);
-          if (task) openAssignDialog(task);
-        }}
-      />
     {/if}
 
-    {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
-      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+    {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div data-plugin-sidebar-slot="section">
+        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} />
+      </div>
+    {/each}
+
+    {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
     {/each}
   </nav>
 
-  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} /></div>
+  {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Preferences footer -->
@@ -992,15 +1010,4 @@
       { label: "Delete", danger: true, onSelect: () => { onDeleteLoopSession?.(loopSessionContextMenu!.session, loopSessionContextMenu!.loopId); loopSessionContextMenu = null; } },
     ]}
   />
-{/if}
-
-<!-- Assign Jira task to project dialog -->
-{#if assignTask}
-<AssignJiraDialog
-  task={assignTask}
-  {projects}
-  preselectedProjectId={assignPreselectedProjectId}
-  onClose={() => { assignTask = null; }}
-  onNewProject={startNewProjectForAssign}
-/>
 {/if}

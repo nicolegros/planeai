@@ -1,0 +1,1 @@
+{"method":"fixture.persistSettings","params":{"settings":{"nested":{"enabled":true,"labels":["alpha","beta"]}}}}

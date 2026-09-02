@@ -273,27 +273,29 @@ pub fn fire_task_hook(
     if let Some(h) = hook {
         let db_path = planeai_paths::db_path();
         let projects = db::list_projects(conn).unwrap_or_default();
-        let prefix = projects
+        let Some(project) = projects
             .iter()
             .find(|p| crate::util::is_project_path_or_descendant(cwd, &p.path))
-            .map(|p| p.prefix.clone())
-            .unwrap_or_default();
-        if !prefix.is_empty() {
-            if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
+        else {
+            return;
+        };
+        if let (Some(status), Ok(repo)) = (
+            planeai_tasks::model::Status::parse(&h.move_to),
+            planeai_tasks::sqlite::SqliteRepository::open(
                 db_path.to_str().unwrap_or_default(),
-                &prefix,
-            ) {
-                use planeai_tasks::model::{Status, UpdateParams};
-                use planeai_tasks::provider::TaskProvider;
-                if let Some(s) = Status::parse(&h.move_to) {
-                    let _ = repo.update(
-                        task_key,
-                        UpdateParams {
-                            status: Some(s),
-                            ..Default::default()
-                        },
-                    );
+                &project.prefix,
+            ),
+        ) {
+            match planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, task_key, status) {
+                Ok((_task, events)) => {
+                    forward_task_lifecycle(planeai_core::task_lifecycle::TaskLifecycleBatch::new(
+                        planeai_core::task_lifecycle::TaskLifecycleOrigin::SessionHook,
+                        project.id.clone(),
+                        project.prefix.clone(),
+                        events,
+                    ))
                 }
+                Err(error) => tracing::warn!(task_key, %error, "task lifecycle hook move failed"),
             }
         }
     }
@@ -911,6 +913,34 @@ pub fn resolve_session_by_prefix(conn: &Connection, prefix: &str) -> Result<Sess
         _ => Err(ResolveError::Ambiguous(
             sessions.into_iter().map(|s| s.id).collect(),
         )),
+    }
+}
+
+/// Forward a post-commit lifecycle batch to the desktop host when it is running.
+/// Session operations are shared by the library and Tauri binary, so this uses the
+/// workspace IPC crate directly rather than a binary-local plugin dependency.
+fn forward_task_lifecycle(batch: planeai_core::task_lifecycle::TaskLifecycleBatch) {
+    use std::io::Write;
+
+    if batch.events.is_empty() {
+        return;
+    }
+
+    let app_dir = planeai_paths::app_data_dir();
+    if !planeai_ipc::channel_exists(planeai_ipc::Channel::Notify, &app_dir) {
+        tracing::debug!(batch_id = %batch.batch_id, "desktop host unavailable; dropping task lifecycle batch");
+        return;
+    }
+    match planeai_ipc::connect(planeai_ipc::Channel::Notify, &app_dir) {
+        Ok(mut stream) => {
+            let message = serde_json::json!({"event": "task_lifecycle", "batch": batch});
+            if let Err(error) = writeln!(stream, "{message}") {
+                tracing::warn!(%error, "failed to forward task lifecycle batch");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "failed to connect to desktop host for task lifecycle batch")
+        }
     }
 }
 

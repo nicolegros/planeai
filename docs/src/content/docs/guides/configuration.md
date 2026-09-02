@@ -181,63 +181,16 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-planeai can sync issues from Jira Cloud into the local task board and write status changes back to Jira. Configured via the `integrations.jira` block.
+Jira is a bundled plugin with configured-source synchronization, periodic refresh, lifecycle writeback, a sidebar, and departed-issue prompts. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. The plugin stores public settings in its own namespace, OAuth credentials in backend-only plugin secrets, and its cache/link state in its plugin database.
 
-```jsonc
-{
-  "integrations": {
-    "jira": {
-      // Your Jira Cloud site URL
-      "site": "https://mycompany.atlassian.net",
-      // How often to poll Jira (milliseconds, default: 60000)
-      "sync_interval_ms": 60000,
-      // Named sync sources — each is a JQL filter
-      "sources": {
-        "my-sprint": {
-          // JQL query selecting which issues to sync
-          "jql": "project = ENG AND assignee = currentUser() AND sprint in openSprints()",
-          // Map Jira status names to planeai statuses
-          "status_map": {
-            "In Progress": "in_progress",
-            "In Review": "in_review",
-            "Done": "done",
-          },
-          // Optional: write local status changes back to Jira
-          "writeback": {
-            // Transition the Jira issue to this status when work starts
-            "on_start": "In Progress",
-            // Transition the Jira issue to this status when work completes
-            "on_complete": "Done",
-            // Add a comment to the Jira issue on each transition
-            "comment": true,
-          },
-        },
-      },
-    },
-  },
-}
-```
+#### Migrating legacy Jira
 
-| Field                       | Description                                                                      |
-| --------------------------- | -------------------------------------------------------------------------------- |
-| `site`                      | Jira Cloud site URL (e.g., `https://myco.atlassian.net`)                         |
-| `sync_interval_ms`          | Polling interval in milliseconds (default: 60000)                                |
-| `sources`                   | Named JQL filters to sync                                                        |
-| `sources.<name>.jql`        | JQL query selecting issues to import                                             |
-| `sources.<name>.status_map` | Map of Jira status → planeai status (`todo`, `in_progress`, `in_review`, `done`) |
-| `sources.<name>.writeback`  | Optional writeback configuration                                                 |
-| `writeback.on_start`        | Jira status to transition to when work starts locally                            |
-| `writeback.on_complete`     | Jira status to transition to when work completes locally                         |
-| `writeback.comment`         | Whether to add a comment on each transition (default: false)                     |
+Profiles that still contain `integrations.jira`, legacy Jira tokens, and legacy issue/link state are never migrated or enabled automatically. Open **Preferences → Plugins** and choose **Migrate and enable Jira plugin**. PlaneAI first freezes legacy ownership, creates a private on-disk backup, imports settings, refresh credentials/cloud identity, issue/source/sync state, links, and departed prompts, validates the target, then enables the bundled plugin.
+
+If PlaneAI is interrupted or validation/enablement fails, Jira remains safely fenced so legacy and plugin workers cannot run together. The same Plugins card shows diagnostics and **Retry migration**; retry reuses the frozen backup and is idempotent. The backup is retained for diagnostics/recovery and never exposed through the UI.
 
 #### Authentication
 
-Jira integration uses OAuth 2.0 with PKCE. Connect via **Preferences → Jira → Connect to Jira**, which opens the Atlassian consent screen in your browser. Tokens are stored locally in the app data directory.
+Connect via **Preferences → Jira → Connect**. Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET`; without them, the build succeeds but OAuth cannot work at runtime.
 
-:::note
-Building from source requires `JIRA_CLIENT_ID` and `JIRA_CLIENT_SECRET` environment variables (see `.env.example`). Without them the build succeeds but OAuth will not work at runtime.
-:::
-
-#### Departed issues
-
-When a synced issue no longer matches its source JQL (e.g., it was reassigned or moved to another project), planeai marks it as "departed" and shows a prompt asking whether to mark the local task as done or dismiss it.
+Jira source synchronization includes departed-issue handling: when an issue no longer matches a configured source, its membership for that source is marked departed. An issue remains in the Jira sidebar while it matches any configured source.

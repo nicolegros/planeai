@@ -11,11 +11,8 @@ import type {
   CiCheck,
   PrStatus,
   CommitEntry,
-  JiraStatus,
-  SyncResult,
-  JiraTasksResponse,
   PluginInventory,
-  JiraPluginStatus,
+  JiraMigrationStatus,
   LoopRunSummary,
   LoopRunDetail,
   RecipeSummary,
@@ -58,7 +55,7 @@ export const sessions = {
 export const projects = {
   list: () => invoke<Project[]>("list_projects"),
   listArchived: () => invoke<Project[]>("list_archived_projects"),
-  create: (name: string, path: string) => invoke("create_project", { name, path }),
+  create: (name: string, path: string) => invoke<Project>("create_project", { name, path }),
   update: (id: string, name: string, path: string) =>
     invoke<Project>("update_project", { id, name, path }),
   delete: (id: string) => invoke("delete_project", { id }),
@@ -237,16 +234,6 @@ export const symphony = {
   getStatus: () => invoke<string>("get_symphony_status"),
 };
 
-export const jira = {
-  connect: () => invoke("jira_connect"),
-  disconnect: () => invoke("jira_disconnect"),
-  syncNow: () => invoke<SyncResult>("jira_sync_now"),
-  status: () => invoke<JiraStatus>("jira_status"),
-  listTasks: () => invoke<JiraTasksResponse>("list_jira_tasks"),
-  assign: (jiraTaskKey: string, projectId: string) =>
-    invoke<TaskItem>("assign_jira_task", { jiraTaskKey, projectId }),
-};
-
 export const plugins = {
   list: () => invoke<PluginInventory[]>("list_plugins"),
   installLocal: (sourcePath: string) =>
@@ -255,11 +242,16 @@ export const plugins = {
   enable: (pluginId: string) => invoke<PluginInventory>("enable_plugin", { pluginId }),
   disable: (pluginId: string) => invoke<PluginInventory>("disable_plugin", { pluginId }),
   reload: (pluginId: string) => invoke<PluginInventory>("reload_plugin", { pluginId }),
+  jiraMigrationStatus: () => invoke<JiraMigrationStatus>("jira_migration_status"),
+  migrateLegacyJira: () => invoke<JiraMigrationStatus>("migrate_legacy_jira"),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
+  settings: <T>(pluginId: string) => invoke<T>("plugin_settings", { pluginId }),
+  updateSettings: <T>(pluginId: string, settings: unknown) =>
+    invoke<T>("update_plugin_settings", { pluginId, settings }),
   localUiSource: (pluginId: string, contributionId: string) =>
     invoke<string>("local_plugin_ui_source", { pluginId, contributionId }),
-  jiraStatus: (pluginId: string) => invoke<JiraPluginStatus>("jira_plugin_status", { pluginId }),
+  dataChanged: (pluginId: string) => invoke<void>("plugin_data_changed", { pluginId }),
 };
 
 export const preferences = {

@@ -73,19 +73,35 @@ pub fn fire_pr_hook(
     };
     let h = hook?;
     let db_path = planeai_paths::db_path();
-    if let Ok(repo) =
-        planeai_tasks::sqlite::SqliteRepository::open(db_path.to_str().unwrap_or_default(), prefix)
-    {
-        use planeai_tasks::model::{Status, UpdateParams};
-        use planeai_tasks::provider::TaskProvider;
-        if let Some(s) = Status::parse(&h.move_to) {
-            let _ = repo.update(
+    if let Some(status) = planeai_tasks::model::Status::parse(&h.move_to) {
+        let project_id = rusqlite::Connection::open(&db_path)
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT id FROM projects WHERE prefix = ?1",
+                    [prefix],
+                    |row| row.get(0),
+                )
+                .ok()
+            })
+            .unwrap_or_default();
+        if let Ok(repo) = planeai_tasks::sqlite::SqliteRepository::open(
+            db_path.to_str().unwrap_or_default(),
+            prefix,
+        ) {
+            let context = planeai::task_cli::TaskLifecycleContext {
+                origin: planeai_core::task_lifecycle::TaskLifecycleOrigin::PrHook,
+                project_id,
+                project_prefix: prefix.to_string(),
+            };
+            if let Err(error) = planeai::task_cli::run_task_move_with_lifecycle(
+                &repo,
                 task_key,
-                UpdateParams {
-                    status: Some(s),
-                    ..Default::default()
-                },
-            );
+                status.as_str(),
+                &context,
+            ) {
+                tracing::warn!(task_key, %error, "PR hook task move failed");
+            }
         }
     }
     Some(h.move_to.clone())

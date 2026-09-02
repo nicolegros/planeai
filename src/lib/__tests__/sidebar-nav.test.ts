@@ -214,3 +214,13 @@ describe("sidebar-nav", () => {
     });
   });
 });
+
+describe("plugin sidebar focus", () => {
+  it("keeps unified keyboard navigation active for a focused sidebar section", () => {
+    const sidebarContribution = document.createElement("div");
+    sidebarContribution.dataset.pluginUiContribution = "jira:jira-sidebar-section";
+    sidebarContribution.dataset.pluginSidebarContribution = "";
+
+    expect(shouldBypassSidebarKeyboard(sidebarContribution)).toBe(false);
+  });
+});

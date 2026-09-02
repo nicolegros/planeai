@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -111,6 +111,17 @@ impl SqliteRepository {
         Self::new(conn, prefix)
     }
 
+    /// Open an existing file-backed DB for reads without running migrations or
+    /// creating the repository's project row.
+    pub fn open_read_only(db_path: &str, prefix: &str) -> Result<Self, Error> {
+        let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+            prefix: prefix.to_string(),
+        })
+    }
+
     /// Convenience: open an in-memory DB (for testing).
     pub fn open_in_memory(prefix: &str) -> Result<Self, Error> {
         let conn = Connection::open_in_memory().map_err(|e| Error::Storage(e.to_string()))?;
@@ -172,6 +183,120 @@ impl SqliteRepository {
             map.insert(k, c);
         }
         Ok(map)
+    }
+
+    /// Create a task and atomically report whether its parent had no children
+    /// immediately before this committed assignment.
+    pub fn create_with_first_child_assignment(
+        &self,
+        params: CreateParams,
+    ) -> Result<(Task, Option<bool>), Error> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        let key = match params.key.clone() {
+            Some(key) => key,
+            None => {
+                let seq: i32 = tx.query_row(
+                    "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
+                    params![self.prefix], |row| row.get(0),
+                ).map_err(|e| Error::Storage(e.to_string()))?;
+                format!("{}-{seq}", self.prefix)
+            }
+        };
+        let parent_key_for_result = params.parent_key.clone();
+        let is_first = match &params.parent_key {
+            Some(parent_key) => !tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+                    params![parent_key],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|e| Error::Storage(e.to_string()))?,
+            None => false,
+        };
+        let now = Utc::now().to_rfc3339();
+        let status = params.status.unwrap_or(Status::Todo);
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![key, self.prefix, params.title, params.description, status.as_str(), params.priority, params.parent_key, params.base_branch, now, now],
+        ).map_err(|e| Error::Storage(e.to_string()))?;
+        if inserted == 0 {
+            tx.commit().map_err(|e| Error::Storage(e.to_string()))?;
+            let task = self.query_task(&conn, &key, Some(&self.prefix))?;
+            return Ok((task, None));
+        }
+        for blocker in &params.blocked_by {
+            tx.execute(
+                "INSERT INTO task_blockers (task_key, blocked_by_key) VALUES (?1, ?2)",
+                params![key, blocker],
+            )
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        }
+        for tag in &params.tags {
+            tx.execute(
+                "INSERT INTO task_tags (task_key, tag) VALUES (?1, ?2)",
+                params![key, tag],
+            )
+            .map_err(|e| Error::Storage(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| Error::Storage(e.to_string()))?;
+        let task = self.query_task(&conn, &key, Some(&self.prefix))?;
+        Ok((task, parent_key_for_result.map(|_| is_first)))
+    }
+
+    /// Change a task's parent and atomically report whether the new parent had
+    /// no children before this assignment committed.
+    pub fn set_parent_with_first_child_assignment(
+        &self,
+        key: &str,
+        parent_key: Option<String>,
+    ) -> Result<(Task, Option<bool>), Error> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let existing_parent: Option<String> = tx
+            .query_row(
+                "SELECT parent_key FROM tasks WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
+                _ => Error::Storage(error.to_string()),
+            })?;
+        if existing_parent == parent_key {
+            tx.commit()
+                .map_err(|error| Error::Storage(error.to_string()))?;
+            return Ok((self.query_task(&conn, key, None)?, None));
+        }
+        let is_first = match &parent_key {
+            Some(parent_key) => !tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+                    params![parent_key],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| Error::Storage(error.to_string()))?,
+            None => false,
+        };
+        tx.execute(
+            "UPDATE tasks SET parent_key = ?1, updated_at = ?2 WHERE key = ?3",
+            params![parent_key, Utc::now().to_rfc3339(), key],
+        )
+        .map_err(|error| Error::Storage(error.to_string()))?;
+        tx.commit()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let task = self.query_task(&conn, key, None)?;
+        Ok((task, parent_key.map(|_| is_first)))
     }
 
     fn next_key(&self, conn: &Connection) -> Result<String, Error> {
@@ -371,6 +496,21 @@ impl TaskProvider for SqliteRepository {
                 updated_at: now,
             },
         )
+    }
+
+    fn create_with_first_child_assignment(
+        &self,
+        params: CreateParams,
+    ) -> Result<(Task, Option<bool>), Error> {
+        SqliteRepository::create_with_first_child_assignment(self, params)
+    }
+
+    fn set_parent_with_first_child_assignment(
+        &self,
+        key: &str,
+        parent_key: Option<String>,
+    ) -> Result<(Task, Option<bool>), Error> {
+        SqliteRepository::set_parent_with_first_child_assignment(self, key, parent_key)
     }
 
     fn get(&self, key: &str) -> Result<Task, Error> {
@@ -575,3 +715,36 @@ impl TaskProvider for SqliteRepository {
 #[cfg(test)]
 #[path = "sqlite_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+
+    #[test]
+    fn read_only_open_does_not_create_a_project() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("tasks.db");
+        let writer = SqliteRepository::open(path.to_str().unwrap(), "TASK").unwrap();
+        writer
+            .create(CreateParams {
+                title: "existing task".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        drop(writer);
+
+        let reader = SqliteRepository::open_read_only(path.to_str().unwrap(), "PLUGIN").unwrap();
+        assert_eq!(reader.get("TASK-1").unwrap().title, "existing task");
+        drop(reader);
+
+        let conn = Connection::open(path).unwrap();
+        let projects = conn
+            .prepare("SELECT prefix FROM task_projects ORDER BY prefix")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(projects, ["TASK"]);
+    }
+}
