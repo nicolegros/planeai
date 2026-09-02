@@ -925,13 +925,16 @@ fn row_to_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInventory
         backend_entrypoint: row.get(5)?,
         ui_contributions,
         capabilities,
-        background_service: serde_json::from_str(&row.get::<_, String>(8)?).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                8,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?,
+        background_service: match row.get::<_, Option<String>>(8)? {
+            Some(json) => serde_json::from_str(&json).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+            None => None,
+        },
         installed_hash: row.get(9)?,
         installed_path: row.get(10)?,
         original_display_path: row.get(11)?,
@@ -1827,7 +1830,20 @@ impl PluginRuntimeSupervisor {
                 return;
             }
         };
+        let migration_blocks_jira = self
+            .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to read Jira migration fence; refusing Jira startup");
+                true
+            });
         for plugin in enabled {
+            if plugin.id == JIRA_PLUGIN_ID && migration_blocks_jira {
+                tracing::info!(
+                    "Jira plugin remains disabled until explicit legacy migration completes"
+                );
+                continue;
+            }
             if let Err(error) = self.enable_inner(&plugin.id).await {
                 tracing::warn!(plugin_id = %plugin.id, %error, "failed to restore enabled plugin at startup");
             }
@@ -1948,7 +1964,24 @@ impl PluginRuntimeSupervisor {
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("plugin runtime is shutting down".to_string());
         }
+        if plugin_id == JIRA_PLUGIN_ID
+            && self
+                .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+                .await?
+        {
+            return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
+        }
         self.enable_inner(plugin_id).await
+    }
+
+    /// Reserved for the host migration coordinator. This is intentionally not
+    /// exposed through the generic Tauri plugin lifecycle API.
+    pub async fn enable_jira_after_migration(&self) -> Result<PluginInventory, String> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err("plugin runtime is shutting down".to_string());
+        }
+        self.enable_inner(JIRA_PLUGIN_ID).await
     }
 
     async fn enable_inner(&self, plugin_id: &str) -> Result<PluginInventory, String> {
@@ -2133,6 +2166,13 @@ impl PluginRuntimeSupervisor {
         let _lifecycle = self.lifecycle.lock().await;
         if self.shutting_down.load(Ordering::Acquire) {
             return Err("plugin runtime is shutting down".to_string());
+        }
+        if plugin_id == JIRA_PLUGIN_ID
+            && self
+                .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+                .await?
+        {
+            return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
         }
         self.disable_inner(plugin_id).await?;
         self.enable_inner(plugin_id).await
@@ -2639,6 +2679,9 @@ mod tests {
             serde_json::from_str(&ui_contributions).unwrap();
         assert_eq!(contributions[0].id, "legacy-main-pane");
         assert_eq!(contributions[0].entrypoint, "ui/entry.js");
+
+        let inventory = get_inventory(&conn, "legacy").unwrap().unwrap();
+        assert!(inventory.background_service.is_none());
     }
 
     #[test]

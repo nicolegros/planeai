@@ -8,7 +8,6 @@ members = [
   "planeai-paths",
   "planeai-plugin-contract",
   "planeai-toon",
-  "planeai-jira",
   "crates/planeai-cli-bin",
   "crates/planeai-daemon-bin",
   "crates/planeai-plugin-jira",
@@ -58,7 +57,6 @@ planeai-daemon = { path = "planeai-daemon" }
 planeai-pty = { path = "planeai-pty" }
 planeai-paths = { path = "planeai-paths" }
 planeai-plugin-contract = { path = "planeai-plugin-contract" }
-planeai-jira = { path = "planeai-jira" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tauri = { version = "2.5", features = ["macos-private-api", "devtools"] }

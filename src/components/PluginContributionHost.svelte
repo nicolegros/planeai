@@ -9,6 +9,7 @@
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
   import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
+  import { focusSidebar } from "../lib/focus.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
 
   interface Props {
@@ -17,6 +18,7 @@
     onNavigate: (pluginId: string, contributionId: string) => void;
     onClose: () => void;
     onOpenPreferences?: () => void;
+    onFailure?: (error: unknown) => void;
     autofocus?: boolean;
   }
 
@@ -31,11 +33,16 @@
     registrationId?: string;
     rows?: Array<{ id?: unknown }>;
     rowId?: string;
+    key?: string;
+    altKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
     kind?: "success" | "error";
     message?: string;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, autofocus = false }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false }: Props = $props();
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
@@ -109,14 +116,22 @@
     button.textContent = "Retry";
     button.addEventListener("click", retry);
     root.replaceChildren(message, button);
-    button.focus();
+    if (contribution.placement.startsWith("sidebar.")) onFailure(error);
   }
 
   function createLocalPluginFrame(root: ShadowRoot): PluginUiDisposer {
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.className = "h-full w-full border-0";
+    frame.className =
+      contribution.placement === "interaction" || contribution.placement === "main-pane"
+        ? "block h-full w-full border-0"
+        : "block w-full border-0";
+    if (contribution.placement.startsWith("sidebar.")) {
+      frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
+      frame.addEventListener("focus", focusSidebar);
+      frame.addEventListener("pointerdown", focusSidebar);
+    }
     frame.srcdoc = `<!doctype html>
       <meta charset="utf-8">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
@@ -132,6 +147,36 @@
           pending.set(requestId, { resolve, reject });
           send({ type, requestId, ...payload });
         });
+        let sidebarKeydownRoutingEnabled = false;
+        const sidebarNavigationKeys = new Set([
+          "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "j", "k", "h", "l", "a", "r", "E", "e", "o", "R", "d", "s",
+        ]);
+        const isEditableTarget = (target) =>
+          target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']");
+        const sendSidebarKeydown = (event) => {
+          send({
+            type: "sidebar-keydown",
+            key: event.key,
+            altKey: event.altKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+          });
+        };
+        const forwardSidebarKeydown = (event) => {
+          if (
+            !sidebarKeydownRoutingEnabled ||
+            !sidebarNavigationKeys.has(event.key) ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            isEditableTarget(event.target)
+          ) return;
+          sendSidebarKeydown(event);
+          event.preventDefault();
+          event.stopPropagation();
+        };
+        addEventListener("keydown", forwardSidebarKeydown);
         const host = {
           call: (method, params = null) => request("call", { method, params }),
           settings: {
@@ -154,7 +199,12 @@
               };
             },
             select: (rowId) => send({ type: "sidebar-select", rowId }),
-            handleKeydown: () => {},
+            handleKeydown: (event) => {
+              if (isEditableTarget(event.target)) return;
+              sendSidebarKeydown(event);
+              event.preventDefault();
+              event.stopPropagation();
+            },
           },
           data: {
             changed: () => request("data-changed"),
@@ -186,6 +236,7 @@
             return;
           }
           if (message.type !== "init") return;
+          sidebarKeydownRoutingEnabled = message.contribution?.placement?.startsWith("sidebar.") ?? false;
           try {
             const url = URL.createObjectURL(new Blob([message.source], { type: "text/javascript" }));
             const module = await import(url);
@@ -200,7 +251,23 @@
         });
       </scr${"ipt"}>`;
 
-    const registrations = new Map<string, () => void>();
+    const registrations = new Map<string, string[]>();
+    let unregisterSidebarRows = () => {};
+    const rebuildSidebarRows = (): void => {
+      unregisterSidebarRows();
+      unregisterSidebarRows = registerPluginSidebarContribution(
+        `${plugin.id}:${contribution.id}`,
+        [...registrations].flatMap(([registrationId, rows]) =>
+          rows.map((id) => ({
+            id,
+            onSelect: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onSelect" }, "*"),
+            onCollapse: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onCollapse" }, "*"),
+            onExpand: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onExpand" }, "*"),
+            onFocus: (selected) => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId, rowId: id, action: "onFocus", selected }, "*"),
+          })),
+        ),
+      );
+    };
     const respond = (requestId: number | undefined, ok: boolean, value?: unknown): void => {
       if (requestId === undefined) return;
       frame.contentWindow?.postMessage(
@@ -249,30 +316,36 @@
         } else if (message.action === "close") onClose();
         else if (message.action === "preferences") onOpenPreferences();
       } else if (message.type === "notify" && typeof message.message === "string") {
-        showSnackbar(message.message, message.kind ?? "error");
+        const notification = message.message.trim();
+        if (notification) showSnackbar(notification, message.kind ?? "error");
       } else if (message.type === "sidebar-select" && typeof message.rowId === "string") {
         container?.dispatchEvent(
           new CustomEvent("plugin-sidebar-select", { bubbles: true, detail: { rowId: message.rowId } }),
         );
+      } else if (message.type === "sidebar-keydown" && typeof message.key === "string") {
+        const detail: { event: KeyboardEvent; handled: boolean } = {
+          event: new KeyboardEvent("keydown", {
+            key: message.key,
+            altKey: message.altKey,
+            ctrlKey: message.ctrlKey,
+            metaKey: message.metaKey,
+            shiftKey: message.shiftKey,
+            bubbles: true,
+            cancelable: true,
+          }),
+          handled: false,
+        };
+        container?.dispatchEvent(
+          new CustomEvent("plugin-sidebar-keydown", { bubbles: true, detail }),
+        );
       } else if (message.type === "sidebar-register" && message.registrationId && message.rows) {
-        registrations.get(message.registrationId)?.();
-        const rows = message.rows.flatMap((row) => (typeof row.id === "string" ? [row.id] : []));
         registrations.set(
           message.registrationId,
-          registerPluginSidebarContribution(
-            `${plugin.id}:${contribution.id}:${message.registrationId}`,
-            rows.map((id) => ({
-              id,
-              onSelect: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId: message.registrationId, rowId: id, action: "onSelect" }, "*"),
-              onCollapse: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId: message.registrationId, rowId: id, action: "onCollapse" }, "*"),
-              onExpand: () => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId: message.registrationId, rowId: id, action: "onExpand" }, "*"),
-              onFocus: (selected) => frame.contentWindow?.postMessage({ type: "sidebar-event", registrationId: message.registrationId, rowId: id, action: "onFocus", selected }, "*"),
-            })),
-          ),
+          message.rows.flatMap((row) => (typeof row.id === "string" ? [row.id] : [])),
         );
+        rebuildSidebarRows();
       } else if (message.type === "sidebar-unregister" && message.registrationId) {
-        registrations.get(message.registrationId)?.();
-        registrations.delete(message.registrationId);
+        if (registrations.delete(message.registrationId)) rebuildSidebarRows();
       } else if (message.type === "load-error") {
         showLoadFailure(root, message.message ?? "local UI bundle failed to load");
       }
@@ -280,7 +353,13 @@
     const initialise = (): void => {
       void plugins
         .localUiSource(plugin.id, contribution.id)
-        .then((source) => frame.contentWindow?.postMessage({ type: "init", source, plugin, contribution }, "*"))
+        .then((source) => {
+          const context = JSON.parse(JSON.stringify({ plugin, contribution })) as {
+            plugin: PluginInventory;
+            contribution: PluginUiContribution;
+          };
+          frame.contentWindow?.postMessage({ type: "init", source, ...context }, "*");
+        })
         .catch((error) => showLoadFailure(root, error));
     };
 
@@ -289,7 +368,7 @@
     root.replaceChildren(frame);
     return () => {
       window.removeEventListener("message", onMessage);
-      for (const unregister of registrations.values()) unregister();
+      unregisterSidebarRows();
       registrations.clear();
       frame.contentWindow?.postMessage({ type: "dispose" }, "*");
       frame.remove();
@@ -441,12 +520,20 @@
 </script>
 
 <div
-  class={`h-full w-full ${contribution.placement === "interaction" ? "pointer-events-auto" : ""}`}
+  class={
+    contribution.placement === "interaction"
+      ? plugin.source_kind === "builtin"
+        ? "pointer-events-none"
+        : "h-full w-full pointer-events-auto"
+      : contribution.placement === "main-pane"
+        ? "h-full w-full"
+        : "w-full"
+  }
   tabindex="-1"
   role="region"
   aria-label={`${plugin.name} · ${contribution.label}`}
   data-plugin-ui-contribution={`${plugin.id}:${contribution.id}`}
-  data-plugin-sidebar-contribution={contribution.placement === "sidebar.section" ? "" : undefined}
+  data-plugin-sidebar-contribution={contribution.placement.startsWith("sidebar.") ? "" : undefined}
   bind:this={container}
   onfocus={() => {
     if (contribution.placement === "interaction") {

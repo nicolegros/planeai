@@ -181,9 +181,13 @@ When `PLANEAI_EXTRA_PATH` is set, `extra_path_dirs` from the config file is igno
 
 ### Jira
 
-Jira is a bundled plugin with manual configured-source synchronization. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. Writeback and periodic polling remain deferred. The plugin stores public settings in its own namespace and keeps OAuth credentials in backend-only plugin secrets.
+Jira is a bundled plugin with configured-source synchronization, periodic refresh, lifecycle writeback, a sidebar, and departed-issue prompts. Configure the Jira Cloud site and JQL sources in **Preferences → Jira**, then use OAuth 2.0 with PKCE to connect. Syncing imports matching issues as PlaneAI tasks and refreshes the Jira sidebar; select an issue there to assign it to a PlaneAI project as a child task. The plugin stores public settings in its own namespace, OAuth credentials in backend-only plugin secrets, and its cache/link state in its plugin database.
 
-Writeback and periodic polling are deferred to a later parity slice. On startup, existing `integrations.jira` public configuration is migrated once into plugin settings; legacy OAuth tokens are intentionally not imported.
+#### Migrating legacy Jira
+
+Profiles that still contain `integrations.jira`, legacy Jira tokens, and legacy issue/link state are never migrated or enabled automatically. Open **Preferences → Plugins** and choose **Migrate and enable Jira plugin**. PlaneAI first freezes legacy ownership, creates a private on-disk backup, imports settings, refresh credentials/cloud identity, issue/source/sync state, links, and departed prompts, validates the target, then enables the bundled plugin.
+
+If PlaneAI is interrupted or validation/enablement fails, Jira remains safely fenced so legacy and plugin workers cannot run together. The same Plugins card shows diagnostics and **Retry migration**; retry reuses the frozen backup and is idempotent. The backup is retained for diagnostics/recovery and never exposed through the UI.
 
 #### Authentication
 

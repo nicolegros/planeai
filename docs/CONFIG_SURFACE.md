@@ -218,7 +218,9 @@ Specific examples:
 
 Jira connection settings are owned by the bundled `planeai-plugin-jira`, not by `integrations.jira`. Configure the Jira Cloud site and connect from **Preferences → Jira**. OAuth credentials are stored only in the plugin secrets namespace.
 
-The current slice supports manual JQL sources, task synchronization, a Jira sidebar section, and assigning a Jira issue to a PlaneAI project as a child task. Writeback and periodic synchronization remain deferred. On startup, legacy `integrations.jira` public settings are migrated once into plugin settings; existing plugin values take precedence. Legacy OAuth tokens are not imported.
+The Jira plugin supports configured JQL sources, task synchronization, periodic refresh, lifecycle writeback, a sidebar section, departed prompts, and assigning a Jira issue to a PlaneAI project as a child task.
+
+For a profile with legacy `integrations.jira` data, migration is explicit: **Preferences → Plugins → Migrate and enable Jira plugin**. The host takes a private backup, fences legacy Jira, transfers public settings, refresh token/cloud identity, issue/source/sync state, and task links to the plugin namespace, validates the import, then enables the bundled plugin. A failed or interrupted migration stays fenced and exposes **Retry migration**, which resumes idempotently from the same backup. No profile runs legacy and plugin Jira workers concurrently.
 
 ### Build-time environment variables
 

@@ -1223,6 +1223,12 @@
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                  onFocused={(event) => {
+                    if (event.type === "focusin" && sessionId !== activeSessionId) return;
+                    splitTree.setFocusedLeaf(leaf.id);
+                    selectWorkspaceSession(sessionId);
+                    focusTerminal();
+                  }}
                   onUserInput={() => orchestrator.recordUserInput(sessionId)}
                 />
               </div>

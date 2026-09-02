@@ -53,6 +53,21 @@
   }
 
   let { renamingSessionId, onAddProject, onSelectSession, onArchiveSession, onDeleteSession, onRestartSession, onOpenPreferences, onRenameSession, onStartRename, onDeleteProject, onEditProject, onPickTask, onCreateSession, onSessionsChanged, onSelectLoop, onStartLoop, onTickLoop, onStopLoop, onDeleteLoop, onDeleteLoopSession, onToggleDiff, selectedLoopId = null, pluginContributions = [], onPluginNavigate, onPluginClose }: Props = $props();
+  let failedSidebarContributions = $state<Set<string>>(new Set());
+
+  function pluginContributionKey(item: { plugin: PluginInventory; contribution: PluginUiContribution }): string {
+    return `${item.plugin.id}:${item.contribution.id}`;
+  }
+
+  function markSidebarContributionFailed(item: { plugin: PluginInventory; contribution: PluginUiContribution }): void {
+    const key = pluginContributionKey(item);
+    if (failedSidebarContributions.has(key)) return;
+    failedSidebarContributions = new Set([...failedSidebarContributions, key]);
+  }
+
+  const activePluginContributions = $derived(
+    pluginContributions.filter((item) => !failedSidebarContributions.has(pluginContributionKey(item))),
+  );
 
   // ─── Derived from stores ────────────────────────────────────────────────────
   const projects = $derived(projectStore.getProjects());
@@ -301,7 +316,7 @@
         for (const t of (statusGroups[status] ?? [])) result.push({ type: "task", task: t, projectPath: project.path });
       }
     }
-    for (const contribution of pluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
+    for (const contribution of activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section")) {
       const contributionKey = `${contribution.plugin.id}:${contribution.contribution.id}`;
       for (const row of getPluginSidebarRows(contributionKey)) {
         result.push({ type: "plugin", contributionKey, row });
@@ -601,8 +616,8 @@
     </button>
   </div>
 
-  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
+  {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.header") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="px-2 py-1" data-plugin-sidebar-slot="header"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Main content -->
@@ -859,19 +874,19 @@
 
     {/if}
 
-    {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.section") as item (`${item.plugin.id}:${item.contribution.id}`)}
       <div data-plugin-sidebar-slot="section">
-        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} />
+        <PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} />
       </div>
     {/each}
 
-    {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
-      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
+    {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.navigation") as item (`${item.plugin.id}:${item.contribution.id}`)}
+      <div data-plugin-sidebar-slot="navigation"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
     {/each}
   </nav>
 
-  {#each pluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
-    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} /></div>
+  {#each activePluginContributions.filter((item) => item.contribution.placement === "sidebar.footer") as item (`${item.plugin.id}:${item.contribution.id}`)}
+    <div class="border-t border-border px-2 py-2" data-plugin-sidebar-slot="footer"><PluginContributionHost plugin={item.plugin} contribution={item.contribution} onNavigate={onPluginNavigate ?? (() => {})} onClose={onPluginClose ?? (() => {})} onOpenPreferences={onOpenPreferences} onFailure={() => markSidebarContributionFailed(item)} /></div>
   {/each}
 
   <!-- Preferences footer -->

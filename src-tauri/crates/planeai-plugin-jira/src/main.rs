@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
-use planeai_jira::config::WritebackConfig;
 use rand::RngExt;
 use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -109,6 +108,16 @@ struct Credentials {
     refresh_token: String,
     cloud_id: String,
     site: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WritebackConfig {
+    #[serde(default)]
+    on_start: Option<String>,
+    #[serde(default)]
+    on_complete: Option<String>,
+    #[serde(default)]
+    comment: bool,
 }
 
 struct PendingAuth {

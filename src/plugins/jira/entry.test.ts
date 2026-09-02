@@ -64,6 +64,23 @@ describe("jiraPreferencesEntrypoint", () => {
     return { root, context };
   }
 
+  it("uses the app preference layout and styling hooks", async () => {
+    const { root } = mount({
+      ...initialSettings(),
+      sources: { primary: { jql: "project = PLA", status_map: { Open: "todo" } } },
+    });
+
+    await vi.waitFor(() => expect(root.querySelector(".page > .card")).toBeTruthy());
+    expect(root.querySelectorAll(".page > .card")).toHaveLength(2);
+    expect(root.querySelector(".page .field")).toBeTruthy();
+    expect(root.querySelector(".page .source")).toBeTruthy();
+    expect(root.querySelector(".page .mapping")).toBeTruthy();
+    expect(root.querySelector(".page .add-source")).toBeTruthy();
+    expect(root.querySelector(".page .add-mapping")).toBeTruthy();
+    expect(root.querySelector("style")?.textContent).toContain("max-width:564px");
+    expect(root.querySelector("style")?.textContent).toContain("var(--color-panel)");
+  });
+
   it("locks the connected site, labels generated controls, and hides deferred writeback", async () => {
     const settings: Settings = {
       ...initialSettings(),
@@ -836,6 +853,7 @@ describe("jiraDepartedInteractionEntrypoint", () => {
       expect(interaction.call).toHaveBeenCalledWith("jira.departures.resolve", { key: "PLA-42" }),
     );
     await vi.waitFor(() => expect(interaction.root.textContent).not.toContain("PLA-42"));
+    expect(surface.hidden).toBe(true);
   });
 
   it("keeps the item queued when Done fails, while N and Escape dismiss it", async () => {
