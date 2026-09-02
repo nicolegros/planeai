@@ -84,12 +84,12 @@ import Terminal from "../Terminal.svelte";
 describe("Terminal pointer focus boundary", () => {
   let target: HTMLDivElement;
   let component: ReturnType<typeof mount>;
-  let onFocused: () => void;
+  let onFocused: (event: PointerEvent | FocusEvent) => void;
 
   beforeEach(() => {
     target = document.createElement("div");
     document.body.appendChild(target);
-    onFocused = vi.fn<() => void>();
+    onFocused = vi.fn<(event: PointerEvent | FocusEvent) => void>();
     Object.defineProperty(document, "fonts", {
       configurable: true,
       value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
@@ -119,12 +119,12 @@ describe("Terminal pointer focus boundary", () => {
   it("notifies its host when xterm's surface receives pointer input", () => {
     target.firstElementChild?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
 
-    expect(onFocused).toHaveBeenCalledTimes(1);
+    expect(onFocused).toHaveBeenCalledWith(expect.objectContaining({ type: "pointerdown" }));
   });
 
   it("notifies its host when xterm moves keyboard focus into its surface", () => {
     target.firstElementChild?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
 
-    expect(onFocused).toHaveBeenCalledTimes(1);
+    expect(onFocused).toHaveBeenCalledWith(expect.objectContaining({ type: "focusin" }));
   });
 });

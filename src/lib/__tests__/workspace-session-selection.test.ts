@@ -20,3 +20,9 @@ describe("workspace session selection", () => {
     );
   });
 });
+
+it("ignores a previous terminal's focus event after a session switch", () => {
+  expect(appSource).toMatch(
+    /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
+  );
+});

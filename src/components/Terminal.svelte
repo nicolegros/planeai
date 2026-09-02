@@ -25,7 +25,7 @@
     skipAttach?: boolean;
     onUserInput?: () => void;
     onAttached?: () => void;
-    onFocused?: () => void;
+    onFocused?: (event: PointerEvent | FocusEvent) => void;
   }
 
   let { sessionId, visible, focused, exited = false, skipAttach = false, onUserInput, onAttached, onFocused }: Props = $props();
