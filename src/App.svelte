@@ -1291,15 +1291,15 @@
     {/if}
 
     {#if activePluginId}
-      <div class="w-full h-full bg-main">
-        <div class="flex items-center gap-3 border-b border-border px-4 py-2">
+      <div class="flex h-full flex-col bg-main">
+        <div class="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
           <button class="text-xs text-t2 hover:text-t1" onclick={leavePluginWorkspace}>← Back to workspace</button>
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="h-[calc(100%-41px)]"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
-          <div class="flex h-[calc(100%-41px)] items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
+          <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}
       </div>
     {/if}

@@ -41,7 +41,7 @@ Every backend and UI path must be a package-relative file path: no absolute path
     "windows-x64": "bin/windows-x64/planeai-plugin-fixture.exe",
     "windows-arm64": "bin/windows-arm64/planeai-plugin-fixture.exe"
   },
-  "capabilities": ["settings", "tasks.read", "task-events"],
+  "capabilities": ["settings", "projects.read", "sessions.read", "tasks.read", "tasks.create", "task-events"],
   "ui_contributions": [
     {
       "id": "fixture",
@@ -57,11 +57,16 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for host callbacks. Local plugins may request only `settings`, `tasks.read`, and `task-events`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, and `task-events`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
+- `projects.read` permits `host.projects.list`, returning non-hidden active projects.
+- `sessions.read` permits `host.sessions.list`, returning safe metadata only: identity, project, name, branch, status, provider/backend, task key, timestamps, tab count, and PR state. It never returns terminal names, provider session IDs, worktree paths, output, or control handles.
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
+- `tasks.create` permits `host.tasks.createChild`. It requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
+
+The sandbox UI can use the same operations directly through `context.host.rpc.call("projects.list")`, `context.host.rpc.call("sessions.list")`, `context.host.rpc.call("task.get", { key })`, and `context.host.rpc.call("tasks.createChild", params)`. The sidecar uses matching nested callbacks with the `host.` prefix. PlaneAI derives the owning plugin identity for both transports and applies identical manifest capability checks.
 
 Settings are a JSON object that PlaneAI owns and persists atomically; its on-disk implementation location is not a plugin API. `host.settings.get` returns `{ "settings": { ... } }`; `host.settings.replace` accepts either `{ "settings": { ... } }` or an object directly and returns the same envelope. Both the fixture's `fixture.persistSettings` sidecar example and its UI settings bridge use that public host API. Do not place credentials or tokens in it.
 
@@ -168,7 +173,7 @@ The command validates every declared local backend path and the current-platform
 ## v1 limitations and author checklist
 
 - Plugins are trusted and unsandboxed; network, process, filesystem, and credential safety are the author's responsibility.
-- Local plugin capabilities are limited to `settings`, `tasks.read`, and `task-events`; no task mutation, arbitrary storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
+- Local plugin capabilities are limited to `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, and `task-events`; no task update, session control/output, arbitrary storage bridge, or arbitrary sidebar-navigation capability is available to local packages.
 - UI is a single self-contained ESM file loaded into a ShadowRoot. No relative imports, asset graph, global PlaneAI DOM access, or direct Tauri IPC.
 - UI settings are public JSON objects; secrets are backend-only. Never log secrets, including to stderr.
 - Stdout must remain newline-framed JSON-RPC. Correlate IDs, stay below 64 KiB, respond to shutdown, and treat host callbacks as nested RPC.

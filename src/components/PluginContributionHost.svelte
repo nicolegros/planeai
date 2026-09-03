@@ -127,6 +127,12 @@
       contribution.placement === "interaction" || contribution.placement === "main-pane"
         ? "block h-full w-full border-0"
         : "block w-full border-0";
+    frame.style.display = "block";
+    frame.style.width = "100%";
+    frame.style.border = "0";
+    if (contribution.placement === "interaction" || contribution.placement === "main-pane") {
+      frame.style.height = "100%";
+    }
     if (contribution.placement.startsWith("sidebar.")) {
       frame.style.height = contribution.placement === "sidebar.footer" ? "34px" : "160px";
       frame.addEventListener("focus", focusSidebar);
@@ -135,7 +141,7 @@
     frame.srcdoc = `<!doctype html>
       <meta charset="utf-8">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'">
-      <style>html,body{margin:0;min-height:100%;background:transparent}</style>
+      <style>html,body{margin:0;height:100%;min-height:100%;background:transparent}</style>
       <script>
         let cleanup = null;
         let nextRequestId = 0;
@@ -179,6 +185,9 @@
         addEventListener("keydown", forwardSidebarKeydown);
         const host = {
           call: (method, params = null) => request("call", { method, params }),
+          rpc: {
+            call: (method, params = null) => request("host-rpc", { method, params }),
+          },
           settings: {
             get: () => request("settings-get"),
             replace: (settings) => request("settings-replace", { params: settings }),
@@ -281,6 +290,11 @@
       if (!message || typeof message.type !== "string") return;
       if (message.type === "call" && typeof message.method === "string") {
         void callPlugin(message.method, message.params)
+          .then((value) => respond(message.requestId, true, value))
+          .catch((error) => respond(message.requestId, false, error));
+      } else if (message.type === "host-rpc" && typeof message.method === "string") {
+        void plugins
+          .hostCall(plugin.id, message.method, message.params)
           .then((value) => respond(message.requestId, true, value))
           .catch((error) => respond(message.requestId, false, error));
       } else if (message.type === "settings-get") {
@@ -401,6 +415,10 @@
       };
       const host: PluginUiHost = {
         call: <T>(method: string, params: unknown = null) => callPlugin<T>(method, params),
+        rpc: {
+          call: <T>(_method: string, _params: unknown = null) =>
+            Promise.reject(new Error("direct host RPC is available only to local plugins")),
+        },
         settings: {
           get: <T extends Record<string, unknown>>() => {
             if (!plugin.capabilities.includes("settings")) {

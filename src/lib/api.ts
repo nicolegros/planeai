@@ -246,6 +246,8 @@ export const plugins = {
   migrateLegacyJira: () => invoke<JiraMigrationStatus>("migrate_legacy_jira"),
   call: <T>(pluginId: string, method: string, params: unknown = null) =>
     invoke<T>("plugin_call", { pluginId, method, params }),
+  hostCall: <T>(pluginId: string, method: string, params: unknown = null) =>
+    invoke<T>("plugin_host_call", { pluginId, method, params }),
   settings: <T>(pluginId: string) => invoke<T>("plugin_settings", { pluginId }),
   updateSettings: <T>(pluginId: string, settings: unknown) =>
     invoke<T>("update_plugin_settings", { pluginId, settings }),
