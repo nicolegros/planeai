@@ -219,6 +219,41 @@ describe("PluginContributionHost", () => {
     expect(frame.srcdoc).toContain("html,body{margin:0;height:100%;min-height:100%");
   });
 
+  it("provides local iframes with semantic PlaneAI tokens and live theme updates", async () => {
+    document.documentElement.style.setProperty("--color-main", "#123456");
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "main-pane" },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.srcdoc).toContain('id="planeai-plugin-theme"');
+    expect(frame.srcdoc).toContain("--planeai-main:#123456");
+    expect(frame.srcdoc).toContain("button,input,select,textarea{font:inherit");
+    expect(frame.srcdoc).toContain("font-size:13px");
+    expect(frame.srcdoc).toContain("h1,h2,h3,p{margin:0}");
+    expect(frame.srcdoc).toContain("select{appearance:none");
+
+    const postMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage } });
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "theme", css: expect.stringContaining("--planeai-main:#123456") }),
+        "*",
+      ),
+    );
+    document.documentElement.style.removeProperty("--color-main");
+  });
+
   it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {
     target = document.createElement("div");
     document.body.append(target);

@@ -116,7 +116,33 @@ export default {
 };
 ```
 
-`root` is a host-owned open `ShadowRoot`. Do not access PlaneAI's DOM, Tailwind classes, Tauri APIs, or `invoke()` directly. The bundle must contain all code it needs: v1 loads exactly the entrypoint source, not relative imports or package asset graphs. Use inherited custom properties such as `--color-t1`, `--color-panel`, `--color-border`, and `--font-sans` rather than hardcoded app colors.
+`root` is the sandboxed local iframe's `document.body`. Do not access PlaneAI's DOM, Tailwind classes, Tauri APIs, or `invoke()` directly. The bundle must contain all code it needs: v1 loads exactly the entrypoint source, not relative imports or package asset graphs.
+
+### Local UI theme contract
+
+PlaneAI injects a host-owned baseline stylesheet into every local UI iframe. It resets document sizing and box sizing, applies PlaneAI's default font/background/text colors, and provides low-specificity typography, borders, and focus styles for native controls. Your module's styles load afterwards, so you can override those defaults normally.
+
+Use only these stable semantic custom properties, never PlaneAI's internal `--color-*` or `--font-*` variables: `--planeai-font-sans`, `--planeai-font-mono`, `--planeai-canvas`, `--planeai-main`, `--planeai-surface`, `--planeai-surface-raised`, `--planeai-text`, `--planeai-text-muted`, `--planeai-text-subtle`, `--planeai-border`, `--planeai-border-strong`, `--planeai-accent`, `--planeai-on-accent`, `--planeai-accent-subtle`, `--planeai-success`, `--planeai-warning`, `--planeai-danger`, `--planeai-radius`, and `--planeai-space-1` through `--planeai-space-6`. PlaneAI updates those properties in place whenever its active theme or appearance changes; it does not remount your UI.
+
+For example, local UI CSS can adopt or intentionally customize the host theme:
+
+```css
+:root {
+  --planeai-radius: 6px; /* optional plugin-specific override */
+}
+
+.card {
+  background: var(--planeai-surface);
+  border: 1px solid var(--planeai-border);
+  border-radius: var(--planeai-radius);
+  color: var(--planeai-text);
+}
+
+.primary {
+  background: var(--planeai-accent);
+  color: var(--planeai-on-accent);
+}
+```
 
 `context.host` provides:
 
