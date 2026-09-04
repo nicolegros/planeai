@@ -28,7 +28,14 @@ const UI_CONTRIBUTION_FIELDS: &[&str] = &[
     "order",
     "shortcut",
 ];
-const LOCAL_CAPABILITIES: &[&str] = &["settings", "tasks.read", "task-events"];
+const LOCAL_CAPABILITIES: &[&str] = &[
+    "settings",
+    "projects.read",
+    "sessions.read",
+    "tasks.read",
+    "tasks.create",
+    "task-events",
+];
 const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
 const UI_PLACEMENTS: &[&str] = &[
     "sidebar.header",

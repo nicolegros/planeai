@@ -122,6 +122,10 @@ impl PluginManifest {
 pub enum PluginHostCapability {
     #[serde(rename = "settings")]
     Settings,
+    #[serde(rename = "projects.read")]
+    ProjectsRead,
+    #[serde(rename = "sessions.read")]
+    SessionsRead,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
@@ -296,13 +300,16 @@ fn validate_capabilities(
             !matches!(
                 capability,
                 PluginHostCapability::Settings
+                    | PluginHostCapability::ProjectsRead
+                    | PluginHostCapability::SessionsRead
                     | PluginHostCapability::TasksRead
+                    | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TaskEvents
             )
         })
     {
         return Err(
-            "local plugins may only request settings, tasks.read, or task-events capabilities"
+            "local plugins may only request settings, projects.read, sessions.read, tasks.read, tasks.create, or task-events capabilities"
                 .to_string(),
         );
     }
@@ -668,6 +675,14 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             last_error TEXT,
             log_path TEXT,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );",
+    )?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS plugin_task_operations (
+            plugin_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            task_key TEXT,
+            PRIMARY KEY (plugin_id, operation_id)
         );",
     )?;
     for (column, definition) in [
@@ -1343,7 +1358,10 @@ async fn execute_host_task(
 ) -> Result<Value, String> {
     let required = match method {
         "host.settings.get" | "host.settings.replace" => PluginHostCapability::Settings,
+        "host.projects.list" => PluginHostCapability::ProjectsRead,
+        "host.sessions.list" => PluginHostCapability::SessionsRead,
         "host.tasks.read" | "host.task.get" => PluginHostCapability::TasksRead,
+        "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
         "host.task.update" => PluginHostCapability::TasksUpdate,
         _ => return Err("host method not found".to_string()),
@@ -1354,6 +1372,63 @@ async fn execute_host_task(
     {
         return Err("plugin capability is not granted".to_string());
     }
+
+    if method == "host.projects.list" {
+        return commands::blocking(|| {
+            let path = planeai_paths::db_path();
+            let conn = Connection::open(path).map_err(|error| error.to_string())?;
+            let projects = crate::db::list_projects(&conn)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|project| !project.hidden)
+                .map(|project| {
+                    serde_json::json!({
+                        "id": project.id,
+                        "name": project.name,
+                        "path": project.path,
+                        "hidden": project.hidden,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "projects": projects }))
+        })
+        .await;
+    }
+
+    if method == "host.sessions.list" {
+        return commands::blocking(|| {
+            let path = planeai_paths::db_path();
+            let conn = Connection::open(path).map_err(|error| error.to_string())?;
+            let sessions = crate::db::list_sessions(&conn)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .map(|session| {
+                    serde_json::json!({
+                        "id": session.id,
+                        "project_id": session.project_id,
+                        "name": session.name,
+                        "branch": session.branch,
+                        "status": session.status,
+                        "created_at": session.created_at,
+                        "provider": session.provider,
+                        "backend": session.backend,
+                        "tab_count": session.tab_count,
+                        "task_key": session.task_key,
+                        "pr_url": session.pr_url,
+                        "pr_state": session.pr_state,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "sessions": sessions }))
+        })
+        .await;
+    }
+
+    if method == "host.tasks.createChild" {
+        let plugin_id = plugin_id.to_string();
+        return commands::blocking(move || create_plugin_child_task(&plugin_id, params)).await;
+    }
+
     if matches!(method, "host.settings.get" | "host.settings.replace") {
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
@@ -1501,6 +1576,157 @@ async fn execute_host_task(
     .await
 }
 
+fn create_plugin_child_task(plugin_id: &str, params: Value) -> Result<Value, String> {
+    let project_path = params
+        .get("project_path")
+        .or_else(|| params.get("projectPath"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("child task create requires project_path")?;
+    let parent_key = params
+        .get("parent_key")
+        .or_else(|| params.get("parentKey"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("child task create requires parent_key")?;
+    let operation_id = params
+        .get("operation_id")
+        .or_else(|| params.get("operationId"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("child task create requires operation_id")?;
+    let title = params
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("child task create requires title")?;
+    let description = params
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let path = planeai_paths::db_path();
+    let mut conn = Connection::open(path).map_err(|error| error.to_string())?;
+    let project = crate::db::list_projects(&conn)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|project| project.path == project_path && !project.hidden)
+        .ok_or("project was not found or is hidden")?;
+    let transaction = conn.transaction().map_err(|error| error.to_string())?;
+    if let Some(task_key) = transaction
+        .query_row(
+            "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
+            rusqlite::params![plugin_id, operation_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .flatten()
+    {
+        transaction.commit().map_err(|error| error.to_string())?;
+        return plugin_task_value(&conn, &task_key);
+    }
+    let reserved = transaction
+        .execute(
+            "INSERT OR IGNORE INTO plugin_task_operations (plugin_id, operation_id, task_key) VALUES (?1, ?2, NULL)",
+            rusqlite::params![plugin_id, operation_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if reserved == 0 {
+        transaction.commit().map_err(|error| error.to_string())?;
+        let task_key = conn
+            .query_row(
+                "SELECT task_key FROM plugin_task_operations WHERE plugin_id = ?1 AND operation_id = ?2",
+                rusqlite::params![plugin_id, operation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(|error| error.to_string())?
+            .ok_or("child task operation is still in progress")?;
+        return plugin_task_value(&conn, &task_key);
+    }
+    let parent_prefix = transaction
+        .query_row(
+            "SELECT project_prefix FROM tasks WHERE key = ?1",
+            rusqlite::params![parent_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("parent task was not found")?;
+    if parent_prefix != project.prefix {
+        return Err("parent task does not belong to the selected project".to_string());
+    }
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO task_projects (prefix, next_seq) VALUES (?1, 1)",
+            rusqlite::params![project.prefix],
+        )
+        .map_err(|error| error.to_string())?;
+    let sequence: i64 = transaction
+        .query_row(
+            "UPDATE task_projects SET next_seq = next_seq + 1 WHERE prefix = ?1 RETURNING next_seq - 1",
+            rusqlite::params![project.prefix],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let task_key = format!("{}-{sequence}", project.prefix);
+    let first_child = !transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE parent_key = ?1)",
+            rusqlite::params![parent_key],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    transaction
+        .execute(
+            "INSERT INTO tasks (key, project_prefix, title, description, status, priority, parent_key, base_branch, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'todo', 0, ?5, 'main', ?6, ?6)",
+            rusqlite::params![task_key, project.prefix, title, description, parent_key, now],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE plugin_task_operations SET task_key = ?3 WHERE plugin_id = ?1 AND operation_id = ?2",
+            rusqlite::params![plugin_id, operation_id, task_key],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
+        crate::task_lifecycle::TaskLifecycleOrigin::Ui,
+        project.id,
+        project.prefix,
+        vec![crate::task_lifecycle::TaskLifecycleEvent::ChildAssigned {
+            child_key: task_key.clone(),
+            parent_key: parent_key.to_string(),
+            is_first_child_assignment: first_child,
+        }],
+    ));
+    plugin_task_value(&conn, &task_key)
+}
+
+fn plugin_task_value(conn: &Connection, task_key: &str) -> Result<Value, String> {
+    let task = conn
+        .query_row(
+            "SELECT key, title, description, status, priority, parent_key, COALESCE(base_branch, 'main') FROM tasks WHERE key = ?1",
+            rusqlite::params![task_key],
+            |row| Ok(serde_json::json!({
+                "key": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1)?,
+                "description": row.get::<_, String>(2)?,
+                "status": row.get::<_, String>(3)?,
+                "priority": row.get::<_, i32>(4)?,
+                "parent_key": row.get::<_, Option<String>>(5)?,
+                "url": Value::Null,
+                "base_branch": row.get::<_, String>(6)?,
+                "blocked_by": Vec::<String>::new(),
+                "tags": Vec::<String>::new(),
+            })),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .ok_or("idempotent child task result was not found")?;
+    Ok(serde_json::json!({ "task": task }))
+}
+
 fn lifecycle_subscription_is_granted(
     capabilities: &HashSet<PluginHostCapability>,
     subscriptions: &HashSet<String>,
@@ -1590,6 +1816,42 @@ impl PluginRuntimeSupervisor {
         let id = plugin_id.to_string();
         self.with_db(move |conn| get_inventory(conn, &id).map_err(|e| e.to_string()))
             .await
+    }
+
+    /// Capability-gated PlaneAI data RPC for a sandboxed local-plugin UI.
+    /// The Tauri command receives the owner ID from the host frame, never from
+    /// the iframe module itself.
+    pub async fn host_call(
+        &self,
+        plugin_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let inventory = self
+            .inventory(plugin_id)
+            .await?
+            .ok_or_else(|| format!("plugin inventory entry not found: {plugin_id}"))?;
+        if inventory.source_kind != PluginSourceKind::Local {
+            return Err("direct host RPC is available only to local plugins".to_string());
+        }
+        if inventory.state != PluginRuntimeState::Running {
+            return Err(format!("plugin {plugin_id} is not running"));
+        }
+        let root = plugin_state_root(&self.app, plugin_id).await?;
+        let capabilities = inventory
+            .capabilities
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        let callback_method = format!("host.{method}");
+        execute_host_task(
+            plugin_id,
+            &capabilities,
+            &root.join("data"),
+            &callback_method,
+            params,
+        )
+        .await
     }
 
     pub fn begin_shutdown(&self) -> bool {

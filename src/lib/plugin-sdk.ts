@@ -23,6 +23,13 @@ export interface PluginUiHost {
   /** Calls the owning plugin sidecar; lifecycle methods remain reserved for PlaneAI. */
   call<T>(method: string, params?: unknown): Promise<T>;
   /**
+   * Calls a PlaneAI public data operation directly. The host derives the owning
+   * plugin identity, checks its manifest capability, and never exposes Tauri.
+   */
+  rpc: {
+    call<T>(method: string, params?: unknown): Promise<T>;
+  };
+  /**
    * Public, JSON-object settings shared with the plugin sidecar's capability-gated
    * `host.settings.get` and `host.settings.replace` callbacks. Secrets are never
    * available through this bridge.

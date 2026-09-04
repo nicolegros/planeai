@@ -6,6 +6,7 @@ const {
   settingsGet,
   updateSettings,
   dataChanged,
+  hostCall,
   eventListeners,
   showSnackbar,
 } = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const {
   settingsGet: vi.fn(() => Promise.resolve({ greeting: "Saved greeting" })),
   updateSettings: vi.fn((_: string, settings: unknown) => Promise.resolve(settings)),
   dataChanged: vi.fn(() => Promise.resolve()),
+  hostCall: vi.fn(() => Promise.resolve({ projects: [] })),
   eventListeners: new Map<string, (event: { payload: string }) => void>(),
   showSnackbar: vi.fn(),
 }));
@@ -30,6 +32,7 @@ const {
 vi.mock("../../lib/api", () => ({
   plugins: {
     call: pluginCall,
+    hostCall,
     localUiSource,
     settings: settingsGet,
     updateSettings,
@@ -151,6 +154,7 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain("postMessage");
       expect(frame?.srcdoc).toContain("settings-get");
       expect(frame?.srcdoc).toContain("settings-replace");
+      expect(frame?.srcdoc).toContain("host-rpc");
       expect(frame?.srcdoc).toContain("sidebar-keydown");
       expect(frame?.srcdoc).toContain("sidebarNavigationKeys");
       expect(frame?.srcdoc).toContain('addEventListener("keydown", forwardSidebarKeydown)');
@@ -208,6 +212,46 @@ describe("PluginContributionHost", () => {
       return next!;
     });
     expect(frame.className).toContain("h-full");
+    expect(frame.style.display).toBe("block");
+    expect(frame.style.width).toBe("100%");
+    expect(frame.style.height).toBe("100%");
+    expect(frame.style.border).toBe("0px");
+    expect(frame.srcdoc).toContain("html,body{margin:0;height:100%;min-height:100%");
+  });
+
+  it("provides local iframes with semantic PlaneAI tokens and live theme updates", async () => {
+    document.documentElement.style.setProperty("--color-main", "#123456");
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "main-pane" },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.srcdoc).toContain('id="planeai-plugin-theme"');
+    expect(frame.srcdoc).toContain("--planeai-main:#123456");
+    expect(frame.srcdoc).toContain("button,input,select,textarea{font:inherit");
+    expect(frame.srcdoc).toContain("font-size:13px");
+    expect(frame.srcdoc).toContain("h1,h2,h3,p{margin:0}");
+    expect(frame.srcdoc).toContain("select{appearance:none");
+
+    const postMessage = vi.fn();
+    Object.defineProperty(frame, "contentWindow", { configurable: true, value: { postMessage } });
+    window.dispatchEvent(new Event("planeai-theme-changed"));
+    await vi.waitFor(() =>
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "theme", css: expect.stringContaining("--planeai-main:#123456") }),
+        "*",
+      ),
+    );
+    document.documentElement.style.removeProperty("--color-main");
   });
 
   it("treats a local sidebar footer as sidebar content for keyboard navigation", async () => {
