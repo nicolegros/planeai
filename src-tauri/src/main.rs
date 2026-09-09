@@ -403,6 +403,7 @@ fn main() {
             install_local_plugin,
             remove_local_plugin,
             plugin_call,
+            plugin_host_call,
             plugin_settings,
             update_plugin_settings,
             local_plugin_ui_source,

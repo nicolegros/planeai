@@ -16,6 +16,7 @@ export function injectTheme(css: string): void {
     document.head.appendChild(el);
   }
   el.textContent = css;
+  window.dispatchEvent(new Event("planeai-theme-changed"));
 }
 
 export function extractTerminalTheme(): ITheme {

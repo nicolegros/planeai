@@ -39,6 +39,16 @@ pub async fn plugin_call(
 }
 
 #[tauri::command]
+pub async fn plugin_host_call(
+    plugin_id: String,
+    method: String,
+    params: Value,
+    runtime: State<'_, PluginRuntimeHandle>,
+) -> Result<Value, String> {
+    runtime.0.host_call(&plugin_id, &method, params).await
+}
+
+#[tauri::command]
 pub async fn plugin_data_changed(plugin_id: String, app: AppHandle) -> Result<(), String> {
     app.emit("plugin-data-changed", plugin_id)
         .map_err(|error| format!("failed to emit plugin data change: {error}"))

@@ -19,6 +19,12 @@ describe("workspace session selection", () => {
       /focused=\{isActiveInLeaf && sessionId === activeSessionId && !activePluginId/,
     );
   });
+
+  it("gives an active main-pane plugin a flex-grown contribution area", () => {
+    expect(appSource).toMatch(
+      /\{#if activePluginId\}\s*<div class="flex h-full flex-col bg-main">[\s\S]*?<div class="min-h-0 flex-1">\s*<PluginContributionHost/,
+    );
+  });
 });
 
 it("ignores a previous terminal's focus event after a session switch", () => {
