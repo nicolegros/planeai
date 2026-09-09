@@ -3367,6 +3367,10 @@ mod tests {
         manifest
             .capabilities
             .push(PluginHostCapability::TasksCreate);
+        assert!(manifest.validate().is_ok());
+        manifest
+            .capabilities
+            .push(PluginHostCapability::TasksUpdate);
         assert!(manifest.validate().is_err());
     }
 
