@@ -98,14 +98,19 @@ describe("serializeComments", () => {
       endLine: 2,
       text: "Why was this removed?",
     });
-    const diffs = new Map<string, TextFileDiff>([["deleted.ts", {
-      kind: "text",
-      original: "keep\nremoved\n",
-      modified: "keep\n",
-      language: "typescript",
-      original_size: 13,
-      modified_size: 5,
-    }]]);
+    const diffs = new Map<string, TextFileDiff>([
+      [
+        "deleted.ts",
+        {
+          kind: "text",
+          original: "keep\nremoved\n",
+          modified: "keep\n",
+          language: "typescript",
+          original_size: 13,
+          modified_size: 5,
+        },
+      ],
+    ]);
 
     const result = serializeComments([comment], diffs);
     expect(result).toContain("removed");
@@ -139,11 +144,25 @@ describe("serializeComments", () => {
     const diffs = new Map<string, TextFileDiff>([
       [
         "a.ts",
-        { original: "", modified: "line1\nline2\nline3\nline4\nline5\n", language: "typescript", kind: "text", original_size: 0, modified_size: 0 },
+        {
+          original: "",
+          modified: "line1\nline2\nline3\nline4\nline5\n",
+          language: "typescript",
+          kind: "text",
+          original_size: 0,
+          modified_size: 0,
+        },
       ],
       [
         "b.ts",
-        { original: "", modified: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n", language: "typescript", kind: "text", original_size: 0, modified_size: 0 },
+        {
+          original: "",
+          modified: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n",
+          language: "typescript",
+          kind: "text",
+          original_size: 0,
+          modified_size: 0,
+        },
       ],
     ]);
 

@@ -13,15 +13,15 @@ export interface ReviewComment {
   createdAt: number;
 }
 
-type NewReviewComment = Omit<ReviewComment, "id" | "createdAt" | "side" | "comparisonKey" | "fingerprint"> &
+type NewReviewComment = Omit<
+  ReviewComment,
+  "id" | "createdAt" | "side" | "comparisonKey" | "fingerprint"
+> &
   Partial<Pick<ReviewComment, "side" | "comparisonKey" | "fingerprint">>;
 
 let commentsBySession = $state<Record<string, ReviewComment[]>>({});
 
-export function addComment(
-  sessionId: string,
-  comment: NewReviewComment,
-): ReviewComment {
+export function addComment(sessionId: string, comment: NewReviewComment): ReviewComment {
   const full: ReviewComment = {
     ...comment,
     side: comment.side ?? "modified",

@@ -41,7 +41,14 @@ Every backend and UI path must be a package-relative file path: no absolute path
     "windows-x64": "bin/windows-x64/planeai-plugin-fixture.exe",
     "windows-arm64": "bin/windows-arm64/planeai-plugin-fixture.exe"
   },
-  "capabilities": ["settings", "projects.read", "sessions.read", "tasks.read", "tasks.create", "task-events"],
+  "capabilities": [
+    "settings",
+    "projects.read",
+    "sessions.read",
+    "tasks.read",
+    "tasks.create",
+    "task-events"
+  ],
   "ui_contributions": [
     {
       "id": "fixture",

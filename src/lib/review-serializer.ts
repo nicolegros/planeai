@@ -21,9 +21,10 @@ export function serializeComments(
     const lang = diff?.language ?? "";
 
     for (const comment of sorted) {
-      const sourceLines = comment.side === "original"
-        ? diff?.original.split("\n") ?? []
-        : diff?.modified.split("\n") ?? [];
+      const sourceLines =
+        comment.side === "original"
+          ? (diff?.original.split("\n") ?? [])
+          : (diff?.modified.split("\n") ?? []);
       lines.push("");
       if (comment.type === "file") {
         lines.push(`--- ${filePath} (file-level) ---`);

@@ -58,6 +58,8 @@
   let sidebarRows = $derived(getReviewTreeRows(files, expandedSidebarFolders));
   let diffView = $state<CodeMirrorDiff>();
   let cache = new Map<string, ReviewFileDiff>();
+  let inFlightDiffs = new Map<string, Promise<ReviewFileDiff>>();
+  let selectedLoadRequest = 0;
   let activeDiff = $state<ReviewFileDiff | null>(null);
 
   let comparison = $derived(getComparison(sessionId, baseBranch));
@@ -93,9 +95,11 @@
   }
 
   async function refresh({ comparisonChange = false } = {}): Promise<void> {
-    if (!discardCommentDraft()) return;
+    if (sendingFeedback || !discardCommentDraft()) return;
     if (comparisonChange && !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
     const generation = ++refreshGeneration;
+    selectedLoadRequest++;
+    inFlightDiffs = new Map();
     loading = true;
     selectedRange = null;
     cache = new Map();
@@ -103,6 +107,9 @@
       const nextFiles = await git.getChangedFiles(repoPath, effectiveBase, effectiveHead);
       if (generation !== refreshGeneration) return;
       const previousPath = activeFile?.path;
+      const orphanedComments = getComments(sessionId).filter((comment) => !nextFiles.some((file) => file.path === comment.filePath));
+      if (orphanedComments.length > 0 && !window.confirm(`Discard ${orphanedComments.length} comment${orphanedComments.length === 1 ? "" : "s"} for file${orphanedComments.length === 1 ? "" : "s"} no longer in this comparison?`)) return;
+      orphanedComments.forEach((comment) => removeComment(sessionId, comment.id));
       const nextFolderPaths = getReviewFolderPaths(nextFiles);
       let nextExpandedFolders = reconcileReviewTreeExpansion(
         expandedSidebarFolders,
@@ -138,30 +145,64 @@
     }
   }
 
+  function fetchFileDiff(
+    file: ChangedFile,
+    key: string,
+    cacheAtRequestStart: Map<string, ReviewFileDiff>,
+    inFlightAtRequestStart: Map<string, Promise<ReviewFileDiff>>,
+  ): Promise<ReviewFileDiff> {
+    const existing = inFlightAtRequestStart.get(key);
+    if (existing) return existing;
+
+    const request = git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as Promise<ReviewFileDiff>;
+    const cachedRequest = request.then((diff) => {
+      if (cache === cacheAtRequestStart) cache.set(key, diff);
+      return diff;
+    }).finally(() => {
+      if (inFlightDiffs === inFlightAtRequestStart && inFlightAtRequestStart.get(key) === cachedRequest) {
+        inFlightAtRequestStart.delete(key);
+      }
+    });
+    inFlightAtRequestStart.set(key, cachedRequest);
+    return cachedRequest;
+  }
+
   async function loadSelected(generation = refreshGeneration): Promise<void> {
     const file = files[selectedIndex];
-    if (!file) { activeDiff = null; return; }
+    const requestId = ++selectedLoadRequest;
+    if (!file) { activeDiff = null; fileLoading = false; return; }
     onFileChange?.(fileName(file.path));
     const key = cacheKey(file);
     const cached = cache.get(key);
-    if (cached) { activeDiff = cached; return; }
+    if (cached) { activeDiff = cached; fileLoading = false; return; }
     activeDiff = null;
     fileLoading = true;
     const cacheAtRequestStart = cache;
+    const inFlightAtRequestStart = inFlightDiffs;
     try {
-      const diff = await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff;
-      if (generation !== refreshGeneration || cache !== cacheAtRequestStart || files[selectedIndex]?.path !== file.path) return;
-      cache.set(key, diff);
+      const diff = await fetchFileDiff(file, key, cacheAtRequestStart, inFlightAtRequestStart);
+      if (
+        generation !== refreshGeneration
+        || cache !== cacheAtRequestStart
+        || requestId !== selectedLoadRequest
+        || files[selectedIndex]?.path !== file.path
+      ) return;
       activeDiff = diff;
-      void preloadAdjacentFiles(generation, cacheAtRequestStart);
+      void preloadAdjacentFiles(generation, cacheAtRequestStart, inFlightAtRequestStart);
     } catch (error) {
-      if (generation === refreshGeneration) showSnackbar(`Could not load ${file.path}: ${String(error)}`, "error");
+      if (generation === refreshGeneration && requestId === selectedLoadRequest) {
+        showSnackbar(`Could not load ${file.path}: ${String(error)}`, "error");
+      }
     } finally {
-      if (generation === refreshGeneration) fileLoading = false;
+      if (generation === refreshGeneration && requestId === selectedLoadRequest) fileLoading = false;
     }
   }
 
-  async function preloadAdjacentFiles(generation: number, cacheAtRequestStart: Map<string, ReviewFileDiff>): Promise<void> {
+  async function preloadAdjacentFiles(
+    generation: number,
+    cacheAtRequestStart: Map<string, ReviewFileDiff>,
+    inFlightAtRequestStart: Map<string, Promise<ReviewFileDiff>>,
+  ): Promise<void> {
     const requests = [selectedIndex - 1, selectedIndex + 1].flatMap((index) => {
       const file = files[index];
       if (!file) return [];
@@ -170,8 +211,7 @@
     });
     await Promise.all(requests.map(async ({ file, key }) => {
       try {
-        const diff = await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff;
-        if (generation === refreshGeneration && cache === cacheAtRequestStart) cache.set(key, diff);
+        await fetchFileDiff(file, key, cacheAtRequestStart, inFlightAtRequestStart);
       } catch { /* Selected-file loading remains the only user-visible failure. */ }
     }));
   }
@@ -226,7 +266,8 @@
   }
 
   function openComment(selection = selectedRange): void {
-    if (!selection || !activeTextDiff || !activeFile) return;
+    if (sendingFeedback || !selection || !activeTextDiff || !activeFile) return;
+    if (showCommentInput && !discardCommentDraft()) return;
     commentRange = selection;
     commentType = selection.startLine === selection.endLine ? "line" : "hunk";
     commentText = "";
@@ -236,6 +277,12 @@
   }
 
   function openEditComment(comment: ReviewComment): void {
+    if (sendingFeedback) return;
+    if (showCommentInput && editingCommentId === comment.id) {
+      commentInputEl?.focus();
+      return;
+    }
+    if (showCommentInput && !discardCommentDraft()) return;
     commentRange = { side: comment.side, startLine: comment.startLine, endLine: comment.endLine };
     commentType = comment.type;
     commentText = comment.text;
@@ -253,7 +300,7 @@
 
   function submitComment(): void {
     const text = commentText.trim();
-    if (!text || !activeFile || !activeTextDiff || !commentRange) return;
+    if (sendingFeedback || !text || !activeFile || !activeTextDiff || !commentRange) return;
     if (editingCommentId) editComment(sessionId, editingCommentId, text);
     else addComment(sessionId, {
       filePath: activeFile.path,
@@ -276,7 +323,7 @@
 
   async function sendFeedback(): Promise<void> {
     const comments = getComments(sessionId);
-    if (comments.length === 0 || sessionExited || sendingFeedback) return;
+    if (comments.length === 0 || sessionExited || sendingFeedback || showCommentInput) return;
     sendingFeedback = true;
     try {
       const diffs = new Map<string, TextFileDiff>();
@@ -305,12 +352,28 @@
     }
   }
 
+  function editCommentAtSelection(): void {
+    const selection = selectedRange;
+    if (!selection || !activeFile) return;
+    const comment = currentFileComments.find((candidate) =>
+      candidate.side === selection.side
+      && candidate.startLine <= selection.endLine
+      && candidate.endLine >= selection.startLine,
+    );
+    if (comment) openEditComment(comment);
+  }
+
   function handleKeydown(e: KeyboardEvent): void {
     if (!visible || getActiveZone() !== "terminal") return;
     const element = document.activeElement;
     if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
     if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }
-    if (showCommentInput || showCompareForm || allFilesReviewed) return;
+    if (sendingFeedback || showCommentInput || showCompareForm || allFilesReviewed) return;
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true, bubbles: true }));
+      return;
+    }
     if ((e.key === "n" && e.ctrlKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
       e.preventDefault();
       selectFile(Math.min(files.length - 1, selectedIndex + 1));
@@ -335,7 +398,13 @@
       return;
     }
     if (e.key === "Escape") { e.preventDefault(); selectedRange = null; diffFocus = "list"; return; }
-    if (e.key === "c" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); openComment(); }
+    if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      openComment();
+    } else if (e.key === "E" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      editCommentAtSelection();
+    }
   }
 
   function toggleSidebarFolder(path: string): void {
@@ -449,16 +518,36 @@
         <span class="text-[11px] text-status-exited">−{activeFile.deletions}</span>
       {/if}
       <div class="flex-1"></div>
-      <button class="rounded-md px-2 py-1 font-mono text-[11px] text-t2 hover:bg-panel-hi hover:text-t1" onclick={() => (showCompareForm = !showCompareForm)} title="Change comparison (B)">{formatComparison(comparison)}</button>
+      <button class="rounded-md px-2 py-1 font-mono text-[11px] text-t2 hover:bg-panel-hi hover:text-t1" onclick={() => { if (!sendingFeedback) showCompareForm = !showCompareForm; }} title="Change comparison (B)">{formatComparison(comparison)}</button>
       <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5">
         <button class="rounded-md px-2 py-1 text-[11px] {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("unified")}>Unified</button>
         <button class="rounded-md px-2 py-1 text-[11px] {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("split")}>Split</button>
       </div>
+      {#if diffStyle === "unified"}
+        <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5" aria-label="Original-side review selection">
+          <button
+            type="button"
+            class="rounded-md px-2 py-1 text-[11px] text-t2 hover:text-t1"
+            onclick={() => diffView?.previousOriginalHunk()}
+            title="Select previous original-side hunk (Option-Shift-Up)"
+            aria-label="Select previous original-side hunk"
+            aria-keyshortcuts="Alt+Shift+ArrowUp"
+          >Original ↑</button>
+          <button
+            type="button"
+            class="rounded-md px-2 py-1 text-[11px] text-t2 hover:text-t1"
+            onclick={() => diffView?.nextOriginalHunk()}
+            title="Select next original-side hunk (Option-Shift-Down)"
+            aria-label="Select next original-side hunk"
+            aria-keyshortcuts="Alt+Shift+ArrowDown"
+          >Original ↓</button>
+        </div>
+      {/if}
       {#if selectedRange && activeTextDiff}
         <Button size="sm" onclick={() => openComment()}>Comment</Button>
       {/if}
       {#if totalCount > 0}
-        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}>
+        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback || showCommentInput} title={sessionExited ? "Agent is not running" : showCommentInput ? "Submit or cancel the open comment before sending feedback" : `Send feedback (${MOD_ENTER_HINT})`}>
           {#if sendingFeedback}<LoaderCircle size={12} class="animate-spin" />{:else}<Send size={12} />{/if}<span class="ml-1">Send ({totalCount})</span>
         </Button>
       {/if}
@@ -470,7 +559,7 @@
 
     {#if showCompareForm}
       <BranchCompareForm {repoPath} {baseBranch} currentBase={effectiveBase} currentHead={effectiveHead} onConfirm={(baseRef, headRef) => {
-        if (!discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
+        if (sendingFeedback || !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
         setComparison(sessionId, { baseRef, headRef });
         showCompareForm = false;
         void refresh({ comparisonChange: false });
@@ -480,7 +569,7 @@
     {#if showCommentInput}
       <div class="absolute left-0 right-0 z-20 border-b border-border bg-chrome p-3" style:top="{contentTop}px">
         <div class="mb-1.5 text-[10px] text-t3">● {editingCommentId ? "Edit note" : "Review note"} · {commentRange?.side} {commentRange?.startLine === commentRange?.endLine ? `line ${commentRange?.startLine}` : `lines ${commentRange?.startLine}–${commentRange?.endLine}`}</div>
-        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full resize-none rounded-lg border border-border-s bg-panel p-2 text-[12.5px] text-t1 focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
+        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} aria-label="Review comment" class="w-full resize-none rounded-lg border border-border-s bg-panel p-2 text-[12.5px] text-t1 focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
       </div>
     {/if}
 
@@ -489,8 +578,8 @@
         {#each currentFileComments as comment (comment.id)}
           <div class="flex items-start gap-2 border-b border-border/50 px-4 py-2 last:border-b-0" role="group" aria-label="Review comment">
             <button type="button" class="min-w-0 flex-1 text-left" onclick={() => openEditComment(comment)}><span class="mr-2 font-mono text-[10px] text-t3">{comment.side} L{comment.startLine}{comment.startLine === comment.endLine ? "" : `–${comment.endLine}`}</span><span class="whitespace-pre-wrap text-[12px] text-t1">{comment.text}</span></button>
-            <button class="text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} title="Edit">✎</button>
-            <button class="text-[13px] text-t3 hover:text-t1" onclick={() => removeComment(sessionId, comment.id)} title="Delete">×</button>
+            <button class="text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} disabled={sendingFeedback} title="Edit" aria-label="Edit review comment">✎</button>
+            <button class="text-[13px] text-t3 hover:text-t1" onclick={() => { if (!sendingFeedback) removeComment(sessionId, comment.id); }} disabled={sendingFeedback} title="Delete" aria-label="Delete review comment">×</button>
           </div>
         {/each}
       </div>
@@ -506,7 +595,7 @@
       {:else if activeDiff?.kind === "binary"}
         <div class="flex h-full flex-col items-center justify-center gap-2 bg-main text-t3"><span class="text-sm font-medium text-t2">Binary file cannot be rendered as text</span><span class="font-mono text-xs">{activeDiff.original_size} B → {activeDiff.modified_size} B</span></div>
       {:else if activeTextDiff}
-        <CodeMirrorDiff bind:this={diffView} diff={activeTextDiff} filePath={activeFile?.path ?? ""} mode={diffStyle} dark={isDark()} fontFamily={terminal.font_family} fontSize={terminal.font_size} onSelection={(selection) => { selectedRange = selection; diffFocus = "body"; }} />
+        <CodeMirrorDiff bind:this={diffView} diff={activeTextDiff} filePath={activeFile?.path ?? ""} mode={diffStyle} dark={isDark()} fontFamily={terminal.font_family} fontSize={terminal.font_size} comments={currentFileComments} onEditComment={openEditComment} onDeleteComment={(comment) => { if (!sendingFeedback) removeComment(sessionId, comment.id); }} onSelection={(selection) => { selectedRange = selection; diffFocus = "body"; }} />
       {:else if fileLoading}
         <div class="flex h-full items-center justify-center bg-main text-t3">Loading file…</div>
       {/if}

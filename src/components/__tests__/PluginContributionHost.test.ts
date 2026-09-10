@@ -247,7 +247,10 @@ describe("PluginContributionHost", () => {
     window.dispatchEvent(new Event("planeai-theme-changed"));
     await vi.waitFor(() =>
       expect(postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "theme", css: expect.stringContaining("--planeai-main:#123456") }),
+        expect.objectContaining({
+          type: "theme",
+          css: expect.stringContaining("--planeai-main:#123456"),
+        }),
         "*",
       ),
     );
