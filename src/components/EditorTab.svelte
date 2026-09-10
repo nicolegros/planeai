@@ -18,7 +18,7 @@
   import { syntaxHighlighting } from "@codemirror/language";
   import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { isPlatformMod, MOD_LABEL } from "../lib/keyboard";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { recordUserInput } from "../lib/session-orchestrator.svelte";
@@ -324,6 +324,23 @@
     }
   }
 
+  function handleFeedbackShortcut(event: KeyboardEvent): void {
+    if (
+      !visible
+      || event.defaultPrevented
+      || event.key !== "Enter"
+      || !isPlatformMod(event)
+      || pendingFeedback.length === 0
+      || sessionExited
+      || sendingFeedback
+      || showFeedbackComposer
+    ) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    void sendFeedback();
+  }
+
   function closeCurrentBuffer(force: boolean) {
     if (!activeBuffer) return;
     if (activeBuffer.modified && !force) {
@@ -362,7 +379,8 @@
   }
 
   onMount(() => {
-    // Lazy setup on first visibility
+    window.addEventListener("keydown", handleFeedbackShortcut, true);
+    return () => window.removeEventListener("keydown", handleFeedbackShortcut, true);
   });
 
   onDestroy(() => {
