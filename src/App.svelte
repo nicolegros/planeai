@@ -9,6 +9,7 @@
   import * as projectStore from "./lib/project-store.svelte";
   import * as taskStore from "./lib/task-store.svelte";
   import { installKeyboardRouter, matchChord, MOD_LABEL, isPlatformMod, MOD_ENTER_HINT } from "./lib/keyboard";
+  import { findPluginShortcut } from "./lib/plugin-shortcuts";
   import { getCycleState, startCycle, advance, commit, cancel } from "./lib/tab-switcher.svelte";
   import * as navCycle from "./lib/session-nav-cycle.svelte";
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
@@ -998,14 +999,23 @@
 
     initUpdateListener();
     const onPluginShortcut = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isPlatformMod(event) || matchChord(event)) return;
-      const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3) : event.key.toUpperCase();
-      const parts = ["Mod", ...(event.shiftKey ? ["Shift"] : []), ...(event.altKey ? ["Alt"] : []), key];
-      const shortcut = parts.join("+");
-      const target = mainPaneCommands.find(({ contribution }) => contribution.shortcut === shortcut);
-      if (target) { event.preventDefault(); openPluginContribution(target.plugin.id, target.contribution.id); }
+      if (event.defaultPrevented) return;
+      const target = findPluginShortcut(event, sessionPanelCommands, mainPaneCommands);
+      if (!target) return;
+      event.preventDefault();
+      if (target.contribution.placement === "session.panel") {
+        if (modalPluginId === target.plugin.id && modalContributionId === target.contribution.id) {
+          closePluginContributionModal();
+          return;
+        }
+        showPrPanel = false;
+        showPrForm = false;
+        openPluginContributionModal(target.plugin.id, target.contribution.id);
+        return;
+      }
+      openPluginContribution(target.plugin.id, target.contribution.id);
     };
-    window.addEventListener("keydown", onPluginShortcut);
+    window.addEventListener("keydown", onPluginShortcut, true);
 
     notify.isInstalled().then((installed) => { if (!installed) showHookPrompt = true; });
     sessionLogs.isEnabled().then((enabled) => { logViewerEnabled = enabled; });
@@ -1135,7 +1145,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { window.removeEventListener("keydown", onPluginShortcut, true); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1669,7 +1679,7 @@
 {#if modalPlugin && modalContribution && activePluginSessionContext}
   <FormDialog
     title={modalContribution.label}
-    class="w-[min(90vw,840px)] h-[min(78vh,720px)]"
+    class="h-[min(78vh,720px)]"
     preventEscapeClose={false}
     onClose={closePluginContributionModal}
   >

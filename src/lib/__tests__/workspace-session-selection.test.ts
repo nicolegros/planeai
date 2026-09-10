@@ -35,6 +35,18 @@ describe("workspace session selection", () => {
     );
   });
 
+  it("routes an active session-panel plugin shortcut before the legacy PR fallback", () => {
+    expect(appSource).toMatch(
+      /findPluginShortcut\(event, sessionPanelCommands, mainPaneCommands\)/,
+    );
+    expect(appSource).toMatch(
+      /window\.addEventListener\("keydown", onPluginShortcut, true\)/,
+    );
+    expect(appSource).toMatch(
+      /target\.contribution\.placement === "session\.panel"[\s\S]*?showPrPanel = false;[\s\S]*?openPluginContributionModal\(target\.plugin\.id, target\.contribution\.id\)/,
+    );
+  });
+
   it("opens only a titlebar navigation target session panel in the generic modal", () => {
     expect(appSource).toMatch(
       /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,

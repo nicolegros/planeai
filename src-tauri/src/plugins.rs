@@ -369,11 +369,11 @@ fn validate_ui_contributions(
             &contribution.entrypoint,
             "UI contribution entrypoint",
         )?;
-        if !matches!(contribution.placement, PluginUiPlacement::MainPane)
+        if !matches!(contribution.placement, PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel)
             && contribution.shortcut.is_some()
         {
             return Err(
-                "UI contribution shortcuts are only valid for main-pane contributions".to_string(),
+                "UI contribution shortcuts are only valid for main-pane or session-panel contributions".to_string(),
             );
         }
         if !contribution.placement.is_sidebar() && contribution.order.is_some() {
@@ -423,14 +423,6 @@ fn validate_shortcut(shortcut: &str) -> Result<(), String> {
         return Err(
             "UI contribution shortcut modifiers must be ordered Shift then Alt".to_string(),
         );
-    }
-    if matches!(
-        key,
-        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
-    ) {
-        return Err(format!(
-            "UI contribution shortcut {shortcut} is reserved by PlaneAI"
-        ));
     }
     Ok(())
 }

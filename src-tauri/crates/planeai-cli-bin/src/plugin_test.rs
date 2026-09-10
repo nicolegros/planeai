@@ -960,6 +960,8 @@ mod tests {
             .remove("order");
         invalid_contribution["ui_contributions"][0]["shortcut"] = json!("Mod+L");
         assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_err());
+        invalid_contribution["ui_contributions"][0]["placement"] = json!("session.panel");
+        assert!(validate_local_manifest(&invalid_contribution, "test-platform").is_ok());
         invalid_contribution["ui_contributions"][0]
             .as_object_mut()
             .unwrap()
