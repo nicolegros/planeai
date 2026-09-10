@@ -18,16 +18,19 @@
   import { syntaxHighlighting } from "@codemirror/language";
   import { classHighlighter } from "@lezer/highlight";
   import { getSettings } from "../lib/settings.svelte";
-  import { isPlatformMod, MOD_LABEL } from "../lib/keyboard";
+  import { isPlatformMod, MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
   import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { recordUserInput } from "../lib/session-orchestrator.svelte";
   import {
     addEditorFeedback,
+    beginEditorFeedbackSend,
     clearEditorFeedback,
     editEditorFeedback,
+    endEditorFeedbackSend,
     getEditorFeedback,
     getEditorFeedbackCount,
+    isEditorFeedbackSending,
     removeEditorFeedback,
     type EditorFeedback,
     type EditorFeedbackSnapshot,
@@ -74,7 +77,7 @@
   let feedbackSnapshot = $state<EditorFeedbackSnapshot | null>(null);
   let editingFeedbackId = $state<string | null>(null);
   let feedbackInputEl = $state<HTMLTextAreaElement>();
-  let sendingFeedback = $state(false);
+  const sendingFeedback = $derived(isEditorFeedbackSending(sessionId));
 
   // Auto-open initialFile when provided
   $effect(() => {
@@ -117,7 +120,6 @@
           { key: "Mod-e", run: () => false },
           { key: "Mod-,", run: () => false },
           { key: "Mod-Shift-c", run: () => { openFeedbackComposer(); return true; } },
-          { key: "Mod-Enter", run: () => { void sendFeedback(); return true; } },
         ])),
         ...(useVim ? [vim()] : []),
         basicSetup,
@@ -272,8 +274,20 @@
     requestAnimationFrame(() => feedbackInputEl?.focus());
   }
 
+  function discardFeedbackDraft(): boolean {
+    if (!showFeedbackComposer || !feedbackText.trim()) { cancelFeedbackComposer(); return true; }
+    if (!window.confirm("Discard the unsaved editor feedback?")) return false;
+    cancelFeedbackComposer();
+    return true;
+  }
+
   function openFeedbackEdit(feedback: EditorFeedback): void {
     if (sendingFeedback) return;
+    if (showFeedbackComposer && editingFeedbackId === feedback.id) {
+      feedbackInputEl?.focus();
+      return;
+    }
+    if (showFeedbackComposer && !discardFeedbackDraft()) return;
     feedbackSnapshot = null;
     feedbackText = feedback.text;
     editingFeedbackId = feedback.id;
@@ -302,32 +316,44 @@
   }
 
   function handleFeedbackKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") { event.preventDefault(); cancelFeedbackComposer(); }
+    if (event.key === "Escape") { event.preventDefault(); discardFeedbackDraft(); }
     else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitFeedback(); }
   }
 
   async function sendFeedback(): Promise<void> {
     if (pendingFeedback.length === 0 || sessionExited || sendingFeedback || showFeedbackComposer) return;
-    sendingFeedback = true;
+    if (!beginEditorFeedbackSend(sessionId)) return;
     try {
       const bytes = Array.from(new TextEncoder().encode(serializeEditorFeedback(pendingFeedback)));
+      bytes.push(0x0d);
+      const delivered = await pty.write(sessionId, bytes);
+      if (!delivered) throw new Error("PTY session is not attached. Try again once it is ready.");
       recordUserInput(sessionId);
-      await pty.write(sessionId, bytes);
-      await pty.write(sessionId, [0x0d]);
       const count = pendingFeedback.length;
       clearEditorFeedback(sessionId);
       showSnackbar(`Editor feedback sent (${count} note${count === 1 ? "" : "s"})`, "success");
     } catch (error) {
       showSnackbar(String(error).replace(/^Error: /, ""), "error");
     } finally {
-      sendingFeedback = false;
+      endEditorFeedbackSend(sessionId);
     }
+  }
+
+  function isShortcutHandledByControl(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    const editable = target.closest("[contenteditable]");
+    return Boolean(
+      target.closest("input, textarea, select, button, [role='dialog']")
+      || (editable && !editable.classList.contains("cm-content")),
+    );
   }
 
   function handleFeedbackShortcut(event: KeyboardEvent): void {
     if (
       !visible
+      || !focused
       || event.defaultPrevented
+      || isShortcutHandledByControl(event.target)
       || event.key !== "Enter"
       || !isPlatformMod(event)
       || pendingFeedback.length === 0
@@ -426,7 +452,7 @@
   }
 </script>
 
-<div class="flex flex-col h-full w-full" class:hidden={!visible}>
+<div class="flex flex-col h-full w-full" class:hidden={!visible} data-editor-tab>
   {#if showFeedbackComposer}
     <div class="shrink-0 border-b border-border bg-chrome p-3">
       <div class="mb-1.5 text-[10px] text-t3">
@@ -480,9 +506,9 @@
         </span>
       </div>
       <div class="flex items-center gap-3">
-        <button type="button" class="rounded px-1.5 py-0.5 text-[10px] text-t2 hover:bg-panel hover:text-t1 disabled:cursor-not-allowed disabled:opacity-50" onclick={openFeedbackComposer} disabled={!hasSelection || sendingFeedback || showFeedbackComposer} title="Comment selection (⌘⇧C)">Comment</button>
+        <button type="button" class="rounded px-1.5 py-0.5 text-[10px] text-t2 hover:bg-panel hover:text-t1 disabled:cursor-not-allowed disabled:opacity-50" onclick={openFeedbackComposer} disabled={!hasSelection || sendingFeedback || showFeedbackComposer} title={`Comment selection (${MOD_LABEL}⇧C)`}>Comment</button>
         {#if pendingFeedbackCount > 0}
-          <button type="button" class="rounded bg-accent-bg px-1.5 py-0.5 text-[10px] text-accent hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50" onclick={() => void sendFeedback()} disabled={sessionExited || sendingFeedback || showFeedbackComposer} title={sessionExited ? "Agent is not running" : showFeedbackComposer ? "Submit or cancel the open comment before sending feedback" : "Send feedback (⌘Enter)"}>Send ({pendingFeedbackCount})</button>
+          <button type="button" class="rounded bg-accent-bg px-1.5 py-0.5 text-[10px] text-accent hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50" onclick={() => void sendFeedback()} disabled={sessionExited || sendingFeedback || showFeedbackComposer} title={sessionExited ? "Agent is not running" : showFeedbackComposer ? "Submit or cancel the open comment before sending feedback" : `Send feedback (${MOD_ENTER_HINT})`}>Send ({pendingFeedbackCount})</button>
         {/if}
         {#if buffers.length > 1}
           <span class="text-t3">[{activeIndex + 1}/{buffers.length}]</span>

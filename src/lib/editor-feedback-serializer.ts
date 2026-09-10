@@ -26,8 +26,13 @@ export function serializeEditorFeedback(feedback: readonly EditorFeedback[]): st
 
 function appendCodeBlock(lines: string[], label: string, content: string, language: string): void {
   if (!content) return;
+  const longestBacktickRun = Math.max(
+    2,
+    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(longestBacktickRun + 1);
   lines.push(label);
-  lines.push(`\`\`\`${language}`);
+  lines.push(`${fence}${language}`);
   lines.push(content);
-  lines.push("```");
+  lines.push(fence);
 }

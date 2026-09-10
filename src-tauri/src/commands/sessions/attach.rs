@@ -142,14 +142,15 @@ pub fn attach_session(
 }
 
 #[tauri::command]
-pub fn write_to_pty(
+pub async fn write_to_pty(
     session_id: String,
     data: Vec<u8>,
-    state: State<PtyState>,
-) -> Result<(), String> {
-    match state.0.write(&session_id, &data) {
-        Err(e) if e == "session not attached" => Ok(()),
-        other => other,
+    state: State<'_, PtyState>,
+) -> Result<bool, String> {
+    match state.0.write(&session_id, &data).await {
+        Ok(()) => Ok(true),
+        Err(e) if e == "session not attached" => Ok(false),
+        Err(e) => Err(e),
     }
 }
 

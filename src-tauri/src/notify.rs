@@ -149,11 +149,14 @@ fn dispatch_message(msg: &NotifyMessage, state: &SharedNotifyState, app: &AppHan
         }
         NotifyEvent::SendPrompt => {
             if let Some(text) = &msg.text {
-                let pty_state = app.state::<crate::state::PtyState>();
-                let payload = format!("{}\n", text);
-                if let Err(e) = pty_state.0.write(&msg.session_id, payload.as_bytes()) {
-                    tracing::warn!(session_id = %msg.session_id, error = %e, "send_prompt write failed");
-                }
+                let pty_manager = app.state::<crate::state::PtyState>().0.clone();
+                let session_id = msg.session_id.clone();
+                let payload = format!("{}\n", text).into_bytes();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = pty_manager.write(&session_id, &payload).await {
+                        tracing::warn!(%session_id, error = %e, "send_prompt write failed");
+                    }
+                });
             }
         }
     }

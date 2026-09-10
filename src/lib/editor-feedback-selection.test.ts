@@ -48,4 +48,15 @@ describe("createEditorFeedbackSnapshot", () => {
     const large = Text.of(["x".repeat(MAX_EDITOR_FEEDBACK_BYTES + 1)]);
     expect(snapshot(large, 0, large.length)).toEqual({ error: "too-large" });
   });
+
+  it("bounds context around a small selection beside an oversized line", () => {
+    const doc = Text.of(["x".repeat(MAX_EDITOR_FEEDBACK_BYTES * 2), "selected"]);
+    const result = snapshot(doc, doc.line(2).from, doc.line(2).to);
+
+    expect("snapshot" in result).toBe(true);
+    if (!("snapshot" in result)) return;
+    expect(new TextEncoder().encode(result.snapshot.contextBefore).byteLength).toBeLessThanOrEqual(
+      4096,
+    );
+  });
 });

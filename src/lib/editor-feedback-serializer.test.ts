@@ -52,4 +52,11 @@ describe("serializeEditorFeedback", () => {
     expect(result).not.toContain("Context after selection:");
     expect(result).not.toContain("unsaved editor content");
   });
+  it("uses a fence longer than any backtick run in selected source", () => {
+    const result = serializeEditorFeedback([
+      { ...feedback, selectedText: "const markdown = ```;" },
+    ]);
+
+    expect(result).toContain("````typescript\nconst markdown = ```;\n````");
+  });
 });

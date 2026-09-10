@@ -16,7 +16,7 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Emitter};
 
 use crate::output_observer::OutputObserver;
-use crate::session_backend::SessionBackend;
+use crate::session_backend::{SessionBackend, WriteAck};
 
 /// Forwards planeai-pty events to the Tauri frontend via the existing output channel.
 pub struct TauriPtySink {
@@ -157,8 +157,11 @@ impl PlaneaiPtyBackend {
 }
 
 impl SessionBackend for PlaneaiPtyBackend {
-    fn write(&self, data: &[u8]) -> Result<(), String> {
-        self.session.write(data).map_err(|e| e.to_string())
+    fn write(&self, data: &[u8]) -> Result<WriteAck, String> {
+        self.session
+            .write(data)
+            .map(|_| WriteAck::Immediate)
+            .map_err(|e| e.to_string())
     }
 
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {

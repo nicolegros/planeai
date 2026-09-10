@@ -96,6 +96,7 @@
   ]};
 
   const editorShortcuts = { section: "Editor", items: [
+    { keys: `${MOD_LABEL}⇧C`, description: "Comment on selected code" },
     { keys: MOD_ENTER_HINT, description: "Send queued editor feedback" },
   ]};
 

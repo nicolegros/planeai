@@ -21,6 +21,7 @@ import {
   removeSession as poolRemove,
 } from "./mru.svelte";
 import { clearComments } from "./review-comments.svelte";
+import { clearEditorFeedback } from "./editor-feedback.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
@@ -201,6 +202,7 @@ export async function deleteSession(s: Session): Promise<void> {
   dismissForSession(s.id);
   destroyTabState(s.id);
   clearComments(s.id);
+  clearEditorFeedback(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
@@ -215,6 +217,7 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   dismissForSession(s.id);
   clearComments(s.id);
+  clearEditorFeedback(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -259,6 +262,7 @@ export function removeProjectSessions(projectId: string): string[] {
   for (const id of ids) {
     poolRemove(id);
     destroyTabState(id);
+    clearEditorFeedback(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {

@@ -64,6 +64,8 @@ describe("editor feedback shortcut hints", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Editor");
+    expect(document.body.textContent).toContain(`${MOD_LABEL}⇧C`);
+    expect(document.body.textContent).toContain("Comment on selected code");
     expect(document.body.textContent).toContain(MOD_ENTER_HINT);
     expect(document.body.textContent).toContain("Send queued editor feedback");
   });

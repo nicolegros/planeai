@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   _resetForTests,
   addEditorFeedback,
+  beginEditorFeedbackSend,
   clearEditorFeedback,
   editEditorFeedback,
+  endEditorFeedbackSend,
   getEditorFeedback,
   getEditorFeedbackCount,
+  isEditorFeedbackSending,
   removeEditorFeedback,
 } from "../editor-feedback.svelte";
 
@@ -38,6 +41,17 @@ describe("editor-feedback", () => {
     editEditorFeedback("s1", feedback.id, "Updated note.");
 
     expect(getEditorFeedback("s1")[0]).toEqual({ ...feedback, text: "Updated note." });
+  });
+
+  it("locks feedback sending for the session until delivery finishes", () => {
+    expect(beginEditorFeedbackSend("s1")).toBe(true);
+    expect(isEditorFeedbackSending("s1")).toBe(true);
+    expect(beginEditorFeedbackSend("s1")).toBe(false);
+
+    endEditorFeedbackSend("s1");
+
+    expect(isEditorFeedbackSending("s1")).toBe(false);
+    expect(beginEditorFeedbackSend("s1")).toBe(true);
   });
 
   it("removes and clears only feedback for the requested session", () => {
