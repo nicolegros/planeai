@@ -212,6 +212,14 @@
   const symphonyStatus = $derived(orchestrator.getSymphonyStatus());
   const zone = $derived(getActiveZone());
   const activeSession = $derived(sessions.find((s) => s.id === activeSessionId) ?? null);
+  const activePluginSessionContext = $derived(activeSession ? {
+    id: activeSession.id,
+    projectId: activeSession.project_id,
+    branch: activeSession.branch,
+    baseBranch: activeSession.base_branch,
+    status: activeSession.status,
+    taskKey: activeSession.task_key,
+  } : undefined);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
@@ -227,6 +235,14 @@
       plugin.ui_contributions.filter((contribution) => contribution.placement === "main-pane").map((contribution) => ({ plugin, contribution })),
     ).sort(comparePluginContribution),
   );
+  const sessionPanelCommands = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "session.panel").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const pluginCommands = $derived([...mainPaneCommands, ...sessionPanelCommands]);
   const interactionPluginContributions = $derived(
     pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
       plugin.ui_contributions.filter((contribution) => contribution.placement === "interaction").map((contribution) => ({ plugin, contribution })),
@@ -822,9 +838,11 @@
 
   function openPluginContribution(pluginId: string, contributionId: string): void {
     const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
-    const contribution = plugin?.ui_contributions.find((candidate) => candidate.id === contributionId && candidate.placement === "main-pane");
-    if (!plugin || !contribution) {
-      showSnackbar("Plugin main-pane contribution is unavailable");
+    const contribution = plugin?.ui_contributions.find((candidate) =>
+      candidate.id === contributionId && ["main-pane", "session.panel"].includes(candidate.placement),
+    );
+    if (!plugin || !contribution || (contribution.placement === "session.panel" && !activeSession)) {
+      showSnackbar("Plugin contribution is unavailable for the selected session");
       return;
     }
     if (activePluginId === pluginId && activeContributionId === contributionId) return;
@@ -1169,7 +1187,7 @@
       onSplitVertical={() => handleSplitAction("split_vertical")}
       onSplitHorizontal={() => handleSplitAction("split_horizontal")}
       onCloseSplit={() => handleSplitAction("close_split")}
-      pluginCommands={mainPaneCommands}
+      pluginCommands={pluginCommands}
       onOpenPluginContribution={openPluginContribution}
     />
 
@@ -1297,7 +1315,7 @@
           <span class="text-sm font-medium text-t1">{activePlugin ? `${activePlugin.name} · ${activeContribution?.label ?? "Contribution"}` : "Plugin"}</span>
         </div>
         {#if activePlugin && activeContribution}
-          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
+          <div class="min-h-0 flex-1"><PluginContributionHost plugin={activePlugin} contribution={activeContribution} session={activeContribution.placement === "session.panel" ? activePluginSessionContext : undefined} onNavigate={openPluginContribution} onClose={leavePluginWorkspace} onOpenPreferences={openPreferences} autofocus /></div>
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center text-sm text-t3">Plugin contribution is no longer available.</div>
         {/if}

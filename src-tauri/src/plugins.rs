@@ -126,6 +126,8 @@ pub enum PluginHostCapability {
     ProjectsRead,
     #[serde(rename = "sessions.read")]
     SessionsRead,
+    #[serde(rename = "sessions.repository-context")]
+    SessionsRepositoryContext,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
@@ -162,6 +164,8 @@ pub enum PluginUiPlacement {
     Preferences,
     #[serde(rename = "main-pane")]
     MainPane,
+    #[serde(rename = "session.panel")]
+    SessionPanel,
     #[serde(rename = "interaction")]
     Interaction,
 }
@@ -302,6 +306,7 @@ fn validate_capabilities(
                 PluginHostCapability::Settings
                     | PluginHostCapability::ProjectsRead
                     | PluginHostCapability::SessionsRead
+                    | PluginHostCapability::SessionsRepositoryContext
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
                     | PluginHostCapability::TaskEvents
@@ -309,7 +314,7 @@ fn validate_capabilities(
         })
     {
         return Err(
-            "local plugins may only request settings, projects.read, sessions.read, tasks.read, tasks.create, or task-events capabilities"
+            "local plugins may only request settings, projects.read, sessions.read, sessions.repository-context, tasks.read, tasks.create, or task-events capabilities"
                 .to_string(),
         );
     }
@@ -1360,6 +1365,7 @@ async fn execute_host_task(
         "host.settings.get" | "host.settings.replace" => PluginHostCapability::Settings,
         "host.projects.list" => PluginHostCapability::ProjectsRead,
         "host.sessions.list" => PluginHostCapability::SessionsRead,
+        "host.sessions.repositoryContext" => PluginHostCapability::SessionsRepositoryContext,
         "host.tasks.read" | "host.task.get" => PluginHostCapability::TasksRead,
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
@@ -1420,6 +1426,43 @@ async fn execute_host_task(
                 })
                 .collect::<Vec<_>>();
             Ok(serde_json::json!({ "sessions": sessions }))
+        })
+        .await;
+    }
+
+    if method == "host.sessions.repositoryContext" {
+        let session_id = params
+            .get("session_id")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("repository context requires session_id")?
+            .to_string();
+        return commands::blocking(move || {
+            let path = planeai_paths::db_path();
+            let conn = Connection::open(path).map_err(|error| error.to_string())?;
+            let session = crate::db::get_session(&conn, &session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or("session not found")?;
+            let project = crate::db::get_project(&conn, &session.project_id)
+                .map_err(|error| error.to_string())?
+                .ok_or("session project not found")?;
+            if project.hidden {
+                return Err("session project is hidden".to_string());
+            }
+            let working_tree_path = session
+                .worktree_path
+                .clone()
+                .unwrap_or(project.path.clone());
+            Ok(serde_json::json!({
+                "session_id": session.id,
+                "project_id": project.id,
+                "working_tree_path": working_tree_path,
+                "branch": session.branch,
+                "base_branch": session.base_branch,
+                "session_status": session.status,
+                "linked_task_key": session.task_key,
+            }))
         })
         .await;
     }

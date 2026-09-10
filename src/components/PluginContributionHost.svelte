@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { jiraDepartedInteractionEntrypoint, jiraPreferencesEntrypoint, jiraSidebarSectionEntrypoint, jiraStatusEntrypoint } from "../plugins/jira/entry";
   import { plugins, projects as projectsApi, tasks as tasksApi } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import * as taskStore from "../lib/task-store.svelte";
   import { getAllTasks } from "../lib/task-store.svelte";
   import { openPluginModal, openProjectForm } from "../lib/plugin-modal-manager";
-  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost } from "../lib/plugin-sdk";
+  import type { PluginUiDisposer, PluginUiEntrypoint, PluginUiHost, PluginSessionContext } from "../lib/plugin-sdk";
   import { registerPluginSidebarContribution } from "../lib/plugin-sidebar-navigation.svelte";
   import { focusSidebar } from "../lib/focus.svelte";
   import type { PluginInventory, PluginUiContribution } from "../lib/types";
@@ -20,6 +21,7 @@
     onOpenPreferences?: () => void;
     onFailure?: (error: unknown) => void;
     autofocus?: boolean;
+    session?: PluginSessionContext;
   }
 
   type LocalPluginFrameMessage = {
@@ -30,6 +32,7 @@
     action?: string;
     pluginId?: string;
     contributionId?: string;
+    url?: string;
     registrationId?: string;
     rows?: Array<{ id?: unknown }>;
     rowId?: string;
@@ -42,7 +45,7 @@
     message?: string;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, session }: Props = $props();
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
@@ -137,9 +140,10 @@
   }
 
   function retry(): void {
+    const sessionContext = session;
     if (!container) return;
     const version = ++generation;
-    void mountContribution(container, version);
+    void mountContribution(container, version, sessionContext);
   }
 
   function showLoadFailure(root: ShadowRoot, error: unknown): void {
@@ -154,18 +158,18 @@
     if (contribution.placement.startsWith("sidebar.")) onFailure(error);
   }
 
-  function createLocalPluginFrame(root: ShadowRoot): PluginUiDisposer {
+  function createLocalPluginFrame(root: ShadowRoot, sessionContext?: PluginSessionContext): PluginUiDisposer {
     const frame = document.createElement("iframe");
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
     frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane"
+      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel"
         ? "block h-full w-full border-0"
         : "block w-full border-0";
     frame.style.display = "block";
     frame.style.width = "100%";
     frame.style.border = "0";
-    if (contribution.placement === "interaction" || contribution.placement === "main-pane") {
+    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel") {
       frame.style.height = "100%";
     }
     if (contribution.placement.startsWith("sidebar.")) {
@@ -232,6 +236,7 @@
             open: (pluginId, contributionId) => send({ type: "navigation", action: "open", pluginId, contributionId }),
             close: () => send({ type: "navigation", action: "close" }),
             openPreferences: () => send({ type: "navigation", action: "preferences" }),
+            openExternal: (url) => send({ type: "navigation", action: "external", url }),
           },
           sidebar: {
             register: (rows) => {
@@ -374,6 +379,15 @@
           onNavigate(message.pluginId, message.contributionId);
         } else if (message.action === "close") onClose();
         else if (message.action === "preferences") onOpenPreferences();
+        else if (message.action === "external" && typeof message.url === "string") {
+          try {
+            const url = new URL(message.url);
+            if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+            void openUrl(url.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+          } catch (error) {
+            showSnackbar(`Invalid plugin URL: ${String(error)}`);
+          }
+        }
       } else if (message.type === "notify" && typeof message.message === "string") {
         const notification = message.message.trim();
         if (notification) showSnackbar(notification, message.kind ?? "error");
@@ -413,9 +427,10 @@
       void plugins
         .localUiSource(plugin.id, contribution.id)
         .then((source) => {
-          const context = JSON.parse(JSON.stringify({ plugin, contribution })) as {
+          const context = JSON.parse(JSON.stringify({ plugin, contribution, session: sessionContext })) as {
             plugin: PluginInventory;
             contribution: PluginUiContribution;
+            session?: PluginSessionContext;
           };
           frame.contentWindow?.postMessage({ type: "init", source, ...context }, "*");
         })
@@ -435,7 +450,7 @@
     };
   }
 
-  async function mountContribution(target: HTMLElement, version: number): Promise<void> {
+  async function mountContribution(target: HTMLElement, version: number, sessionContext?: PluginSessionContext): Promise<void> {
     disposeCurrent();
     const root = target.shadowRoot ?? target.attachShadow({ mode: "open" });
     if (plugin.state !== "running") {
@@ -444,7 +459,7 @@
     }
     try {
       if (plugin.source_kind !== "builtin") {
-        const cleanup = createLocalPluginFrame(root);
+        const cleanup = createLocalPluginFrame(root, sessionContext);
         if (version !== generation) {
           cleanup();
           return;
@@ -479,7 +494,20 @@
             return plugins.updateSettings<T>(plugin.id, settings);
           },
         },
-        navigation: { open: onNavigate, close: onClose, openPreferences: onOpenPreferences },
+        navigation: {
+          open: onNavigate,
+          close: onClose,
+          openPreferences: onOpenPreferences,
+          openExternal: (url) => {
+            try {
+              const parsed = new URL(url);
+              if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("only http(s) URLs are supported");
+              void openUrl(parsed.toString()).catch((error) => showSnackbar(`Failed to open URL: ${String(error)}`));
+            } catch (error) {
+              showSnackbar(`Invalid plugin URL: ${String(error)}`);
+            }
+          },
+        },
         sidebar: {
           register: (rows) => registerPluginSidebarContribution(`${plugin.id}:${contribution.id}`, rows),
           select: (rowId) => {
@@ -525,7 +553,7 @@
         openModal: openPluginModal,
         openProjectForm,
       };
-      const cleanup = entrypoint.mount(root, { plugin, contribution, host });
+      const cleanup = entrypoint.mount(root, { plugin, contribution, session: sessionContext, host });
       if (typeof cleanup !== "function") {
         throw new Error("plugin UI entrypoint mount must return a disposer function");
       }
@@ -542,9 +570,10 @@
   }
 
   $effect(() => {
+    const sessionContext = session;
     if (!container) return;
     const version = ++generation;
-    void mountContribution(container, version);
+    void mountContribution(container, version, sessionContext);
     return () => {
       if (generation === version) generation += 1;
       disposeCurrent();
@@ -564,7 +593,7 @@
     const refreshTheme = (): void => refreshLocalPluginTheme?.();
     window.addEventListener("planeai-theme-changed", refreshTheme);
     void listen<string>("plugin-data-changed", (event) => {
-      if (event.payload !== plugin.id || !["sidebar.section", "interaction"].includes(contribution.placement)) return;
+      if (event.payload !== plugin.id || !["sidebar.section", "interaction", "session.panel"].includes(contribution.placement)) return;
       if (plugin.source_kind === "builtin" && dataChangeListeners.size > 0) {
         notify(dataChangeListeners);
       } else {
@@ -598,7 +627,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane"
+      : contribution.placement === "main-pane" || contribution.placement === "session.panel"
         ? "h-full w-full"
         : "w-full"
   }
