@@ -1,4 +1,4 @@
-export type SnackbarType = "error" | "success";
+export type SnackbarType = "error" | "warning" | "info" | "success";
 
 let message = $state<string | null>(null);
 let type_ = $state<SnackbarType>("error");

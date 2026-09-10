@@ -79,6 +79,7 @@ export interface PluginSessionContext {
   branch: string;
   baseBranch: string | null;
   status: "active" | "exited" | "archived";
+  provider: string | null;
   taskKey: string | null;
 }
 

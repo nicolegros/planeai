@@ -2,7 +2,24 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::cleanup;
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, PtyState};
+
+pub(crate) fn session_lifecycle_event(
+    session: &db::Session,
+    previous_status: &str,
+    status: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "status_changed",
+        "session_id": session.id,
+        "project_id": session.project_id,
+        "branch": session.branch,
+        "linked_task_key": session.task_key,
+        "previous_status": previous_status,
+        "status": status,
+    })
+}
 
 #[tauri::command]
 pub fn restart_session(
@@ -10,11 +27,22 @@ pub fn restart_session(
     app: AppHandle,
     db_state: State<DbState>,
     config_state: State<ConfigState>,
+    runtime: State<PluginRuntimeHandle>,
 ) -> Result<db::Session, String> {
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let previous = db::get_session(&conn, &session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
     let ops = crate::session_restart::real_restart_ops();
     let session = crate::session_restart::restart(&conn, &session_id, &cfg, &ops)?;
+    runtime
+        .0
+        .dispatch_session_lifecycle(session_lifecycle_event(
+            &session,
+            &previous.status,
+            "active",
+        ));
     // Emit event so frontend re-attaches the PTY to the restarted session
     let _ = app.emit(
         "session-restarted",
@@ -29,11 +57,22 @@ pub fn archive_session(
     db_state: State<DbState>,
     pty_state: State<PtyState>,
     config_state: State<ConfigState>,
+    runtime: State<PluginRuntimeHandle>,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
     crate::session_ops::archive(&conn, &id, &Some(cfg), &cleanup::real_kill_ops())?;
+    runtime
+        .0
+        .dispatch_session_lifecycle(session_lifecycle_event(
+            &session,
+            &session.status,
+            "archived",
+        ));
     Ok(())
 }
 
@@ -43,14 +82,25 @@ pub async fn destroy_session(
     db_state: State<'_, DbState>,
     pty_state: State<'_, PtyState>,
     config_state: State<'_, ConfigState>,
+    runtime: State<'_, PluginRuntimeHandle>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     pty_state.0.detach(&id);
 
     let conn = db_state.0.lock().map_err(|e| e.to_string())?;
+    let session = db::get_session(&conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or("session not found")?;
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     let result = crate::session_ops::destroy(&conn, &id, &Some(cfg), &cleanup::real_ops())?;
+    runtime
+        .0
+        .dispatch_session_lifecycle(session_lifecycle_event(
+            &session,
+            &session.status,
+            "destroyed",
+        ));
 
     if !result.cleanup_errors.is_empty() {
         let msg = result.cleanup_errors.join("; ");
