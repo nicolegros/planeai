@@ -142,6 +142,18 @@ export interface PluginInventory {
 }
 
 export type JiraMigrationState = "not_needed" | "available" | "importing" | "failed" | "completed";
+export type GithubMigrationState = JiraMigrationState;
+
+export interface GithubMigrationStatus {
+  state: GithubMigrationState;
+  legacy_detected: boolean;
+  can_migrate: boolean;
+  message: string;
+  error: string | null;
+  imported_pull_requests: number;
+  skipped_state_only: number;
+  snapshot_path: string | null;
+}
 
 export interface JiraMigrationStatus {
   state: JiraMigrationState;
