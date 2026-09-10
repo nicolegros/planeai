@@ -177,6 +177,8 @@ pub enum PluginUiPlacement {
     MainPane,
     #[serde(rename = "session.panel")]
     SessionPanel,
+    #[serde(rename = "titlebar")]
+    Titlebar,
     #[serde(rename = "interaction")]
     Interaction,
 }
@@ -879,6 +881,59 @@ pub fn insert_local_inventory(
         .ok_or_else(|| "new local plugin inventory record was not found".to_string())
 }
 
+pub fn replace_local_inventory(
+    conn: &Connection,
+    manifest: &PluginManifest,
+    backend_entrypoint: &str,
+    content_hash: &str,
+    package_dir: &Path,
+    original_display_path: &str,
+) -> Result<PluginInventory, String> {
+    let existing = get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("plugin inventory entry not found: {}", manifest.id))?;
+    if existing.source_kind != PluginSourceKind::Local {
+        return Err(format!(
+            "plugin id is reserved by a bundled plugin: {}",
+            manifest.id
+        ));
+    }
+    manifest.validate()?;
+    validate_shortcut_collisions(conn, manifest)?;
+    let ui_contributions = serde_json::to_string(&manifest.effective_ui_contributions())
+        .map_err(|error| format!("failed to serialize plugin UI contributions: {error}"))?;
+    let capabilities = serde_json::to_string(&manifest.capabilities)
+        .map_err(|error| format!("failed to serialize plugin capabilities: {error}"))?;
+    let background_service = serde_json::to_string(&manifest.background_service)
+        .map_err(|error| format!("failed to serialize plugin background service: {error}"))?;
+    conn.execute(
+        "UPDATE plugin_inventory SET
+            name = ?2, version = ?3, host_api_version = ?4, backend_entrypoint = ?5,
+            ui_contributions = ?6, capabilities = ?7, background_service = ?8,
+            installed_hash = ?9, installed_path = ?10, original_display_path = ?11,
+            enabled = 0, runtime_state = 'disabled', last_error = NULL, log_path = NULL,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND source_kind = 'local'",
+        params![
+            manifest.id,
+            manifest.name,
+            manifest.version,
+            manifest.host_api_version,
+            backend_entrypoint,
+            ui_contributions,
+            capabilities,
+            background_service,
+            content_hash,
+            package_dir.display().to_string(),
+            original_display_path,
+        ],
+    )
+    .map_err(|error| format!("failed to replace local plugin inventory: {error}"))?;
+    get_inventory(conn, &manifest.id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "replaced local plugin inventory record was not found".to_string())
+}
+
 pub fn list_inventory(conn: &Connection) -> rusqlite::Result<Vec<PluginInventory>> {
     let mut statement = conn.prepare(
         "SELECT id, name, version, host_api_version, source_kind, backend_entrypoint,
@@ -1548,6 +1603,77 @@ fn replace_plugin_settings(data_dir: &Path, settings: Value) -> Result<Value, St
     Ok(settings)
 }
 
+fn settings_path(params: &Value) -> Result<Option<Vec<String>>, String> {
+    let Some(path) = params.get("path") else {
+        return Ok(None);
+    };
+    let path = path
+        .as_array()
+        .ok_or("settings path must be an array of object keys")?;
+    if path.is_empty() || path.len() > 8 {
+        return Err("settings path must contain between 1 and 8 object keys".to_string());
+    }
+    path.iter()
+        .map(|segment| {
+            segment
+                .as_str()
+                .filter(|segment| !segment.is_empty() && segment.len() <= 256)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    "settings path keys must be non-empty strings up to 256 bytes".to_string()
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn plugin_settings_at_path(settings: &Value, path: &[String]) -> Value {
+    path.iter()
+        .try_fold(settings, |current, segment| current.get(segment))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn merge_plugin_settings_patch(
+    target: &mut serde_json::Map<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else if let Some(value) = value.as_object() {
+            let target_value = target
+                .entry(key.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !target_value.is_object() {
+                *target_value = Value::Object(serde_json::Map::new());
+            }
+            merge_plugin_settings_patch(
+                target_value
+                    .as_object_mut()
+                    .expect("object target was initialized above"),
+                value,
+            );
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn patch_plugin_settings(data_dir: &Path, patch: Value) -> Result<(), String> {
+    let patch = patch
+        .as_object()
+        .ok_or("plugin settings patch must be a JSON object")?;
+    let mut settings = read_plugin_settings(data_dir)?;
+    merge_plugin_settings_patch(
+        settings
+            .as_object_mut()
+            .expect("read_plugin_settings validates JSON objects"),
+        patch,
+    );
+    replace_plugin_settings(data_dir, settings).map(|_| ())
+}
+
 async fn execute_host_task(
     plugin_id: &str,
     capabilities: &HashSet<PluginHostCapability>,
@@ -1556,7 +1682,9 @@ async fn execute_host_task(
     params: Value,
 ) -> Result<Value, String> {
     let required = match method {
-        "host.settings.get" | "host.settings.replace" => PluginHostCapability::Settings,
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
+            PluginHostCapability::Settings
+        }
         "host.projects.list" => PluginHostCapability::ProjectsRead,
         "host.sessions.list" => PluginHostCapability::SessionsRead,
         "host.sessions.repositoryContext" => PluginHostCapability::SessionsRepositoryContext,
@@ -1684,16 +1812,32 @@ async fn execute_host_task(
         return commands::blocking(move || create_plugin_child_task(&plugin_id, params)).await;
     }
 
-    if matches!(method, "host.settings.get" | "host.settings.replace") {
+    if matches!(
+        method,
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch"
+    ) {
         let data_dir = data_dir.to_path_buf();
         let method = method.to_string();
         return commands::blocking(move || match method.as_str() {
-            "host.settings.get" => read_plugin_settings(&data_dir)
-                .map(|settings| serde_json::json!({ "settings": settings })),
+            "host.settings.get" => {
+                let path = settings_path(&params)?;
+                read_plugin_settings(&data_dir).map(|settings| {
+                    let settings = path
+                        .as_deref()
+                        .map(|path| plugin_settings_at_path(&settings, path))
+                        .unwrap_or(settings);
+                    serde_json::json!({ "settings": settings })
+                })
+            }
             "host.settings.replace" => {
                 let settings = params.get("settings").cloned().unwrap_or(params);
                 replace_plugin_settings(&data_dir, settings)
                     .map(|settings| serde_json::json!({ "settings": settings }))
+            }
+            "host.settings.patch" => {
+                let patch = params.get("patch").cloned().unwrap_or(params);
+                patch_plugin_settings(&data_dir, patch)
+                    .map(|()| serde_json::json!({ "updated": true }))
             }
             _ => unreachable!(),
         })
@@ -2174,16 +2318,51 @@ impl PluginRuntimeSupervisor {
         let hash = imported.content_hash.clone();
         let package_dir = imported.package_dir.clone();
         let original_path = imported.original_display_path.clone();
+        let existing = self.inventory(&manifest.id).await?;
+        let was_enabled = match existing.as_ref() {
+            Some(inventory) if inventory.source_kind != PluginSourceKind::Local => {
+                let error = format!("plugin id is reserved by a bundled plugin: {}", manifest.id);
+                if let Err(cleanup_error) =
+                    commands::blocking(move || imported.discard_if_newly_published()).await
+                {
+                    tracing::warn!(%cleanup_error, "failed to discard unreferenced local plugin package");
+                }
+                return Err(error);
+            }
+            Some(inventory) if inventory.installed_hash.as_deref() == Some(&hash) => {
+                return Ok(inventory.clone());
+            }
+            Some(inventory) => inventory.enabled,
+            None => false,
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|inventory| inventory.state != PluginRuntimeState::Disabled)
+        {
+            self.disable_inner(&manifest.id).await?;
+        }
+        let replacing = existing.is_some();
         let inventory = self
             .with_db(move |conn| {
-                insert_local_inventory(
-                    conn,
-                    &manifest,
-                    &backend,
-                    &hash,
-                    &package_dir,
-                    &original_path,
-                )
+                if replacing {
+                    replace_local_inventory(
+                        conn,
+                        &manifest,
+                        &backend,
+                        &hash,
+                        &package_dir,
+                        &original_path,
+                    )
+                } else {
+                    insert_local_inventory(
+                        conn,
+                        &manifest,
+                        &backend,
+                        &hash,
+                        &package_dir,
+                        &original_path,
+                    )
+                }
             })
             .await;
         let inventory = match inventory {
@@ -2197,6 +2376,9 @@ impl PluginRuntimeSupervisor {
                 return Err(error);
             }
         };
+        if was_enabled {
+            return self.enable_inner(&inventory.id).await;
+        }
         self.emit_change(&inventory.id).await;
         Ok(inventory)
     }
@@ -3389,6 +3571,11 @@ mod tests {
         let inventory = get_inventory(&conn, "sidebar-test").unwrap().unwrap();
         assert_eq!(inventory.ui_contributions, manifest.ui_contributions);
 
+        let mut titlebar = manifest.clone();
+        titlebar.ui_contributions[0].placement = PluginUiPlacement::Titlebar;
+        titlebar.ui_contributions[0].order = None;
+        assert!(titlebar.validate().is_ok());
+
         let mut invalid_shortcut = manifest.clone();
         invalid_shortcut.ui_contributions[0].shortcut = Some("Mod+L".into());
         assert!(invalid_shortcut
@@ -3468,7 +3655,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_local_plugin_ids_are_rejected_without_replacing_inventory() {
+    fn replacing_a_local_plugin_updates_its_package_metadata_without_deleting_inventory() {
         let conn = database();
         let manifest = PluginManifest {
             schema: "planeai.plugin.v1".into(),
@@ -3497,7 +3684,7 @@ mod tests {
             "/original/package",
         )
         .unwrap();
-        let error = insert_local_inventory(
+        let replacement = replace_local_inventory(
             &conn,
             &manifest,
             "bin/plugin",
@@ -3505,14 +3692,17 @@ mod tests {
             package.path(),
             "/different/package",
         )
-        .unwrap_err();
-        assert!(error.contains("already installed"));
-        let inventory = get_inventory(&conn, "fixture").unwrap().unwrap();
-        assert_eq!(inventory.installed_hash.as_deref(), Some("content-hash"));
+        .unwrap();
         assert_eq!(
-            inventory.original_display_path.as_deref(),
-            Some("/original/package")
+            replacement.installed_hash.as_deref(),
+            Some("different-hash")
         );
+        assert_eq!(
+            replacement.original_display_path.as_deref(),
+            Some("/different/package")
+        );
+        assert!(!replacement.enabled);
+        assert_eq!(replacement.state, PluginRuntimeState::Disabled);
         delete_local_inventory(&conn, "fixture").unwrap();
         assert!(get_inventory(&conn, "fixture").unwrap().is_none());
         assert!(delete_local_inventory(&conn, "jira")
@@ -3822,6 +4012,96 @@ mod tests {
         .await
         .unwrap_err()
         .contains("not granted"));
+    }
+
+    #[tokio::test]
+    async fn bounded_settings_callbacks_patch_large_documents_without_returning_them() {
+        let data = tempfile::TempDir::new().unwrap();
+        let capabilities = HashSet::from([PluginHostCapability::Settings]);
+        let legacy_mappings = (0..300)
+            .map(|index| {
+                (
+                    format!("session-{index}"),
+                    serde_json::json!({ "url": format!("https://github.com/example/repository/pull/{index}"), "note": "x".repeat(256) }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        replace_plugin_settings(
+            data.path(),
+            serde_json::json!({
+                "github": {
+                    "version": 1,
+                    "pull_requests": legacy_mappings,
+                    "reconciliation": { "status": "idle", "checked": 0 },
+                },
+                "unrelated": { "retain": true },
+            }),
+        )
+        .unwrap();
+
+        let whole_document = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.get",
+            Value::Null,
+        )
+        .await
+        .unwrap();
+        let frame =
+            encode_host_callback_response(Value::String("whole".into()), Ok(whole_document))
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&frame).unwrap()["error"]["message"],
+            "host callback response exceeded the frame limit"
+        );
+
+        let reconciliation = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.get",
+            serde_json::json!({ "path": ["github", "reconciliation"] }),
+        )
+        .await
+        .unwrap();
+        let frame = encode_host_callback_response(
+            Value::String("reconciliation".into()),
+            Ok(reconciliation.clone()),
+        )
+        .unwrap();
+        assert!(host_callback_response_fits(&frame));
+        assert_eq!(reconciliation["settings"]["status"], "idle");
+
+        let patched = execute_host_task(
+            "github",
+            &capabilities,
+            data.path(),
+            "host.settings.patch",
+            serde_json::json!({
+                "patch": {
+                    "github": {
+                        "pull_requests": {
+                            "active-session": { "url": "https://github.com/example/repository/pull/999", "state": "open" }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        let frame =
+            encode_host_callback_response(Value::String("patch".into()), Ok(patched)).unwrap();
+        assert!(host_callback_response_fits(&frame));
+        assert_eq!(
+            read_plugin_settings(data.path()).unwrap()["unrelated"]["retain"],
+            true
+        );
+        assert_eq!(
+            read_plugin_settings(data.path()).unwrap()["github"]["pull_requests"]["active-session"]
+                ["state"],
+            "open"
+        );
     }
 
     #[test]

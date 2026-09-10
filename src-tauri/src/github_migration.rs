@@ -487,7 +487,7 @@ fn validate_durable_state(state: &Value) -> Result<(), String> {
         }) {
             return Err("GitHub durable state pull request contains unknown fields".to_string());
         }
-        if strict_string(mapping.get("session_id")).as_deref() != Some(session_id)
+        if strict_string(mapping.get("session_id")) != Some(session_id)
             || strict_string(mapping.get("url")).is_none()
             || strict_string(mapping.get("state")).is_none()
             || mapping.get("updated_at").and_then(Value::as_u64).is_none()

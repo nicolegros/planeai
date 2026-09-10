@@ -158,9 +158,51 @@ describe("PluginContributionHost", () => {
       expect(frame?.srcdoc).toContain("sidebar-keydown");
       expect(frame?.srcdoc).toContain("sidebarNavigationKeys");
       expect(frame?.srcdoc).toContain('addEventListener("keydown", forwardSidebarKeydown)');
+      expect(frame?.srcdoc).toContain("session: message.session");
     });
     // jsdom does not execute iframe srcdoc. The production bridge loads source only after its frame loads.
     expect(localUiSource).not.toHaveBeenCalled();
+  });
+
+  it("focuses a local session-panel iframe when the modal requests autofocus", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.panel", autofocus: true },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      const root = next!.getRootNode();
+      expect(root).toBeInstanceOf(ShadowRoot);
+      expect((root as ShadowRoot).activeElement).toBe(next);
+      return next!;
+    });
+    expect(frame.title).toBe("Fixture");
+  });
+
+  it("forwards Escape from a local plugin modal iframe through navigation.close when requested", async () => {
+    target = document.createElement("div");
+    document.body.append(target);
+    component = mount(PluginContributionHostLocalHarness, {
+      target,
+      props: { placement: "session.panel", closeOnEscape: true },
+    }) as typeof component;
+
+    const frame = await vi.waitFor(() => {
+      const next = target
+        .querySelector<HTMLElement>("[data-plugin-ui-contribution]")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      expect(next).toBeTruthy();
+      return next!;
+    });
+    expect(frame.srcdoc).toContain("const closeOnEscape = true");
+    expect(frame.srcdoc).toContain("forwardEscapeToHost");
+    expect(frame.srcdoc).toContain('send({ type: "navigation", action: "close" })');
   });
 
   it("uses a compact iframe for local sidebar footers while retaining section space", async () => {

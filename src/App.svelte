@@ -79,6 +79,8 @@
   // PR form state
   let showPrForm = $state(false);
   let showPrPanel = $state(false);
+  let modalPluginId = $state<string | null>(null);
+  let modalContributionId = $state<string | null>(null);
   let prTitle = $state("");
   let prBody = $state("");
   let prBaseBranch = $state("");
@@ -225,6 +227,8 @@
   const activeLoopId = $derived(loopStore.getActiveLoopId());
   const activePlugin = $derived(pluginInventory.find((plugin) => plugin.id === activePluginId) ?? null);
   const activeContribution = $derived(activePlugin?.ui_contributions.find((contribution) => contribution.id === activeContributionId) ?? null);
+  const modalPlugin = $derived(pluginInventory.find((plugin) => plugin.id === modalPluginId) ?? null);
+  const modalContribution = $derived(modalPlugin?.ui_contributions.find((contribution) => contribution.id === modalContributionId) ?? null);
   const comparePluginContribution = (left: { plugin: PluginInventory; contribution: PluginUiContribution }, right: { plugin: PluginInventory; contribution: PluginUiContribution }) =>
     (left.contribution.order ?? 0) - (right.contribution.order ?? 0) || left.plugin.name.localeCompare(right.plugin.name) || left.plugin.id.localeCompare(right.plugin.id) || left.contribution.id.localeCompare(right.contribution.id);
   const sidebarPluginContributions = $derived(
@@ -241,6 +245,13 @@
     activeSession
       ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
           plugin.ui_contributions.filter((contribution) => contribution.placement === "session.panel").map((contribution) => ({ plugin, contribution })),
+        ).sort(comparePluginContribution)
+      : [],
+  );
+  const titlebarContributions = $derived(
+    activeSession
+      ? pluginInventory.filter((plugin) => plugin.state === "running").flatMap((plugin) =>
+          plugin.ui_contributions.filter((contribution) => contribution.placement === "titlebar").map((contribution) => ({ plugin, contribution })),
         ).sort(comparePluginContribution)
       : [],
   );
@@ -827,6 +838,26 @@
     activeContributionId = null;
   }
 
+  function closePluginContributionModal(): void {
+    modalPluginId = null;
+    modalContributionId = null;
+    tick().then(() => refocusTerminal());
+  }
+
+  function openPluginContributionModal(pluginId: string, contributionId: string): void {
+    const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
+    const contribution = plugin?.ui_contributions.find((candidate) =>
+      candidate.id === contributionId && candidate.placement === "session.panel",
+    );
+    if (!plugin || !contribution || !activeSession) {
+      showSnackbar("Plugin contribution is unavailable for the selected session");
+      return;
+    }
+    leavePluginWorkspace();
+    modalPluginId = pluginId;
+    modalContributionId = contributionId;
+  }
+
   function focusPluginInteraction(): boolean {
     const interaction = document.querySelector<HTMLElement>("[data-plugin-interaction-host] [data-plugin-ui-contribution]");
     if (!interaction) return false;
@@ -1000,7 +1031,7 @@
         } else if (action.type === "focus_terminal") {
           if (getCycleState().isCycling) cancel();
           if (navCycle.isCycling()) navCycle.cancel();
-          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
+          showSessionForm = false; showProjectForm = false; projectToEdit = null; showShortcuts = false; showNewItemModal = false; showTaskForm = false; showPrForm = false; showPrPanel = false; closePluginContributionModal(); showLoopForm = false; sessionToDelete = null; commandMenuOpen = false; commandMenuFileMode = false;
         } else if (action.type === "command_palette") { commandMenuOpen = !commandMenuOpen; }
         else if (action.type === "open_preferences") { openPreferences(); }
         else if (action.type === "show_shortcuts") { showShortcuts = !showShortcuts; }
@@ -1044,7 +1075,7 @@
         }
         else if (action.type === "split_vertical" || action.type === "split_horizontal" || action.type === "close_split" || action.type === "focus_split_left" || action.type === "focus_split_right" || action.type === "focus_split_up" || action.type === "focus_split_down" || action.type === "move_tab_left" || action.type === "move_tab_right" || action.type === "move_tab_up" || action.type === "move_tab_down") { handleSplitAction(action.type); }
       },
-      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
+      () => !showSessionForm && !showProjectForm && !commandMenuOpen && !showShortcuts && !showNewItemModal && !showTaskForm && !showPrForm && !showPrPanel && !modalPluginId && !showLoopForm && !getCycleState().isCycling && !navCycle.isCycling(),
       () => {
         const leaf = splitTree.getFocusedLeaf();
         return getActiveZone() === "editor" && !!leaf && splitTree.getActiveTabEntry(leaf)?.type === "editor";
@@ -1131,6 +1162,9 @@
     }}
     onAddTab={() => orchestrator.handleNewTab()}
     onCreatePr={openPrForm}
+    {titlebarContributions}
+    titlebarSession={activePluginSessionContext}
+    onOpenTitlebarContribution={openPluginContributionModal}
     onOpenCommand={() => { commandMenuFileMode = false; commandMenuOpen = true; }}
     onTogglePrPanel={togglePrPanel}
     {symphonyStatus}
@@ -1299,7 +1333,7 @@
                 <Terminal
                   sessionId={tabEntry.ptyKey}
                   visible={isActiveInLeaf && !activeLoopId && !activePluginId}
-                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
+                  focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel && !modalPluginId}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
                   onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
@@ -1628,6 +1662,31 @@
           </div>
         </div>
       </form>
+    </div>
+  </FormDialog>
+{/if}
+
+{#if modalPlugin && modalContribution && activePluginSessionContext}
+  <FormDialog
+    title={modalContribution.label}
+    class="w-[min(90vw,840px)] h-[min(78vh,720px)]"
+    preventEscapeClose={false}
+    onClose={closePluginContributionModal}
+  >
+    <div class="h-full min-h-0">
+      <PluginContributionHost
+        plugin={modalPlugin}
+        contribution={modalContribution}
+        session={activePluginSessionContext}
+        onNavigate={(pluginId, contributionId) => {
+          closePluginContributionModal();
+          openPluginContribution(pluginId, contributionId);
+        }}
+        onClose={closePluginContributionModal}
+        onOpenPreferences={openPreferences}
+        closeOnEscape={true}
+        autofocus={true}
+      />
     </div>
   </FormDialog>
 {/if}
