@@ -12,6 +12,7 @@ mod file_explorer;
 mod git;
 mod jira_migration;
 mod logging;
+mod lsp;
 mod notify;
 mod output_observer;
 mod paths;
@@ -208,6 +209,7 @@ fn main() {
 
             // Daemon state (lazily connects to daemon)
             app.manage(DaemonState(tokio::sync::Mutex::new(None)));
+            app.manage(LspState::default());
 
             // Scaffold themes dir with bundled themes if missing
             let themes_dir = config_dir.join("themes");
@@ -328,6 +330,9 @@ fn main() {
             write_file,
             list_monospace_fonts,
             get_config,
+            lsp_connect,
+            lsp_send,
+            lsp_disconnect,
             get_log_dir,
             update_config,
             refresh_config,

@@ -109,6 +109,7 @@
 
   const backendValue = $derived(config.session_backend ?? "auto");
   const vimEnabled = $derived(config.vim_mode ?? true);
+  const lspEnabled = $derived(config.language_servers?.enabled ?? true);
 
   function setSessionBackend(value: string) {
     const backend = value === "auto" ? null : value;
@@ -117,6 +118,12 @@
 
   function setVimMode(enabled: boolean) {
     updateSettings({ vim_mode: enabled } as Partial<AppConfig>);
+  }
+
+  function setLspEnabled(enabled: boolean) {
+    updateSettings({
+      language_servers: { ...config.language_servers, enabled, profiles: config.language_servers?.profiles ?? [] },
+    } as Partial<AppConfig>);
   }
 
   async function pickProjectsBasePath() {
@@ -616,6 +623,26 @@
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {vimEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>
       </div>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Language Servers</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm text-t1">Enable code intelligence</p>
+          <p class="text-xs text-t3">Starts trusted servers automatically for supported files. PlaneAI never installs a server or runs repository-provided commands.</p>
+        </div>
+        <button
+          class="w-10 h-5 rounded-full transition-colors {lspEnabled ? 'bg-accent' : 'bg-panel-hi'}"
+          onclick={() => setLspEnabled(!lspEnabled)}
+          role="switch"
+          aria-checked={lspEnabled}
+          aria-label="Toggle language servers"
+        >
+          <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {lspEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+        </button>
+      </div>
+      <p class="text-xs text-t2">Built in: TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. {config.language_servers?.profiles?.length ?? 0} trusted custom profile(s) configured in config.json.</p>
     </section>
 
     <section class="space-y-3">

@@ -40,6 +40,22 @@ export interface TaskManager {
   auto_dispatch?: AutoDispatchConfig | null;
 }
 
+export interface LanguageServerProfile {
+  id: string;
+  language_id: string;
+  extensions: string[];
+  command: string;
+  args: string[];
+  enabled?: boolean | null;
+}
+
+export interface LanguageServerSettings {
+  enabled?: boolean | null;
+  profiles: LanguageServerProfile[];
+  max_servers?: number | null;
+  format_on_save?: boolean | null;
+}
+
 export interface AppConfig {
   appearance: {
     mode: AppearanceMode;
@@ -64,6 +80,7 @@ export interface AppConfig {
   auto_open_review?: boolean | null;
   sound_enabled?: boolean | null;
   post_merge_action?: "archive" | "destroy" | "keep" | null;
+  language_servers?: LanguageServerSettings | null;
 }
 
 let config = $state<AppConfig>({

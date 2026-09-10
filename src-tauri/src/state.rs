@@ -8,6 +8,8 @@ use crate::notify;
 use crate::pty;
 use crate::symphony;
 
+pub use crate::lsp::LspState;
+
 pub struct DbState(pub Arc<Mutex<Connection>>);
 
 #[derive(Default)]

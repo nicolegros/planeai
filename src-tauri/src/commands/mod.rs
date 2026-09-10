@@ -6,6 +6,7 @@ pub mod file_explorer;
 pub mod files;
 pub mod git;
 pub mod loops;
+pub mod lsp;
 pub mod notify;
 pub mod plugins;
 pub mod pr;
@@ -23,6 +24,7 @@ pub use file_explorer::*;
 pub use files::*;
 pub use git::*;
 pub use loops::*;
+pub use lsp::*;
 pub use notify::*;
 pub use plugins::*;
 pub use pr::{

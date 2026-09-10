@@ -88,6 +88,19 @@ export const pty = {
   incrementTabCount: (sessionId: string) => invoke("increment_tab_count", { sessionId }),
 };
 
+export interface LspConnection {
+  connection_id: string;
+  language_id: string;
+  profile_id: string;
+}
+
+export const lsp = {
+  connect: (repoPath: string, filePath: string, onMessage: Channel<string>) =>
+    invoke<LspConnection>("lsp_connect", { repoPath, filePath, onMessage }),
+  send: (connectionId: string, message: string) => invoke("lsp_send", { connectionId, message }),
+  disconnect: (connectionId: string) => invoke("lsp_disconnect", { connectionId }),
+};
+
 export const config = {
   get: () => invoke<AppConfig>("get_config"),
   update: (newConfig: AppConfig) => invoke("update_config", { newConfig }),

@@ -14,6 +14,33 @@ pub struct IntegrationsConfig {
     pub jira: Option<serde_json::Value>,
 }
 
+/// User-owned, trusted overrides for language-server discovery. Project files
+/// never supply executable commands; profiles live only in PlaneAI config.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LanguageServerSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<LanguageServerProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_servers: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_on_save: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LanguageServerProfile {
+    pub id: String,
+    pub language_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<String>,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub appearance: Appearance,
@@ -60,6 +87,8 @@ pub struct Config {
     pub sound_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrations: Option<IntegrationsConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_servers: Option<LanguageServerSettings>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -283,6 +312,7 @@ impl Default for Config {
             auto_open_review: Some(true),
             sound_enabled: Some(true),
             integrations: None,
+            language_servers: None,
         }
     }
 }
