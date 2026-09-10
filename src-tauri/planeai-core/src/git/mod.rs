@@ -251,9 +251,30 @@ mod tests {
             None,
         )
         .unwrap();
+        assert_eq!(diff.kind, FileDiffKind::Text);
         assert_eq!(diff.original, "hello\n");
         assert_eq!(diff.modified, "hello\nworld\n");
         assert_eq!(diff.language, "plaintext");
+    }
+
+    #[test]
+    fn get_file_diff_classifies_binary_content_without_lossy_text() {
+        let repo = init_repo_with_feature_branch();
+        fs::write(repo.path().join("binary.dat"), [0_u8, 159, 255, 12]).unwrap();
+
+        let diff = get_file_diff(
+            repo.path().to_str().unwrap(),
+            "main",
+            "binary.dat",
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(diff.kind, FileDiffKind::Binary);
+        assert_eq!(diff.original, "");
+        assert_eq!(diff.modified, "");
+        assert_eq!(diff.modified_size, 4);
     }
 
     #[test]

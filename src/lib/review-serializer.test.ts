@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { serializeComments } from "./review-serializer";
 import type { ReviewComment } from "./review-comments.svelte";
-import type { FileDiff } from "./types";
+import type { TextFileDiff } from "./review-diff";
 
 function makeComment(
   overrides: Partial<ReviewComment> & Pick<ReviewComment, "filePath" | "text">,
@@ -11,6 +11,9 @@ function makeComment(
     type: "line",
     startLine: 1,
     endLine: 1,
+    side: "modified",
+    comparisonKey: "main:WORKTREE",
+    fingerprint: "fixture",
     createdAt: Date.now(),
     ...overrides,
   };
@@ -31,7 +34,7 @@ describe("serializeComments", () => {
         text: "Validate the id parameter.",
       }),
     ];
-    const diffs = new Map<string, FileDiff>([
+    const diffs = new Map<string, TextFileDiff>([
       [
         "src/lib/api.ts",
         {
@@ -39,6 +42,9 @@ describe("serializeComments", () => {
           modified:
             "import { invoke } from './tauri';\n\nexport function fetchUser(id: string) {\n  return invoke('get_user', { id })\n}\n",
           language: "typescript",
+          kind: "text",
+          original_size: 0,
+          modified_size: 0,
         },
       ],
     ]);
@@ -63,7 +69,7 @@ describe("serializeComments", () => {
         text: "Extract this into a helper.",
       }),
     ];
-    const diffs = new Map<string, FileDiff>([
+    const diffs = new Map<string, TextFileDiff>([
       [
         "src/utils.ts",
         {
@@ -71,6 +77,9 @@ describe("serializeComments", () => {
           modified:
             "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nconst e = 5;\nconst f = 6;\n",
           language: "typescript",
+          kind: "text",
+          original_size: 0,
+          modified_size: 0,
         },
       ],
     ]);
@@ -79,6 +88,28 @@ describe("serializeComments", () => {
 
     expect(result).toContain("--- src/utils.ts (lines 2-4) ---");
     expect(result).toContain("Comment: Extract this into a helper.");
+  });
+
+  it("serializes original-side comments against the original document", () => {
+    const comment = makeComment({
+      filePath: "deleted.ts",
+      side: "original",
+      startLine: 2,
+      endLine: 2,
+      text: "Why was this removed?",
+    });
+    const diffs = new Map<string, TextFileDiff>([["deleted.ts", {
+      kind: "text",
+      original: "keep\nremoved\n",
+      modified: "keep\n",
+      language: "typescript",
+      original_size: 13,
+      modified_size: 5,
+    }]]);
+
+    const result = serializeComments([comment], diffs);
+    expect(result).toContain("removed");
+    expect(result).toContain("Why was this removed?");
   });
 
   it("serializes file-level comments without code context", () => {
@@ -105,14 +136,14 @@ describe("serializeComments", () => {
       makeComment({ filePath: "a.ts", startLine: 5, endLine: 5, text: "a-file" }),
       makeComment({ filePath: "b.ts", startLine: 2, endLine: 2, text: "first" }),
     ];
-    const diffs = new Map<string, FileDiff>([
+    const diffs = new Map<string, TextFileDiff>([
       [
         "a.ts",
-        { original: "", modified: "line1\nline2\nline3\nline4\nline5\n", language: "typescript" },
+        { original: "", modified: "line1\nline2\nline3\nline4\nline5\n", language: "typescript", kind: "text", original_size: 0, modified_size: 0 },
       ],
       [
         "b.ts",
-        { original: "", modified: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n", language: "typescript" },
+        { original: "", modified: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n", language: "typescript", kind: "text", original_size: 0, modified_size: 0 },
       ],
     ]);
 

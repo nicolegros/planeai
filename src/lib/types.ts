@@ -41,6 +41,8 @@ export interface TaskItem {
   base_branch: string;
 }
 
+import type { ReviewFileDiff } from "./review-diff";
+
 export interface DirEntry {
   name: string;
   path: string;
@@ -61,11 +63,7 @@ export interface ChangedFile {
   old_path: string | null;
 }
 
-export interface FileDiff {
-  original: string;
-  modified: string;
-  language: string;
-}
+export type FileDiff = ReviewFileDiff;
 
 export interface CiCheck {
   name: string;

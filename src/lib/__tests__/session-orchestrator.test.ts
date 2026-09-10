@@ -9,11 +9,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("../snackbar.svelte", () => ({ showSnackbar: vi.fn() }));
 vi.mock("../soundPlayer", () => ({ playTaskComplete: vi.fn() }));
-vi.mock("../diff-preload", () => ({
-  preloadPatches: vi.fn(),
-  clearPreloadedPatches: vi.fn(),
-  disposePreloadedPatches: vi.fn(),
-}));
 vi.mock("../settings.svelte", () => ({
   getSettings: vi.fn(() => ({
     appearance: { mode: "system", theme: "default" },
@@ -57,7 +52,6 @@ vi.mock("../api", () => ({
 
 import { sessions as sessionsApi, symphony } from "../api";
 import { getSettings } from "../settings.svelte";
-import { clearPreloadedPatches, disposePreloadedPatches } from "../diff-preload";
 import type { Session } from "../types";
 import {
   getSessions,
@@ -132,17 +126,6 @@ describe("session-orchestrator", () => {
       expect(getActiveSessionId()).toBe("s1");
     });
 
-    it("disposes preload state for sessions removed during reconciliation", async () => {
-      api.list.mockResolvedValue([makeSession({ id: "stale-session" })]);
-      await loadSessions();
-      vi.mocked(disposePreloadedPatches).mockClear();
-      api.list.mockResolvedValue([makeSession({ id: "current-session" })]);
-
-      await loadSessions();
-
-      expect(disposePreloadedPatches).toHaveBeenCalledWith("stale-session");
-    });
-
     it("selects first session when no active session", async () => {
       api.list.mockResolvedValue([makeSession({ id: "abc" })]);
       await loadSessions();
@@ -214,7 +197,7 @@ describe("session-orchestrator", () => {
   });
 
   describe("removeProjectSessions", () => {
-    it("disposes preloaded patches for every removed project session", async () => {
+    it("removes every project session", async () => {
       api.list.mockResolvedValue([
         makeSession({ id: "p1-a", project_id: "p1" }),
         makeSession({ id: "p1-b", project_id: "p1" }),
@@ -223,9 +206,6 @@ describe("session-orchestrator", () => {
       await loadSessions();
 
       expect(removeProjectSessions("p1")).toEqual(["p1-a", "p1-b"]);
-      expect(disposePreloadedPatches).toHaveBeenCalledTimes(2);
-      expect(disposePreloadedPatches).toHaveBeenCalledWith("p1-a");
-      expect(disposePreloadedPatches).toHaveBeenCalledWith("p1-b");
       expect(getSessions().map((session) => session.id)).toEqual(["p2-a"]);
     });
   });
@@ -496,7 +476,7 @@ describe("session-orchestrator", () => {
       expect(getReviewReady()["s1"]).toBe(true);
     });
 
-    it("recordUserInput clears review readiness and its preload before a write", async () => {
+    it("recordUserInput clears review readiness before a write", async () => {
       api.list.mockResolvedValue([makeSession({ id: "s1" })]);
       await loadSessions();
       _setReviewReadyForTests("s1");
@@ -504,7 +484,6 @@ describe("session-orchestrator", () => {
       recordUserInput("s1");
 
       expect(getReviewReady()["s1"]).toBeUndefined();
-      expect(clearPreloadedPatches).toHaveBeenCalledWith("s1");
     });
   });
 });

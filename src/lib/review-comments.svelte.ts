@@ -1,20 +1,35 @@
+import type { DiffSide } from "./review-diff";
+
 export interface ReviewComment {
   id: string;
   filePath: string;
   type: "line" | "hunk" | "file";
   startLine: number;
   endLine: number;
+  side: DiffSide;
+  comparisonKey: string;
+  fingerprint: string;
   text: string;
   createdAt: number;
 }
+
+type NewReviewComment = Omit<ReviewComment, "id" | "createdAt" | "side" | "comparisonKey" | "fingerprint"> &
+  Partial<Pick<ReviewComment, "side" | "comparisonKey" | "fingerprint">>;
 
 let commentsBySession = $state<Record<string, ReviewComment[]>>({});
 
 export function addComment(
   sessionId: string,
-  comment: Omit<ReviewComment, "id" | "createdAt">,
+  comment: NewReviewComment,
 ): ReviewComment {
-  const full: ReviewComment = { ...comment, id: crypto.randomUUID(), createdAt: Date.now() };
+  const full: ReviewComment = {
+    ...comment,
+    side: comment.side ?? "modified",
+    comparisonKey: comment.comparisonKey ?? "",
+    fingerprint: comment.fingerprint ?? "",
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
   commentsBySession[sessionId] = [...(commentsBySession[sessionId] ?? []), full];
   return full;
 }

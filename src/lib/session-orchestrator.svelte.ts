@@ -24,7 +24,6 @@ import { clearComments } from "./review-comments.svelte";
 import { destroySession as destroyViewedState } from "./diff-viewed.svelte";
 import { showSnackbar } from "./snackbar.svelte";
 import { showMergePrompt, dismissForSession } from "./post-merge-prompt.svelte";
-import { preloadPatches, clearPreloadedPatches, disposePreloadedPatches } from "./diff-preload";
 import { getSettings } from "./settings.svelte";
 import { playTaskComplete } from "./soundPlayer";
 import { getProjects } from "./project-store.svelte";
@@ -141,10 +140,6 @@ export function toggleDiff(): void {
 
 export async function loadSessions(): Promise<void> {
   const loadedSessions = await sessionsApi.list();
-  const loadedSessionIds = new Set(loadedSessions.map((session) => session.id));
-  for (const session of sessions) {
-    if (!loadedSessionIds.has(session.id)) disposePreloadedPatches(session.id);
-  }
   sessions = loadedSessions;
   updateCiSessions(sessions);
   updatePrCommentSessions(sessions);
@@ -206,7 +201,6 @@ export async function deleteSession(s: Session): Promise<void> {
   dismissForSession(s.id);
   destroyTabState(s.id);
   clearComments(s.id);
-  disposePreloadedPatches(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   tabLayoutCleanup(s.id);
@@ -221,7 +215,6 @@ export async function archiveSession(s: Session): Promise<void> {
   await sessionsApi.archive(s.id);
   dismissForSession(s.id);
   clearComments(s.id);
-  disposePreloadedPatches(s.id);
   destroyViewedState(s.id);
   poolRemove(s.id);
   sessions = sessions.filter((x) => x.id !== s.id);
@@ -253,7 +246,6 @@ export function clearAgentState(sessionId: string): void {
 export function recordUserInput(sessionId: string): void {
   if (agentStates[sessionId]) clearAgentState(sessionId);
   clearReviewReady(sessionId);
-  clearPreloadedPatches(sessionId);
 }
 export function updateSessionStatus(sessionId: string, status: Session["status"]): void {
   sessions = sessions.map((s) => (s.id === sessionId ? { ...s, status } : s));
@@ -267,7 +259,6 @@ export function removeProjectSessions(projectId: string): string[] {
   for (const id of ids) {
     poolRemove(id);
     destroyTabState(id);
-    disposePreloadedPatches(id);
   }
   sessions = sessions.filter((s) => s.project_id !== projectId);
   if (activeSessionId && ids.includes(activeSessionId)) {
@@ -297,8 +288,6 @@ export function startEventListeners(): () => void {
         const sid = event.payload.session_id;
         const session = sessions.find((s) => s.id === sid);
         if (session?.worktree_path && session.base_branch) {
-          // Preload combined patch so ReviewTab opens instantly
-          preloadPatches(sid, session.worktree_path!, session.base_branch!);
           if (sid === activeSessionId) {
             if (getSettings().auto_open_review !== false) {
               // Defer to next frame so state updates don't block the current tick

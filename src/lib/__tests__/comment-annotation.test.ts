@@ -7,6 +7,9 @@ const comment = {
   type: "line" as const,
   startLine: 7,
   endLine: 7,
+  side: "modified" as const,
+  comparisonKey: "main:WORKTREE",
+  fingerprint: "fixture",
   text: "Please simplify this branch.",
   createdAt: 1,
 };
