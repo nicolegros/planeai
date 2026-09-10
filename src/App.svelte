@@ -42,10 +42,10 @@
   import LoopForm from "./components/LoopForm.svelte";
   import LoopDashboard from "./components/LoopDashboard.svelte";
   import PluginContributionHost from "./components/PluginContributionHost.svelte";
-  import type { PluginInventory, PluginUiContribution } from "./lib/types";
+  import type { PluginInventory, PluginSessionAction, PluginSessionAdvisory, PluginSessionCompletion, PluginUiContribution } from "./lib/types";
   import * as loopStore from "./lib/loop-store.svelte";
   import { loops as loopsApi, plugins as pluginsApi } from "./lib/api";
-  import { focusMergePrompt, getPrompt } from "./lib/post-merge-prompt.svelte";
+  import { focusMergePrompt, getPrompt, showMergePrompt } from "./lib/post-merge-prompt.svelte";
   import { getTabs, getActiveTabIndex, addTab } from "./lib/session-tabs.svelte";
   import { isMounted as poolIsMounted, touchMru } from "./lib/mru.svelte";
   import * as orchestrator from "./lib/session-orchestrator.svelte";
@@ -74,6 +74,7 @@
   let activePluginId = $state<string | null>(null);
   let activeContributionId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  let pluginSessionActions = $state<PluginSessionAction[]>([]);
 
   // PR form state
   let showPrForm = $state(false);
@@ -218,6 +219,7 @@
     branch: activeSession.branch,
     baseBranch: activeSession.base_branch,
     status: activeSession.status,
+    provider: activeSession.provider,
     taskKey: activeSession.task_key,
   } : undefined);
   const activeLoopId = $derived(loopStore.getActiveLoopId());
@@ -836,6 +838,42 @@
     if (activePluginId === pluginId) leavePluginWorkspace();
   }
 
+  async function runPluginSessionAction(session: Session, action: PluginSessionAction): Promise<void> {
+    try {
+      await pluginsApi.call(action.plugin_id, "plugin.sessionAction", {
+        action_id: action.id,
+        session_id: session.id,
+      });
+    } catch (error) {
+      showSnackbar(`Integration action failed: ${String(error)}`);
+    }
+  }
+
+  function showIntegrationCompletionPrompt(session: Session, message: string): void {
+    showMergePrompt({
+      sessionId: session.id,
+      sessionName: session.name || session.branch,
+      taskKey: session.task_key,
+      message,
+      onArchive: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.archiveSession(found) : Promise.resolve();
+      },
+      onDestroy: (id) => {
+        const found = sessions.find((candidate) => candidate.id === id);
+        return found ? orchestrator.deleteSession(found) : Promise.resolve();
+      },
+      onTaskDone: session.task_key
+        ? async (id) => {
+            const found = sessions.find((candidate) => candidate.id === id);
+            if (!found?.task_key) return;
+            const project = projects.find((candidate) => candidate.id === found.project_id);
+            if (project) await taskStore.moveTask(found.task_key, "done", project.path);
+          }
+        : undefined,
+    });
+  }
+
   function openPluginContribution(pluginId: string, contributionId: string): void {
     const plugin = pluginInventory.find((candidate) => candidate.id === pluginId && candidate.state === "running");
     const contribution = plugin?.ui_contributions.find((candidate) =>
@@ -902,7 +940,29 @@
     const unlistenCleanup = listen<string>("cleanup-error", (event) => { showSnackbar(event.payload); });
     const unlistenPluginRuntime = listen<import("./lib/types").PluginInventory>("plugin-runtime-changed", (event) => {
       pluginInventory = pluginInventory.filter((plugin) => plugin.id !== event.payload.id).concat(event.payload);
-      if (event.payload.state !== "running") invalidatePluginPage(event.payload.id);
+      if (event.payload.state !== "running") {
+        pluginSessionActions = pluginSessionActions.filter((action) => action.plugin_id !== event.payload.id);
+        invalidatePluginPage(event.payload.id);
+      }
+    });
+    const unlistenPluginActions = listen<{ plugin_id: string; actions: PluginSessionAction[] }>("plugin-session-actions", (event) => {
+      const { plugin_id: pluginId, actions } = event.payload;
+      if (!pluginInventory.some((plugin) => plugin.id === pluginId)) return;
+      pluginSessionActions = pluginSessionActions
+        .filter((action) => action.plugin_id !== pluginId)
+        .concat(actions.map((action) => ({ ...action, plugin_id: pluginId })));
+    });
+    const unlistenPluginAdvisory = listen<{ plugin_id: string; advisory: PluginSessionAdvisory }>("plugin-session-advisory", (event) => {
+      const { plugin_id: pluginId, advisory } = event.payload;
+      if (!sessions.some((session) => session.id === advisory.session_id)) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
+      showSnackbar(`${pluginName}: ${advisory.message}`, advisory.severity);
+    });
+    const unlistenPluginCompletion = listen<{ plugin_id: string; completion: PluginSessionCompletion }>("plugin-session-completed", (event) => {
+      const session = sessions.find((candidate) => candidate.id === event.payload.completion.session_id);
+      if (!session) return;
+      const pluginName = pluginInventory.find((plugin) => plugin.id === event.payload.plugin_id)?.name ?? event.payload.plugin_id;
+      showIntegrationCompletionPrompt(session, event.payload.completion.message ?? `${pluginName} completed`);
     });
 
     initUpdateListener();
@@ -1044,7 +1104,7 @@
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
 
-    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
+    return () => { window.removeEventListener("keydown", onPluginShortcut); cleanup(); cleanupEvents(); cleanupSymphony(); cleanupCi(); cleanupPrComments(); cleanupLoopListener(); unlistenSettings.then((fn) => fn()); unlistenCleanup.then((fn) => fn()); unlistenPluginRuntime.then((fn) => fn()); unlistenPluginActions.then((fn) => fn()); unlistenPluginAdvisory.then((fn) => fn()); unlistenPluginCompletion.then((fn) => fn()); unlistenClose.then((fn) => fn()); window.removeEventListener("keydown", onModalKeydown, true); window.removeEventListener("keyup", onKeyUp); window.removeEventListener("blur", onBlur); };
   });
 </script>
 
@@ -1102,6 +1162,8 @@
         selectedLoopId={activeLoopId}
         onToggleDiff={toggleDiffInTree}
         pluginContributions={sidebarPluginContributions}
+        pluginSessionActions={pluginSessionActions}
+        onPluginSessionAction={runPluginSessionAction}
         onPluginNavigate={openPluginContribution}
         onPluginClose={leavePluginWorkspace}
       />
@@ -1585,9 +1647,9 @@
 {#if getSnackbarMessage()}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
+  <div class="fixed bottom-4 left-4 z-[100] max-w-lg cursor-pointer rounded-lg {getSnackbarType() === 'error' ? 'bg-red-600' : getSnackbarType() === 'warning' ? 'bg-amber-600' : getSnackbarType() === 'info' ? 'bg-blue-600' : 'bg-green-600'} px-4 py-3 shadow-lg" onclick={() => { navigator.clipboard.writeText(getSnackbarMessage()!); dismissSnackbar(); }} title="Click to copy and dismiss">
     <p class="text-sm text-white font-mono break-all">{getSnackbarMessage()}</p>
-    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : 'text-green-200'} mt-1">Click to dismiss</p>
+    <p class="text-xs {getSnackbarType() === 'error' ? 'text-red-200' : getSnackbarType() === 'warning' ? 'text-amber-100' : getSnackbarType() === 'info' ? 'text-blue-100' : 'text-green-200'} mt-1">Click to dismiss</p>
   </div>
 {/if}
 

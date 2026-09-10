@@ -128,12 +128,22 @@ pub enum PluginHostCapability {
     SessionsRead,
     #[serde(rename = "sessions.repository-context")]
     SessionsRepositoryContext,
+    #[serde(rename = "session-events")]
+    SessionEvents,
+    #[serde(rename = "sessions.actions")]
+    SessionActions,
+    #[serde(rename = "sessions.advisories")]
+    SessionAdvisories,
+    #[serde(rename = "sessions.complete")]
+    SessionsComplete,
     #[serde(rename = "tasks.read")]
     TasksRead,
     #[serde(rename = "task-events")]
     TaskEvents,
     #[serde(rename = "tasks.create")]
     TasksCreate,
+    #[serde(rename = "tasks.transition")]
+    TasksTransition,
     #[serde(rename = "tasks.update")]
     TasksUpdate,
     #[serde(rename = "storage")]
@@ -307,8 +317,13 @@ fn validate_capabilities(
                     | PluginHostCapability::ProjectsRead
                     | PluginHostCapability::SessionsRead
                     | PluginHostCapability::SessionsRepositoryContext
+                    | PluginHostCapability::SessionEvents
+                    | PluginHostCapability::SessionActions
+                    | PluginHostCapability::SessionAdvisories
+                    | PluginHostCapability::SessionsComplete
                     | PluginHostCapability::TasksRead
                     | PluginHostCapability::TasksCreate
+                    | PluginHostCapability::TasksTransition
                     | PluginHostCapability::TaskEvents
             )
         })
@@ -1040,6 +1055,7 @@ struct BackgroundWorker {
 }
 
 struct RuntimeProcess {
+    app: AppHandle,
     child: AsyncMutex<Child>,
     stdin: AsyncMutex<ChildStdin>,
     stdout: AsyncMutex<BufReader<ChildStdout>>,
@@ -1051,17 +1067,125 @@ struct RuntimeProcess {
     lifecycle_event_subscriptions: AsyncMutex<HashSet<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionActionsRequest {
+    actions: Vec<PluginSessionAction>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionAction {
+    id: String,
+    label: String,
+    #[serde(default)]
+    providers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum PluginSessionAdvisorySeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionAdvisory {
+    session_id: String,
+    message: String,
+    severity: PluginSessionAdvisorySeverity,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionCompletion {
+    session_id: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+fn validate_plugin_session_actions(
+    request: SessionActionsRequest,
+) -> Result<Vec<PluginSessionAction>, String> {
+    if request.actions.len() > 32 {
+        return Err("plugin may register at most 32 session actions".to_string());
+    }
+    let mut ids = HashSet::new();
+    for action in &request.actions {
+        if action.id.is_empty()
+            || !action.id.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+            })
+        {
+            return Err(
+                "plugin session action id must contain lowercase letters, digits, or hyphens"
+                    .to_string(),
+            );
+        }
+        if !ids.insert(&action.id) {
+            return Err("plugin session action ids must be unique".to_string());
+        }
+        if action.label.trim().is_empty() || action.label.chars().count() > 80 {
+            return Err("plugin session action label must be 1 to 80 characters".to_string());
+        }
+        let mut providers = HashSet::new();
+        for provider in &action.providers {
+            if provider.trim().is_empty()
+                || provider.chars().count() > 80
+                || !providers.insert(provider)
+            {
+                return Err(
+                    "plugin session action providers must be unique nonempty strings".to_string(),
+                );
+            }
+        }
+    }
+    Ok(request.actions)
+}
+
+fn validate_plugin_session_advisory(
+    advisory: PluginSessionAdvisory,
+) -> Result<PluginSessionAdvisory, String> {
+    if advisory.session_id.trim().is_empty()
+        || advisory.message.trim().is_empty()
+        || advisory.message.chars().count() > 1_000
+    {
+        return Err("plugin session advisory requires a session_id and a message of at most 1000 characters".to_string());
+    }
+    Ok(advisory)
+}
+
+fn validate_plugin_session_completion(
+    completion: PluginSessionCompletion,
+) -> Result<PluginSessionCompletion, String> {
+    if completion.session_id.trim().is_empty()
+        || completion
+            .message
+            .as_ref()
+            .is_some_and(|message| message.trim().is_empty() || message.chars().count() > 280)
+    {
+        return Err("plugin session completion requires a session_id and an optional nonempty message of at most 280 characters".to_string());
+    }
+    Ok(completion)
+}
+
 fn is_host_controlled_plugin_method(method: &str) -> bool {
     matches!(
         method,
-        "plugin.handshake" | "plugin.shutdown" | "plugin.taskLifecycle" | "$/cancelRequest"
+        "plugin.handshake"
+            | "plugin.shutdown"
+            | "plugin.taskLifecycle"
+            | "plugin.sessionLifecycle"
+            | "$/cancelRequest"
     )
 }
 
 fn request_timeout(method: &str) -> Duration {
     match method {
         "jira.syncNow" => JIRA_SYNC_RPC_TIMEOUT,
-        "plugin.taskLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
+        "plugin.taskLifecycle" | "plugin.sessionLifecycle" => JIRA_LIFECYCLE_RPC_TIMEOUT,
         _ => RPC_TIMEOUT,
     }
 }
@@ -1214,14 +1338,83 @@ impl RuntimeProcess {
 
     async fn handle_plugin_request(&self, request: JsonRpcCallbackRequest) -> Result<(), String> {
         let JsonRpcCallbackRequest { id, method, params } = request;
-        let result = execute_host_task(
-            &self.plugin_id,
-            &self.capabilities,
-            &self.data_dir,
-            &method,
-            params,
-        )
-        .await;
+        let result = match method.as_str() {
+            "host.sessions.actions" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionActions)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session actions: {error}"))
+                        .and_then(validate_plugin_session_actions)
+                        .and_then(|actions| {
+                            self.app
+                                .emit(
+                                    "plugin-session-actions",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "actions": actions }),
+                                )
+                                .map_err(|error| {
+                                    format!("failed to emit plugin session actions: {error}")
+                                })
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            "host.sessions.advisory" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionAdvisories)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session advisory: {error}"))
+                        .and_then(validate_plugin_session_advisory)
+                        .and_then(|advisory| {
+                            self.app
+                                .emit(
+                                    "plugin-session-advisory",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "advisory": advisory }),
+                                )
+                                .map_err(|error| format!("failed to emit plugin advisory: {error}"))
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            "host.sessions.complete" => {
+                if !self
+                    .capabilities
+                    .contains(&PluginHostCapability::SessionsComplete)
+                {
+                    Err("plugin capability is not granted".to_string())
+                } else {
+                    serde_json::from_value(params)
+                        .map_err(|error| format!("invalid plugin session completion: {error}"))
+                        .and_then(validate_plugin_session_completion)
+                        .and_then(|completion| {
+                            self.app
+                                .emit(
+                                    "plugin-session-completed",
+                                    serde_json::json!({ "plugin_id": self.plugin_id, "completion": completion }),
+                                )
+                                .map_err(|error| format!("failed to emit plugin completion: {error}"))
+                        })
+                        .map(|_| serde_json::json!({ "accepted": true }))
+                }
+            }
+            _ => {
+                execute_host_task(
+                    &self.plugin_id,
+                    &self.capabilities,
+                    &self.data_dir,
+                    &method,
+                    params,
+                )
+                .await
+            }
+        };
         let frame = encode_host_callback_response(id, result)?;
         let mut stdin = self.stdin.lock().await;
         stdin
@@ -1366,6 +1559,7 @@ async fn execute_host_task(
         "host.projects.list" => PluginHostCapability::ProjectsRead,
         "host.sessions.list" => PluginHostCapability::SessionsRead,
         "host.sessions.repositoryContext" => PluginHostCapability::SessionsRepositoryContext,
+        "host.sessions.transitionLinkedTask" => PluginHostCapability::TasksTransition,
         "host.tasks.read" | "host.task.get" => PluginHostCapability::TasksRead,
         "host.tasks.createChild" => PluginHostCapability::TasksCreate,
         "host.task.create" => PluginHostCapability::TasksCreate,
@@ -1465,6 +1659,23 @@ async fn execute_host_task(
             }))
         })
         .await;
+    }
+
+    if method == "host.sessions.transitionLinkedTask" {
+        let session_id = params
+            .get("session_id")
+            .or_else(|| params.get("sessionId"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or("linked task transition requires session_id")?
+            .to_string();
+        let status = params
+            .get("status")
+            .and_then(Value::as_str)
+            .and_then(Status::parse)
+            .ok_or("linked task transition requires a valid status")?;
+        return commands::blocking(move || transition_linked_plugin_task(&session_id, status))
+            .await;
     }
 
     if method == "host.tasks.createChild" {
@@ -1617,6 +1828,40 @@ async fn execute_host_task(
         }
     })
     .await
+}
+
+fn transition_linked_plugin_task(session_id: &str, status: Status) -> Result<Value, String> {
+    let path = planeai_paths::db_path();
+    let conn = Connection::open(&path).map_err(|error| error.to_string())?;
+    let session = crate::db::get_session(&conn, session_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("session not found")?;
+    let task_key = session.task_key.ok_or("session has no linked task")?;
+    let project = crate::db::get_project(&conn, &session.project_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("session project not found")?;
+    if project.hidden {
+        return Err("session project is hidden".to_string());
+    }
+    let repo = SqliteRepository::open(
+        path.to_str().ok_or("invalid PlaneAI task database path")?,
+        &project.prefix,
+    )
+    .map_err(|error| error.to_string())?;
+    let (task, events) =
+        planeai_core::task_lifecycle::move_task_with_lifecycle(&repo, &task_key, status)
+            .map_err(|error| error.to_string())?;
+    if !events.is_empty() {
+        planeai::task_cli::notify_task_lifecycle(&TaskLifecycleBatch::new(
+            crate::task_lifecycle::TaskLifecycleOrigin::Ui,
+            project.id,
+            project.prefix,
+            events,
+        ));
+    }
+    serde_json::to_value(task)
+        .map(|task| serde_json::json!({ "task": task }))
+        .map_err(|error| error.to_string())
 }
 
 fn create_plugin_child_task(plugin_id: &str, params: Value) -> Result<Value, String> {
@@ -1776,6 +2021,14 @@ fn lifecycle_subscription_is_granted(
 ) -> bool {
     capabilities.contains(&PluginHostCapability::TaskEvents)
         && subscriptions.contains("task.lifecycle")
+}
+
+fn session_lifecycle_subscription_is_granted(
+    capabilities: &HashSet<PluginHostCapability>,
+    subscriptions: &HashSet<String>,
+) -> bool {
+    capabilities.contains(&PluginHostCapability::SessionEvents)
+        && subscriptions.contains("session.lifecycle")
 }
 
 impl PluginRuntimeSupervisor {
@@ -2093,6 +2346,49 @@ impl PluginRuntimeSupervisor {
         });
     }
 
+    /// Deliver a committed session lifecycle event in the background. Delivery
+    /// is best-effort and requires both manifest capability and handshake opt-in.
+    pub fn dispatch_session_lifecycle(self: &Arc<Self>, event: Value) {
+        if self.shutting_down.load(Ordering::Acquire) {
+            tracing::warn!(
+                "skipped session lifecycle delivery while plugin runtime is shutting down"
+            );
+            return;
+        }
+        let supervisor = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            let processes = supervisor
+                .processes
+                .lock()
+                .await
+                .iter()
+                .map(|(plugin_id, process)| (plugin_id.clone(), process.clone()))
+                .collect::<Vec<_>>();
+            for (plugin_id, process) in processes {
+                let subscriptions = process.lifecycle_event_subscriptions.lock().await;
+                let subscribed = session_lifecycle_subscription_is_granted(
+                    &process.capabilities,
+                    &subscriptions,
+                );
+                drop(subscriptions);
+                if !subscribed {
+                    continue;
+                }
+                if let Err(error) = supervisor
+                    .call_internal(
+                        &plugin_id,
+                        "plugin.sessionLifecycle",
+                        serde_json::json!({ "event": event }),
+                        true,
+                    )
+                    .await
+                {
+                    tracing::warn!(plugin_id, %error, "session lifecycle delivery failed");
+                }
+            }
+        });
+    }
+
     pub async fn local_ui_source(
         &self,
         plugin_id: &str,
@@ -2327,6 +2623,7 @@ impl PluginRuntimeSupervisor {
         // must survive restarts under the same plugin namespace as local plugins.
         let state_path = Some(plugin_state_root(&self.app, &id).await?);
         let process = match spawn_runtime(
+            self.app.clone(),
             &binary,
             &log_path,
             state_path.as_deref(),
@@ -2383,12 +2680,16 @@ impl PluginRuntimeSupervisor {
         {
             let mut subscriptions = process.lifecycle_event_subscriptions.lock().await;
             *subscriptions = handshake.lifecycle_event_subscriptions;
-            if !process
-                .capabilities
-                .contains(&PluginHostCapability::TaskEvents)
-            {
-                subscriptions.clear();
-            }
+            subscriptions.retain(|subscription| {
+                (subscription == "task.lifecycle"
+                    && process
+                        .capabilities
+                        .contains(&PluginHostCapability::TaskEvents))
+                    || (subscription == "session.lifecycle"
+                        && process
+                            .capabilities
+                            .contains(&PluginHostCapability::SessionEvents))
+            });
         }
         tracing::info!(plugin_id = %handshake.plugin_id, version = %handshake.plugin_version, "plugin runtime handshake completed");
 
@@ -2722,6 +3023,7 @@ async fn plugin_log_path(app: &AppHandle, plugin_id: &str) -> Result<PathBuf, St
 }
 
 async fn spawn_runtime(
+    app: AppHandle,
     binary: &Path,
     log_path: &Path,
     state_root: Option<&Path>,
@@ -2758,6 +3060,7 @@ async fn spawn_runtime(
         .map(|root| root.join("data"))
         .ok_or("plugin runtime state root was not provided")?;
     Ok(RuntimeProcess {
+        app,
         child: AsyncMutex::new(child),
         stdin: AsyncMutex::new(stdin),
         stdout: AsyncMutex::new(BufReader::new(stdout)),
@@ -3407,6 +3710,15 @@ mod tests {
             &HashSet::new(),
             &subscriptions
         ));
+        let session_subscriptions = HashSet::from(["session.lifecycle".to_string()]);
+        assert!(session_lifecycle_subscription_is_granted(
+            &HashSet::from([PluginHostCapability::SessionEvents]),
+            &session_subscriptions
+        ));
+        assert!(!session_lifecycle_subscription_is_granted(
+            &HashSet::new(),
+            &session_subscriptions
+        ));
         manifest
             .capabilities
             .push(PluginHostCapability::TasksCreate);
@@ -3545,11 +3857,58 @@ mod tests {
             "plugin.handshake",
             "plugin.shutdown",
             "plugin.taskLifecycle",
+            "plugin.sessionLifecycle",
             "$/cancelRequest",
         ] {
             assert!(is_host_controlled_plugin_method(method), "{method}");
         }
         assert!(!is_host_controlled_plugin_method("fixture.status"));
+    }
+
+    #[test]
+    fn local_plugin_session_callback_payloads_are_strict_and_provider_aware() {
+        let actions = validate_plugin_session_actions(SessionActionsRequest {
+            actions: vec![
+                PluginSessionAction {
+                    id: "review".into(),
+                    label: "Open review".into(),
+                    providers: vec!["claude".into()],
+                },
+                PluginSessionAction {
+                    id: "sync".into(),
+                    label: "Sync".into(),
+                    providers: vec![],
+                },
+            ],
+        })
+        .unwrap();
+        assert_eq!(actions[0].providers, vec!["claude"]);
+        assert!(validate_plugin_session_actions(SessionActionsRequest {
+            actions: vec![
+                PluginSessionAction {
+                    id: "duplicate".into(),
+                    label: "One".into(),
+                    providers: vec![]
+                },
+                PluginSessionAction {
+                    id: "duplicate".into(),
+                    label: "Two".into(),
+                    providers: vec![]
+                },
+            ],
+        })
+        .is_err());
+        assert!(validate_plugin_session_advisory(PluginSessionAdvisory {
+            session_id: "session-1".into(),
+            message: "Needs attention".into(),
+            severity: PluginSessionAdvisorySeverity::Warning,
+        })
+        .is_ok());
+        assert!(validate_plugin_session_completion(PluginSessionCompletion {
+            session_id: "session-1".into(),
+            message: Some("Integration completed".into()),
+        })
+        .is_ok());
     }
 
     #[test]

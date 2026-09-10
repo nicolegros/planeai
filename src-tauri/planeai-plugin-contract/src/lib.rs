@@ -33,8 +33,13 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "projects.read",
     "sessions.read",
     "sessions.repository-context",
+    "session-events",
+    "sessions.actions",
+    "sessions.advisories",
+    "sessions.complete",
     "tasks.read",
     "tasks.create",
+    "tasks.transition",
     "task-events",
 ];
 const BACKGROUND_SERVICE_FIELDS: &[&str] = &["method", "interval_setting", "default_interval_ms"];
@@ -126,9 +131,7 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
             .as_str()
             .ok_or_else(|| anyhow!("plugin manifest capabilities must contain strings"))?;
         if !LOCAL_CAPABILITIES.contains(&capability) {
-            bail!(
-                "local plugins may only request settings, projects.read, sessions.read, sessions.repository-context, tasks.read, tasks.create, or task-events capabilities"
-            );
+            bail!("local plugins may only request documented local plugin capabilities");
         }
         if !seen.insert(capability) {
             bail!("plugin manifest declares duplicate capabilities");
@@ -301,7 +304,14 @@ mod tests {
             "host_api_version": "planeai.plugin-host.v1",
             "source_kind": "local",
             "backend_entrypoints": { "macos-arm64": "bin/plugin" },
-            "capabilities": ["sessions.repository-context"],
+            "capabilities": [
+                "sessions.repository-context",
+                "session-events",
+                "sessions.actions",
+                "sessions.advisories",
+                "sessions.complete",
+                "tasks.transition"
+            ],
             "ui_contributions": [{
                 "id": "panel",
                 "label": "Integration",

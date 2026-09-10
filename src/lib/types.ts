@@ -96,6 +96,28 @@ export interface PluginUiContribution {
   shortcut: string | null;
 }
 
+/** A sidecar-registered action rendered in a host session context menu. */
+export interface PluginSessionAction {
+  plugin_id: string;
+  id: string;
+  label: string;
+  /** Empty means all providers; otherwise the action is shown only for these provider IDs. */
+  providers: string[];
+}
+
+export type PluginSessionAdvisorySeverity = "info" | "warning" | "error";
+
+export interface PluginSessionAdvisory {
+  session_id: string;
+  message: string;
+  severity: PluginSessionAdvisorySeverity;
+}
+
+export interface PluginSessionCompletion {
+  session_id: string;
+  message: string | null;
+}
+
 export interface PluginInventory {
   id: string;
   name: string;

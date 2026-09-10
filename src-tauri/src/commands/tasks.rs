@@ -5,7 +5,9 @@ use planeai_tasks::model::{CreateParams, ListFilter, Status, UpdateParams, DEFAU
 use planeai_tasks::provider::TaskProvider;
 use planeai_tasks::sqlite::SqliteRepository;
 
+use crate::commands::sessions::lifecycle::session_lifecycle_event;
 use crate::db;
+use crate::plugins::PluginRuntimeHandle;
 use crate::state::{ConfigState, DbState, PtyState};
 use crate::task_lifecycle::{
     StatusChangeCause, TaskLifecycleBatch, TaskLifecycleEvent, TaskLifecycleOrigin,
@@ -227,6 +229,7 @@ pub async fn move_task_item(
     config_state: State<'_, ConfigState>,
     pty_state: State<'_, PtyState>,
     app: AppHandle,
+    runtime: State<'_, PluginRuntimeHandle>,
     key: String,
     status: String,
     repo_path: String,
@@ -239,7 +242,7 @@ pub async fn move_task_item(
     let cfg = config_state.0.lock().map_err(|e| e.to_string())?.clone();
 
     // All I/O (DB writes, subprocess kills) runs off the main thread.
-    let (archived_session_ids, events) = super::blocking({
+    let (archived_sessions, events) = super::blocking({
         let key = key.clone();
         let cfg = cfg.clone();
         move || {
@@ -278,7 +281,7 @@ pub async fn move_task_item(
                 });
             }
 
-            let mut session_ids: Vec<String> = Vec::new();
+            let mut archived_sessions: Vec<db::Session> = Vec::new();
 
             if s == Status::Done {
                 let parent_before = task
@@ -300,15 +303,23 @@ pub async fn move_task_item(
 
                 // Archive sessions linked to this task
                 let conn = db.lock().map_err(|e| e.to_string())?;
-                session_ids = planeai_core::services::SessionService::list_by_task_key(&conn, &key)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|s| s.id.clone())
-                    .collect();
+                archived_sessions =
+                    planeai_core::services::SessionService::list_by_task_key(&conn, &key)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|session| session.status != "archived")
+                        .map(|session| {
+                            db::get_session(&conn, &session.id)
+                                .map_err(|error| error.to_string())?
+                                .ok_or(
+                                    "session disappeared before it could be archived".to_string(),
+                                )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                 crate::session_ops::archive_sessions_for_task(&conn, &key, &Some(cfg));
             }
 
-            Ok((session_ids, events))
+            Ok((archived_sessions, events))
         }
     })
     .await?;
@@ -321,6 +332,20 @@ pub async fn move_task_item(
             events,
         ));
     }
+
+    for session in &archived_sessions {
+        runtime
+            .0
+            .dispatch_session_lifecycle(session_lifecycle_event(
+                session,
+                &session.status,
+                "archived",
+            ));
+    }
+    let archived_session_ids = archived_sessions
+        .iter()
+        .map(|session| session.id.clone())
+        .collect::<Vec<_>>();
 
     // Detach PTYs (PtyManager is !Send, must stay on main thread)
     for id in &archived_session_ids {
