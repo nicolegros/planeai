@@ -47,6 +47,20 @@ export function editComment(sessionId: string, commentId: string, newText: strin
   );
 }
 
+/** Records that a file's pending review comments now refer to a refreshed diff. */
+export function reanchorComments(
+  sessionId: string,
+  filePath: string,
+  comparisonKey: string,
+  fingerprint: string,
+): void {
+  const list = commentsBySession[sessionId];
+  if (!list) return;
+  commentsBySession[sessionId] = list.map((comment) =>
+    comment.filePath === filePath ? { ...comment, comparisonKey, fingerprint } : comment,
+  );
+}
+
 export function getComments(sessionId: string): ReviewComment[] {
   return commentsBySession[sessionId] ?? [];
 }

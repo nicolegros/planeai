@@ -6,7 +6,7 @@
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
-  import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
+  import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
   import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
@@ -94,6 +94,45 @@
     return true;
   }
 
+  function hasValidAnchor(comment: ReviewComment, diff: TextFileDiff): boolean {
+    if (comment.type === "file") return true;
+    const lineCount = (comment.side === "original" ? diff.original : diff.modified).split("\n").length;
+    return comment.startLine >= 1 && comment.endLine >= comment.startLine && comment.endLine <= lineCount;
+  }
+
+  async function reanchorPendingComments(
+    nextFiles: ChangedFile[],
+    generation: number,
+  ): Promise<boolean> {
+    const comments = getComments(sessionId);
+    if (comments.length === 0) return true;
+    const filesByPath = new Map(nextFiles.map((file) => [file.path, file]));
+    const referencedFiles = [...new Set(comments.map((comment) => comment.filePath))]
+      .map((filePath) => filesByPath.get(filePath))
+      .filter((file): file is ChangedFile => file !== undefined);
+    const refreshed = await Promise.all(referencedFiles.map(async (file) => ({
+      file,
+      diff: await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff,
+    })));
+    if (generation !== refreshGeneration) return false;
+
+    const invalid = refreshed.flatMap(({ file, diff }) =>
+      diff.kind !== "text"
+        ? getComments(sessionId).filter((comment) => comment.filePath === file.path)
+        : getComments(sessionId).filter((comment) => comment.filePath === file.path && !hasValidAnchor(comment, diff)),
+    );
+    if (invalid.length > 0 && !window.confirm(
+      `Discard ${invalid.length} comment${invalid.length === 1 ? "" : "s"} whose selected line${invalid.length === 1 ? " no longer exists" : "s no longer exist"}?`,
+    )) return false;
+    invalid.forEach((comment) => removeComment(sessionId, comment.id));
+
+    for (const { file, diff } of refreshed) {
+      if (diff.kind !== "text") continue;
+      reanchorComments(sessionId, file.path, comparisonKey, contentFingerprint(diff));
+    }
+    return true;
+  }
+
   async function refresh({ comparisonChange = false } = {}): Promise<void> {
     if (sendingFeedback || !discardCommentDraft()) return;
     if (comparisonChange && !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
@@ -110,6 +149,7 @@
       const orphanedComments = getComments(sessionId).filter((comment) => !nextFiles.some((file) => file.path === comment.filePath));
       if (orphanedComments.length > 0 && !window.confirm(`Discard ${orphanedComments.length} comment${orphanedComments.length === 1 ? "" : "s"} for file${orphanedComments.length === 1 ? "" : "s"} no longer in this comparison?`)) return;
       orphanedComments.forEach((comment) => removeComment(sessionId, comment.id));
+      if (!(await reanchorPendingComments(nextFiles, generation))) return;
       const nextFolderPaths = getReviewFolderPaths(nextFiles);
       let nextExpandedFolders = reconcileReviewTreeExpansion(
         expandedSidebarFolders,
