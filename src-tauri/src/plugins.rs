@@ -35,6 +35,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
 const JIRA_PLUGIN_ID: &str = "jira";
+const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2431,17 +2432,28 @@ impl PluginRuntimeSupervisor {
                 return;
             }
         };
-        let migration_blocks_jira = self
-            .with_db(|conn| Ok(crate::jira_migration::blocks_plugin_start(conn)))
+        let (migration_blocks_jira, migration_blocks_github) = self
+            .with_db(|conn| {
+                Ok((
+                    crate::jira_migration::blocks_plugin_start(conn),
+                    crate::github_migration::blocks_plugin_start(conn),
+                ))
+            })
             .await
             .unwrap_or_else(|error| {
-                tracing::warn!(%error, "failed to read Jira migration fence; refusing Jira startup");
-                true
+                tracing::warn!(%error, "failed to read plugin migration fences; refusing protected plugin startup");
+                (true, true)
             });
         for plugin in enabled {
             if plugin.id == JIRA_PLUGIN_ID && migration_blocks_jira {
                 tracing::info!(
                     "Jira plugin remains disabled until explicit legacy migration completes"
+                );
+                continue;
+            }
+            if plugin.id == GITHUB_PLUGIN_ID && migration_blocks_github {
+                tracing::info!(
+                    "GitHub plugin remains disabled until explicit legacy migration completes"
                 );
                 continue;
             }
@@ -2571,6 +2583,13 @@ impl PluginRuntimeSupervisor {
                 .await?
         {
             return Err("Jira is waiting for explicit legacy migration. Use Migrate and enable Jira plugin in Plugins first.".to_string());
+        }
+        if plugin_id == GITHUB_PLUGIN_ID
+            && self
+                .with_db(|conn| Ok(crate::github_migration::blocks_plugin_start(conn)))
+                .await?
+        {
+            return Err("GitHub migration is required before enabling the GitHub plugin. Migrate legacy GitHub pull-request mappings first.".to_string());
         }
         self.enable_inner(plugin_id).await
     }
