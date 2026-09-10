@@ -1258,6 +1258,8 @@
                 {@const editorRepoPath = session.worktree_path ?? project.path}
                 <EditorTab
                   repoPath={editorRepoPath}
+                  sessionId={sessionId}
+                  sessionExited={session.status === "exited"}
                   visible={isActiveInLeaf && !activePluginId}
                   theme={isDark() ? "vs-dark" : "vs"}
                   initialFile={tabEntry.filePath}
