@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter};
 use crate::daemon_client::DataConnection;
 use crate::output_observer::{NoopObserver, OutputObserver};
 use crate::pty_planeai_core_adapter::PlaneaiPtyBackend;
-use crate::session_backend::SessionBackend;
+use crate::session_backend::{SessionBackend, WriteAck};
 #[cfg(not(windows))]
 use crate::tmux;
 use planeai_pty::FlowControl;
@@ -43,19 +43,25 @@ struct DaemonBackend {
 }
 
 impl SessionBackend for DaemonBackend {
-    fn write(&self, data: &[u8]) -> Result<(), String> {
+    fn write(&self, data: &[u8]) -> Result<WriteAck, String> {
         let writer = self.writer.clone();
         let data = data.to_vec();
+        let (acknowledge, receiver) = tokio::sync::oneshot::channel();
         tauri::async_runtime::spawn(async move {
-            let mut w = writer.lock().await;
-            let _ = planeai_daemon::protocol::write_frame(
-                &mut *w,
-                planeai_daemon::protocol::FRAME_INPUT,
-                &data,
-            )
+            let result = async {
+                let mut w = writer.lock().await;
+                planeai_daemon::protocol::write_frame(
+                    &mut *w,
+                    planeai_daemon::protocol::FRAME_INPUT,
+                    &data,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            }
             .await;
+            let _ = acknowledge.send(result);
         });
-        Ok(())
+        Ok(WriteAck::Pending(receiver))
     }
 
     fn resize(&self, rows: u16, cols: u16) -> Result<(), String> {
@@ -94,16 +100,17 @@ impl SessionBackend for DaemonBackend {
 
 // ─── PtyManager ──────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<String, Box<dyn SessionBackend>>>>,
-    observer: RwLock<Arc<dyn OutputObserver>>,
+    observer: Arc<RwLock<Arc<dyn OutputObserver>>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            observer: RwLock::new(Arc::new(NoopObserver)),
+            observer: Arc::new(RwLock::new(Arc::new(NoopObserver))),
         }
     }
 
@@ -305,11 +312,14 @@ impl PtyManager {
         Ok(())
     }
 
-    /// Write input bytes to a session's PTY.
-    pub fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        let sessions = self.sessions.read().map_err(|e| e.to_string())?;
-        let backend = sessions.get(session_id).ok_or("session not attached")?;
-        backend.write(data)
+    /// Write input bytes to a session's PTY and wait for transport acknowledgement.
+    pub async fn write(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
+        let acknowledgement = {
+            let sessions = self.sessions.read().map_err(|e| e.to_string())?;
+            let backend = sessions.get(session_id).ok_or("session not attached")?;
+            backend.write(data)?
+        };
+        acknowledgement.wait().await
     }
 
     /// Resize a session's PTY.

@@ -95,6 +95,11 @@
     { keys: `ss`, description: "Start session" },
   ]};
 
+  const editorShortcuts = { section: "Editor", items: [
+    { keys: `${MOD_LABEL}⇧C`, description: "Comment on selected code" },
+    { keys: MOD_ENTER_HINT, description: "Send queued editor feedback" },
+  ]};
+
   const reviewShortcuts = { section: "Review (Diff)", items: [
     { keys: `j/k`, description: "Navigate files / move cursor" },
     { keys: `Enter`, description: "Focus diff body" },
@@ -117,7 +122,9 @@
   const visibleShortcuts = $derived(
     getActiveZone() === "sidebar"
       ? [sidebarShortcuts, ...shortcuts]
-      : [reviewShortcuts, prPanelShortcuts, ...shortcuts]
+      : getActiveZone() === "editor"
+        ? [editorShortcuts, ...shortcuts]
+        : [reviewShortcuts, prPanelShortcuts, ...shortcuts]
   );
 
   const filteredShortcuts = $derived(

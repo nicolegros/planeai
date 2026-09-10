@@ -54,6 +54,11 @@ import { sessions as sessionsApi, symphony } from "../api";
 import { getSettings } from "../settings.svelte";
 import type { Session } from "../types";
 import {
+  addEditorFeedback,
+  getEditorFeedbackCount,
+  _resetForTests as resetEditorFeedback,
+} from "../editor-feedback.svelte";
+import {
   getSessions,
   getActiveSessionId,
   loadSessions,
@@ -112,8 +117,25 @@ describe("session-orchestrator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetForTests();
+    resetEditorFeedback();
     api.list.mockResolvedValue([]);
   });
+
+  const queuedFeedback = {
+    filePath: "src/example.ts",
+    startLine: 1,
+    endLine: 1,
+    language: "typescript",
+    selectedText: "const answer = 42;",
+    contextBefore: "",
+    contextAfter: "",
+    isUnsaved: false,
+    text: "Please revise this.",
+  };
+
+  function queueEditorFeedback(sessionId: string): void {
+    addEditorFeedback(sessionId, queuedFeedback);
+  }
 
   describe("loadSessions", () => {
     it("populates sessions from API", async () => {
@@ -165,6 +187,17 @@ describe("session-orchestrator", () => {
       expect(api.destroy).toHaveBeenCalledWith("s1");
     });
 
+    it("clears queued editor feedback", async () => {
+      const s1 = makeSession({ id: "s1" });
+      api.list.mockResolvedValue([s1]);
+      await loadSessions();
+      queueEditorFeedback(s1.id);
+
+      await deleteSession(s1);
+
+      expect(getEditorFeedbackCount(s1.id)).toBe(0);
+    });
+
     it("selects next session when active is deleted", async () => {
       const s1 = makeSession({ id: "s1" }),
         s2 = makeSession({ id: "s2" });
@@ -183,6 +216,17 @@ describe("session-orchestrator", () => {
       await archiveSession(makeSession({ id: "s1" }));
       expect(getSessions()).toHaveLength(0);
       expect(api.archive).toHaveBeenCalledWith("s1");
+    });
+
+    it("clears queued editor feedback", async () => {
+      const s1 = makeSession({ id: "s1" });
+      api.list.mockResolvedValue([s1]);
+      await loadSessions();
+      queueEditorFeedback(s1.id);
+
+      await archiveSession(s1);
+
+      expect(getEditorFeedbackCount(s1.id)).toBe(0);
     });
   });
 
@@ -207,6 +251,24 @@ describe("session-orchestrator", () => {
 
       expect(removeProjectSessions("p1")).toEqual(["p1-a", "p1-b"]);
       expect(getSessions().map((session) => session.id)).toEqual(["p2-a"]);
+    });
+
+    it("clears queued feedback for every removed project session", async () => {
+      api.list.mockResolvedValue([
+        makeSession({ id: "p1-a", project_id: "p1" }),
+        makeSession({ id: "p1-b", project_id: "p1" }),
+        makeSession({ id: "p2-a", project_id: "p2" }),
+      ]);
+      await loadSessions();
+      queueEditorFeedback("p1-a");
+      queueEditorFeedback("p1-b");
+      queueEditorFeedback("p2-a");
+
+      removeProjectSessions("p1");
+
+      expect(getEditorFeedbackCount("p1-a")).toBe(0);
+      expect(getEditorFeedbackCount("p1-b")).toBe(0);
+      expect(getEditorFeedbackCount("p2-a")).toBe(1);
     });
   });
 

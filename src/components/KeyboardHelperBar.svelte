@@ -2,7 +2,7 @@
   import { getActiveZone, getExplorerReturnZone } from "../lib/focus.svelte";
   import { getDiffTabActive } from "../lib/tab-layout.svelte";
   import { getActiveSessionId } from "../lib/session-orchestrator.svelte";
-  import { MOD_LABEL } from "../lib/keyboard";
+  import { MOD_ENTER_HINT, MOD_LABEL } from "../lib/keyboard";
 
   const TERMINAL_HINTS = [
     { k: `${MOD_LABEL}K`, l: "Command" },
@@ -44,6 +44,11 @@
     { k: "Esc", l: "Back" },
   ];
 
+  const EDITOR_HINTS = [
+    { k: `${MOD_LABEL}⇧C`, l: "Comment" },
+    { k: MOD_ENTER_HINT, l: "Send feedback" },
+  ];
+
   let isDiffActive = $derived((() => {
     const sid = getActiveSessionId();
     return sid ? (getDiffTabActive()[sid] ?? false) : false;
@@ -52,11 +57,13 @@
   let activeZone = $derived(getActiveZone());
   let hints = $derived(activeZone === "explorer"
     ? explorerHints
-    : isDiffActive
-      ? DIFF_HINTS
-      : activeZone === "sidebar"
-        ? SIDEBAR_HINTS
-        : TERMINAL_HINTS);
+    : activeZone === "editor"
+      ? EDITOR_HINTS
+      : isDiffActive
+        ? DIFF_HINTS
+        : activeZone === "sidebar"
+          ? SIDEBAR_HINTS
+          : TERMINAL_HINTS);
 </script>
 
 <div class="flex items-center gap-[18px] h-[34px] px-4 border-t border-border bg-chrome shrink-0">

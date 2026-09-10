@@ -12,3 +12,7 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => false,
   }),
 });
+
+if (!Range.prototype.getClientRects) {
+  Range.prototype.getClientRects = () => [];
+}

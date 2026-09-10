@@ -70,7 +70,8 @@ export const projects = {
 };
 
 export const pty = {
-  write: (sessionId: string, data: number[]) => invoke("write_to_pty", { sessionId, data }),
+  write: (sessionId: string, data: number[]) =>
+    invoke<boolean>("write_to_pty", { sessionId, data }),
   attach: (sessionId: string, darkMode: boolean, onData: Channel<ArrayBuffer>) =>
     invoke("attach_session", { sessionId, darkMode, onData }),
   spawnTab: (

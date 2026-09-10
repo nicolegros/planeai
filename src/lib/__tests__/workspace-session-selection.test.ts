@@ -32,3 +32,9 @@ it("ignores a previous terminal's focus event after a session switch", () => {
     /onFocused=\{\(event\) => \{\s*if \(event\.type === "focusin" && sessionId !== activeSessionId\) return;/,
   );
 });
+
+it("preserves editor focus when a split-pane click originates inside an editor", () => {
+  expect(appSource).toMatch(
+    /event\.target instanceof Element && event\.target\.closest\("\[data-editor-tab\]"\)[\s\S]*?focusTerminal\(\);/,
+  );
+});
