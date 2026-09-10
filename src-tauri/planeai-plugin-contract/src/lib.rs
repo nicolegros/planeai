@@ -202,8 +202,8 @@ fn validate_ui_contributions(object: &Map<String, Value>, plugin_id: &str) -> Re
             Some(Value::String(value)) => Some(value.as_str()),
             Some(_) => bail!("UI contribution shortcut must be a string"),
         };
-        if placement != "main-pane" && shortcut.is_some() {
-            bail!("UI contribution shortcuts are only valid for main-pane contributions");
+        if !matches!(placement, "main-pane" | "session.panel") && shortcut.is_some() {
+            bail!("UI contribution shortcuts are only valid for main-pane or session-panel contributions");
         }
         if !placement.starts_with("sidebar.") && has_order {
             bail!("UI contribution order is only valid for sidebar contributions");
@@ -259,12 +259,6 @@ fn validate_shortcut(shortcut: &str) -> Result<()> {
     };
     if canonical != shortcut {
         bail!("UI contribution shortcut modifiers must be ordered Shift then Alt");
-    }
-    if matches!(
-        key,
-        "B" | "D" | "E" | "K" | "N" | "P" | "R" | "S" | "T" | "U" | "W"
-    ) {
-        bail!("UI contribution shortcut {shortcut} is reserved by PlaneAI");
     }
     Ok(())
 }
@@ -341,12 +335,12 @@ mod tests {
     }
 
     #[test]
-    fn session_panel_cannot_claim_a_global_shortcut() {
+    fn session_panel_can_claim_a_global_shortcut() {
         let mut manifest = manifest();
-        manifest["ui_contributions"][0]["shortcut"] = json!("Mod+G");
-        assert!(validate_local_manifest(&manifest, "macos-arm64")
-            .unwrap_err()
-            .to_string()
-            .contains("shortcuts are only valid for main-pane"));
+        manifest["ui_contributions"][0]["shortcut"] = json!("Mod+Shift+P");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
     }
 }
