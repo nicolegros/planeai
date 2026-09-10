@@ -76,7 +76,7 @@
         b: { doc: diff.modified, extensions: extensions("modified") },
         orientation: "a-b",
         gutter: true,
-        highlightChanges: true,
+        highlightChanges: false,
         collapseUnchanged,
         diffConfig,
       });
@@ -90,7 +90,7 @@
         unifiedMergeView({
           original: diff.original,
           gutter: true,
-          highlightChanges: true,
+          highlightChanges: false,
           mergeControls: false,
           collapseUnchanged,
           diffConfig,
