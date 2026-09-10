@@ -64,11 +64,12 @@ The platform key is the current OS and architecture: `macos-arm64`, `macos-x64`,
 
 ### Capabilities
 
-Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `tasks.read`, `tasks.create`, and `task-events`; duplicates and all other local capabilities are rejected.
+Capabilities are an explicit contract for PlaneAI data RPC. Local plugins may request `settings`, `projects.read`, `sessions.read`, `sessions.repository-context`, `tasks.read`, `tasks.create`, and `task-events`; duplicates and all other local capabilities are rejected.
 
 - `settings` permits sidecar callbacks `host.settings.get` and `host.settings.replace`.
 - `projects.read` permits `host.projects.list`, returning non-hidden active projects.
-- `sessions.read` permits `host.sessions.list`, returning safe metadata only: identity, project, name, branch, status, provider/backend, task key, timestamps, tab count, and PR state. It never returns terminal names, provider session IDs, worktree paths, output, or control handles.
+- `sessions.read` permits `host.sessions.list`, returning safe metadata only: identity, project, name, branch, status, provider/backend, task key, timestamps, tab count, and legacy migration state. It never returns terminal names, provider session IDs, worktree paths, output, or control handles.
+- `sessions.repository-context` permits `host.sessions.repositoryContext` for an explicitly supplied session ID. It returns only that session's ID, project ID, resolved working-tree path, branch, base branch, status, and linked task key. Use it for provider-neutral repository integrations; it does not grant terminal output, environment variables, provider session IDs, or access to other sessions.
 - `tasks.read` permits the keyed single-task lookup aliases `host.tasks.read` and `host.task.get`. Each accepts `{ "key": "TASK-123" }` and returns `{ "task": ... }` (or `{ "task": null }` when no task matches).
 - `tasks.create` permits `host.tasks.createChild`. It requires `projectPath`, `parentKey`, `title`, `description`, and a plugin-scoped `operationId`; PlaneAI verifies the parent belongs to the project and returns the originally created child when the same operation is retried.
 - `task-events` permits event delivery only when the handshake also subscribes to `task.lifecycle`.
@@ -161,7 +162,7 @@ For example, local UI CSS can adopt or intentionally customize the host theme:
 
 The fixture UI calls `context.host.call("fixture.status")`, loads a saved greeting with `context.host.settings.get()`, replaces it when **Save greeting** is selected, calls `data.changed()`, and removes its click handler in its disposer.
 
-Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`. Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, and `main-pane`. Sidebar contributions may set integer `order`. A `main-pane` contribution may specify an optional portable `Mod+…` shortcut and is discoverable in Cmd+K while running. Use the placement's available space conservatively; the host owns focus, navigation, keyboard routing, lifecycle, loading/retry UI, and teardown.
+Each `ui_contributions` item requires a unique safe `id`, `label`, `placement`, and `entrypoint`. Supported placements are `sidebar.header`, `sidebar.navigation`, `sidebar.section`, `sidebar.footer`, `preferences`, `main-pane`, and `session.panel`. Sidebar contributions may set integer `order`. A `main-pane` contribution may specify an optional portable `Mod+…` shortcut and is discoverable in Cmd+K while running. A `session.panel` contribution is also discoverable in Cmd+K when a session is selected; PlaneAI supplies its UI entrypoint the selected session's identity, project ID, branch, base branch, status, and linked task key. It does not supply a working-tree path through UI context—request the separately capability-gated `host.sessions.repositoryContext` operation when needed. Use the placement's available space conservatively; the host owns focus, navigation, keyboard routing, lifecycle, loading/retry UI, and teardown.
 
 ## Install, use, reload, and remove
 

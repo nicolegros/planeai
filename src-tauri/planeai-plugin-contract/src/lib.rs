@@ -32,6 +32,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "settings",
     "projects.read",
     "sessions.read",
+    "sessions.repository-context",
     "tasks.read",
     "tasks.create",
     "task-events",
@@ -44,6 +45,7 @@ const UI_PLACEMENTS: &[&str] = &[
     "sidebar.footer",
     "preferences",
     "main-pane",
+    "session.panel",
     "interaction",
 ];
 
@@ -125,7 +127,7 @@ fn validate_capabilities(object: &Map<String, Value>) -> Result<()> {
             .ok_or_else(|| anyhow!("plugin manifest capabilities must contain strings"))?;
         if !LOCAL_CAPABILITIES.contains(&capability) {
             bail!(
-                "local plugins may only request settings, tasks.read, or task-events capabilities"
+                "local plugins may only request settings, projects.read, sessions.read, sessions.repository-context, tasks.read, tasks.create, or task-events capabilities"
             );
         }
         if !seen.insert(capability) {
@@ -283,4 +285,47 @@ fn required_string<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow!("plugin manifest {field} must be a nonempty string"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn manifest() -> Value {
+        json!({
+            "schema": "planeai.plugin.v1",
+            "id": "integration",
+            "name": "Integration",
+            "version": "0.1.0",
+            "host_api_version": "planeai.plugin-host.v1",
+            "source_kind": "local",
+            "backend_entrypoints": { "macos-arm64": "bin/plugin" },
+            "capabilities": ["sessions.repository-context"],
+            "ui_contributions": [{
+                "id": "panel",
+                "label": "Integration",
+                "placement": "session.panel",
+                "entrypoint": "ui/entry.js"
+            }]
+        })
+    }
+
+    #[test]
+    fn accepts_session_panel_and_repository_context_capability() {
+        assert_eq!(
+            validate_local_manifest(&manifest(), "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn session_panel_cannot_claim_a_global_shortcut() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["shortcut"] = json!("Mod+G");
+        assert!(validate_local_manifest(&manifest, "macos-arm64")
+            .unwrap_err()
+            .to_string()
+            .contains("shortcuts are only valid for main-pane"));
+    }
 }

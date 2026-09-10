@@ -84,6 +84,7 @@ export type PluginUiPlacement =
   | "sidebar.footer"
   | "preferences"
   | "main-pane"
+  | "session.panel"
   | "interaction";
 
 export interface PluginUiContribution {
