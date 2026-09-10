@@ -7,7 +7,7 @@
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
   import { ResizeHandle } from "./ui";
   import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
-  import { MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
@@ -19,6 +19,7 @@
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
   import CodeMirrorDiff from "./CodeMirrorDiff.svelte";
   import { contentFingerprint, type ReviewFileDiff, type ReviewSelection, type TextFileDiff } from "../lib/review-diff";
+  import { expandReviewTreeAncestors, getReviewFolderPaths, getReviewTreeRows, reconcileReviewTreeExpansion, type ReviewTreeRow } from "../lib/diff-sidebar-tree";
 
   interface Props {
     repoPath: string;
@@ -50,6 +51,11 @@
   let mounted = false;
   let refreshGeneration = 0;
   let sidebarListRef = $state<HTMLElement>();
+  let sidebarFocusedRowId = $state<string | null>(null);
+  let expandedSidebarFolders = $state<Set<string>>(new Set());
+  let sidebarFolderPaths = $state<Set<string>>(new Set());
+  let sidebarTreeInitialized = false;
+  let sidebarRows = $derived(getReviewTreeRows(files, expandedSidebarFolders));
   let diffView = $state<CodeMirrorDiff>();
   let cache = new Map<string, ReviewFileDiff>();
   let activeDiff = $state<ReviewFileDiff | null>(null);
@@ -79,10 +85,6 @@
     return status === "A" ? "text-status-running" : status === "D" ? "text-status-exited" : status === "R" ? "text-accent" : "text-status-review";
   }
 
-  function comparisonChanged(): boolean {
-    return getComments(sessionId).some((comment) => comment.comparisonKey && comment.comparisonKey !== comparisonKey);
-  }
-
   function discardCommentsIfNeeded(message: string): boolean {
     if (getComments(sessionId).length === 0) return true;
     if (!window.confirm(message)) return false;
@@ -91,6 +93,7 @@
   }
 
   async function refresh({ comparisonChange = false } = {}): Promise<void> {
+    if (!discardCommentDraft()) return;
     if (comparisonChange && !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
     const generation = ++refreshGeneration;
     loading = true;
@@ -100,9 +103,25 @@
       const nextFiles = await git.getChangedFiles(repoPath, effectiveBase, effectiveHead);
       if (generation !== refreshGeneration) return;
       const previousPath = activeFile?.path;
+      const nextFolderPaths = getReviewFolderPaths(nextFiles);
+      let nextExpandedFolders = reconcileReviewTreeExpansion(
+        expandedSidebarFolders,
+        sidebarFolderPaths,
+        nextFolderPaths,
+        sidebarTreeInitialized,
+      );
       files = nextFiles;
       selectedIndex = Math.max(0, nextFiles.findIndex((file) => file.path === previousPath));
       if (selectedIndex < 0 || !nextFiles[selectedIndex]) selectedIndex = 0;
+      sidebarFolderPaths = nextFolderPaths;
+      sidebarTreeInitialized = true;
+      if (nextFiles[selectedIndex]) {
+        nextExpandedFolders = expandReviewTreeAncestors(nextExpandedFolders, nextFiles[selectedIndex].path);
+        sidebarFocusedRowId = `file:${nextFiles[selectedIndex].path}`;
+      } else {
+        sidebarFocusedRowId = null;
+      }
+      expandedSidebarFolders = nextExpandedFolders;
       const fingerprints = new Map(nextFiles.map((file) => [file.path, `${file.status}:${file.additions}:${file.deletions}:${file.old_path ?? ""}`]));
       invalidateViewedFiles(sessionId, fingerprints);
       allFilesReviewed = false;
@@ -126,13 +145,15 @@
     const key = cacheKey(file);
     const cached = cache.get(key);
     if (cached) { activeDiff = cached; return; }
+    activeDiff = null;
     fileLoading = true;
+    const cacheAtRequestStart = cache;
     try {
       const diff = await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff;
-      if (generation !== refreshGeneration || files[selectedIndex]?.path !== file.path) return;
+      if (generation !== refreshGeneration || cache !== cacheAtRequestStart || files[selectedIndex]?.path !== file.path) return;
       cache.set(key, diff);
       activeDiff = diff;
-      void preloadAdjacentFiles();
+      void preloadAdjacentFiles(generation, cacheAtRequestStart);
     } catch (error) {
       if (generation === refreshGeneration) showSnackbar(`Could not load ${file.path}: ${String(error)}`, "error");
     } finally {
@@ -140,24 +161,42 @@
     }
   }
 
-  async function preloadAdjacentFiles(): Promise<void> {
-    await Promise.all([selectedIndex - 1, selectedIndex + 1].map(async (index) => {
+  async function preloadAdjacentFiles(generation: number, cacheAtRequestStart: Map<string, ReviewFileDiff>): Promise<void> {
+    const requests = [selectedIndex - 1, selectedIndex + 1].flatMap((index) => {
       const file = files[index];
-      if (!file || cache.has(cacheKey(file))) return;
+      if (!file) return [];
+      const key = cacheKey(file);
+      return cacheAtRequestStart.has(key) ? [] : [{ file, key }];
+    });
+    await Promise.all(requests.map(async ({ file, key }) => {
       try {
         const diff = await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff;
-        cache.set(cacheKey(file), diff);
+        if (generation === refreshGeneration && cache === cacheAtRequestStart) cache.set(key, diff);
       } catch { /* Selected-file loading remains the only user-visible failure. */ }
     }));
   }
 
-  function selectFile(index: number): void {
-    if (!files[index] || index === selectedIndex) return;
-    if (showCommentInput && !discardCommentDraft()) return;
+  function getSidebarRowId(row: ReviewTreeRow): string {
+    return `${row.kind}:${row.path}`;
+  }
+
+  function revealSelectedFile(): void {
+    const selectedPath = files[selectedIndex]?.path;
+    if (!selectedPath) return;
+    expandedSidebarFolders = expandReviewTreeAncestors(expandedSidebarFolders, selectedPath);
+    sidebarFocusedRowId = `file:${selectedPath}`;
+  }
+
+  function selectFile(index: number): boolean {
+    if (!files[index]) return false;
+    if (index === selectedIndex) { revealSelectedFile(); return true; }
+    if (showCommentInput && !discardCommentDraft()) return false;
     selectedIndex = index;
     selectedRange = null;
     diffFocus = "list";
+    revealSelectedFile();
     void loadSelected();
+    return true;
   }
 
   function discardCommentDraft(): boolean {
@@ -266,28 +305,117 @@
     }
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
+  function handleKeydown(e: KeyboardEvent): void {
     if (!visible || getActiveZone() !== "terminal") return;
     const element = document.activeElement;
     if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
-    if (event.key === "Enter" && event.metaKey) { event.preventDefault(); void sendFeedback(); return; }
+    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }
     if (showCommentInput || showCompareForm || allFilesReviewed) return;
-    if (event.key === "r" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); void refresh(); return; }
-    if (event.key === "B" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); showCompareForm = !showCompareForm; return; }
-    if (event.key === "u" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setDiffStyle(diffStyle === "split" ? "unified" : "split"); return; }
-    if (event.key === "m" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); toggleViewed(selectedIndex, true); return; }
-    if (event.key === "e" && !event.metaKey && !event.ctrlKey && activeFile) { event.preventDefault(); onEditFile?.(activeFile.path); return; }
-    if (event.key === "]" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); diffFocus = "body"; diffView?.nextHunk(); return; }
-    if (event.key === "[" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); diffFocus = "body"; diffView?.previousHunk(); return; }
-    if (event.key === "x" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); diffView?.expandContext(); return; }
-    if (diffFocus === "list") {
-      if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault(); selectFile(Math.min(files.length - 1, selectedIndex + 1)); }
-      else if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault(); selectFile(Math.max(0, selectedIndex - 1)); }
-      else if (event.key === "Enter") { event.preventDefault(); diffFocus = "body"; diffView?.focus(); }
+    if ((e.key === "n" && e.ctrlKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
+      e.preventDefault();
+      selectFile(Math.min(files.length - 1, selectedIndex + 1));
       return;
     }
-    if (event.key === "Escape") { event.preventDefault(); selectedRange = null; diffFocus = "list"; return; }
-    if (event.key === "c" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); openComment(); }
+    if ((e.key === "p" && e.ctrlKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
+      e.preventDefault();
+      selectFile(Math.max(0, selectedIndex - 1));
+      return;
+    }
+    if (e.key === "r" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); void refresh(); return; }
+    if (e.key === "B" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); showCompareForm = !showCompareForm; return; }
+    if (e.key === "u" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setDiffStyle(diffStyle === "split" ? "unified" : "split"); return; }
+    if (e.key === "m" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleViewed(selectedIndex, true); return; }
+    if (e.key === "e" && !e.metaKey && !e.ctrlKey && activeFile) { e.preventDefault(); onEditFile?.(activeFile.path); return; }
+    if (e.key === "]" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffFocus = "body"; diffView?.nextHunk(); return; }
+    if (e.key === "[" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffFocus = "body"; diffView?.previousHunk(); return; }
+    if (e.key === "x" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffView?.expandContext(); return; }
+    if (diffFocus === "list") {
+      if (handleSidebarTreeKey(e)) return;
+      if (e.key === "Escape") e.preventDefault();
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); selectedRange = null; diffFocus = "list"; return; }
+    if (e.key === "c" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); openComment(); }
+  }
+
+  function toggleSidebarFolder(path: string): void {
+    const expanded = new Set(expandedSidebarFolders);
+    if (expanded.has(path)) expanded.delete(path);
+    else expanded.add(path);
+    expandedSidebarFolders = expanded;
+    sidebarFocusedRowId = `folder:${path}`;
+  }
+
+  function focusSidebarRow(row: ReviewTreeRow): void {
+    if (row.kind === "folder") sidebarFocusedRowId = getSidebarRowId(row);
+    else if (!selectFile(row.fileIndex)) return;
+
+    const rowId = getSidebarRowId(row);
+    requestAnimationFrame(() => {
+      Array.from(sidebarListRef?.querySelectorAll<HTMLElement>("[data-tree-row]") ?? []).find(
+        (element) => element.dataset.treeRow === rowId,
+      )?.focus({ preventScroll: true });
+    });
+  }
+
+  function moveSidebarFocus(delta: 1 | -1): void {
+    if (sidebarRows.length === 0) return;
+    const focusedIndex = sidebarRows.findIndex((row) => getSidebarRowId(row) === sidebarFocusedRowId);
+    const selectedRowIndex = sidebarRows.findIndex((row) => row.kind === "file" && row.fileIndex === selectedIndex);
+    const currentIndex = focusedIndex >= 0 ? focusedIndex : Math.max(selectedRowIndex, 0);
+    const nextIndex = Math.max(0, Math.min(sidebarRows.length - 1, currentIndex + delta));
+    focusSidebarRow(sidebarRows[nextIndex]);
+  }
+
+  function parentFolderPath(row: ReviewTreeRow): string | null {
+    const separator = row.path.lastIndexOf("/");
+    return separator >= 0 ? row.path.slice(0, separator) : null;
+  }
+
+  function handleSidebarTreeKey(e: KeyboardEvent): boolean {
+    const focusedRow = sidebarRows.find((row) => getSidebarRowId(row) === sidebarFocusedRowId)
+      ?? sidebarRows.find((row) => row.kind === "file" && row.fileIndex === selectedIndex);
+    if (!focusedRow) return false;
+
+    const hasPlatformModifier = e.ctrlKey || e.metaKey;
+    const isDown = !hasPlatformModifier && (e.key === "ArrowDown" || e.key === "j");
+    const isUp = !hasPlatformModifier && (e.key === "ArrowUp" || e.key === "k");
+    const isRight = !hasPlatformModifier && (e.key === "ArrowRight" || e.key === "l");
+    const isLeft = !hasPlatformModifier && (e.key === "ArrowLeft" || e.key === "h");
+
+    if (isDown) moveSidebarFocus(1);
+    else if (isUp) moveSidebarFocus(-1);
+    else if (isRight && focusedRow.kind === "folder") {
+      if (!expandedSidebarFolders.has(focusedRow.path)) toggleSidebarFolder(focusedRow.path);
+      else {
+        const child = sidebarRows[sidebarRows.indexOf(focusedRow) + 1];
+        if (child && child.depth > focusedRow.depth) focusSidebarRow(child);
+      }
+    } else if (isLeft) {
+      if (focusedRow.kind === "folder" && expandedSidebarFolders.has(focusedRow.path)) {
+        toggleSidebarFolder(focusedRow.path);
+      } else {
+        const parentPath = parentFolderPath(focusedRow);
+        const parent = parentPath === null ? undefined : sidebarRows.find(
+          (row) => row.kind === "folder" && row.path === parentPath,
+        );
+        if (parent) focusSidebarRow(parent);
+      }
+    } else if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+      if (focusedRow.kind === "folder") toggleSidebarFolder(focusedRow.path);
+      else {
+        diffFocus = "body";
+        diffView?.focus();
+      }
+    } else return false;
+
+    e.preventDefault();
+    return true;
+  }
+
+  function handleSidebarRowKeydown(event: KeyboardEvent): void {
+    if (!handleSidebarTreeKey(event)) return;
+    event.stopPropagation();
   }
 
   onMount(() => {
@@ -303,9 +431,12 @@
   });
 
   $effect(() => {
-    const index = selectedIndex;
+    const focusedRowId = sidebarFocusedRowId;
     void viewedVersion;
-    sidebarListRef?.querySelector(`[data-nav-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
+    if (!focusedRowId) return;
+    Array.from(sidebarListRef?.querySelectorAll<HTMLElement>("[data-tree-row]") ?? []).find(
+      (row) => row.dataset.treeRow === focusedRowId,
+    )?.scrollIntoView({ block: "nearest" });
   });
 </script>
 
@@ -385,20 +516,54 @@
   <div class="relative shrink-0 overflow-x-hidden overflow-y-auto border-l border-border bg-chrome" style:width="{sidebarWidth}px">
     <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={240} onResizeEnd={(width) => setLayoutWidth("diff-sidebar", width)} />
     <div class="flex items-center justify-between border-b border-border px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[.05em] text-t3"><span>Changed · {files.length}</span><span class="text-status-running">+{files.reduce((total, file) => total + file.additions, 0)}</span><span class="text-status-exited">−{files.reduce((total, file) => total + file.deletions, 0)}</span></div>
-    <ul bind:this={sidebarListRef} class="py-1" role="listbox">
-      {#each files as file, index (file.path)}
-        {@const count = getFileCommentCount(sessionId, file.path)}
-        {@const viewed = viewedFiles.has(file.path)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <li role="option" aria-selected={index === selectedIndex} data-nav-index={index} class="mx-1 flex items-center gap-1 {viewed ? 'opacity-50' : ''}" onclick={() => selectFile(index)}>
-          <span class="w-0.5 self-stretch rounded-full {index === selectedIndex ? 'bg-accent' : 'opacity-0'}"></span>
-          <div class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] {index === selectedIndex ? 'bg-accent-bg' : 'hover:bg-panel-hi'}">
-            {#if viewed}<button class="shrink-0 text-status-running" onclick={(event) => { event.stopPropagation(); toggleViewed(index); }} title="Mark as unviewed"><Check size={12} /></button>{:else}<span class="w-4 shrink-0 font-mono text-[10px] {statusColor(file.status)}">{file.status}</span>{/if}
-            <span class="min-w-0 flex-1 truncate font-mono" title={file.path}><span class="text-[9.5px] text-t3">{dirName(file.path)}</span><span class="text-[12px] text-t1">{fileName(file.path)}</span></span>
-            {#if count > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{count}</span>{/if}
-            <span class="font-mono text-[10px] text-t3">+{file.additions} −{file.deletions}</span>
-          </div>
-        </li>
+    <ul bind:this={sidebarListRef} class="py-1" role="tree" aria-label="Changed files">
+      {#each sidebarRows as row (getSidebarRowId(row))}
+        {@const rowId = getSidebarRowId(row)}
+        {#if row.kind === "folder"}
+          {@const expanded = expandedSidebarFolders.has(row.path)}
+          <li
+            role="treeitem"
+            aria-level={row.depth + 1}
+            aria-expanded={expanded}
+            aria-selected={false}
+            tabindex={sidebarFocusedRowId === rowId ? 0 : -1}
+            data-tree-row={rowId}
+            class="mx-1 flex w-full items-center gap-1.5 rounded-lg py-1.5 pr-2 text-left text-[12px] font-mono outline-none focus-visible:ring-2 focus-visible:ring-accent {sidebarFocusedRowId === rowId ? 'bg-panel-hi text-t1' : 'text-t2 hover:bg-panel-hi'}"
+            style={`padding-left: ${8 + row.depth * 12}px`}
+            onfocus={() => (sidebarFocusedRowId = rowId)}
+            onkeydown={handleSidebarRowKeydown}
+            onclick={() => toggleSidebarFolder(row.path)}
+          >
+            {#if expanded}<ChevronDown size={13} class="shrink-0" />{:else}<ChevronRight size={13} class="shrink-0" />{/if}
+            <span class="truncate" title={row.path}>{row.name}</span>
+          </li>
+        {:else}
+          {@const file = files[row.fileIndex]}
+          {@const count = getFileCommentCount(sessionId, file.path)}
+          {@const viewed = viewedFiles.has(file.path)}
+          <li
+            role="treeitem"
+            aria-level={row.depth + 1}
+            aria-selected={row.fileIndex === selectedIndex}
+            tabindex={sidebarFocusedRowId === rowId ? 0 : -1}
+            data-tree-row={rowId}
+            class="mx-1 flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent {viewed ? 'opacity-50' : ''}"
+            onfocus={() => (sidebarFocusedRowId = rowId)}
+            onkeydown={handleSidebarRowKeydown}
+            onclick={() => selectFile(row.fileIndex)}
+          >
+            <span class="w-0.5 self-stretch rounded-full {row.fileIndex === selectedIndex ? 'bg-accent' : 'opacity-0'}"></span>
+            <div
+              class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg py-1.5 pr-2 text-[12px] {row.fileIndex === selectedIndex ? 'bg-accent-bg' : sidebarFocusedRowId === rowId ? 'bg-panel-hi' : 'hover:bg-panel-hi'}"
+              style={`padding-left: ${8 + row.depth * 12}px`}
+            >
+              {#if viewed}<button tabindex={-1} class="shrink-0 text-status-running" onclick={(event) => { event.stopPropagation(); toggleViewed(row.fileIndex); }} title="Mark as unviewed" aria-label="Mark as unviewed"><Check size={12} /></button>{:else}<span class="w-4 shrink-0 font-mono text-[10px] {statusColor(file.status)}">{file.status}</span>{/if}
+              <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-t1" title={file.path}>{row.name}</span>
+              {#if count > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{count}</span>{/if}
+              <span class="font-mono text-[10px] text-t3">+{file.additions} −{file.deletions}</span>
+            </div>
+          </li>
+        {/if}
       {/each}
     </ul>
   </div>

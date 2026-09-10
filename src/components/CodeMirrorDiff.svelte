@@ -4,6 +4,8 @@
   import { EditorView } from "@codemirror/view";
   import {
     MergeView,
+    getChunks,
+    getOriginalDoc,
     goToNextChunk,
     goToPreviousChunk,
     unifiedMergeView,
@@ -12,6 +14,7 @@
   import { basicSetup } from "codemirror";
   import { darkTheme, detectLanguageFromPath, fontExtension, lightTheme } from "../lib/cm-shared";
   import type { ReviewSelection, TextFileDiff } from "../lib/review-diff";
+  import { originalSelectionForDeletedLine } from "../lib/cm-unified-selection";
 
   interface Props {
     diff: TextFileDiff | null;
@@ -40,6 +43,19 @@
     return { side, startLine: Math.min(start, end), endLine: Math.max(start, end) };
   }
 
+  function unifiedDeletedSelection(event: Event, view: EditorView): ReviewSelection | null {
+    const target = event.target;
+    if (!(target instanceof Element)) return null;
+    const deletedLine = target.closest(".cm-deletedLine");
+    const deletedChunk = deletedLine?.closest(".cm-deletedChunk");
+    if (!deletedLine || !deletedChunk) return null;
+
+    const deletedLineOffset = Array.from(deletedChunk.querySelectorAll(".cm-deletedLine")).indexOf(deletedLine);
+    const anchor = view.posAtDOM(deletedChunk);
+    const chunk = getChunks(view.state)?.chunks.find((candidate) => candidate.fromB <= anchor && anchor <= candidate.endB);
+    return chunk ? originalSelectionForDeletedLine(getOriginalDoc(view.state), chunk, deletedLineOffset) : null;
+  }
+
   function extensions(side: ReviewSelection["side"]) {
     return [
       basicSetup,
@@ -53,7 +69,7 @@
       }),
       EditorView.domEventHandlers({
         focus: (_, view) => onSelection?.(selectionFor(view, side)),
-        pointerup: (_, view) => onSelection?.(selectionFor(view, side)),
+        pointerup: (event, view) => onSelection?.(unifiedDeletedSelection(event, view) ?? selectionFor(view, side)),
       }),
     ];
   }

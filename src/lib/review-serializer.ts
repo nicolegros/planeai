@@ -33,7 +33,7 @@ export function serializeComments(
           comment.startLine === comment.endLine
             ? `line ${comment.startLine}`
             : `lines ${comment.startLine}-${comment.endLine}`;
-        lines.push(`--- ${filePath} (${lineLabel}) ---`);
+        lines.push(`--- ${filePath} (${comment.side} ${lineLabel}) ---`);
 
         const ctxStart = Math.max(0, comment.startLine - 1 - 2);
         const ctxEnd = Math.min(sourceLines.length, comment.endLine + 2);

@@ -52,7 +52,7 @@ describe("serializeComments", () => {
     const result = serializeComments(comments, diffs);
 
     expect(result).toContain("Please address these review comments:");
-    expect(result).toContain("--- src/lib/api.ts (line 3) ---");
+    expect(result).toContain("--- src/lib/api.ts (modified line 3) ---");
     expect(result).toContain("```typescript");
     expect(result).toContain("export function fetchUser(id: string) {");
     expect(result).toContain("```");
@@ -86,7 +86,7 @@ describe("serializeComments", () => {
 
     const result = serializeComments(comments, diffs);
 
-    expect(result).toContain("--- src/utils.ts (lines 2-4) ---");
+    expect(result).toContain("--- src/utils.ts (modified lines 2-4) ---");
     expect(result).toContain("Comment: Extract this into a helper.");
   });
 
