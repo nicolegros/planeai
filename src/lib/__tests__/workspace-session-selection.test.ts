@@ -25,6 +25,24 @@ describe("workspace session selection", () => {
       /\{#if activePluginId\}\s*<div class="flex h-full flex-col bg-main">[\s\S]*?<div class="min-h-0 flex-1">\s*<PluginContributionHost/,
     );
   });
+
+  it("derives running titlebar contributions independently from session-panel commands", () => {
+    expect(appSource).toMatch(
+      /const titlebarContributions = \$derived\([\s\S]*?contribution\.placement === "titlebar"/,
+    );
+    expect(appSource).toMatch(
+      /<Titlebar[\s\S]*?\{titlebarContributions\}[\s\S]*?titlebarSession=\{activePluginSessionContext\}[\s\S]*?onOpenTitlebarContribution=\{openPluginContributionModal\}/,
+    );
+  });
+
+  it("opens only a titlebar navigation target session panel in the generic modal", () => {
+    expect(appSource).toMatch(
+      /function openPluginContributionModal\(pluginId: string, contributionId: string\): void \{[\s\S]*?candidate\.placement === "session\.panel"[\s\S]*?modalPluginId = pluginId;/,
+    );
+    expect(appSource).toMatch(
+      /\{#if modalPlugin && modalContribution && activePluginSessionContext\}[\s\S]*?<FormDialog[\s\S]*?title=\{modalContribution\.label\}[\s\S]*?preventEscapeClose=\{false\}[\s\S]*?<PluginContributionHost[\s\S]*?session=\{activePluginSessionContext\}[\s\S]*?closeOnEscape=\{true\}/,
+    );
+  });
 });
 
 it("ignores a previous terminal's focus event after a session switch", () => {

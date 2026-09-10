@@ -583,7 +583,7 @@ fn host_callback(
     params: Option<Value>,
 ) -> Result<Option<Value>> {
     match method {
-        "host.settings.get" | "host.settings.replace" => {
+        "host.settings.get" | "host.settings.replace" | "host.settings.patch" => {
             if !capabilities.contains("settings") {
                 bail!("plugin capability is not granted");
             }
@@ -610,20 +610,76 @@ fn settings_callback(
     method: &str,
     params: Option<Value>,
 ) -> Result<Option<Value>> {
-    let settings = match method {
-        "host.settings.get" => settings.clone(),
+    let params = params.unwrap_or(Value::Null);
+    match method {
+        "host.settings.get" => {
+            let settings = if let Some(path) = params.get("path") {
+                let path = path.as_array().ok_or_else(|| {
+                    anyhow!("malformed host.settings.get callback: path must be an array")
+                })?;
+                if path.is_empty() {
+                    bail!("malformed host.settings.get callback: path must not be empty");
+                }
+                path.iter().try_fold(settings.clone(), |current, segment| {
+                    let segment = segment.as_str().ok_or_else(|| {
+                        anyhow!("malformed host.settings.get callback: path keys must be strings")
+                    })?;
+                    Ok::<Value, anyhow::Error>(current.get(segment).cloned().unwrap_or(Value::Null))
+                })?
+            } else {
+                settings.clone()
+            };
+            Ok(Some(json!({ "settings": settings })))
+        }
         "host.settings.replace" => {
-            let params = params.unwrap_or(Value::Null);
             let replacement = params.get("settings").cloned().unwrap_or(params);
             if !replacement.is_object() {
                 bail!("malformed host.settings.replace callback: settings must be an object");
             }
             *settings = replacement;
-            settings.clone()
+            Ok(Some(json!({ "settings": settings })))
         }
-        _ => return Ok(None),
-    };
-    Ok(Some(json!({ "settings": settings })))
+        "host.settings.patch" => {
+            let patch = params.get("patch").cloned().unwrap_or(params);
+            let patch = patch.as_object().ok_or_else(|| {
+                anyhow!("malformed host.settings.patch callback: patch must be an object")
+            })?;
+            merge_settings_patch(
+                settings
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("host settings must be an object"))?,
+                patch,
+            );
+            Ok(Some(json!({ "updated": true })))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn merge_settings_patch(
+    target: &mut serde_json::Map<String, Value>,
+    patch: &serde_json::Map<String, Value>,
+) {
+    for (key, value) in patch {
+        if value.is_null() {
+            target.remove(key);
+        } else if let Some(value) = value.as_object() {
+            let target_value = target
+                .entry(key.clone())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !target_value.is_object() {
+                *target_value = Value::Object(serde_json::Map::new());
+            }
+            merge_settings_patch(
+                target_value
+                    .as_object_mut()
+                    .expect("object target was initialized above"),
+                value,
+            );
+        } else {
+            target.insert(key.clone(), value.clone());
+        }
+    }
 }
 
 impl Drop for PluginProcess {
@@ -844,6 +900,20 @@ mod tests {
     }
 
     #[test]
+    fn manifest_validation_accepts_titlebar_contributions() {
+        let mut titlebar = manifest();
+        titlebar["ui_contributions"][0]["placement"] = json!("titlebar");
+        titlebar["ui_contributions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("shortcut");
+        assert_eq!(
+            validate_local_manifest(&titlebar, "test-platform").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
     fn manifest_validation_rejects_non_local_and_unsafe_entrypoints() {
         let mut non_local = manifest();
         non_local["source_kind"] = json!("builtin");
@@ -917,6 +987,27 @@ mod tests {
             host_callback(&mut settings, &capabilities, "host.settings.get", None).unwrap(),
             Some(json!({ "settings": { "greeting": "Hello" } }))
         );
+        assert_eq!(
+            host_callback(
+                &mut settings,
+                &capabilities,
+                "host.settings.patch",
+                Some(json!({ "patch": { "github": { "pull_requests": { "session-1": { "url": "https://example.test/pr/1" } } } } })),
+            )
+            .unwrap(),
+            Some(json!({ "updated": true }))
+        );
+        assert_eq!(
+            host_callback(
+                &mut settings,
+                &capabilities,
+                "host.settings.get",
+                Some(json!({ "path": ["github", "pull_requests", "session-1"] })),
+            )
+            .unwrap(),
+            Some(json!({ "settings": { "url": "https://example.test/pr/1" } }))
+        );
+        assert_eq!(settings["greeting"], "Hello");
         for method in ["host.tasks.read", "host.task.get"] {
             assert_eq!(
                 host_callback(

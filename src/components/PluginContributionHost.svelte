@@ -21,6 +21,7 @@
     onOpenPreferences?: () => void;
     onFailure?: (error: unknown) => void;
     autofocus?: boolean;
+    closeOnEscape?: boolean;
     session?: PluginSessionContext;
   }
 
@@ -45,7 +46,7 @@
     message?: string;
   };
 
-  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, session }: Props = $props();
+  let { plugin, contribution, onNavigate, onClose, onOpenPreferences = () => {}, onFailure = () => {}, autofocus = false, closeOnEscape = false, session }: Props = $props();
   let container = $state<HTMLElement>();
   let disposer: PluginUiDisposer | null = null;
   let generation = 0;
@@ -163,13 +164,13 @@
     frame.title = contribution.label;
     frame.setAttribute("sandbox", "allow-scripts");
     frame.className =
-      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel"
+      contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "block h-full w-full border-0"
         : "block w-full border-0";
     frame.style.display = "block";
     frame.style.width = "100%";
     frame.style.border = "0";
-    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel") {
+    if (contribution.placement === "interaction" || contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar") {
       frame.style.height = "100%";
     }
     if (contribution.placement.startsWith("sidebar.")) {
@@ -193,6 +194,15 @@
           pending.set(requestId, { resolve, reject });
           send({ type, requestId, ...payload });
         });
+        const closeOnEscape = ${closeOnEscape};
+        const forwardEscapeToHost = (event) => {
+          if (closeOnEscape && event.key === "Escape" && !event.defaultPrevented && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            send({ type: "navigation", action: "close" });
+          }
+        };
+        addEventListener("keydown", forwardEscapeToHost);
         let sidebarKeydownRoutingEnabled = false;
         const sidebarNavigationKeys = new Set([
           "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "j", "k", "h", "l", "a", "r", "E", "e", "o", "R", "d", "s",
@@ -288,6 +298,7 @@
           if (message.type === "dispose") {
             if (typeof cleanup === "function") cleanup();
             cleanup = null;
+            removeEventListener("keydown", forwardEscapeToHost);
             return;
           }
           if (message.type !== "init") return;
@@ -298,7 +309,7 @@
             URL.revokeObjectURL(url);
             const entrypoint = module.default || module.pluginEntrypoint;
             if (!entrypoint || typeof entrypoint.mount !== "function") throw new Error("local UI bundle must default-export a PluginUiEntrypoint");
-            cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, host });
+            cleanup = entrypoint.mount(document.body, { plugin: message.plugin, contribution: message.contribution, session: message.session, host });
             send({ type: "mounted" });
           } catch (error) {
             send({ type: "load-error", message: String(error) });
@@ -440,6 +451,7 @@
     window.addEventListener("message", onMessage);
     frame.addEventListener("load", initialise, { once: true });
     root.replaceChildren(frame);
+    if (autofocus) queueMicrotask(() => frame.focus());
     return () => {
       if (refreshLocalPluginTheme === refreshTheme) refreshLocalPluginTheme = null;
       window.removeEventListener("message", onMessage);
@@ -627,7 +639,7 @@
       ? plugin.source_kind === "builtin"
         ? "pointer-events-none"
         : "h-full w-full pointer-events-auto"
-      : contribution.placement === "main-pane" || contribution.placement === "session.panel"
+      : contribution.placement === "main-pane" || contribution.placement === "session.panel" || contribution.placement === "titlebar"
         ? "h-full w-full"
         : "w-full"
   }

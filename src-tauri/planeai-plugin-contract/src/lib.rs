@@ -51,6 +51,7 @@ const UI_PLACEMENTS: &[&str] = &[
     "preferences",
     "main-pane",
     "session.panel",
+    "titlebar",
     "interaction",
 ];
 
@@ -325,6 +326,16 @@ mod tests {
     fn accepts_session_panel_and_repository_context_capability() {
         assert_eq!(
             validate_local_manifest(&manifest(), "macos-arm64").unwrap(),
+            "bin/plugin"
+        );
+    }
+
+    #[test]
+    fn accepts_compact_titlebar_contributions() {
+        let mut manifest = manifest();
+        manifest["ui_contributions"][0]["placement"] = json!("titlebar");
+        assert_eq!(
+            validate_local_manifest(&manifest, "macos-arm64").unwrap(),
             "bin/plugin"
         );
     }

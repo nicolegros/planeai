@@ -85,6 +85,7 @@ export type PluginUiPlacement =
   | "preferences"
   | "main-pane"
   | "session.panel"
+  | "titlebar"
   | "interaction";
 
 export interface PluginUiContribution {
