@@ -1,9 +1,9 @@
 import type { ReviewComment } from "./review-comments.svelte";
-import type { FileDiff } from "./types";
+import type { TextFileDiff } from "./review-diff";
 
 export function serializeComments(
   comments: ReviewComment[],
-  fileDiffs: Map<string, FileDiff>,
+  fileDiffs: Map<string, TextFileDiff>,
 ): string {
   if (comments.length === 0) return "";
 
@@ -18,10 +18,13 @@ export function serializeComments(
   for (const [filePath, fileComments] of grouped) {
     const sorted = fileComments!.sort((a, b) => a.startLine - b.startLine);
     const diff = fileDiffs.get(filePath);
-    const modifiedLines = diff?.modified.split("\n") ?? [];
     const lang = diff?.language ?? "";
 
     for (const comment of sorted) {
+      const sourceLines =
+        comment.side === "original"
+          ? (diff?.original.split("\n") ?? [])
+          : (diff?.modified.split("\n") ?? []);
       lines.push("");
       if (comment.type === "file") {
         lines.push(`--- ${filePath} (file-level) ---`);
@@ -31,11 +34,11 @@ export function serializeComments(
           comment.startLine === comment.endLine
             ? `line ${comment.startLine}`
             : `lines ${comment.startLine}-${comment.endLine}`;
-        lines.push(`--- ${filePath} (${lineLabel}) ---`);
+        lines.push(`--- ${filePath} (${comment.side} ${lineLabel}) ---`);
 
         const ctxStart = Math.max(0, comment.startLine - 1 - 2);
-        const ctxEnd = Math.min(modifiedLines.length, comment.endLine + 2);
-        const contextSlice = modifiedLines.slice(ctxStart, ctxEnd);
+        const ctxEnd = Math.min(sourceLines.length, comment.endLine + 2);
+        const contextSlice = sourceLines.slice(ctxStart, ctxEnd);
 
         if (contextSlice.length > 0) {
           lines.push("```" + lang);

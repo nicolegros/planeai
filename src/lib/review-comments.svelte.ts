@@ -1,20 +1,35 @@
+import type { DiffSide } from "./review-diff";
+
 export interface ReviewComment {
   id: string;
   filePath: string;
   type: "line" | "hunk" | "file";
   startLine: number;
   endLine: number;
+  side: DiffSide;
+  comparisonKey: string;
+  fingerprint: string;
   text: string;
   createdAt: number;
 }
 
+type NewReviewComment = Omit<
+  ReviewComment,
+  "id" | "createdAt" | "side" | "comparisonKey" | "fingerprint"
+> &
+  Partial<Pick<ReviewComment, "side" | "comparisonKey" | "fingerprint">>;
+
 let commentsBySession = $state<Record<string, ReviewComment[]>>({});
 
-export function addComment(
-  sessionId: string,
-  comment: Omit<ReviewComment, "id" | "createdAt">,
-): ReviewComment {
-  const full: ReviewComment = { ...comment, id: crypto.randomUUID(), createdAt: Date.now() };
+export function addComment(sessionId: string, comment: NewReviewComment): ReviewComment {
+  const full: ReviewComment = {
+    ...comment,
+    side: comment.side ?? "modified",
+    comparisonKey: comment.comparisonKey ?? "",
+    fingerprint: comment.fingerprint ?? "",
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
   commentsBySession[sessionId] = [...(commentsBySession[sessionId] ?? []), full];
   return full;
 }
@@ -29,6 +44,20 @@ export function editComment(sessionId: string, commentId: string, newText: strin
   if (!list) return;
   commentsBySession[sessionId] = list.map((c) =>
     c.id === commentId ? { ...c, text: newText } : c,
+  );
+}
+
+/** Records that a file's pending review comments now refer to a refreshed diff. */
+export function reanchorComments(
+  sessionId: string,
+  filePath: string,
+  comparisonKey: string,
+  fingerprint: string,
+): void {
+  const list = commentsBySession[sessionId];
+  if (!list) return;
+  commentsBySession[sessionId] = list.map((comment) =>
+    comment.filePath === filePath ? { ...comment, comparisonKey, fingerprint } : comment,
   );
 }
 

@@ -1037,9 +1037,8 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|error| format!("failed to read Jira plugin schema version: {error}"))?;
 
-    if current_version < 1 {
-        conn.execute_batch(
-            "CREATE TABLE jira_issues (
+    let migrations = [
+        (1, "CREATE TABLE jira_issues (
                 issue_key TEXT PRIMARY KEY,
                 summary TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
@@ -1055,15 +1054,8 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
                 task_key TEXT PRIMARY KEY,
                 issue_key TEXT NOT NULL UNIQUE REFERENCES jira_issues(issue_key)
             );
-            CREATE INDEX jira_issues_source_active ON jira_issues(source_name, sync_status);
-            INSERT INTO jira_plugin_schema_migrations (version) VALUES (1);",
-        )
-        .map_err(|error| format!("failed to apply Jira plugin migration 1: {error}"))?;
-    }
-
-    if current_version < 2 {
-        conn.execute_batch(
-            "CREATE TABLE jira_issue_sources (
+            CREATE INDEX jira_issues_source_active ON jira_issues(source_name, sync_status);"),
+        (2, "CREATE TABLE jira_issue_sources (
                 issue_key TEXT NOT NULL REFERENCES jira_issues(issue_key),
                 source_name TEXT NOT NULL,
                 sync_status TEXT NOT NULL DEFAULT 'synced',
@@ -1071,34 +1063,40 @@ fn migrate_database(conn: &Connection) -> Result<(), String> {
             );
             CREATE INDEX jira_issue_sources_source_active ON jira_issue_sources(source_name, sync_status);
             INSERT OR IGNORE INTO jira_issue_sources (issue_key, source_name, sync_status)
-                SELECT issue_key, source_name, sync_status FROM jira_issues;
-            INSERT INTO jira_plugin_schema_migrations (version) VALUES (2);",
-        )
-        .map_err(|error| format!("failed to apply Jira plugin migration 2: {error}"))?;
-    }
-
-    if current_version < 3 {
-        conn.execute_batch(
-            "CREATE TABLE jira_cache_metadata (
+                SELECT issue_key, source_name, sync_status FROM jira_issues;"),
+        (3, "CREATE TABLE jira_cache_metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
-            );
-            INSERT INTO jira_plugin_schema_migrations (version) VALUES (3);",
-        )
-        .map_err(|error| format!("failed to apply Jira plugin migration 3: {error}"))?;
-    }
-
-    if current_version < 4 {
-        conn.execute_batch(
-            "ALTER TABLE jira_issue_sources ADD COLUMN departure_prompt_eligible INTEGER NOT NULL DEFAULT 0;
+            );"),
+        (4, "ALTER TABLE jira_issue_sources ADD COLUMN departure_prompt_eligible INTEGER NOT NULL DEFAULT 0;
              CREATE TABLE jira_departure_queue (
                 issue_key TEXT PRIMARY KEY REFERENCES jira_issues(issue_key),
                 summary TEXT NOT NULL,
                 queued_at TEXT NOT NULL
-             );
-             INSERT INTO jira_plugin_schema_migrations (version) VALUES (4);",
-        )
-        .map_err(|error| format!("failed to apply Jira plugin migration 4: {error}"))?;
+             );"),
+    ];
+
+    for (version, sql) in migrations {
+        if current_version >= version {
+            continue;
+        }
+        let transaction = conn
+            .unchecked_transaction()
+            .map_err(|error| format!("failed to start Jira plugin migration {version}: {error}"))?;
+        transaction
+            .execute_batch(sql)
+            .map_err(|error| format!("failed to apply Jira plugin migration {version}: {error}"))?;
+        transaction
+            .execute(
+                "INSERT INTO jira_plugin_schema_migrations (version) VALUES (?1)",
+                [version],
+            )
+            .map_err(|error| {
+                format!("failed to record Jira plugin migration {version}: {error}")
+            })?;
+        transaction.commit().map_err(|error| {
+            format!("failed to commit Jira plugin migration {version}: {error}")
+        })?;
     }
 
     Ok(())

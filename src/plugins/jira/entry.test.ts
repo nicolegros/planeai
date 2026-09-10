@@ -137,7 +137,12 @@ describe("jiraPreferencesEntrypoint", () => {
     const call = vi.fn(async (method: string) => {
       if (method === "jira.settings.get") return initialSettings();
       if (method === "jira.status")
-        return { connected: true, authorizing: false, site: "https://example.atlassian.net", last_error: null };
+        return {
+          connected: true,
+          authorizing: false,
+          site: "https://example.atlassian.net",
+          last_error: null,
+        };
       if (method === "jira.syncNow")
         return {
           created: 0,

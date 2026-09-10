@@ -11,11 +11,21 @@ pub struct ChangedFile {
     pub old_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileDiffKind {
+    Text,
+    Binary,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct FileDiff {
+    pub kind: FileDiffKind,
     pub original: String,
     pub modified: String,
     pub language: String,
+    pub original_size: u64,
+    pub modified_size: u64,
 }
 
 /// Parse a git rename numstat path like `{old => new}/file.rs` or `old/path => new/path`
@@ -165,14 +175,14 @@ pub fn get_file_diff(
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
 
-    let original = if original_output.status.success() {
-        String::from_utf8_lossy(&original_output.stdout).to_string()
+    let original_bytes = if original_output.status.success() {
+        original_output.stdout
     } else {
-        String::new()
+        Vec::new()
     };
 
-    // Get modified content: from head ref if specified, otherwise from working tree
-    let modified = match head_ref {
+    // Get modified content: from head ref if specified, otherwise from working tree.
+    let modified_bytes = match head_ref {
         Some(h) => {
             let output = git_cmd()
                 .args(["show", &format!("{h}:{file_path}")])
@@ -180,23 +190,43 @@ pub fn get_file_diff(
                 .output()
                 .map_err(|e| format!("failed to run git: {e}"))?;
             if output.status.success() {
-                String::from_utf8_lossy(&output.stdout).to_string()
+                output.stdout
             } else {
-                String::new()
+                Vec::new()
             }
         }
         None => {
             let full_path = std::path::Path::new(repo_path).join(file_path);
-            std::fs::read_to_string(&full_path).unwrap_or_default()
+            std::fs::read(&full_path).unwrap_or_default()
         }
     };
 
+    let original_size = original_bytes.len() as u64;
+    let modified_size = modified_bytes.len() as u64;
+    let is_binary = original_bytes.contains(&0)
+        || modified_bytes.contains(&0)
+        || std::str::from_utf8(&original_bytes).is_err()
+        || std::str::from_utf8(&modified_bytes).is_err();
     let language = detect_language(file_path);
 
+    if is_binary {
+        return Ok(FileDiff {
+            kind: FileDiffKind::Binary,
+            original: String::new(),
+            modified: String::new(),
+            language,
+            original_size,
+            modified_size,
+        });
+    }
+
     Ok(FileDiff {
-        original,
-        modified,
+        kind: FileDiffKind::Text,
+        original: String::from_utf8(original_bytes).expect("binary content was rejected"),
+        modified: String::from_utf8(modified_bytes).expect("binary content was rejected"),
         language,
+        original_size,
+        modified_size,
     })
 }
 

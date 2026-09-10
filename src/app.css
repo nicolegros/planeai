@@ -281,23 +281,6 @@
   display: none;
 }
 
-/* ── @pierre/diffs theming ── */
-/* NOTE: --diffs-font-size / --diffs-font-family are NOT set here on purpose.
-   They are driven by the terminal font settings in ReviewTab.svelte and set on
-   an ancestor element so they inherit in. Declaring them directly on
-   diffs-container here would shadow that inherited value and win. */
-diffs-container {
-  --diffs-line-height: 1.72;
-  --diffs-dark-bg: #0a0a0a;
-  --diffs-light-bg: #ffffff;
-  --diffs-dark: #f2f2f2;
-  --diffs-light: #171717;
-  --diffs-dark-addition-color: #3fb950;
-  --diffs-dark-deletion-color: #ff7b72;
-  --diffs-light-addition-color: #1a7f37;
-  --diffs-light-deletion-color: #cf222e;
-}
-
 /* ── @pierre/trees theming ── */
 .file-tree-host {
   --trees-theme-bg: var(--color-canvas);

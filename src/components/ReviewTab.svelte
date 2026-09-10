@@ -1,33 +1,25 @@
 <script lang="ts">
-  import { git } from "../lib/api";
-  import type { ChangedFile, FileDiff as FileDiffData } from "../lib/types";
-  import { onMount, onDestroy } from "svelte";
-  import { CodeView, parsePatchFiles, type CodeViewItem, type DiffLineAnnotation, type SelectedLineRange, type FileDiffMetadata, type FileContents } from "@pierre/diffs";
-  import { getOrCreateWorkerPoolSingleton, terminateWorkerPoolSingleton } from "@pierre/diffs/worker";
-  import { workerFactory } from "../lib/worker-factory";
+  import { git, pty } from "../lib/api";
+  import type { ChangedFile } from "../lib/types";
+  import { onDestroy, onMount } from "svelte";
   import { isDark, getSettings } from "../lib/settings.svelte";
   import { getActiveZone } from "../lib/focus.svelte";
   import { getLayoutWidth, setLayoutWidth } from "../lib/layout-state";
-  import { ContextMenu, ResizeHandle } from "./ui";
-  import { addComment, removeComment, editComment, getComments, getFileCommentCount, getTotalCommentCount, clearComments, type ReviewComment } from "../lib/review-comments.svelte";
+  import { ResizeHandle } from "./ui";
+  import { addComment, clearComments, editComment, getComments, getFileCommentCount, getTotalCommentCount, reanchorComments, removeComment, type ReviewComment } from "../lib/review-comments.svelte";
   import { ChevronDown, ChevronRight, MessageSquare, Send, Check, AlertTriangle, LoaderCircle } from "@lucide/svelte";
-  import { pty } from "../lib/api";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { MOD_ENTER_HINT } from "../lib/keyboard";
   import { serializeComments } from "../lib/review-serializer";
   import { getActiveSession, recordUserInput } from "../lib/session-orchestrator.svelte";
   import Button from "./ui/Button.svelte";
-  import { getCombinedPatchForReview } from "../lib/diff-preload";
   import { hasConflicts } from "../lib/ci-checks.svelte";
   import BranchCompareForm from "./BranchCompareForm.svelte";
   import { getComparison, setComparison, formatComparison } from "../lib/diff-comparison.svelte";
   import { ensureSession, getViewedFiles, setFileViewed, setFileUnviewed, isFileViewed, invalidateViewedFiles, getViewedVersion } from "../lib/diff-viewed.svelte";
-  import { rebuildItemWithFullContent } from "../lib/diff-expansion";
-  import { getRefreshedSelectedIndex } from "../lib/diff-selection";
+  import CodeMirrorDiff from "./CodeMirrorDiff.svelte";
+  import { contentFingerprint, type ReviewFileDiff, type ReviewSelection, type TextFileDiff } from "../lib/review-diff";
   import { expandReviewTreeAncestors, getReviewFolderPaths, getReviewTreeRows, reconcileReviewTreeExpansion, type ReviewTreeRow } from "../lib/diff-sidebar-tree";
-  import type { MenuItem } from "./ui/ContextMenu.svelte";
-  import { buildPointerSelectionRange, commentRangeOverlapsSelection, commentTargetFromSelection, gutterActionAnchor, lockSelectionToOriginSide, pointerSelectionMode, selectionForContextMenu, selectionLabel, shouldClearSelectionAfterClick, shouldConfirmDraftDiscard } from "../lib/diff-review-mouse";
-  import { renderCommentAnnotation } from "../lib/comment-annotation";
 
   interface Props {
     repoPath: string;
@@ -38,256 +30,237 @@
     onFileChange?: (fileName: string) => void;
   }
 
-  type DiffContextMenuState =
-    | { x: number; y: number; target: "selection"; range: SelectedLineRange }
-    | { x: number; y: number; target: "context"; hunkIndex: number }
-    | { x: number; y: number; target: "comment"; comment: ReviewComment };
-
   let { repoPath, baseBranch, visible, sessionId, onEditFile, onFileChange }: Props = $props();
-
   let files = $state<ChangedFile[]>([]);
   let selectedIndex = $state(0);
   let loading = $state(true);
+  let fileLoading = $state(false);
   let diffStyle = $state<"split" | "unified">("split");
   let sidebarWidth = $state(getLayoutWidth("diff-sidebar", 256));
   let showCompareForm = $state(false);
-
-  // Comparison state — reactive derivation from the per-session store
-  let comparison = $derived(getComparison(sessionId, baseBranch));
-  let effectiveBase = $derived(comparison.baseRef);
-  let effectiveHead = $derived(comparison.headRef);
-
-  // Focus state
-  let showCommentInput = $state(false);
   let diffFocus = $state<"list" | "body">("list");
+  let selectedRange = $state<ReviewSelection | null>(null);
+  let showCommentInput = $state(false);
   let commentText = $state("");
-  let commentStartLine = $state(0);
-  let commentEndLine = $state(0);
   let commentType = $state<"line" | "hunk" | "file">("line");
-  let cursorLine = $state(1);
-  let selectionAnchor = $state<number | null>(null);
-  let commentInputEl = $state<HTMLTextAreaElement | undefined>();
+  let commentRange = $state<ReviewSelection | null>(null);
   let editingCommentId = $state<string | null>(null);
-  let selectedLineRange = $state<SelectedLineRange | null>(null);
-  let pointerSelectionOrigin = $state<SelectedLineRange["side"] | undefined>();
-  let bodySelectionPointerId = $state<number | undefined>();
-  let bodySelectionAnchor = $state<SelectedLineRange | undefined>();
-  let preserveCompletedBodyDragClick = false;
-  let bodyDragClickResetTimer: ReturnType<typeof setTimeout> | undefined;
-  let gutterActionPosition = $state<{ left: number; top: number } | null>(null);
-  let gutterActionPositionFrame: number | undefined;
-  let diffContextMenu = $state<DiffContextMenuState | null>(null);
-
-  // CodeView + Worker Pool
-  let viewerRoot: HTMLElement;
-  let sidebarListRef: HTMLElement;
+  let commentInputEl = $state<HTMLTextAreaElement>();
+  let sendingFeedback = $state(false);
+  let allFilesReviewed = $state(false);
+  let mounted = false;
+  let refreshGeneration = 0;
+  let sidebarListRef = $state<HTMLElement>();
   let sidebarFocusedRowId = $state<string | null>(null);
   let expandedSidebarFolders = $state<Set<string>>(new Set());
   let sidebarFolderPaths = $state<Set<string>>(new Set());
   let sidebarTreeInitialized = false;
   let sidebarRows = $derived(getReviewTreeRows(files, expandedSidebarFolders));
-  let viewer: CodeView<ReviewComment> | null = null;
-  let mounted = false;
+  let diffView = $state<CodeMirrorDiff>();
+  let cache = new Map<string, ReviewFileDiff>();
+  let inFlightDiffs = new Map<string, Promise<ReviewFileDiff>>();
+  let selectedLoadRequest = 0;
+  let activeDiff = $state<ReviewFileDiff | null>(null);
 
-  // Hunk navigation state: array of { fileIndex, line } for each hunk's first changed line (additions side)
-  let hunkPositions: { fileIndex: number; line: number }[] = [];
-  // Visible line ranges per file index: ranges the cursor can occupy
-  let visibleRanges: Map<number, { start: number; end: number }[]> = new Map();
-
-  // Viewed files state (persisted in module-level store across remounts)
+  let comparison = $derived(getComparison(sessionId, baseBranch));
+  let effectiveBase = $derived(comparison.baseRef);
+  let effectiveHead = $derived(comparison.headRef);
   let viewedFiles = $derived(getViewedFiles(sessionId));
   let viewedVersion = $derived(getViewedVersion(sessionId));
-  let allItems: CodeViewItem<ReviewComment>[] = [];
-  let diffGeneration = 0;
-
-  // Single-file rendering: only the selected file is displayed in CodeView
-  let allFilesReviewed = $state(false);
-
-  // Tracks files that have been expanded to full content (isPartial: false)
-  let expandedFiles = new Set<string>();
-  // Tracks files currently being loaded for expansion (for loading UI feedback)
-  let loadingExpansionFiles = $state<Set<string>>(new Set());
-
-  let workerPool: ReturnType<typeof getOrCreateWorkerPoolSingleton> | null = null;
-
-  function getWorkerPool() {
-    if (!workerPool) {
-      workerPool = getOrCreateWorkerPoolSingleton({
-        poolOptions: { workerFactory },
-        highlighterOptions: {
-          theme: { dark: "github-dark", light: "github-light" },
-          langs: ["typescript", "javascript", "css", "html", "rust", "python", "go", "svelte", "json", "yaml", "toml", "bash", "sql"],
-        },
-      });
-    }
-    return workerPool;
-  }
-
-  // Reactive
   let totalCount = $derived(getTotalCommentCount(sessionId));
   let sessionExited = $derived(getActiveSession()?.status === "exited");
-  let sendingFeedback = $state(false);
-  let currentFileComments = $derived(
-    getComments(sessionId).filter((c) => c.filePath === (files[selectedIndex]?.path ?? ""))
-  );
   let conflicted = $derived(hasConflicts(sessionId));
-  let contentTop = $derived(conflicted ? 76 : 42); // 42px toolbar; +34px conflict banner
+  let contentTop = $derived(conflicted ? 76 : 42);
+  let activeFile = $derived(files[selectedIndex] ?? null);
+  let activeTextDiff = $derived(activeDiff?.kind === "text" ? activeDiff : null);
+  let currentFileComments = $derived(getComments(sessionId).filter((comment) => comment.filePath === activeFile?.path));
+  let comparisonKey = $derived(`${effectiveBase}:${effectiveHead ?? "WORKTREE"}`);
+  let terminal = $derived(getSettings().terminal);
 
-
-  // ─── Core Functions ─────────────────────────────────────────────────────────
-
-  function currentFileId(): string {
-    return files[selectedIndex] ? `diff:${files[selectedIndex].path}` : "";
+  function cacheKey(file: ChangedFile): string {
+    return `${comparisonKey}:${file.old_path ?? ""}:${file.path}`;
   }
 
-  async function refresh({ confirmDraft = true, usePreloaded = false } = {}) {
-    if (confirmDraft && !prepareForNavigation("reload")) return;
-    const generation = ++diffGeneration;
-    clearSelection();
+  function fileName(path: string): string { return path.split("/").pop() || path; }
+  function dirName(path: string): string { const parts = path.split("/"); return parts.length > 1 ? `${parts.slice(0, -1).join("/")}/` : ""; }
+  function statusColor(status: string): string {
+    return status === "A" ? "text-status-running" : status === "D" ? "text-status-exited" : status === "R" ? "text-accent" : "text-status-review";
+  }
+
+  function discardCommentsIfNeeded(message: string): boolean {
+    if (getComments(sessionId).length === 0) return true;
+    if (!window.confirm(message)) return false;
+    clearComments(sessionId);
+    return true;
+  }
+
+  function hasValidAnchor(comment: ReviewComment, diff: TextFileDiff): boolean {
+    if (comment.type === "file") return true;
+    const lineCount = (comment.side === "original" ? diff.original : diff.modified).split("\n").length;
+    return comment.startLine >= 1 && comment.endLine >= comment.startLine && comment.endLine <= lineCount;
+  }
+
+  async function reanchorPendingComments(
+    nextFiles: ChangedFile[],
+    generation: number,
+  ): Promise<boolean> {
+    const comments = getComments(sessionId);
+    if (comments.length === 0) return true;
+    const filesByPath = new Map(nextFiles.map((file) => [file.path, file]));
+    const referencedFiles = [...new Set(comments.map((comment) => comment.filePath))]
+      .map((filePath) => filesByPath.get(filePath))
+      .filter((file): file is ChangedFile => file !== undefined);
+    const refreshed = await Promise.all(referencedFiles.map(async (file) => ({
+      file,
+      diff: await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff,
+    })));
+    if (generation !== refreshGeneration) return false;
+
+    const invalid = refreshed.flatMap(({ file, diff }) =>
+      diff.kind !== "text"
+        ? getComments(sessionId).filter((comment) => comment.filePath === file.path)
+        : getComments(sessionId).filter((comment) => comment.filePath === file.path && !hasValidAnchor(comment, diff)),
+    );
+    if (invalid.length > 0 && !window.confirm(
+      `Discard ${invalid.length} comment${invalid.length === 1 ? "" : "s"} whose selected line${invalid.length === 1 ? " no longer exists" : "s no longer exist"}?`,
+    )) return false;
+    invalid.forEach((comment) => removeComment(sessionId, comment.id));
+
+    for (const { file, diff } of refreshed) {
+      if (diff.kind !== "text") continue;
+      reanchorComments(sessionId, file.path, comparisonKey, contentFingerprint(diff));
+    }
+    return true;
+  }
+
+  async function refresh({ comparisonChange = false } = {}): Promise<void> {
+    if (sendingFeedback || !discardCommentDraft()) return;
+    if (comparisonChange && !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
+    const generation = ++refreshGeneration;
+    selectedLoadRequest++;
+    inFlightDiffs = new Map();
     loading = true;
+    selectedRange = null;
+    cache = new Map();
     try {
-      await loadAllDiffs(usePreloaded, generation);
-    } catch (e) {
-      if (generation !== diffGeneration) return;
-      console.error("Failed to load diffs:", e);
-      files = [];
+      const nextFiles = await git.getChangedFiles(repoPath, effectiveBase, effectiveHead);
+      if (generation !== refreshGeneration) return;
+      const previousPath = activeFile?.path;
+      const orphanedComments = getComments(sessionId).filter((comment) => !nextFiles.some((file) => file.path === comment.filePath));
+      if (orphanedComments.length > 0 && !window.confirm(`Discard ${orphanedComments.length} comment${orphanedComments.length === 1 ? "" : "s"} for file${orphanedComments.length === 1 ? "" : "s"} no longer in this comparison?`)) return;
+      orphanedComments.forEach((comment) => removeComment(sessionId, comment.id));
+      if (!(await reanchorPendingComments(nextFiles, generation))) return;
+      const nextFolderPaths = getReviewFolderPaths(nextFiles);
+      let nextExpandedFolders = reconcileReviewTreeExpansion(
+        expandedSidebarFolders,
+        sidebarFolderPaths,
+        nextFolderPaths,
+        sidebarTreeInitialized,
+      );
+      files = nextFiles;
+      selectedIndex = Math.max(0, nextFiles.findIndex((file) => file.path === previousPath));
+      if (selectedIndex < 0 || !nextFiles[selectedIndex]) selectedIndex = 0;
+      sidebarFolderPaths = nextFolderPaths;
+      sidebarTreeInitialized = true;
+      if (nextFiles[selectedIndex]) {
+        nextExpandedFolders = expandReviewTreeAncestors(nextExpandedFolders, nextFiles[selectedIndex].path);
+        sidebarFocusedRowId = `file:${nextFiles[selectedIndex].path}`;
+      } else {
+        sidebarFocusedRowId = null;
+      }
+      expandedSidebarFolders = nextExpandedFolders;
+      const fingerprints = new Map(nextFiles.map((file) => [file.path, `${file.status}:${file.additions}:${file.deletions}:${file.old_path ?? ""}`]));
+      invalidateViewedFiles(sessionId, fingerprints);
+      allFilesReviewed = false;
+      if (nextFiles.length > 0) await loadSelected(generation);
+      else activeDiff = null;
+    } catch (error) {
+      if (generation === refreshGeneration) {
+        files = [];
+        activeDiff = null;
+        showSnackbar(`Could not load review files: ${String(error)}`, "error");
+      }
     } finally {
-      if (generation === diffGeneration) loading = false;
+      if (generation === refreshGeneration) loading = false;
     }
   }
 
-  async function loadAllDiffs(usePreloaded: boolean, generation: number) {
-    if (!viewer) return;
-    // Reset expanded files tracking on fresh load
-    expandedFiles = new Set<string>();
-    const combinedPatch = await getCombinedPatchForReview(
-      sessionId,
-      repoPath,
-      effectiveBase,
-      effectiveHead,
-      usePreloaded,
-    );
+  function fetchFileDiff(
+    file: ChangedFile,
+    key: string,
+    cacheAtRequestStart: Map<string, ReviewFileDiff>,
+    inFlightAtRequestStart: Map<string, Promise<ReviewFileDiff>>,
+  ): Promise<ReviewFileDiff> {
+    const existing = inFlightAtRequestStart.get(key);
+    if (existing) return existing;
 
-    if (!viewer || generation !== diffGeneration) return;
-
-    // Parse the combined patch into per-file diffs
-    const parsed = parsePatchFiles(combinedPatch, sessionId);
-    const allFileDiffs = parsed.flatMap((p) => p.files);
-
-    // Derive file list from the parsed patch output
-    const derivedFiles: ChangedFile[] = allFileDiffs.map((fileDiff) => {
-      const path = fileDiff.name;
-      const oldPath = fileDiff.prevName;
-      let status = "M";
-      if (fileDiff.type === "new") status = "A";
-      else if (fileDiff.type === "deleted") status = "D";
-      else if (fileDiff.type === "rename-pure" || fileDiff.type === "rename-changed") status = "R";
-      let additions = 0;
-      let deletions = 0;
-      for (const hunk of fileDiff.hunks) {
-        additions += hunk.additionLines;
-        deletions += hunk.deletionLines;
+    const request = git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as Promise<ReviewFileDiff>;
+    const cachedRequest = request.then((diff) => {
+      if (cache === cacheAtRequestStart) cache.set(key, diff);
+      return diff;
+    }).finally(() => {
+      if (inFlightDiffs === inFlightAtRequestStart && inFlightAtRequestStart.get(key) === cachedRequest) {
+        inFlightAtRequestStart.delete(key);
       }
-      return { path, status, additions, deletions, old_path: oldPath ?? null };
     });
+    inFlightAtRequestStart.set(key, cachedRequest);
+    return cachedRequest;
+  }
 
-    const nextFolderPaths = getReviewFolderPaths(derivedFiles);
-    let nextExpandedFolders = reconcileReviewTreeExpansion(
-      expandedSidebarFolders,
-      sidebarFolderPaths,
-      nextFolderPaths,
-      sidebarTreeInitialized,
-    );
-    selectedIndex = getRefreshedSelectedIndex(files, selectedIndex, derivedFiles);
-    files = derivedFiles;
-    sidebarFolderPaths = nextFolderPaths;
-    sidebarTreeInitialized = true;
-    if (files.length > 0) {
-      const selectedPath = files[selectedIndex].path;
-      nextExpandedFolders = expandReviewTreeAncestors(nextExpandedFolders, selectedPath);
-      sidebarFocusedRowId = `file:${selectedPath}`;
-      onFileChange?.(selectedPath.split("/").pop() || selectedPath);
-    }
-    expandedSidebarFolders = nextExpandedFolders;
-
-    // Update fingerprints and invalidate viewed state for changed files
-    const newFingerprints = new Map<string, string>();
-    for (let i = 0; i < files.length; i++) {
-      const fp = `${files[i].additions}:${files[i].deletions}:${allFileDiffs[i]?.splitLineCount ?? 0}`;
-      newFingerprints.set(files[i].path, fp);
-    }
-    invalidateViewedFiles(sessionId, newFingerprints);
-
-    const items: CodeViewItem<ReviewComment>[] = [];
-    for (let i = 0; i < allFileDiffs.length; i++) {
-      const fileDiff = allFileDiffs[i];
-      delete fileDiff.cacheKey;
-      const filePath = files[i]?.path ?? "";
-      const annotations = getAnnotationsForFile(filePath);
-      items.push({
-        id: `diff:${filePath}`,
-        type: "diff",
-        fileDiff: fileDiff as FileDiffMetadata,
-        annotations,
-      });
-    }
-    allItems = items;
-    // Single-file mode: only render the currently selected file
-    renderCurrentFile();
-    // Work around a race condition where the InteractionManager doesn't pick
-    // up enableLineSelection on the first render frame. Bumping a version on
-    // the items forces a re-render which re-runs flushManagers/syncPointerListeners.
-    requestAnimationFrame(() => {
-      if (!viewer || generation !== diffGeneration) return;
-      const rendered = viewer.getRenderedItems();
-      for (const r of rendered) {
-        r.instance.flushManagers();
+  async function loadSelected(generation = refreshGeneration): Promise<void> {
+    const file = files[selectedIndex];
+    const requestId = ++selectedLoadRequest;
+    if (!file) { activeDiff = null; fileLoading = false; return; }
+    onFileChange?.(fileName(file.path));
+    const key = cacheKey(file);
+    const cached = cache.get(key);
+    if (cached) { activeDiff = cached; fileLoading = false; return; }
+    activeDiff = null;
+    fileLoading = true;
+    const cacheAtRequestStart = cache;
+    const inFlightAtRequestStart = inFlightDiffs;
+    try {
+      const diff = await fetchFileDiff(file, key, cacheAtRequestStart, inFlightAtRequestStart);
+      if (
+        generation !== refreshGeneration
+        || cache !== cacheAtRequestStart
+        || requestId !== selectedLoadRequest
+        || files[selectedIndex]?.path !== file.path
+      ) return;
+      activeDiff = diff;
+      void preloadAdjacentFiles(generation, cacheAtRequestStart, inFlightAtRequestStart);
+    } catch (error) {
+      if (generation === refreshGeneration && requestId === selectedLoadRequest) {
+        showSnackbar(`Could not load ${file.path}: ${String(error)}`, "error");
       }
-      scheduleGutterActionPosition();
+    } finally {
+      if (generation === refreshGeneration && requestId === selectedLoadRequest) fileLoading = false;
+    }
+  }
+
+  async function preloadAdjacentFiles(
+    generation: number,
+    cacheAtRequestStart: Map<string, ReviewFileDiff>,
+    inFlightAtRequestStart: Map<string, Promise<ReviewFileDiff>>,
+  ): Promise<void> {
+    const requests = [selectedIndex - 1, selectedIndex + 1].flatMap((index) => {
+      const file = files[index];
+      if (!file) return [];
+      const key = cacheKey(file);
+      return cacheAtRequestStart.has(key) ? [] : [{ file, key }];
     });
-  }
-
-  function computeHunkMeta(items: CodeViewItem<ReviewComment>[]) {
-    const positions: { fileIndex: number; line: number }[] = [];
-    const ranges = new Map<number, { start: number; end: number }[]>();
-
-    for (let fi = 0; fi < items.length; fi++) {
-      const item = items[fi];
-      if (item.type !== "diff") continue;
-      // In single-file mode, all items map to selectedIndex
-      const filesIdx = selectedIndex;
-      const fileRanges: { start: number; end: number }[] = [];
-      for (const hunk of item.fileDiff.hunks) {
-        // Find the first changed line in this hunk
-        let firstChangeLine = hunk.additionStart;
-        for (const seg of hunk.hunkContent) {
-          if (seg.type === "change") {
-            firstChangeLine = hunk.additionStart + (seg.additionLineIndex - hunk.additionLineIndex);
-            break;
-          }
-        }
-        positions.push({ fileIndex: filesIdx, line: firstChangeLine });
-
-        // Visible range for this hunk: additionStart to additionStart + additionCount - 1
-        fileRanges.push({ start: hunk.additionStart, end: hunk.additionStart + hunk.additionCount - 1 });
-      }
-      ranges.set(filesIdx, fileRanges);
-    }
-    hunkPositions = positions;
-    visibleRanges = ranges;
-  }
-
-  function getAnnotationsForFile(filePath: string): DiffLineAnnotation<ReviewComment>[] {
-    return getComments(sessionId)
-      .filter((c) => c.filePath === filePath && c.type !== "file")
-      .map((c) => ({ side: "additions" as const, lineNumber: c.startLine, metadata: c }));
+    await Promise.all(requests.map(async ({ file, key }) => {
+      try {
+        await fetchFileDiff(file, key, cacheAtRequestStart, inFlightAtRequestStart);
+      } catch { /* Selected-file loading remains the only user-visible failure. */ }
+    }));
   }
 
   function getSidebarRowId(row: ReviewTreeRow): string {
     return `${row.kind}:${row.path}`;
   }
 
-  function revealSelectedFile() {
+  function revealSelectedFile(): void {
     const selectedPath = files[selectedIndex]?.path;
     if (!selectedPath) return;
     expandedSidebarFolders = expandReviewTreeAncestors(expandedSidebarFolders, selectedPath);
@@ -295,26 +268,186 @@
   }
 
   function selectFile(index: number): boolean {
-    if (index < 0 || index >= files.length) return false;
-    if (index === selectedIndex) {
-      revealSelectedFile();
-      return true;
-    }
-    if (!prepareForNavigation("change-file")) return false;
+    if (!files[index]) return false;
+    if (index === selectedIndex) { revealSelectedFile(); return true; }
+    if (showCommentInput && !discardCommentDraft()) return false;
     selectedIndex = index;
-    showCommentInput = false;
-    selectionAnchor = null;
-    selectedLineRange = null;
+    selectedRange = null;
+    diffFocus = "list";
     revealSelectedFile();
-    onFileChange?.(files[index]?.path.split("/").pop() || files[index]?.path || "");
-    cursorLine = snapToVisible(1, 1);
-    // Single-file mode: only render the selected file.
-    renderCurrentFile();
-    if (diffFocus === "body") showCursor();
+    void loadSelected();
     return true;
   }
 
-  function toggleSidebarFolder(path: string) {
+  function discardCommentDraft(): boolean {
+    if (!showCommentInput || !commentText.trim()) { cancelComment(); return true; }
+    if (!window.confirm("Discard the unsaved review comment?")) return false;
+    cancelComment();
+    return true;
+  }
+
+  function setDiffStyle(style: "split" | "unified"): void {
+    if (diffStyle === style || !discardCommentDraft()) return;
+    diffStyle = style;
+    selectedRange = null;
+  }
+
+  function toggleViewed(index = selectedIndex, advance = false): void {
+    const file = files[index];
+    if (!file) return;
+    const viewed = isFileViewed(sessionId, file.path);
+    if (viewed) setFileUnviewed(sessionId, file.path); else setFileViewed(sessionId, file.path);
+    if (!advance || viewed) return;
+    const next = files.findIndex((candidate, candidateIndex) => candidateIndex > index && !isFileViewed(sessionId, candidate.path));
+    if (next >= 0) { selectFile(next); return; }
+    const wrap = files.findIndex((candidate) => !isFileViewed(sessionId, candidate.path));
+    if (wrap >= 0) { selectFile(wrap); return; }
+    allFilesReviewed = true;
+  }
+
+  function openComment(selection = selectedRange): void {
+    if (sendingFeedback || !selection || !activeTextDiff || !activeFile) return;
+    if (showCommentInput && !discardCommentDraft()) return;
+    commentRange = selection;
+    commentType = selection.startLine === selection.endLine ? "line" : "hunk";
+    commentText = "";
+    editingCommentId = null;
+    showCommentInput = true;
+    requestAnimationFrame(() => commentInputEl?.focus());
+  }
+
+  function openEditComment(comment: ReviewComment): void {
+    if (sendingFeedback) return;
+    if (showCommentInput && editingCommentId === comment.id) {
+      commentInputEl?.focus();
+      return;
+    }
+    if (showCommentInput && !discardCommentDraft()) return;
+    commentRange = { side: comment.side, startLine: comment.startLine, endLine: comment.endLine };
+    commentType = comment.type;
+    commentText = comment.text;
+    editingCommentId = comment.id;
+    showCommentInput = true;
+    requestAnimationFrame(() => commentInputEl?.focus());
+  }
+
+  function cancelComment(): void {
+    showCommentInput = false;
+    commentText = "";
+    commentRange = null;
+    editingCommentId = null;
+  }
+
+  function submitComment(): void {
+    const text = commentText.trim();
+    if (sendingFeedback || !text || !activeFile || !activeTextDiff || !commentRange) return;
+    if (editingCommentId) editComment(sessionId, editingCommentId, text);
+    else addComment(sessionId, {
+      filePath: activeFile.path,
+      type: commentType,
+      startLine: commentRange.startLine,
+      endLine: commentRange.endLine,
+      side: commentRange.side,
+      comparisonKey,
+      fingerprint: contentFingerprint(activeTextDiff),
+      text,
+    });
+    cancelComment();
+    selectedRange = null;
+  }
+
+  function handleCommentKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") { event.preventDefault(); cancelComment(); }
+    else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitComment(); }
+  }
+
+  async function sendFeedback(): Promise<void> {
+    const comments = getComments(sessionId);
+    if (comments.length === 0 || sessionExited || sendingFeedback || showCommentInput) return;
+    sendingFeedback = true;
+    try {
+      const diffs = new Map<string, TextFileDiff>();
+      for (const filePath of new Set(comments.map((comment) => comment.filePath))) {
+        const file = files.find((candidate) => candidate.path === filePath);
+        if (!file) throw new Error(`${filePath} is no longer part of this comparison`);
+        const latest = await git.getFileDiff(repoPath, effectiveBase, file.path, file.old_path, effectiveHead) as ReviewFileDiff;
+        if (latest.kind !== "text") throw new Error(`${filePath} is binary and cannot receive line comments`);
+        const expected = comments.filter((comment) => comment.filePath === filePath);
+        if (expected.some((comment) => comment.comparisonKey !== comparisonKey || comment.fingerprint !== contentFingerprint(latest))) {
+          throw new Error(`${filePath} changed since it was reviewed. Refresh and re-anchor its comments.`);
+        }
+        diffs.set(filePath, latest);
+      }
+      const bytes = Array.from(new TextEncoder().encode(serializeComments(comments, diffs)));
+      recordUserInput(sessionId);
+      await pty.write(sessionId, bytes);
+      await pty.write(sessionId, [0x0d]);
+      const count = comments.length;
+      clearComments(sessionId);
+      showSnackbar(`Feedback sent (${count} comment${count === 1 ? "" : "s"})`, "success");
+    } catch (error) {
+      showSnackbar(String(error).replace(/^Error: /, ""), "error");
+    } finally {
+      sendingFeedback = false;
+    }
+  }
+
+  function editCommentAtSelection(): void {
+    const selection = selectedRange;
+    if (!selection || !activeFile) return;
+    const comment = currentFileComments.find((candidate) =>
+      candidate.side === selection.side
+      && candidate.startLine <= selection.endLine
+      && candidate.endLine >= selection.startLine,
+    );
+    if (comment) openEditComment(comment);
+  }
+
+  function handleKeydown(e: KeyboardEvent): void {
+    if (!visible || getActiveZone() !== "terminal") return;
+    const element = document.activeElement;
+    if (element?.closest("[role='dialog'], [role='alertdialog'], [role='combobox'], dialog[open]")) return;
+    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); void sendFeedback(); return; }
+    if (sendingFeedback || showCommentInput || showCompareForm || allFilesReviewed) return;
+    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+      e.preventDefault();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true, bubbles: true }));
+      return;
+    }
+    if ((e.key === "n" && e.ctrlKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
+      e.preventDefault();
+      selectFile(Math.min(files.length - 1, selectedIndex + 1));
+      return;
+    }
+    if ((e.key === "p" && e.ctrlKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
+      e.preventDefault();
+      selectFile(Math.max(0, selectedIndex - 1));
+      return;
+    }
+    if (e.key === "r" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); void refresh(); return; }
+    if (e.key === "B" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); showCompareForm = !showCompareForm; return; }
+    if (e.key === "u" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setDiffStyle(diffStyle === "split" ? "unified" : "split"); return; }
+    if (e.key === "m" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleViewed(selectedIndex, true); return; }
+    if (e.key === "e" && !e.metaKey && !e.ctrlKey && activeFile) { e.preventDefault(); onEditFile?.(activeFile.path); return; }
+    if (e.key === "]" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffFocus = "body"; diffView?.nextHunk(); return; }
+    if (e.key === "[" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffFocus = "body"; diffView?.previousHunk(); return; }
+    if (e.key === "x" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); diffView?.expandContext(); return; }
+    if (diffFocus === "list") {
+      if (handleSidebarTreeKey(e)) return;
+      if (e.key === "Escape") e.preventDefault();
+      return;
+    }
+    if (e.key === "Escape") { e.preventDefault(); selectedRange = null; diffFocus = "list"; return; }
+    if (e.key === "c" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      openComment();
+    } else if (e.key === "E" && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      editCommentAtSelection();
+    }
+  }
+
+  function toggleSidebarFolder(path: string): void {
     const expanded = new Set(expandedSidebarFolders);
     if (expanded.has(path)) expanded.delete(path);
     else expanded.add(path);
@@ -322,12 +455,9 @@
     sidebarFocusedRowId = `folder:${path}`;
   }
 
-  function focusSidebarRow(row: ReviewTreeRow) {
-    if (row.kind === "folder") {
-      sidebarFocusedRowId = getSidebarRowId(row);
-    } else if (!selectFile(row.fileIndex)) {
-      return;
-    }
+  function focusSidebarRow(row: ReviewTreeRow): void {
+    if (row.kind === "folder") sidebarFocusedRowId = getSidebarRowId(row);
+    else if (!selectFile(row.fileIndex)) return;
 
     const rowId = getSidebarRowId(row);
     requestAnimationFrame(() => {
@@ -337,12 +467,7 @@
     });
   }
 
-  function handleSidebarRowKeydown(e: KeyboardEvent) {
-    if (!handleSidebarTreeKey(e)) return;
-    e.stopPropagation();
-  }
-
-  function moveSidebarFocus(delta: 1 | -1) {
+  function moveSidebarFocus(delta: 1 | -1): void {
     if (sidebarRows.length === 0) return;
     const focusedIndex = sidebarRows.findIndex((row) => getSidebarRowId(row) === sidebarFocusedRowId);
     const selectedRowIndex = sidebarRows.findIndex((row) => row.kind === "file" && row.fileIndex === selectedIndex);
@@ -372,8 +497,7 @@
     else if (isRight && focusedRow.kind === "folder") {
       if (!expandedSidebarFolders.has(focusedRow.path)) toggleSidebarFolder(focusedRow.path);
       else {
-        const rowIndex = sidebarRows.indexOf(focusedRow);
-        const child = sidebarRows[rowIndex + 1];
+        const child = sidebarRows[sidebarRows.indexOf(focusedRow) + 1];
         if (child && child.depth > focusedRow.depth) focusSidebarRow(child);
       }
     } else if (isLeft) {
@@ -390,8 +514,7 @@
       if (focusedRow.kind === "folder") toggleSidebarFolder(focusedRow.path);
       else {
         diffFocus = "body";
-        cursorLine = snapToVisible(1, 1);
-        showCursor();
+        diffView?.focus();
       }
     } else return false;
 
@@ -399,1204 +522,129 @@
     return true;
   }
 
-  function navigateFile(index: number) {
-    if (!selectFile(index)) return;
-    if (diffFocus === "body") {
-      cursorLine = 1;
-      viewer?.setSelectedLines({ id: currentFileId(), range: { start: 1, end: 1, side: "additions" } });
-    }
-  }
-
-  // ─── Comments ───────────────────────────────────────────────────────────────
-
-  function openCommentInput(start: number, end: number, type: "line" | "hunk" | "file") {
-    commentStartLine = start;
-    commentEndLine = end;
-    commentType = type;
-    commentText = "";
-    showCommentInput = true;
-    requestAnimationFrame(() => commentInputEl?.focus());
-  }
-
-  function openCommentForSelection(range: SelectedLineRange) {
-    // Keep an in-progress same-file draft intact; selecting another range only
-    // changes the visual selection until the current draft is submitted/cancelled.
-    if (showCommentInput) {
-      commentInputEl?.focus();
-      return;
-    }
-    const target = commentTargetFromSelection(range);
-    openCommentInput(target.startLine, target.endLine, target.type);
-  }
-
-  function hasUnsavedCommentDraft(): boolean {
-    return showCommentInput && (editingCommentId !== null || commentText.trim().length > 0);
-  }
-
-  function prepareForNavigation(navigation: "change-file" | "reload"): boolean {
-    if (shouldConfirmDraftDiscard(hasUnsavedCommentDraft(), navigation)) {
-      if (!window.confirm("Discard the unsaved review comment?")) return false;
-    }
-    if (showCommentInput) cancelComment();
-    return true;
-  }
-
-  function submitComment() {
-    const text = commentText.trim();
-    if (!text) return;
-    if (editingCommentId) {
-      editComment(sessionId, editingCommentId, text);
-    } else {
-      addComment(sessionId, {
-        filePath: files[selectedIndex]?.path ?? "",
-        type: commentType,
-        startLine: commentStartLine,
-        endLine: commentEndLine,
-        text,
-      });
-    }
-    cancelComment();
-    clearSelection();
-    updateAnnotations();
-  }
-
-  function cancelComment() {
-    showCommentInput = false;
-    commentText = "";
-    editingCommentId = null;
-    clearSelection();
-  }
-
-  function openEditComment(comment: ReviewComment) {
-    if (showCommentInput && editingCommentId === comment.id) {
-      commentInputEl?.focus();
-      return;
-    }
-    if (!prepareForNavigation("change-file")) return;
-    commentStartLine = comment.startLine;
-    commentEndLine = comment.endLine;
-    commentType = comment.type;
-    commentText = comment.text;
-    editingCommentId = comment.id;
-    showCommentInput = true;
-    requestAnimationFrame(() => commentInputEl?.focus());
-  }
-
-  function handleCommentKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") { e.preventDefault(); cancelComment(); }
-    else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitComment(); }
-  }
-
-  function updateAnnotations() {
-    if (!viewer || files.length === 0) return;
-    allItems = allItems.map((it) =>
-      it.type === "diff"
-        ? { ...it, version: (it.version ?? 0) + 1, annotations: getAnnotationsForFile(it.id.replace("diff:", "")) }
-        : it,
-    );
-    // Re-render current file with updated annotations
-    renderCurrentFile();
-  }
-
-  /**
-   * Expand a partial file to full content by fetching old+new file from git.
-   * After expansion, the item has isPartial:false and the library handles
-   * subsequent expand/collapse of context lines natively.
-   */
-  async function expandFileToFull(filePath: string): Promise<boolean> {
-    if (!viewer || expandedFiles.has(filePath)) return true;
-    if (loadingExpansionFiles.has(filePath)) return false;
-    const file = files.find((f) => f.path === filePath);
-    if (!file) return false;
-
-    loadingExpansionFiles.add(filePath);
-    loadingExpansionFiles = new Set(loadingExpansionFiles);
-    try {
-      const gen = diffGeneration;
-      const diff = await git.getFileDiff(repoPath, effectiveBase, filePath, file.old_path, effectiveHead);
-      if (gen !== diffGeneration) return false;
-      const oldFile: FileContents = { name: file.old_path ?? filePath, contents: diff.original };
-      const newFile: FileContents = { name: filePath, contents: diff.modified };
-
-      const itemId = `diff:${filePath}`;
-      const itemIdx = allItems.findIndex((it) => it.id === itemId);
-      if (itemIdx === -1) return false;
-
-      const rebuilt = rebuildItemWithFullContent(allItems[itemIdx], oldFile, newFile);
-      if (!rebuilt) return false;
-
-      allItems[itemIdx] = rebuilt;
-      expandedFiles.add(filePath);
-      // Re-render if this is the currently displayed file
-      if (itemIdx === selectedIndex) {
-        renderCurrentFile();
-      }
-      return true;
-    } catch (e) {
-      console.error(`Failed to expand file ${filePath}:`, e);
-      return false;
-    } finally {
-      loadingExpansionFiles.delete(filePath);
-      loadingExpansionFiles = new Set(loadingExpansionFiles);
-    }
-  }
-
-  /**
-   * Render only the currently selected file in the CodeView.
-   * This is the core of single-file display mode.
-   */
-  function renderCurrentFile() {
-    if (!viewer || allItems.length === 0) return;
-    const item = allItems[selectedIndex];
-    if (!item) return;
-    allFilesReviewed = false;
-    const viewed = viewedFiles.has(item.id.replace("diff:", ""));
-    viewer.setItems([{ ...item, collapsed: viewed }]);
-    computeHunkMeta([item]);
-    // Flush interaction managers after render
-    requestAnimationFrame(() => {
-      if (!viewer) return;
-      const rendered = viewer.getRenderedItems();
-      for (const r of rendered) {
-        r.instance.flushManagers();
-      }
-      scheduleGutterActionPosition();
-    });
-    // Proactively load full file content for the current file (enables context expansion)
-    const filePath = files[selectedIndex]?.path;
-    if (filePath && !expandedFiles.has(filePath)) {
-      expandFileToFull(filePath);
-    }
-    // Preload adjacent files
-    preloadAdjacentFiles(selectedIndex);
-  }
-
-  /**
-   * The @pierre/diffs library sets an explicit height on its inner container
-   * based on estimated line heights, which is often too short in split mode.
-   * This observer removes that constraint so the container grows to fit its
-   * actual content, letting the outer viewerRoot handle scrolling naturally.
-   */
-  let containerObserver: MutationObserver | null = null;
-  let suppressObserver = false;
-
-  function startContainerHeightFix() {
-    if (containerObserver || !viewerRoot) return;
-    const container = viewerRoot.firstElementChild as HTMLElement | null;
-    if (!container) return;
-    containerObserver = new MutationObserver(() => {
-      if (suppressObserver) return;
-      if (container.style.height) {
-        suppressObserver = true;
-        container.style.height = "";
-        suppressObserver = false;
-      }
-    });
-    containerObserver.observe(container, { attributes: true, attributeFilter: ["style"] });
-    // Also clear it immediately
-    if (container.style.height) container.style.height = "";
-  }
-
-  function stopContainerHeightFix() {
-    containerObserver?.disconnect();
-    containerObserver = null;
-  }
-
-  /**
-   * Preload full file content for adjacent files (prev and next)
-   * so that switching is instantaneous.
-   */
-  function preloadAdjacentFiles(currentIndex: number) {
-    const adjacent = [currentIndex - 1, currentIndex + 1];
-    for (const idx of adjacent) {
-      if (idx < 0 || idx >= files.length) continue;
-      const filePath = files[idx]?.path;
-      if (!filePath || expandedFiles.has(filePath)) continue;
-      // Fire-and-forget expansion for adjacent files
-      expandFileToFull(filePath);
-    }
-  }
-
-  /**
-   * Keyboard shortcut handler: expand the nearest collapsed context around cursor.
-   * If the file is still partial, loads it fully first, then expands the nearest hunk.
-   */
-  async function expandCurrentFileContext() {
-    const filePath = files[selectedIndex]?.path;
-    if (!filePath || !viewer) return;
-
-    // Ensure file is fully loaded
-    const expanded = await expandFileToFull(filePath);
-    if (!expanded) return;
-
-    // Find the rendered instance for this file and expand the nearest hunk
-    const itemId = `diff:${filePath}`;
-    const renderedItems = viewer.getRenderedItems();
-    const rendered = renderedItems.find((r) => r.item.id === itemId);
-    if (!rendered || rendered.type !== "diff") return;
-
-    const item = viewer.getItem(itemId);
-    if (!item || item.type !== "diff") return;
-
-    // Find the nearest hunk separator relative to cursor position
-    const hunks = item.fileDiff.hunks;
-    let bestHunkIdx = -1;
-    let bestDistance = Infinity;
-
-    for (let i = 0; i < hunks.length; i++) {
-      const hunk = hunks[i];
-      // The separator is above this hunk — collapsed lines precede additionStart
-      const separatorLine = hunk.additionStart;
-      const dist = Math.abs(cursorLine - separatorLine);
-      if (dist < bestDistance && hunk.collapsedBefore > 0) {
-        bestDistance = dist;
-        bestHunkIdx = i;
-      }
-    }
-
-    if (bestHunkIdx >= 0) {
-      rendered.instance.expandHunk(bestHunkIdx, "both");
-    }
-  }
-
-  async function sendFeedback() {
-    const comments = getComments(sessionId);
-    if (comments.length === 0 || sessionExited || sendingFeedback) return;
-    sendingFeedback = true;
-    try {
-      const filePaths = [...new Set(comments.map((c) => c.filePath))];
-      const fileDiffs = new Map<string, FileDiffData>();
-      await Promise.all(filePaths.map(async (path) => {
-        try { const diff = await git.getFileDiff(repoPath, effectiveBase, path, null, effectiveHead); fileDiffs.set(path, diff); } catch {}
-      }));
-      const serialized = serializeComments(comments, fileDiffs);
-      const bytes = Array.from(new TextEncoder().encode(serialized));
-      recordUserInput(sessionId);
-      await pty.write(sessionId, bytes);
-      await pty.write(sessionId, [0x0d]);
-      const count = comments.length;
-      clearComments(sessionId);
-      updateAnnotations();
-      showSnackbar(`Feedback sent (${count} comment${count !== 1 ? "s" : ""})`, "success");
-    } finally {
-      sendingFeedback = false;
-    }
-  }
-
-  // ─── Viewed ──────────────────────────────────────────────────────────────────
-
-  function toggleViewed(index: number, advance = false) {
-    const path = files[index]?.path;
-    if (!path) return;
-    const wasViewed = isFileViewed(sessionId, path);
-    if (wasViewed) { setFileUnviewed(sessionId, path); } else { setFileViewed(sessionId, path); }
-    // Auto-advance to next unviewed file when marking as viewed
-    if (advance && !wasViewed) {
-      const next = files.findIndex((f, i) => i > index && !isFileViewed(sessionId, f.path));
-      if (next !== -1) { selectFile(next); return; }
-      const wrap = files.findIndex((f) => !isFileViewed(sessionId, f.path));
-      if (wrap !== -1) { selectFile(wrap); return; }
-      // All files reviewed
-      allFilesReviewed = true;
-      return;
-    }
-    // Re-render current file (collapsed state may have changed)
-    renderCurrentFile();
-  }
-
-  // ─── Selection ──────────────────────────────────────────────────────────────
-
-  function navigateHunk(direction: 1 | -1) {
-    if (hunkPositions.length === 0) {
-      // Current file has no hunks — try to cross to adjacent file
-      crossFileHunkNav(direction);
-      return;
-    }
-    // Find next hunk within current file relative to cursor position
-    let targetIdx = -1;
-    if (direction === 1) {
-      targetIdx = hunkPositions.findIndex((h) => h.fileIndex === selectedIndex && h.line > cursorLine);
-      if (targetIdx === -1) {
-        // No more hunks in this file — cross to next file
-        crossFileHunkNav(direction);
-        return;
-      }
-    } else {
-      for (let i = hunkPositions.length - 1; i >= 0; i--) {
-        if (hunkPositions[i].fileIndex === selectedIndex && hunkPositions[i].line < cursorLine) {
-          targetIdx = i;
-          break;
-        }
-      }
-      if (targetIdx === -1) {
-        // No more hunks in this file — cross to prev file
-        crossFileHunkNav(direction);
-        return;
-      }
-    }
-    const target = hunkPositions[targetIdx];
-    diffFocus = "body";
-    cursorLine = target.line;
-    selectionAnchor = null;
-    const id = currentFileId();
-    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "center" });
-    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-  }
-
-  /**
-   * Cross file boundary for hunk navigation.
-   * Switches to the adjacent file and lands on the first/last hunk.
-   */
-  function crossFileHunkNav(direction: 1 | -1) {
-    const nextIdx = direction === 1
-      ? (selectedIndex < files.length - 1 ? selectedIndex + 1 : 0) // wrap
-      : (selectedIndex > 0 ? selectedIndex - 1 : files.length - 1); // wrap
-    if (!selectFile(nextIdx)) return;
-    selectionAnchor = null;
-    // After render, navigate to the appropriate hunk
-    diffFocus = "body";
-    if (hunkPositions.length > 0) {
-      const target = direction === 1 ? hunkPositions[0] : hunkPositions[hunkPositions.length - 1];
-      cursorLine = target.line;
-    } else {
-      cursorLine = snapToVisible(1, 1);
-    }
-    const id = currentFileId();
-    viewer?.scrollTo({ type: "line", id, lineNumber: cursorLine, side: "additions", align: "center" });
-    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-  }
-
-  function showCursor() {
-    const id = currentFileId();
-    if (!id) return;
-    const ranges = visibleRanges.get(selectedIndex);
-    if (ranges && ranges.length > 0) {
-      const inRange = ranges.some((r) => cursorLine >= r.start && cursorLine <= r.end);
-      if (!inRange) cursorLine = ranges[0].start;
-    }
-    viewer?.setSelectedLines({ id, range: { start: cursorLine, end: cursorLine, side: "additions" } });
-    scrollSelectedLineIntoView();
-  }
-
-  /** Find the highlighted line in the active file's shadow DOM and scroll it into view. */
-  function scrollSelectedLineIntoView() {
-    const id = currentFileId();
-    const item = viewer?.getRenderedItems().find((r) => r.item.id === id);
-    const el = item?.element?.shadowRoot?.querySelector("[data-selected-line]");
-    if (el) (el as HTMLElement).scrollIntoView({ block: "nearest" });
-  }
-
-  function moveCursor(delta: number) {
-    const prevLine = cursorLine;
-    const newLine = Math.max(1, cursorLine + delta);
-    cursorLine = snapToVisible(newLine, delta >= 0 ? 1 : -1);
-    // Cross-file advancement when stuck at boundary
-    if (cursorLine === prevLine && selectionAnchor === null) {
-      const dir = delta >= 0 ? 1 : -1;
-      const nextIdx = findNextFile(selectedIndex, dir);
-      if (nextIdx !== -1) {
-        selectedIndex = nextIdx;
-        revealSelectedFile();
-        onFileChange?.(files[nextIdx]?.path.split("/").pop() || files[nextIdx]?.path || "");
-        diffFocus = "body";
-        // Re-render with the new file
-        renderCurrentFile();
-        const ranges = visibleRanges.get(nextIdx);
-        if (ranges && ranges.length > 0) {
-          cursorLine = dir === 1 ? ranges[0].start : ranges[ranges.length - 1].end;
-        }
-        showCursor();
-        return;
-      }
-    }
-    if (selectionAnchor !== null) {
-      const start = Math.min(selectionAnchor, cursorLine);
-      const end = Math.max(selectionAnchor, cursorLine);
-      try { viewer?.setSelectedLines({ id: currentFileId(), range: { start, end, side: "additions" } }); } catch {}
-    } else {
-      showCursor();
-    }
-  }
-
-  function findNextFile(fromIndex: number, direction: 1 | -1): number {
-    for (let i = fromIndex + direction; i >= 0 && i < files.length; i += direction) {
-      if (!viewedFiles.has(files[i].path)) return i;
-    }
-    // All remaining are viewed — advance to adjacent anyway
-    const next = fromIndex + direction;
-    return next >= 0 && next < files.length ? next : -1;
-  }
-
-  function snapToVisible(line: number, direction: 1 | -1): number {
-    const fileRanges = visibleRanges.get(selectedIndex);
-    if (!fileRanges || fileRanges.length === 0) return line;
-    // Check if line falls within any visible range
-    for (const r of fileRanges) {
-      if (line >= r.start && line <= r.end) return line;
-    }
-    // Line is in a folded region — find the nearest visible line in the given direction
-    if (direction === 1) {
-      for (const r of fileRanges) {
-        if (r.start > line) return r.start;
-      }
-      return fileRanges[fileRanges.length - 1].end; // clamp to last
-    } else {
-      for (let i = fileRanges.length - 1; i >= 0; i--) {
-        if (fileRanges[i].end < line) return fileRanges[i].end;
-      }
-      return fileRanges[0].start; // clamp to first
-    }
-  }
-
-  function rangesEqual(a: SelectedLineRange | null, b: SelectedLineRange | null): boolean {
-    return a === b || (a !== null && b !== null
-      && a.start === b.start && a.end === b.end && a.side === b.side && a.endSide === b.endSide);
-  }
-
-  function syncSelectedLineRange(range: SelectedLineRange | null) {
-    selectedLineRange = range;
-    if (range) {
-      diffFocus = "body";
-      cursorLine = range.end;
-      selectionAnchor = range.start !== range.end ? range.start : null;
-    } else {
-      selectionAnchor = null;
-    }
-    scheduleGutterActionPosition();
-  }
-
-  function findLineElement(lineNumber: number, side: SelectedLineRange["side"]): HTMLElement | null {
-    const item = viewer?.getRenderedItems().find((rendered) => rendered.item.id === currentFileId());
-    const root = item?.element?.shadowRoot;
-    if (!root) return null;
-    const scope = side ? `[data-${side}] ` : "";
-    const lines = root.querySelectorAll<HTMLElement>(`${scope}[data-line="${lineNumber}"]`);
-    // Unified diffs do not always expose side wrappers, but their selected
-    // lines still carry the same data-line marker.
-    return lines[0] ?? root.querySelector<HTMLElement>(`[data-line="${lineNumber}"]`);
-  }
-
-  function clampSelectionAtCollapsedContext(range: SelectedLineRange): SelectedLineRange {
-    const start = findLineElement(range.start, range.side);
-    const end = findLineElement(range.end, range.side);
-    const parent = start?.parentElement;
-    if (!start || !end || !parent || parent !== end.parentElement) return range;
-
-    const rows = [...parent.children];
-    const startIndex = rows.indexOf(start);
-    const endIndex = rows.indexOf(end);
-    if (startIndex === -1 || endIndex === -1) return range;
-
-    const direction = endIndex >= startIndex ? 1 : -1;
-    const first = Math.min(startIndex, endIndex);
-    const last = Math.max(startIndex, endIndex);
-    const separatorIndex = rows.findIndex((row, index) =>
-      index > first && index < last && (row instanceof HTMLElement)
-      && (row.hasAttribute("data-expand-index") || row.querySelector("[data-expand-index]") !== null),
-    );
-    if (separatorIndex === -1) return range;
-
-    for (let index = separatorIndex - direction; index >= 0 && index < rows.length; index -= direction) {
-      const row = rows[index];
-      const line = row instanceof HTMLElement
-        ? (row.matches("[data-line]") ? row : row.querySelector<HTMLElement>("[data-line]"))
-        : null;
-      const lineNumber = line?.getAttribute("data-line");
-      if (lineNumber && Number.isFinite(Number(lineNumber))) {
-        return { start: range.start, end: Number(lineNumber), ...(range.side ? { side: range.side } : {}) };
-      }
-    }
-    return range;
-  }
-
-  function findLineNumberElement(lineNumber: number, side: SelectedLineRange["side"]): HTMLElement | null {
-    const item = viewer?.getRenderedItems().find((rendered) => rendered.item.id === currentFileId());
-    const root = item?.element?.shadowRoot;
-    if (!root) return null;
-    const scope = side ? `[data-${side}] ` : "";
-    const numbers = root.querySelectorAll<HTMLElement>(`${scope}[data-column-number="${lineNumber}"]`);
-    return numbers[0] ?? root.querySelector<HTMLElement>(`[data-column-number="${lineNumber}"]`);
-  }
-
-  function updateGutterActionPosition() {
-    gutterActionPositionFrame = undefined;
-    const range = selectedLineRange;
-    if (!range) {
-      gutterActionPosition = null;
-      return;
-    }
-    const start = findLineNumberElement(range.start, range.side);
-    const end = findLineNumberElement(range.end, range.endSide ?? range.side);
-    if (!start || !end) {
-      gutterActionPosition = null;
-      return;
-    }
-    const startRect = start.getBoundingClientRect();
-    const endRect = end.getBoundingClientRect();
-    if (startRect.width === 0 || endRect.width === 0) {
-      gutterActionPosition = null;
-      return;
-    }
-    gutterActionPosition = gutterActionAnchor(startRect, endRect);
-  }
-
-  function scheduleGutterActionPosition() {
-    if (gutterActionPositionFrame !== undefined) cancelAnimationFrame(gutterActionPositionFrame);
-    gutterActionPositionFrame = requestAnimationFrame(updateGutterActionPosition);
-  }
-
-  function normalizePointerSelection(range: SelectedLineRange | null): SelectedLineRange | null {
-    if (!range) return null;
-    if (pointerSelectionOrigin && range.endSide && range.endSide !== pointerSelectionOrigin) {
-      // The opposite pane can have incompatible line numbers. Hold the last
-      // valid endpoint instead of mapping a deletion-side number to additions.
-      return selectedLineRange ?? lockSelectionToOriginSide(range, pointerSelectionOrigin);
-    }
-    return clampSelectionAtCollapsedContext(range);
-  }
-
-  function handlePointerSelectionStart(range: SelectedLineRange | null) {
-    pointerSelectionOrigin = range?.side;
-    syncSelectedLineRange(range);
-  }
-
-  function handlePointerSelectionChange(range: SelectedLineRange | null) {
-    const normalized = normalizePointerSelection(range);
-    syncSelectedLineRange(normalized);
-    if (normalized && !rangesEqual(normalized, range)) {
-      viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
-    }
-  }
-
-  function handlePointerSelectionEnd(range: SelectedLineRange | null) {
-    const normalized = normalizePointerSelection(range);
-    pointerSelectionOrigin = undefined;
-    syncSelectedLineRange(normalized);
-    if (normalized && !rangesEqual(normalized, range)) {
-      viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
-    }
-  }
-
-  function toggleSelectionMode() {
-    if (selectionAnchor !== null) { selectionAnchor = null; }
-    else { selectionAnchor = cursorLine; }
-  }
-
-  function clearSelection() {
-    syncSelectedLineRange(null);
-    pointerSelectionOrigin = undefined;
-    viewer?.setSelectedLines(null);
-  }
-
-  // ─── Keyboard ───────────────────────────────────────────────────────────────
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (!visible || getActiveZone() !== "terminal") return;
-    // Don't intercept shortcuts when focus is inside a modal or combobox
-    const el = document.activeElement;
-    if (el && (el.closest("[role='dialog']") || el.closest("[role='alertdialog']") || el.closest("[role='combobox']") || el.closest("dialog[open]"))) return;
-    if (e.key === "Enter" && e.metaKey) { e.preventDefault(); sendFeedback(); return; }
-    if (showCommentInput) return;
-    if (showCompareForm) return;
-    if (allFilesReviewed) return;
-
-    // Global keys (both modes)
-    if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
-      e.preventDefault();
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", metaKey: true, bubbles: true }));
-      return;
-    }
-    if ((e.key === "n" && e.ctrlKey) || (e.key === "ArrowDown" && e.ctrlKey)) {
-      e.preventDefault();
-      if (selectedIndex < files.length - 1) navigateFile(selectedIndex + 1);
-      return;
-    }
-    if ((e.key === "p" && e.ctrlKey) || (e.key === "ArrowUp" && e.ctrlKey)) {
-      e.preventDefault();
-      if (selectedIndex > 0) navigateFile(selectedIndex - 1);
-      return;
-    }
-    if (e.key === "]" && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      navigateHunk(1);
-      return;
-    }
-    if (e.key === "[" && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      navigateHunk(-1);
-      return;
-    }
-    if (e.key === "u" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleDiffStyle(); return; }
-    if (e.key === "m" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); toggleViewed(selectedIndex, true); return; }
-    if (e.key === "r" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); refresh(); return; }
-    if (e.key === "B" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); showCompareForm = !showCompareForm; return; }
-    if (e.key === "e" && !e.metaKey && !e.ctrlKey && files.length > 0) { e.preventDefault(); onEditFile?.(files[selectedIndex].path); return; }
-
-    // List mode
-    if (diffFocus === "list") {
-      if (handleSidebarTreeKey(e)) return;
-      if (e.key === "Escape") e.preventDefault();
-      return;
-    }
-
-    // Body mode
-    if (e.key === "Escape") {
-      e.preventDefault();
-      if (selectionAnchor !== null) { clearSelection(); return; }
-      diffFocus = "list";
-      clearSelection();
-      return;
-    }
-    if (e.key === "ArrowDown" && e.shiftKey) { e.preventDefault(); if (selectionAnchor === null) selectionAnchor = cursorLine; moveCursor(1); }
-    else if (e.key === "ArrowUp" && e.shiftKey) { e.preventDefault(); if (selectionAnchor === null) selectionAnchor = cursorLine; moveCursor(-1); }
-    else if (e.key === "ArrowDown" || (e.key === "j" && !e.ctrlKey && !e.metaKey && !e.shiftKey)) { e.preventDefault(); moveCursor(1); }
-    else if (e.key === "ArrowUp" || (e.key === "k" && !e.ctrlKey && !e.metaKey && !e.shiftKey)) { e.preventDefault(); moveCursor(-1); }
-    else if (e.key === "v" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggleSelectionMode(); }
-    else if (e.key === "d" && !e.metaKey && !e.ctrlKey || e.key === "f" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); moveCursor(15); }
-    else if (e.key === "b" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); moveCursor(-15); }
-    else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !e.shiftKey) { e.preventDefault(); cursorLine = snapToVisible(1, 1); showCursor(); }
-    else if (e.key === "G" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); cursorLine = snapToVisible(9999, -1); showCursor(); }
-    else if (e.key === "c" && !e.metaKey && !e.ctrlKey && files.length > 0) {
-      e.preventDefault();
-      if (selectionAnchor !== null) {
-        const start = Math.min(selectionAnchor, cursorLine);
-        const end = Math.max(selectionAnchor, cursorLine);
-        openCommentInput(start, end, start === end ? "line" : "hunk");
-      } else {
-        openCommentInput(cursorLine, cursorLine, "line");
-      }
-    }
-    else if (e.key === "E" && !e.metaKey && !e.ctrlKey && files.length > 0) {
-      e.preventDefault();
-      const comment = getComments(sessionId).find((c) => c.filePath === files[selectedIndex]?.path && c.startLine <= cursorLine && c.endLine >= cursorLine);
-      if (comment) openEditComment(comment);
-    }
-    else if (e.key === "x" && !e.metaKey && !e.ctrlKey && files.length > 0) {
-      e.preventDefault();
-      expandCurrentFileContext();
-    }
-  }
-
-  function setDiffStyle(style: "split" | "unified") {
-    if (diffStyle === style || !prepareForNavigation("reload")) return;
-    diffStyle = style;
-    // Rebuild with new style — CodeView options are set at construction, so we recreate.
-    if (viewer && viewerRoot) {
-      viewer.cleanUp();
-      viewer = createViewer();
-      void refresh({ confirmDraft: false });
-    }
-  }
-
-  function toggleDiffStyle() {
-    setDiffStyle(diffStyle === "split" ? "unified" : "split");
-  }
-
-  function createViewer(): CodeView<ReviewComment> {
-    const v = new CodeView<ReviewComment>({
-      theme: { dark: "github-dark", light: "github-light" },
-      themeType: isDark() ? "dark" : "light",
-      diffStyle,
-      stickyHeaders: false,
-      enableLineSelection: true,
-      pointerEventsOnScroll: true,
-      disableVirtualizationBuffers: true,
-      disableFileHeader: false,
-      expandUnchanged: true,
-      expansionLineCount: 20,
-      // Render all lines (disable line-level virtualization) for keyboard nav
-      itemMetrics: { hunkLineCount: 100000 },
-      collapsedContextThreshold: 5,
-      renderHeaderMetadata(fileDiff) {
-        const path = fileDiff.name;
-        const idx = files.findIndex((f) => f.path === path);
-        if (idx === -1) return null;
-        const btn = document.createElement("button");
-        btn.title = "Mark as viewed (m)";
-        btn.style.cssText = "background:none;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;display:flex;align-items:center;line-height:1";
-        const updateBtn = () => {
-          btn.innerHTML = viewedFiles.has(path)
-            ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:#16a34a"><polyline points="20 6 9 17 4 12"></polyline></svg>`
-            : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#888"><circle cx="12" cy="12" r="10"></circle></svg>`;
-        };
-        updateBtn();
-        btn.onclick = (e) => { e.stopPropagation(); toggleViewed(idx); updateBtn(); };
-        return btn;
-      },
-      onLineSelectionStart: handlePointerSelectionStart,
-      onLineSelectionChange: handlePointerSelectionChange,
-      onLineSelectionEnd: handlePointerSelectionEnd,
-      onLineSelected(range) {
-        syncSelectedLineRange(range);
-      },
-      renderAnnotation(annotation) {
-        const comment = annotation.metadata as ReviewComment | undefined;
-        if (!comment) return undefined;
-        return renderCommentAnnotation(comment, {
-          onOpen: () => openEditComment(comment),
-          onEdit: () => openEditComment(comment),
-          onDelete: () => {
-            removeComment(sessionId, comment.id);
-            updateAnnotations();
-          },
-          onContextMenu: (event) => openCommentContextMenu(event, comment),
-        });
-      },
-      layout: { paddingTop: 8, paddingBottom: 8, gap: 0 },
-    }, getWorkerPool());
-    v.setup(viewerRoot);
-    return v;
-  }
-
-  function openCommentContextMenu(event: MouseEvent, comment: ReviewComment) {
-    event.preventDefault();
+  function handleSidebarRowKeydown(event: KeyboardEvent): void {
+    if (!handleSidebarTreeKey(event)) return;
     event.stopPropagation();
-    diffContextMenu = { x: event.clientX, y: event.clientY, target: "comment", comment };
   }
-
-  function selectedRangeFromEvent(event: MouseEvent): SelectedLineRange | null {
-    const path = event.composedPath();
-    let lineNumber: number | null = null;
-    let side: SelectedLineRange["side"] | undefined;
-    for (const entry of path) {
-      if (!(entry instanceof HTMLElement)) continue;
-      if (!side && entry.hasAttribute("data-additions")) side = "additions";
-      if (!side && entry.hasAttribute("data-deletions")) side = "deletions";
-      const value = entry.getAttribute("data-line") ?? entry.getAttribute("data-column-number");
-      if (value && Number.isFinite(Number(value))) lineNumber = Number(value);
-    }
-    return lineNumber === null ? null : { start: lineNumber, end: lineNumber, ...(side ? { side } : {}) };
-  }
-
-  function contextHunkFromEvent(event: MouseEvent): number | null {
-    for (const entry of event.composedPath()) {
-      if (!(entry instanceof HTMLElement)) continue;
-      const value = entry.getAttribute("data-expand-index");
-      if (value && Number.isInteger(Number(value))) return Number(value);
-    }
-    return null;
-  }
-
-  function handleViewerContextMenu(event: MouseEvent) {
-    const hunkIndex = contextHunkFromEvent(event);
-    if (hunkIndex !== null) {
-      event.preventDefault();
-      diffContextMenu = { x: event.clientX, y: event.clientY, target: "context", hunkIndex };
-      return;
-    }
-
-    const clickedRange = selectedRangeFromEvent(event);
-    if (!clickedRange) {
-      clearSelection();
-      return;
-    }
-    const range = selectionForContextMenu(selectedLineRange, clickedRange);
-    event.preventDefault();
-    syncSelectedLineRange(range);
-    viewer?.setSelectedLines({ id: currentFileId(), range }, { notify: false });
-    diffContextMenu = { x: event.clientX, y: event.clientY, target: "selection", range };
-  }
-
-  function handleViewerClick(event: MouseEvent) {
-    if (event.button !== 0) return;
-    const preserveCompletedBodyDrag = preserveCompletedBodyDragClick;
-    preserveCompletedBodyDragClick = false;
-    if (bodyDragClickResetTimer !== undefined) {
-      clearTimeout(bodyDragClickResetTimer);
-      bodyDragClickResetTimer = undefined;
-    }
-    const isInteractive = event.composedPath().some((entry) => entry instanceof HTMLElement && (
-      entry.hasAttribute("data-line")
-      || entry.hasAttribute("data-column-number")
-      || entry.hasAttribute("data-line-annotation")
-      || entry.hasAttribute("data-expand-index")
-      || entry.hasAttribute("data-utility-button")
-    ));
-    if (shouldClearSelectionAfterClick({ isInteractive, preserveCompletedBodyDrag })) clearSelection();
-  }
-
-  function preserveBodyDragSelectionThroughTrailingClick() {
-    preserveCompletedBodyDragClick = true;
-    if (bodyDragClickResetTimer !== undefined) clearTimeout(bodyDragClickResetTimer);
-    bodyDragClickResetTimer = setTimeout(() => {
-      preserveCompletedBodyDragClick = false;
-      bodyDragClickResetTimer = undefined;
-    }, 50);
-  }
-
-  function codeLineRangeFromPointerEvent(event: PointerEvent): SelectedLineRange | null {
-    let isCodeLine = false;
-    for (const entry of event.composedPath()) {
-      if (!(entry instanceof HTMLElement)) continue;
-      if (
-        entry.hasAttribute("data-column-number")
-        || entry.hasAttribute("data-utility-button")
-        || entry.hasAttribute("data-line-annotation")
-        || entry.hasAttribute("data-expand-index")
-      ) {
-        return null;
-      }
-      if (entry.hasAttribute("data-line")) isCodeLine = true;
-    }
-    return isCodeLine ? selectedRangeFromEvent(event) : null;
-  }
-
-  function applyBodyPointerSelection(endpoint: SelectedLineRange) {
-    const range = bodySelectionAnchor
-      ? buildPointerSelectionRange(bodySelectionAnchor, endpoint)
-      : endpoint;
-    const normalized = normalizePointerSelection(range);
-    if (!normalized) return;
-    syncSelectedLineRange(normalized);
-    viewer?.setSelectedLines({ id: currentFileId(), range: normalized }, { notify: false });
-  }
-
-  function stopBodyPointerSelection() {
-    document.removeEventListener("pointermove", handleBodyPointerMove, true);
-    document.removeEventListener("pointerup", handleBodyPointerUp, true);
-    document.removeEventListener("pointercancel", handleBodyPointerCancel, true);
-    bodySelectionPointerId = undefined;
-    bodySelectionAnchor = undefined;
-  }
-
-  function handleBodyPointerMove(event: PointerEvent) {
-    if (event.pointerId !== bodySelectionPointerId) return;
-    event.preventDefault();
-    const range = codeLineRangeFromPointerEvent(event);
-    if (range) applyBodyPointerSelection(range);
-  }
-
-  function finishBodyPointerSelection(event: PointerEvent) {
-    if (event.pointerId !== bodySelectionPointerId) return;
-    event.preventDefault();
-    const range = codeLineRangeFromPointerEvent(event);
-    if (range) applyBodyPointerSelection(range);
-    preserveBodyDragSelectionThroughTrailingClick();
-    pointerSelectionOrigin = undefined;
-    stopBodyPointerSelection();
-  }
-
-  function handleBodyPointerUp(event: PointerEvent) {
-    finishBodyPointerSelection(event);
-  }
-
-  function handleBodyPointerCancel(event: PointerEvent) {
-    finishBodyPointerSelection(event);
-  }
-
-  function handleViewerPointerDown(event: PointerEvent) {
-    if (event.pointerType !== "mouse") return;
-    const range = codeLineRangeFromPointerEvent(event);
-    const mode = pointerSelectionMode({
-      primaryButton: event.button === 0,
-      isCodeLine: range !== null,
-      altKey: event.altKey,
-    });
-    if (mode === "ignore" || range === null) return;
-    if (mode === "text") {
-      // Stop the library's line-selection session before it attaches document
-      // listeners; the browser can then perform its normal text selection.
-      event.stopImmediatePropagation();
-      clearSelection();
-      return;
-    }
-
-    // @pierre/diffs starts line selection from the number gutter only. Claim
-    // ordinary code-body drags here so they match visual-mode line selection.
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    window.getSelection()?.removeAllRanges();
-    pointerSelectionOrigin = range.side;
-    bodySelectionAnchor = range;
-    applyBodyPointerSelection(range);
-    bodySelectionPointerId = event.pointerId;
-    document.addEventListener("pointermove", handleBodyPointerMove, true);
-    document.addEventListener("pointerup", handleBodyPointerUp, true);
-    document.addEventListener("pointercancel", handleBodyPointerCancel, true);
-  }
-
-  async function expandContext(hunkIndex: number, all = false) {
-    const filePath = files[selectedIndex]?.path;
-    if (!filePath || !(await expandFileToFull(filePath))) return;
-    const rendered = viewer?.getRenderedItems().find((item) => item.item.id === currentFileId());
-    const item = viewer?.getItem(currentFileId());
-    if (!rendered || rendered.type !== "diff" || !item || item.type !== "diff") return;
-    if (all) {
-      // The renderer also uses the hunk-count index for trailing collapsed
-      // context, so include it in addition to every concrete hunk.
-      for (let index = 0; index <= item.fileDiff.hunks.length; index++) {
-        rendered.instance.expandHunk(index, "both", Number.POSITIVE_INFINITY);
-      }
-    } else {
-      rendered.instance.expandHunk(hunkIndex, "both");
-    }
-  }
-
-  function diffContextMenuItems(menu: DiffContextMenuState): MenuItem[] {
-    if (menu.target === "comment") {
-      return [
-        { label: "Edit comment", onSelect: () => openEditComment(menu.comment) },
-        { label: "Delete comment", danger: true, onSelect: () => { removeComment(sessionId, menu.comment.id); updateAnnotations(); } },
-      ];
-    }
-    if (menu.target === "context") {
-      return [
-        { label: "Expand context block", onSelect: () => { void expandContext(menu.hunkIndex); } },
-        { label: "Expand all context in file", onSelect: () => { void expandContext(menu.hunkIndex, true); } },
-      ];
-    }
-
-    const comment = getComments(sessionId).find((candidate) =>
-      candidate.filePath === files[selectedIndex]?.path
-      && commentRangeOverlapsSelection(candidate, menu.range),
-    );
-    return [
-      { label: selectionLabel(menu.range), onSelect: () => openCommentForSelection(menu.range) },
-      ...(comment ? [{ label: "Edit comment", onSelect: () => openEditComment(comment) }] : []),
-    ];
-  }
-
-  // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
   onMount(() => {
     ensureSession(sessionId);
     window.addEventListener("keydown", handleKeydown);
-    window.addEventListener("keyup", handleKeyup);
-    window.addEventListener("resize", scheduleGutterActionPosition);
+    if (visible) { mounted = true; void refresh(); }
   });
 
-  onDestroy(() => {
-    window.removeEventListener("keydown", handleKeydown);
-    window.removeEventListener("keyup", handleKeyup);
-    window.removeEventListener("resize", scheduleGutterActionPosition);
-    viewerRoot?.removeEventListener("pointerdown", handleViewerPointerDown, true);
-    viewerRoot?.removeEventListener("scroll", scheduleGutterActionPosition, true);
-    stopBodyPointerSelection();
-    if (bodyDragClickResetTimer !== undefined) clearTimeout(bodyDragClickResetTimer);
-    if (gutterActionPositionFrame !== undefined) cancelAnimationFrame(gutterActionPositionFrame);
-    viewerRoot?.removeEventListener("click", handleViewerClick);
-    viewerRoot?.removeEventListener("contextmenu", handleViewerContextMenu);
-    stopContainerHeightFix();
-    viewer?.cleanUp();
-    viewer = null;
-  });
-
-  function handleKeyup(e: KeyboardEvent) {
-    if (e.key === "Shift" && selectionAnchor !== null && diffFocus === "body") {
-      selectionAnchor = null;
-    }
-  }
+  onDestroy(() => window.removeEventListener("keydown", handleKeydown));
 
   $effect(() => {
-    if (visible && !mounted && viewerRoot) {
-      mounted = true;
-      viewer = createViewer();
-      viewerRoot.addEventListener("pointerdown", handleViewerPointerDown, true);
-      viewerRoot.addEventListener("scroll", scheduleGutterActionPosition, true);
-      viewerRoot.addEventListener("click", handleViewerClick);
-      viewerRoot.addEventListener("contextmenu", handleViewerContextMenu);
-      applyDiffFont();
-      void refresh({ usePreloaded: true });
-      // Start observing to fix library's incorrect height constraint
-      requestAnimationFrame(() => startContainerHeightFix());
-    }
+    if (visible && !mounted) { mounted = true; void refresh(); }
   });
 
-  function applyDiffFont() {
-    if (!viewerRoot) return;
-    const { font_family, font_size } = getSettings().terminal;
-    viewerRoot.style.setProperty("--diffs-font-family", `"${font_family}", monospace`);
-    viewerRoot.style.setProperty("--diffs-font-size", `${font_size}px`);
-  }
-
-  // Keep the diff font (family + size) in sync with the terminal font settings,
-  // so changing it in Preferences updates the diff without a remount.
-  $effect(() => {
-    const { font_family, font_size } = getSettings().terminal;
-    void font_family;
-    void font_size;
-    if (mounted) applyDiffFont();
-  });
-
-  $effect(() => {
-    const dark = isDark();
-    if (viewer && mounted) {
-      viewer.setOptions({ themeType: dark ? "dark" : "light" });
-    }
-  });
-
-  // Scroll the focused tree row into view on keyboard navigation.
   $effect(() => {
     const focusedRowId = sidebarFocusedRowId;
-    if (!sidebarListRef || !focusedRowId) return;
-    Array.from(sidebarListRef.querySelectorAll<HTMLElement>("[data-tree-row]")).find(
+    void viewedVersion;
+    if (!focusedRowId) return;
+    Array.from(sidebarListRef?.querySelectorAll<HTMLElement>("[data-tree-row]") ?? []).find(
       (row) => row.dataset.treeRow === focusedRowId,
     )?.scrollIntoView({ block: "nearest" });
   });
-
-  function statusColor(status: string): string {
-    switch (status) {
-      case "A": return "text-status-running";
-      case "D": return "text-status-exited";
-      case "M": return "text-status-review";
-      case "R": return "text-accent";
-      default: return "text-t3";
-    }
-  }
-
 </script>
 
 <div class="flex h-full w-full" class:hidden={!visible}>
-  <div class="flex-1 min-w-0 relative overflow-hidden">
-    <!-- Toolbar -->
-    <div class="absolute top-0 left-0 right-0 h-[42px] flex items-center px-4 gap-3 border-b border-border bg-chrome z-10">
-      {#if files.length > 0}
-        <span class="font-mono text-[12px] text-t1 truncate">{files[selectedIndex]?.path ?? ''}</span>
-        <span class="text-[11px] text-status-running">+{files[selectedIndex]?.additions ?? 0}</span>
-        <span class="text-[11px] text-status-exited">−{files[selectedIndex]?.deletions ?? 0}</span>
+  <div class="relative min-w-0 flex-1 overflow-hidden">
+    <div class="absolute left-0 right-0 top-0 z-10 flex h-[42px] items-center gap-3 border-b border-border bg-chrome px-4">
+      {#if activeFile}
+        <span class="truncate font-mono text-[12px] text-t1">{activeFile.path}</span>
+        <span class="text-[11px] text-status-running">+{activeFile.additions}</span>
+        <span class="text-[11px] text-status-exited">−{activeFile.deletions}</span>
       {/if}
       <div class="flex-1"></div>
-      <!-- Comparison label -->
-      <button
-        class="font-mono text-[11px] px-2 py-1 rounded-md text-t2 hover:text-t1 hover:bg-panel-hi transition-colors"
-        onclick={() => { showCompareForm = !showCompareForm; }}
-        title="Change comparison (B)"
-      >
-        {formatComparison(comparison)}
-      </button>
+      <button class="rounded-md px-2 py-1 font-mono text-[11px] text-t2 hover:bg-panel-hi hover:text-t1" onclick={() => { if (!sendingFeedback) showCompareForm = !showCompareForm; }} title="Change comparison (B)">{formatComparison(comparison)}</button>
       <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5">
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("unified")}>Unified</button>
-        <button class="px-2 py-1 text-[11px] rounded-md transition-colors {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("split")}>Split</button>
+        <button class="rounded-md px-2 py-1 text-[11px] {diffStyle === 'unified' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("unified")}>Unified</button>
+        <button class="rounded-md px-2 py-1 text-[11px] {diffStyle === 'split' ? 'bg-accent-bg text-accent' : 'text-t2 hover:text-t1'}" onclick={() => setDiffStyle("split")}>Split</button>
       </div>
-      {#if files.length > 0}
-        <span class="font-mono text-[10px] text-t3 bg-panel-hi px-1.5 py-0.5 rounded" title="Option-drag to select and copy text instead of review lines">c Comment · ⌥ drag: select text</span>
+      {#if diffStyle === "unified"}
+        <div class="flex gap-0.5 rounded-lg bg-panel-hi p-0.5" aria-label="Original-side review selection">
+          <button
+            type="button"
+            class="rounded-md px-2 py-1 text-[11px] text-t2 hover:text-t1"
+            onclick={() => diffView?.previousOriginalHunk()}
+            title="Select previous original-side hunk (Option-Shift-Up)"
+            aria-label="Select previous original-side hunk"
+            aria-keyshortcuts="Alt+Shift+ArrowUp"
+          >Original ↑</button>
+          <button
+            type="button"
+            class="rounded-md px-2 py-1 text-[11px] text-t2 hover:text-t1"
+            onclick={() => diffView?.nextOriginalHunk()}
+            title="Select next original-side hunk (Option-Shift-Down)"
+            aria-label="Select next original-side hunk"
+            aria-keyshortcuts="Alt+Shift+ArrowDown"
+          >Original ↓</button>
+        </div>
+      {/if}
+      {#if selectedRange && activeTextDiff}
+        <Button size="sm" onclick={() => openComment()}>Comment</Button>
       {/if}
       {#if totalCount > 0}
-        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback} title={sessionExited ? "Agent is not running" : `Send feedback (${MOD_ENTER_HINT})`}>{#if sendingFeedback}<LoaderCircle size={12} class="animate-spin" />{:else}<Send size={12} />{/if}<span class="ml-1">Send ({totalCount})</span></Button>
+        <Button variant="primary" size="sm" onclick={sendFeedback} disabled={sessionExited || sendingFeedback || showCommentInput} title={sessionExited ? "Agent is not running" : showCommentInput ? "Submit or cancel the open comment before sending feedback" : `Send feedback (${MOD_ENTER_HINT})`}>
+          {#if sendingFeedback}<LoaderCircle size={12} class="animate-spin" />{:else}<Send size={12} />{/if}<span class="ml-1">Send ({totalCount})</span>
+        </Button>
       {/if}
     </div>
 
-    <!-- Conflict warning banner -->
     {#if conflicted}
-      <div class="absolute top-[42px] left-0 right-0 z-10 flex items-center gap-2 px-4 py-2 bg-[rgba(234,179,8,0.12)] border-b border-[rgba(234,179,8,0.3)]">
-        <AlertTriangle class="size-4 text-[#eab308] shrink-0" />
-        <span class="text-[12.5px] text-[#eab308] font-medium">This PR has merge conflicts</span>
-      </div>
+      <div class="absolute left-0 right-0 top-[42px] z-10 flex items-center gap-2 border-b border-[rgba(234,179,8,0.3)] bg-[rgba(234,179,8,0.12)] px-4 py-2"><AlertTriangle class="size-4 shrink-0 text-[#eab308]" /><span class="text-[12.5px] font-medium text-[#eab308]">This PR has merge conflicts</span></div>
     {/if}
 
-    <!-- Branch compare form -->
     {#if showCompareForm}
-      <BranchCompareForm
-        {repoPath}
-        {baseBranch}
-        currentBase={effectiveBase}
-        currentHead={effectiveHead}
-        onConfirm={(baseRef, headRef) => {
-          if (!prepareForNavigation("reload")) return;
-          setComparison(sessionId, { baseRef, headRef });
-          showCompareForm = false;
-          void refresh({ confirmDraft: false });
-        }}
-        onCancel={() => { showCompareForm = false; }}
-      />
+      <BranchCompareForm {repoPath} {baseBranch} currentBase={effectiveBase} currentHead={effectiveHead} onConfirm={(baseRef, headRef) => {
+        if (sendingFeedback || !discardCommentsIfNeeded("Discard pending review comments before changing the comparison?")) return;
+        setComparison(sessionId, { baseRef, headRef });
+        showCompareForm = false;
+        void refresh({ comparisonChange: false });
+      }} onCancel={() => (showCompareForm = false)} />
     {/if}
 
-    <!-- Comment input -->
     {#if showCommentInput}
-      <div class="absolute left-0 right-0 z-20 p-3 border-b border-border bg-chrome" style:top="{contentTop}px">
-        {#if commentType !== "file"}
-          <div class="text-[10px] text-t3 mb-1.5">● {editingCommentId ? "Edit note" : "Review note"} · {commentType === "hunk" ? `lines ${commentStartLine}–${commentEndLine}` : `line ${commentStartLine}`}</div>
-        {/if}
-        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} class="w-full p-2 text-[12.5px] rounded-lg border border-border-s bg-panel text-t1 resize-none focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="{editingCommentId ? 'Edit note…' : 'Add a note…'} (Enter to submit, Esc to cancel)"></textarea>
-        <span class="font-mono text-[10px] text-t3 mt-1 inline-block">r reply</span>
+      <div class="absolute left-0 right-0 z-20 border-b border-border bg-chrome p-3" style:top="{contentTop}px">
+        <div class="mb-1.5 text-[10px] text-t3">● {editingCommentId ? "Edit note" : "Review note"} · {commentRange?.side} {commentRange?.startLine === commentRange?.endLine ? `line ${commentRange?.startLine}` : `lines ${commentRange?.startLine}–${commentRange?.endLine}`}</div>
+        <textarea bind:this={commentInputEl} bind:value={commentText} onkeydown={handleCommentKeydown} aria-label="Review comment" class="w-full resize-none rounded-lg border border-border-s bg-panel p-2 text-[12.5px] text-t1 focus:outline-none focus:ring-1 focus:ring-accent" rows="3" placeholder="Add a note… (Enter to submit, Esc to cancel)"></textarea>
       </div>
     {/if}
 
-    <!-- Comment list (split view) -->
-    {#if diffStyle === "split" && currentFileComments.length > 0 && !showCommentInput}
-      <div class="absolute top-[42px] left-0 right-0 z-10 border-b border-border bg-chrome max-h-[200px] overflow-y-auto">
+    {#if currentFileComments.length > 0 && !showCommentInput}
+      <div class="absolute left-0 right-0 z-10 max-h-[160px] overflow-y-auto border-b border-border bg-chrome" style:top="{contentTop}px">
         {#each currentFileComments as comment (comment.id)}
-          <div
-            class="flex items-start gap-2 px-4 py-2 border-b border-border/50 last:border-b-0"
-            role="group"
-            aria-label="Review comment"
-            oncontextmenu={(event) => openCommentContextMenu(event, comment)}
-          >
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-start gap-2 text-left"
-              onclick={() => openEditComment(comment)}
-            >
-              <span class="shrink-0 text-[10px] text-t3 font-mono pt-0.5">{comment.type === "hunk" ? `L${comment.startLine}–${comment.endLine}` : `L${comment.startLine}`}</span>
-              <span class="text-[12px] text-t1 whitespace-pre-wrap break-words">{comment.text}</span>
-            </button>
-            <button class="shrink-0 text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} title="Edit">✎</button>
-            <button class="shrink-0 text-[13px] text-t3 hover:text-t1" onclick={() => { removeComment(sessionId, comment.id); updateAnnotations(); }} title="Delete">×</button>
+          <div class="flex items-start gap-2 border-b border-border/50 px-4 py-2 last:border-b-0" role="group" aria-label="Review comment">
+            <button type="button" class="min-w-0 flex-1 text-left" onclick={() => openEditComment(comment)}><span class="mr-2 font-mono text-[10px] text-t3">{comment.side} L{comment.startLine}{comment.startLine === comment.endLine ? "" : `–${comment.endLine}`}</span><span class="whitespace-pre-wrap text-[12px] text-t1">{comment.text}</span></button>
+            <button class="text-[11px] text-t3 hover:text-t1" onclick={() => openEditComment(comment)} disabled={sendingFeedback} title="Edit" aria-label="Edit review comment">✎</button>
+            <button class="text-[13px] text-t3 hover:text-t1" onclick={() => { if (!sendingFeedback) removeComment(sessionId, comment.id); }} disabled={sendingFeedback} title="Delete" aria-label="Delete review comment">×</button>
           </div>
         {/each}
       </div>
     {/if}
 
-    <!-- CodeView container -->
-    <div bind:this={viewerRoot} class="absolute inset-0 overflow-auto" style:top="{contentTop}px"></div>
-
-    {#if selectedLineRange && gutterActionPosition && !showCommentInput}
-      <button
-        type="button"
-        data-utility-button
-        class="fixed z-30 flex size-5 -translate-x-full items-center justify-center rounded bg-accent text-[15px] leading-none text-on-accent shadow-sm hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-accent"
-        style="left:{gutterActionPosition.left}px;top:{gutterActionPosition.top}px"
-        title={selectionLabel(selectedLineRange)}
-        aria-label={selectionLabel(selectedLineRange)}
-        onpointerdown={(event) => event.stopPropagation()}
-        onclick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (selectedLineRange) openCommentForSelection(selectedLineRange);
-        }}
-      >+</button>
-    {/if}
-
-    <!-- Loading states -->
-    {#if loading}
-      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">Loading diff…</div>
-    {:else if files.length === 0}
-      <div class="absolute inset-0 flex items-center justify-center text-t3 bg-main" style:top="{contentTop}px">No changes on this branch</div>
-    {:else if allFilesReviewed}
-      <div class="absolute inset-0 flex flex-col items-center justify-center text-t3 bg-main z-[5]" style:top="{contentTop}px">
-        <Check size={24} class="text-status-running mb-2" />
-        <span class="text-t2 text-sm font-medium">All files reviewed</span>
-        <span class="text-t3 text-xs mt-1">Select a file from the sidebar to revisit</span>
-      </div>
-    {/if}
-
-    <!-- Expansion loading indicator -->
-    {#if loadingExpansionFiles.size > 0}
-      <div class="absolute left-0 right-0 z-10" style:top="{contentTop}px">
-        <div class="h-[2px] w-full bg-panel-hi overflow-hidden">
-          <div class="h-full w-2/5 bg-accent rounded-full" style="animation: loading-slide 1.2s ease-in-out infinite; transform-origin: left;"></div>
-        </div>
-      </div>
-    {/if}
-
-<style>
-  @keyframes loading-slide {
-    0% { transform: translateX(-100%); }
-    50% { transform: translateX(150%); }
-    100% { transform: translateX(-100%); }
-  }
-</style>
-
+    <div class="absolute inset-0" style:top="{contentTop}px">
+      {#if loading}
+        <div class="flex h-full items-center justify-center bg-main text-t3">Loading diff…</div>
+      {:else if files.length === 0}
+        <div class="flex h-full items-center justify-center bg-main text-t3">No changes on this branch</div>
+      {:else if allFilesReviewed}
+        <div class="flex h-full flex-col items-center justify-center bg-main text-t3"><Check size={24} class="mb-2 text-status-running" /><span class="text-sm font-medium text-t2">All files reviewed</span></div>
+      {:else if activeDiff?.kind === "binary"}
+        <div class="flex h-full flex-col items-center justify-center gap-2 bg-main text-t3"><span class="text-sm font-medium text-t2">Binary file cannot be rendered as text</span><span class="font-mono text-xs">{activeDiff.original_size} B → {activeDiff.modified_size} B</span></div>
+      {:else if activeTextDiff}
+        <CodeMirrorDiff bind:this={diffView} diff={activeTextDiff} filePath={activeFile?.path ?? ""} mode={diffStyle} dark={isDark()} fontFamily={terminal.font_family} fontSize={terminal.font_size} comments={currentFileComments} onEditComment={openEditComment} onDeleteComment={(comment) => { if (!sendingFeedback) removeComment(sessionId, comment.id); }} onSelection={(selection) => { selectedRange = selection; diffFocus = "body"; }} />
+      {:else if fileLoading}
+        <div class="flex h-full items-center justify-center bg-main text-t3">Loading file…</div>
+      {/if}
+    </div>
   </div>
 
-  <!-- File sidebar (right) -->
-  <div class="relative shrink-0 border-l border-border bg-chrome overflow-y-auto overflow-x-hidden" style:width="{sidebarWidth}px">
-    <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={240} onResizeEnd={(w) => setLayoutWidth("diff-sidebar", w)} />
-    <div class="px-3 py-2.5 text-[10px] font-semibold text-t3 uppercase tracking-[.05em] border-b border-border flex items-center justify-between">
-      <span>Changed · {files.length}</span>
-      <span class="text-status-running">+{files.reduce((a, f) => a + f.additions, 0)}</span>
-      <span class="text-status-exited">−{files.reduce((a, f) => a + f.deletions, 0)}</span>
-    </div>
+  <div class="relative shrink-0 overflow-x-hidden overflow-y-auto border-l border-border bg-chrome" style:width="{sidebarWidth}px">
+    <ResizeHandle side="left" bind:width={sidebarWidth} min={180} max={Infinity} defaultWidth={240} onResizeEnd={(width) => setLayoutWidth("diff-sidebar", width)} />
+    <div class="flex items-center justify-between border-b border-border px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[.05em] text-t3"><span>Changed · {files.length}</span><span class="text-status-running">+{files.reduce((total, file) => total + file.additions, 0)}</span><span class="text-status-exited">−{files.reduce((total, file) => total + file.deletions, 0)}</span></div>
     <ul bind:this={sidebarListRef} class="py-1" role="tree" aria-label="Changed files">
       {#each sidebarRows as row (getSidebarRowId(row))}
         {@const rowId = getSidebarRowId(row)}
@@ -1620,7 +668,7 @@
           </li>
         {:else}
           {@const file = files[row.fileIndex]}
-          {@const fileCount = getFileCommentCount(sessionId, file.path)}
+          {@const count = getFileCommentCount(sessionId, file.path)}
           {@const viewed = viewedFiles.has(file.path)}
           <li
             role="treeitem"
@@ -1628,24 +676,20 @@
             aria-selected={row.fileIndex === selectedIndex}
             tabindex={sidebarFocusedRowId === rowId ? 0 : -1}
             data-tree-row={rowId}
-            class="flex items-center gap-1 mx-1 outline-none focus-visible:ring-2 focus-visible:ring-accent {viewed ? 'opacity-50' : ''}"
+            class="mx-1 flex items-center gap-1 outline-none focus-visible:ring-2 focus-visible:ring-accent {viewed ? 'opacity-50' : ''}"
             onfocus={() => (sidebarFocusedRowId = rowId)}
             onkeydown={handleSidebarRowKeydown}
             onclick={() => selectFile(row.fileIndex)}
           >
-            <span class="w-0.5 self-stretch rounded-full transition-opacity {row.fileIndex === selectedIndex ? 'bg-accent opacity-100' : 'opacity-0'}"></span>
+            <span class="w-0.5 self-stretch rounded-full {row.fileIndex === selectedIndex ? 'bg-accent' : 'opacity-0'}"></span>
             <div
-              class="flex-1 min-w-0 flex items-center gap-1.5 py-1.5 pr-2 cursor-pointer text-[12px] rounded-lg {row.fileIndex === selectedIndex ? 'bg-accent-bg' : sidebarFocusedRowId === rowId ? 'bg-panel-hi' : 'hover:bg-panel-hi'}"
+              class="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-lg py-1.5 pr-2 text-[12px] {row.fileIndex === selectedIndex ? 'bg-accent-bg' : sidebarFocusedRowId === rowId ? 'bg-panel-hi' : 'hover:bg-panel-hi'}"
               style={`padding-left: ${8 + row.depth * 12}px`}
             >
-              {#if viewed}
-                <button tabindex={-1} class="shrink-0 text-status-running" onclick={(e) => { e.stopPropagation(); toggleViewed(row.fileIndex); }} title="Mark as unviewed" aria-label="Mark as unviewed"><Check size={12} /></button>
-              {:else}
-                <span class="font-mono w-4 shrink-0 text-[10px] {statusColor(file.status)}">{file.status}</span>
-              {/if}
-              <span class="truncate flex-1 font-mono text-t1" title={file.path}>{row.name}</span>
-              {#if fileCount > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{fileCount}</span>{/if}
-              <span class="text-[10px] font-mono text-t3">+{file.additions} −{file.deletions}</span>
+              {#if viewed}<button tabindex={-1} class="shrink-0 text-status-running" onclick={(event) => { event.stopPropagation(); toggleViewed(row.fileIndex); }} title="Mark as unviewed" aria-label="Mark as unviewed"><Check size={12} /></button>{:else}<span class="w-4 shrink-0 font-mono text-[10px] {statusColor(file.status)}">{file.status}</span>{/if}
+              <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-t1" title={file.path}>{row.name}</span>
+              {#if count > 0}<span class="flex items-center gap-0.5 text-[10px] text-accent"><MessageSquare size={10} />{count}</span>{/if}
+              <span class="font-mono text-[10px] text-t3">+{file.additions} −{file.deletions}</span>
             </div>
           </li>
         {/if}
@@ -1653,13 +697,3 @@
     </ul>
   </div>
 </div>
-
-{#if diffContextMenu}
-  <ContextMenu
-    x={diffContextMenu.x}
-    y={diffContextMenu.y}
-    items={diffContextMenuItems(diffContextMenu)}
-    onClose={() => (diffContextMenu = null)}
-  />
-{/if}
-
