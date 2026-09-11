@@ -973,6 +973,7 @@ mod tests {
                 })),
             }),
             language_servers: None,
+            editor: None,
         }
     }
 

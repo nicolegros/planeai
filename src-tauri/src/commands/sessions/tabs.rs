@@ -6,6 +6,26 @@ use crate::db;
 use crate::pty;
 use crate::state::{ConfigState, DbState, PtyState};
 
+fn shell_args() -> &'static [&'static str] {
+    #[cfg(windows)]
+    {
+        &[]
+    }
+    #[cfg(not(windows))]
+    {
+        &["-l"]
+    }
+}
+
+fn shell_command(shell: &str) -> String {
+    let args = shell_args();
+    if args.is_empty() {
+        shell.to_string()
+    } else {
+        format!("{shell} {}", args.join(" "))
+    }
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_tab(
@@ -46,7 +66,7 @@ pub fn spawn_tab(
 
     // Build canonical env (augmented PATH, TERM, COLORFGBG, PLANEAI_SOCKET, etc.)
     // via prepare_session() — same for both backends.
-    let shell_cmd = format!("{} -l", shell);
+    let shell_cmd = shell_command(&shell);
     let env = {
         let cfg = config_state.0.lock().map_err(|e| e.to_string())?;
         let extra_path_dirs = cfg.resolved_extra_path_dirs();
@@ -71,7 +91,7 @@ pub fn spawn_tab(
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            crate::daemon::spawn_session(&pty_key, &shell, &["-l"], &cwd, Some(&env_ref))?;
+            crate::daemon::spawn_session(&pty_key, &shell, shell_args(), &cwd, Some(&env_ref))?;
         }
         let socket_path = planeai_ipc::daemon_socket_path();
         pty::PtyTarget::Daemon {
@@ -129,4 +149,23 @@ pub fn increment_tab_count(session_id: String, db_state: State<DbState>) -> Resu
 #[tauri::command]
 pub fn check_tmux_available() -> bool {
     config::tmux_available()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn uses_a_login_shell_on_unix() {
+        assert_eq!(shell_args(), ["-l"]);
+        assert_eq!(shell_command("/bin/zsh"), "/bin/zsh -l");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn does_not_pass_a_login_flag_to_cmd() {
+        assert!(shell_args().is_empty());
+        assert_eq!(shell_command("cmd.exe"), "cmd.exe");
+    }
 }

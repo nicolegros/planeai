@@ -4,7 +4,8 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager, type LanguageServerProfile } from "../lib/settings.svelte";
+  import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager, type LanguageServerProfile, type EditorSettings } from "../lib/settings.svelte";
+  import { EDITOR_PRESETS, editorDraft, validateEditorSettings, type EditorMode } from "../lib/editor-settings";
   import {
     emptyLanguageServerProfileDraft,
     languageServerProfileDraft,
@@ -93,6 +94,7 @@
   onMount(async () => {
     window.addEventListener("keydown", handleKeydown, true);
     await loadSettings();
+    editorConfigDraft = editorDraft(config.editor);
     pluginInventory = await plugins.list();
     loadTheme();
     preferences.listMonospaceFonts().then((fonts) => {
@@ -121,6 +123,30 @@
   let editingLanguageServerProfileId = $state<string | null>(null);
   let languageServerProfile = $state<LanguageServerProfileDraft>(emptyLanguageServerProfileDraft());
   let languageServerProfileError = $state("");
+  let editorConfigDraft = $state<EditorSettings>(editorDraft(undefined));
+  let editorConfigError = $state("");
+
+  function setEditorMode(mode: EditorMode) {
+    editorConfigDraft = editorDraft(editorConfigDraft, mode);
+    editorConfigError = "";
+  }
+
+  function applyEditorPreset(preset: (typeof EDITOR_PRESETS)[number]) {
+    editorConfigDraft = { ...editorConfigDraft, command: preset.command, args: [...preset.args] };
+    editorConfigError = "";
+  }
+
+  function saveEditorSettings() {
+    const error = validateEditorSettings(editorConfigDraft);
+    if (error) {
+      editorConfigError = error;
+      return;
+    }
+    editorConfigError = "";
+    void updateSettings({
+      editor: editorConfigDraft.mode === "embedded" ? null : { ...editorConfigDraft, command: editorConfigDraft.command.trim() },
+    } as Partial<AppConfig>);
+  }
 
   function setSessionBackend(value: string) {
     const backend = value === "auto" ? null : value;
@@ -630,6 +656,38 @@
     {/if}
 
     {#if activeTab === "Editor"}
+    <section class="space-y-3">
+      <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">File Editor</h2>
+      <p class="text-xs text-t3">Choose how PlaneAI opens project files. Terminal and external commands receive absolute <code>{"{file}"}</code> and active-worktree <code>{"{project}"}</code> placeholders.</p>
+      <div class="flex flex-wrap gap-2">
+        {#each [{ value: "embedded", label: "Embedded" }, { value: "terminal", label: "Terminal command" }, { value: "external", label: "External app" }] as option (option.value)}
+          <button
+            class="rounded-md px-3 py-2 text-sm font-medium transition-colors {editorConfigDraft.mode === option.value ? 'bg-accent text-on-accent' : 'bg-panel-hi text-t1 hover:bg-panel-hi'}"
+            onclick={() => setEditorMode(option.value as EditorMode)}
+          >{option.label}</button>
+        {/each}
+      </div>
+      {#if editorConfigDraft.mode !== "embedded"}
+        <div class="rounded-lg border border-border p-4 space-y-3">
+          <div class="flex flex-wrap gap-2">
+            {#each EDITOR_PRESETS as preset (preset.label)}
+              <button class="rounded border border-border px-2 py-1 text-xs text-t2 hover:text-accent" onclick={() => applyEditorPreset(preset)}>{preset.label}</button>
+            {/each}
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-t2" for="editor-command">Executable</label>
+            <Input id="editor-command" value={editorConfigDraft.command} onchange={(event) => { editorConfigDraft.command = event.currentTarget.value; editorConfigError = ""; }} class="font-mono" placeholder="e.g. code or nvim" />
+          </div>
+          <div class="space-y-1">
+            <label class="text-xs text-t2" for="editor-args">Arguments (one per line)</label>
+            <textarea id="editor-args" class="min-h-20 w-full rounded border border-border bg-panel px-3 py-2 font-mono text-xs text-t1 outline-none focus:border-accent" value={editorConfigDraft.args.join("\n")} oninput={(event) => { editorConfigDraft.args = event.currentTarget.value.split("\n").filter(Boolean); editorConfigError = ""; }} placeholder={"--goto\n{file}"}></textarea>
+          </div>
+        </div>
+      {/if}
+      {#if editorConfigError}<p class="text-xs text-red-500" role="alert">{editorConfigError}</p>{/if}
+      <Button type="button" onclick={saveEditorSettings}>Save editor settings</Button>
+    </section>
+
     <section class="space-y-3">
       <h2 class="text-[11px] font-semibold text-t3 uppercase tracking-[.05em]">Language Server Settings</h2>
       <div class="flex items-center justify-between">

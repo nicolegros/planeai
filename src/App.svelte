@@ -3,7 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { listen } from "@tauri-apps/api/event";
-  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs } from "./lib/api";
+  import { sessions as sessionsApi, pr as prApi, pty, notify, sessionLogs, editor as editorApi } from "./lib/api";
   import type { Session, Project } from "./lib/types";
   import { focusEditor, focusTerminal, refocusTerminal, focusExplorer, focusSidebar, getActiveZone, toggleExplorerFocus } from "./lib/focus.svelte";
   import * as projectStore from "./lib/project-store.svelte";
@@ -14,6 +14,7 @@
   import { computeSidebarSessionOrder, isLoopId, parseLoopId } from "./lib/sidebar-session-order";
   import { isTerminal, isActive as isLoopActive } from "./lib/loop-status";
   import { loadSettings, getSettings, isDark } from "./lib/settings.svelte";
+  import { editorMode } from "./lib/editor-settings";
   import { createFormKeyboardController } from "./lib/form-keyboard.svelte";
   import { loadTheme } from "./lib/theme-loader";
   import { startPolling as startCiPolling, getCiChecks, classifyCheck } from "./lib/ci-checks.svelte";
@@ -74,6 +75,7 @@
   let activePluginId = $state<string | null>(null);
   let activeContributionId = $state<string | null>(null);
   let pluginInventory = $state<import("./lib/types").PluginInventory[]>([]);
+  const pendingShellCommands = new Map<string, string>();
 
   // PR form state
   let showPrForm = $state(false);
@@ -673,10 +675,62 @@
     splitTree.addSessionToLeaf(focusedLeafId, tabEntry);
   }
 
-  /** Open a file in an editor tab. If already open, focus it. */
-  function openFileInTree(sessionId: string, filePath: string): void {
+  async function runPendingShellCommand(ptyKey: string): Promise<void> {
+    const command = pendingShellCommands.get(ptyKey);
+    if (!command) return;
+    pendingShellCommands.delete(ptyKey);
+    try {
+      const delivered = await pty.write(ptyKey, Array.from(new TextEncoder().encode(`${command}\r`)));
+      if (!delivered) showSnackbar("Terminal editor is unavailable", "error");
+    } catch (error) {
+      showSnackbar(`Failed to start terminal editor: ${error}`, "error");
+    }
+  }
+
+  async function openTerminalEditorInTree(sessionId: string, filePath: string): Promise<void> {
+    try {
+      const command = await editorApi.getTerminalCommand(sessionId, filePath);
+      const focusedLeafId = splitTree.getFocusedLeafId();
+      if (!focusedLeafId) return;
+      const tabIndex = addTab(sessionId);
+      if (tabIndex === -1) return;
+      pty.incrementTabCount(sessionId);
+      const ptyKey = `${sessionId}:${tabIndex}`;
+      pendingShellCommands.set(ptyKey, command);
+      splitTree.addSessionToLeaf(focusedLeafId, {
+        ptyKey,
+        label: filePath.split("/").pop() ?? filePath,
+        icon: "terminal",
+        type: "shell",
+      });
+      tick().then(() => requestAnimationFrame(() => refocusTerminal()));
+    } catch (error) {
+      showSnackbar(`Failed to open terminal editor: ${error}`, "error");
+    }
+  }
+
+  /** Open a file with the globally configured editor. */
+  async function openFileInTree(sessionId: string, filePath: string): Promise<void> {
     // Reject traversal paths (.. as path segment)
     if (filePath.split(/[/\\]/).includes("..")) return;
+    const mode = editorMode(getSettings().editor);
+    if (!mode) {
+      showSnackbar("Editor configuration has an unknown mode", "error");
+      return;
+    }
+    if (mode === "terminal") {
+      await openTerminalEditorInTree(sessionId, filePath);
+      return;
+    }
+    if (mode === "external") {
+      try {
+        await editorApi.openExternal(sessionId, filePath);
+      } catch (error) {
+        showSnackbar(`Failed to open external editor: ${error}`, "error");
+      }
+      return;
+    }
+
     const editorPtyKey = `${sessionId}:editor:${filePath}`;
 
     // If already open, focus it
@@ -1231,7 +1285,11 @@
                   focused={isActiveInLeaf && sessionId === activeSessionId && !activePluginId && leaf.id === splitTree.getFocusedLeafId() && zone === "terminal" && !showNewItemModal && !sessionToDelete && !showTaskForm && !showProjectForm && !showPrPanel}
                   exited={tabEntry.type === "agent" && session.status === "exited"}
                   skipAttach={tabEntry.type === "shell"}
-                  onAttached={() => { if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active"); if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal(); }}
+                  onAttached={() => {
+                    if (tabEntry.type === "shell") void runPendingShellCommand(tabEntry.ptyKey);
+                    if (tabEntry.type === "agent" && session?.status === "exited") orchestrator.updateSessionStatus(session.id, "active");
+                    if (tabEntry.type === "shell" && leaf.id === splitTree.getFocusedLeafId()) refocusTerminal();
+                  }}
                   onFocused={(event) => {
                     if (event.type === "focusin" && sessionId !== activeSessionId) return;
                     splitTree.setFocusedLeaf(leaf.id);
