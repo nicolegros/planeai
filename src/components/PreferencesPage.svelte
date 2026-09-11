@@ -4,7 +4,13 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { open } from "@tauri-apps/plugin-dialog";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
-  import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager } from "../lib/settings.svelte";
+  import { loadSettings, getSettings, updateSettings, refreshSettings, type AppearanceMode, type AppConfig, type Provider, type TaskManager, type LanguageServerProfile } from "../lib/settings.svelte";
+  import {
+    emptyLanguageServerProfileDraft,
+    languageServerProfileDraft,
+    validateLanguageServerProfile,
+    type LanguageServerProfileDraft,
+  } from "../lib/language-server-profile";
   import { loadTheme } from "../lib/theme-loader";
   import { showSnackbar } from "../lib/snackbar.svelte";
   import { Select, Input, Button, Dialog } from "./ui";
@@ -110,6 +116,11 @@
   const backendValue = $derived(config.session_backend ?? "auto");
   const vimEnabled = $derived(config.vim_mode ?? true);
   const lspEnabled = $derived(config.language_servers?.enabled ?? true);
+  const languageServerProfiles = $derived(config.language_servers?.profiles ?? []);
+  let showLanguageServerProfileDialog = $state(false);
+  let editingLanguageServerProfileId = $state<string | null>(null);
+  let languageServerProfile = $state<LanguageServerProfileDraft>(emptyLanguageServerProfileDraft());
+  let languageServerProfileError = $state("");
 
   function setSessionBackend(value: string) {
     const backend = value === "auto" ? null : value;
@@ -122,7 +133,54 @@
 
   function setLspEnabled(enabled: boolean) {
     updateSettings({
-      language_servers: { ...config.language_servers, enabled, profiles: config.language_servers?.profiles ?? [] },
+      language_servers: { ...config.language_servers, enabled, profiles: languageServerProfiles },
+    } as Partial<AppConfig>);
+  }
+
+  function openLanguageServerProfile(profile?: LanguageServerProfile) {
+    editingLanguageServerProfileId = profile?.id ?? null;
+    languageServerProfile = profile ? languageServerProfileDraft(profile) : emptyLanguageServerProfileDraft();
+    languageServerProfileError = "";
+    showLanguageServerProfileDialog = true;
+  }
+
+  function saveLanguageServerProfile() {
+    const result = validateLanguageServerProfile(
+      languageServerProfile,
+      languageServerProfiles.map((profile) => profile.id),
+      editingLanguageServerProfileId ?? undefined,
+    );
+    if (!result.ok) {
+      languageServerProfileError = result.error;
+      return;
+    }
+
+    const profiles = editingLanguageServerProfileId
+      ? languageServerProfiles.map((profile) => profile.id === editingLanguageServerProfileId ? result.profile : profile)
+      : [...languageServerProfiles, result.profile];
+    void updateSettings({
+      language_servers: { ...config.language_servers, enabled: config.language_servers?.enabled ?? true, profiles },
+    } as Partial<AppConfig>);
+    showLanguageServerProfileDialog = false;
+  }
+
+  function removeLanguageServerProfile(id: string) {
+    void updateSettings({
+      language_servers: {
+        ...config.language_servers,
+        enabled: config.language_servers?.enabled ?? true,
+        profiles: languageServerProfiles.filter((profile) => profile.id !== id),
+      },
+    } as Partial<AppConfig>);
+  }
+
+  function setLanguageServerProfileEnabled(id: string, enabled: boolean) {
+    void updateSettings({
+      language_servers: {
+        ...config.language_servers,
+        enabled: config.language_servers?.enabled ?? true,
+        profiles: languageServerProfiles.map((profile) => profile.id === id ? { ...profile, enabled } : profile),
+      },
     } as Partial<AppConfig>);
   }
 
@@ -595,6 +653,7 @@
       </div>
       {#if backendValue === "tmux" && !tmuxAvailable}
         <p class="text-xs text-amber-600">⚠ tmux not found on PATH. Sessions will fail to launch.</p>
+
       {/if}
       <p class="text-xs text-t2">
         {#if backendValue === "local"}Sessions run in-process. Restarted with resume command on focus.
@@ -642,7 +701,40 @@
           <span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {lspEnabled ? 'translate-x-5' : 'translate-x-0.5'}"></span>
         </button>
       </div>
-      <p class="text-xs text-t2">Built in: TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. {config.language_servers?.profiles?.length ?? 0} trusted custom profile(s) configured in config.json.</p>
+      <p class="text-xs text-t2">Built in: TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Custom profiles are trusted commands from your PlaneAI config only.</p>
+      <div class="rounded-lg border border-border divide-y divide-border">
+        <div class="flex items-center justify-between gap-3 p-3">
+          <div>
+            <p class="text-sm text-t1">Custom profiles</p>
+            <p class="text-xs text-t3">Override built-in discovery for file extensions. Changes apply to newly opened editor files.</p>
+          </div>
+          <Button type="button" onclick={() => openLanguageServerProfile()}>Add profile</Button>
+        </div>
+        {#if languageServerProfiles.length === 0}
+          <p class="p-3 text-xs text-t3">No custom profiles configured.</p>
+        {:else}
+          {#each languageServerProfiles as profile (profile.id)}
+            <div class="flex items-center gap-3 p-3">
+              <button
+                class="w-9 h-5 shrink-0 rounded-full transition-colors {profile.enabled !== false ? 'bg-accent' : 'bg-panel-hi'}"
+                onclick={() => setLanguageServerProfileEnabled(profile.id, profile.enabled === false)}
+                role="switch"
+                aria-checked={profile.enabled !== false}
+                aria-label={`Toggle ${profile.id} language server`}
+              ><span class="block w-4 h-4 rounded-full bg-white shadow transition-transform {profile.enabled !== false ? 'translate-x-4' : 'translate-x-0.5'}"></span></button>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-t1">{profile.id}</p>
+                <p class="truncate font-mono text-[11px] text-t3">{profile.command}{profile.args.length ? ` ${profile.args.join(" ")}` : ""}</p>
+                <p class="text-[11px] text-t3">{profile.language_id} · {profile.extensions.map((extension) => `.${extension}`).join(", ")}</p>
+              </div>
+              <div class="flex shrink-0 gap-2">
+                <button class="text-xs text-t2 hover:text-accent" onclick={() => openLanguageServerProfile(profile)}>Edit</button>
+                <button class="text-xs text-red-500 hover:text-red-700" onclick={() => removeLanguageServerProfile(profile.id)}>Remove</button>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
     </section>
 
     <section class="space-y-3">
@@ -773,4 +865,54 @@
       onclick={confirmCleanup}
     >Remove {staleWorktrees.length} worktree{staleWorktrees.length === 1 ? '' : 's'}</button>
   </div>
+</Dialog>
+
+
+<Dialog
+  open={showLanguageServerProfileDialog}
+  onOpenChange={(open) => { showLanguageServerProfileDialog = open; }}
+  title={editingLanguageServerProfileId ? "Edit language-server profile" : "Add language-server profile"}
+  class="w-[34rem] p-6"
+>
+  <form class="space-y-4" onsubmit={(event) => { event.preventDefault(); saveLanguageServerProfile(); }}>
+    <div>
+      <h2 class="text-base font-semibold text-t1">{editingLanguageServerProfileId ? "Edit language-server profile" : "Add language-server profile"}</h2>
+      <p class="mt-1 text-xs text-t3">Commands are trusted and run only from your PlaneAI configuration, never from a repository.</p>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div class="space-y-1">
+        <label class="text-xs text-t2" for="lsp-profile-id">Profile ID</label>
+        <Input id="lsp-profile-id" bind:value={languageServerProfile.id} class="font-mono" placeholder="local-rust-analyzer" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-xs text-t2" for="lsp-profile-language">Language ID</label>
+        <Input id="lsp-profile-language" bind:value={languageServerProfile.languageId} class="font-mono" placeholder="rust" />
+      </div>
+    </div>
+    <div class="space-y-1">
+      <label class="text-xs text-t2" for="lsp-profile-extensions">File extensions</label>
+      <Input id="lsp-profile-extensions" bind:value={languageServerProfile.extensions} class="font-mono" placeholder="rs, rsi" />
+      <p class="text-[11px] text-t3">Comma-separated, without the leading dot.</p>
+    </div>
+    <div class="space-y-1">
+      <label class="text-xs text-t2" for="lsp-profile-command">Command</label>
+      <Input id="lsp-profile-command" bind:value={languageServerProfile.command} class="font-mono" placeholder="rust-analyzer" />
+    </div>
+    <div class="space-y-1">
+      <label class="text-xs text-t2" for="lsp-profile-args">Arguments</label>
+      <textarea id="lsp-profile-args" bind:value={languageServerProfile.args} class="min-h-20 w-full resize-y rounded-md border border-border bg-panel px-3 py-2 font-mono text-sm text-t1 placeholder:text-t3 focus:outline-none focus:ring-1 focus:ring-accent" placeholder="--stdio"></textarea>
+      <p class="text-[11px] text-t3">One argument per line. This preserves arguments containing spaces.</p>
+    </div>
+    <label class="flex items-center gap-2 text-sm text-t1">
+      <input type="checkbox" bind:checked={languageServerProfile.enabled} class="rounded border-border text-accent focus:ring-accent" />
+      Enable this profile
+    </label>
+    {#if languageServerProfileError}
+      <p class="text-xs text-red-500" role="alert">{languageServerProfileError}</p>
+    {/if}
+    <div class="flex justify-end gap-2 pt-2">
+      <Button type="button" onclick={() => { showLanguageServerProfileDialog = false; }}>Cancel</Button>
+      <Button type="submit">Save profile</Button>
+    </div>
+  </form>
 </Dialog>

@@ -18,11 +18,13 @@ pub async fn lsp_connect(
         .map_err(|error| error.to_string())?
         .clone();
     let manager = state.0.clone();
-    manager
-        .lock()
-        .await
-        .connect(repo_path, file_path, &config, on_message, manager.clone())
-        .await
+    let result = {
+        let mut guard = manager.lock().await;
+        guard
+            .connect(repo_path, file_path, &config, on_message, manager.clone())
+            .await
+    };
+    result
 }
 
 #[tauri::command]
@@ -39,6 +41,6 @@ pub async fn lsp_disconnect(
     connection_id: String,
     state: State<'_, LspState>,
 ) -> Result<(), String> {
-    state.0.lock().await.disconnect(&connection_id);
+    state.0.lock().await.disconnect(&connection_id).await;
     Ok(())
 }

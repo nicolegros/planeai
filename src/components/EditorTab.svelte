@@ -1,7 +1,15 @@
 <script lang="ts">
   import { git } from "../lib/api";
-  import { LSPClient, languageServerExtensions } from "@codemirror/lsp-client";
+  import {
+    findReferences,
+    formatDocument,
+    jumpToDefinition,
+    languageServerExtensions,
+    LSPClient,
+  } from "@codemirror/lsp-client";
+  import { lintGutter, nextDiagnostic, openLintPanel, previousDiagnostic } from "@codemirror/lint";
   import { TauriLspTransport, fileUri } from "../lib/lsp-transport";
+  import { renameLspSymbol } from "../lib/lsp-rename";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
@@ -138,6 +146,7 @@
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
         editorLangCompartment.of([]),
+        lintGutter(),
         ...(lsp ? [lsp.client.plugin(lsp.documentUri, lsp.transport.languageId)] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
@@ -180,6 +189,11 @@
     return () => {};
   }
 
+  function runEditorCommand(command: (view: EditorView) => boolean): void {
+    view?.focus();
+    if (view) command(view);
+  }
+
   function registerCurrentView() {
     if (!view) return;
     registerEditor(view, {
@@ -189,6 +203,13 @@
       saveAndClose: async () => { await saveCurrentBuffer(); closeCurrentBuffer(true); },
       nextBuffer: () => nextBuffer(),
       prevBuffer: () => prevBuffer(),
+      definition: () => runEditorCommand(jumpToDefinition),
+      references: () => runEditorCommand(findReferences),
+      rename: () => runEditorCommand(renameLspSymbol),
+      format: () => runEditorCommand(formatDocument),
+      nextDiagnostic: () => runEditorCommand(nextDiagnostic),
+      previousDiagnostic: () => runEditorCommand(previousDiagnostic),
+      showDiagnostics: () => runEditorCommand(openLintPanel),
       onModeChange: (mode) => { vimMode = mode; },
     });
   }
