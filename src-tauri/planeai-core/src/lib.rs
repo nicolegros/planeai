@@ -18,6 +18,7 @@ pub mod task_lifecycle;
 pub mod template;
 pub mod text;
 pub mod verifier;
+pub mod wsl;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_fixtures;
