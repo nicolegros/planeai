@@ -1,5 +1,15 @@
 <script lang="ts">
   import { git } from "../lib/api";
+  import {
+    findReferences,
+    formatDocument,
+    jumpToDefinition,
+    languageServerExtensions,
+    LSPClient,
+  } from "@codemirror/lsp-client";
+  import { lintGutter, nextDiagnostic, openLintPanel, previousDiagnostic } from "@codemirror/lint";
+  import { TauriLspTransport, fileUri } from "../lib/lsp-transport";
+  import { renameLspSymbol } from "../lib/lsp-rename";
   import { onMount, onDestroy } from "svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { EditorState, Compartment, Prec } from "@codemirror/state";
@@ -38,11 +48,18 @@
   import { createEditorFeedbackSnapshot } from "../lib/editor-feedback-selection";
   import { serializeEditorFeedback } from "../lib/editor-feedback-serializer";
 
+  interface LspSupport {
+    client: LSPClient;
+    transport: TauriLspTransport;
+    documentUri: string;
+  }
+
   interface Buffer {
     path: string;
     content: string;
     modified: boolean;
     state: EditorState | null;
+    lsp: LspSupport | null;
   }
 
   interface Props {
@@ -77,6 +94,7 @@
   let feedbackSnapshot = $state<EditorFeedbackSnapshot | null>(null);
   let editingFeedbackId = $state<string | null>(null);
   let feedbackInputEl = $state<HTMLTextAreaElement>();
+  let lspStatus = $state<"unavailable" | "connecting" | "ready">("unavailable");
   const sendingFeedback = $derived(isEditorFeedbackSending(sessionId));
 
   // Auto-open initialFile when provided
@@ -96,7 +114,7 @@
   const pendingFeedback = $derived(getEditorFeedback(sessionId));
   const pendingFeedbackCount = $derived(getEditorFeedbackCount(sessionId));
 
-  function createEditorState(content: string, filePath: string): EditorState {
+  function createEditorState(content: string, filePath: string, lsp: LspSupport | null): EditorState {
     const themeExt = isDarkTheme(theme) ? darkTheme : lightTheme;
     const { font_family, font_size } = getSettings().terminal;
     const useVim = getSettings().vim_mode ?? true;
@@ -128,6 +146,8 @@
         editorThemeCompartment.of(themeExt),
         editorFontCompartment.of(fontExtension(font_family, font_size)),
         editorLangCompartment.of([]),
+        lintGutter(),
+        ...(lsp ? [lsp.client.plugin(lsp.documentUri, lsp.transport.languageId)] : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged && activeBuffer) {
             if (!activeBuffer.modified) onModifiedChange?.(true);
@@ -146,9 +166,32 @@
     });
   }
 
+  async function connectLsp(fullPath: string): Promise<LspSupport | null> {
+    lspStatus = "connecting";
+    try {
+      const transport = await TauriLspTransport.connect(repoPath, fullPath);
+      const client = new LSPClient({
+        rootUri: fileUri(repoPath),
+        extensions: languageServerExtensions(),
+      }).connect(transport);
+      await client.initializing;
+      lspStatus = "ready";
+      return { client, transport, documentUri: fileUri(fullPath) };
+    } catch (error) {
+      console.info("LSP unavailable for file:", error);
+      lspStatus = "unavailable";
+      return null;
+    }
+  }
+
   function setupView() {
     if (!editorContainer) return;
     return () => {};
+  }
+
+  function runEditorCommand(command: (view: EditorView) => boolean): void {
+    view?.focus();
+    if (view) command(view);
   }
 
   function registerCurrentView() {
@@ -160,6 +203,13 @@
       saveAndClose: async () => { await saveCurrentBuffer(); closeCurrentBuffer(true); },
       nextBuffer: () => nextBuffer(),
       prevBuffer: () => prevBuffer(),
+      definition: () => runEditorCommand(jumpToDefinition),
+      references: () => runEditorCommand(findReferences),
+      rename: () => runEditorCommand(renameLspSymbol),
+      format: () => runEditorCommand(formatDocument),
+      nextDiagnostic: () => runEditorCommand(nextDiagnostic),
+      previousDiagnostic: () => runEditorCommand(previousDiagnostic),
+      showDiagnostics: () => runEditorCommand(openLintPanel),
       onModeChange: (mode) => { vimMode = mode; },
     });
   }
@@ -192,8 +242,16 @@
       const content = await git.readFile(fullPath, repoPath);
       // Guard: component may have unmounted during async fetch
       if (!editorContainer || !mounted) return;
-      const state = createEditorState(content, filePath);
-      buffers.push({ path: filePath, content, modified: false, state });
+      const lsp = await connectLsp(fullPath);
+      if (!editorContainer || !mounted) {
+        if (lsp) {
+          lsp.client.disconnect();
+          await lsp.transport.close();
+        }
+        return;
+      }
+      const state = createEditorState(content, filePath, lsp);
+      buffers.push({ path: filePath, content, modified: false, state, lsp });
       switchToBuffer(buffers.length - 1);
     } catch (e) {
       console.error("Failed to open file:", e);
@@ -210,6 +268,7 @@
 
     activeIndex = index;
     const buf = buffers[index];
+    lspStatus = buf.lsp ? "ready" : "unavailable";
     onFileChange?.(buf.path.split("/").pop() || buf.path);
     onModifiedChange?.(buf.modified);
 
@@ -245,6 +304,13 @@
     } catch (e) {
       console.error("Failed to save file:", e);
     }
+  }
+
+  async function closeLsp(buffer: Buffer) {
+    if (!buffer.lsp) return;
+    buffer.lsp.client.disconnect();
+    await buffer.lsp.transport.close();
+    buffer.lsp = null;
   }
 
   function openFeedbackComposer(): void {
@@ -373,6 +439,7 @@
       console.warn("Buffer has unsaved changes. Use :q! to force.");
       return;
     }
+    void closeLsp(activeBuffer);
     buffers.splice(activeIndex, 1);
     if (buffers.length === 0) {
       activeIndex = -1;
@@ -411,6 +478,7 @@
 
   onDestroy(() => {
     cleanupInterval?.();
+    for (const buffer of buffers) void closeLsp(buffer);
     if (view) {
       unregisterEditor(view);
       view.destroy();
@@ -510,6 +578,7 @@
         {#if pendingFeedbackCount > 0}
           <button type="button" class="rounded bg-accent-bg px-1.5 py-0.5 text-[10px] text-accent hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50" onclick={() => void sendFeedback()} disabled={sessionExited || sendingFeedback || showFeedbackComposer} title={sessionExited ? "Agent is not running" : showFeedbackComposer ? "Submit or cancel the open comment before sending feedback" : `Send feedback (${MOD_ENTER_HINT})`}>Send ({pendingFeedbackCount})</button>
         {/if}
+        <span class={lspStatus === "ready" ? "text-green-500" : lspStatus === "connecting" ? "text-yellow-400" : "text-t3"}>LSP {lspStatus}</span>
         {#if buffers.length > 1}
           <span class="text-t3">[{activeIndex + 1}/{buffers.length}]</span>
         {/if}

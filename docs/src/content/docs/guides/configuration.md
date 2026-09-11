@@ -71,6 +71,30 @@ The `daemon` backend is experimental. It provides session persistence across app
 tmux is not supported on Windows. The `local` backend is used automatically on Windows regardless of this setting.
 :::
 
+## Language Servers
+
+PlaneAI can start configured language servers for supported editor files. Built-in discovery covers TypeScript/JavaScript/JSON, Rust, Python, Go, and C/C++. Add custom trusted profiles in **Preferences → More → Language Servers** when a server lives outside the standard PATH or needs specific arguments.
+
+```jsonc
+{
+  "language_servers": {
+    "enabled": true,
+    "profiles": [
+      {
+        "id": "local-rust-analyzer",
+        "language_id": "rust",
+        "extensions": ["rs"],
+        "command": "/Users/me/.local/bin/rust-analyzer",
+        "args": [],
+        "enabled": true,
+      },
+    ],
+  },
+}
+```
+
+Custom profiles override built-in discovery for their matching extensions. Profile commands are trusted user configuration: PlaneAI never reads server commands from a repository. In Preferences, enter one command argument per line so arguments containing spaces remain intact. Changes apply when opening a new editor file.
+
 ## Sound
 
 Controls whether planeai plays audio notifications.

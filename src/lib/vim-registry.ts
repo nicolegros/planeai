@@ -19,6 +19,13 @@ export interface VimHandlers {
   saveAndClose: () => void;
   nextBuffer: () => void;
   prevBuffer: () => void;
+  definition: () => void;
+  references: () => void;
+  rename: () => void;
+  format: () => void;
+  nextDiagnostic: () => void;
+  previousDiagnostic: () => void;
+  showDiagnostics: () => void;
   onModeChange: (mode: string) => void;
 }
 
@@ -47,6 +54,35 @@ function initGlobal() {
   Vim.defineEx("bp", "bp", (cm: any) => {
     registry.get(cm.cm6)?.prevBuffer();
   });
+  Vim.defineEx("LspDefinition", "LspDefinition", (cm: any) => {
+    registry.get(cm.cm6)?.definition();
+  });
+  Vim.defineEx("LspReferences", "LspReferences", (cm: any) => {
+    registry.get(cm.cm6)?.references();
+  });
+  Vim.defineEx("LspRename", "LspRename", (cm: any) => {
+    registry.get(cm.cm6)?.rename();
+  });
+  Vim.defineEx("LspFormat", "LspFormat", (cm: any) => {
+    registry.get(cm.cm6)?.format();
+  });
+  Vim.defineEx("LspNextDiagnostic", "LspNextDiagnostic", (cm: any) => {
+    registry.get(cm.cm6)?.nextDiagnostic();
+  });
+  Vim.defineEx("LspPrevDiagnostic", "LspPrevDiagnostic", (cm: any) => {
+    registry.get(cm.cm6)?.previousDiagnostic();
+  });
+  Vim.defineEx("LspDiagnostics", "LspDiagnostics", (cm: any) => {
+    registry.get(cm.cm6)?.showDiagnostics();
+  });
+
+  Vim.map("gd", ":LspDefinition<CR>", "normal");
+  Vim.map("gr", ":LspReferences<CR>", "normal");
+  Vim.map("gR", ":LspRename<CR>", "normal");
+  Vim.map("gF", ":LspFormat<CR>", "normal");
+  Vim.map("]d", ":LspNextDiagnostic<CR>", "normal");
+  Vim.map("[d", ":LspPrevDiagnostic<CR>", "normal");
+  Vim.map("gD", ":LspDiagnostics<CR>", "normal");
 }
 
 function modeLabel(ev: { mode: string; subMode?: string }): string {
