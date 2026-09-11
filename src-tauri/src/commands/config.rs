@@ -40,6 +40,7 @@ pub fn update_config(
             Some(normalized)
         };
     }
+    config::validate(&new_config)?;
     let config_dir = config::config_dir(&app.package_info().name);
     config::save(&config_dir, &new_config)?;
     let mut cfg = state.0.lock().map_err(|e| e.to_string())?;

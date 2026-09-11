@@ -107,6 +107,13 @@ export const config = {
   refresh: () => invoke<AppConfig>("refresh_config"),
 };
 
+export const editor = {
+  getTerminalCommand: (sessionId: string, filePath: string) =>
+    invoke<string>("get_terminal_editor_command", { sessionId, filePath }),
+  openExternal: (sessionId: string, filePath: string) =>
+    invoke("open_external_editor", { sessionId, filePath }),
+};
+
 export const tasks = {
   list: (repoPath: string) => invoke<TaskItem[]>("list_task_items", { repoPath }),
   listAll: (repoPath: string) => invoke<TaskItem[]>("list_all_task_items", { repoPath }),
