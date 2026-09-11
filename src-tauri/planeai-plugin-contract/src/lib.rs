@@ -33,6 +33,7 @@ const LOCAL_CAPABILITIES: &[&str] = &[
     "projects.read",
     "sessions.read",
     "sessions.repository-context",
+    "sessions.prompt",
     "session-events",
     "sessions.actions",
     "sessions.advisories",
@@ -301,6 +302,7 @@ mod tests {
             "backend_entrypoints": { "macos-arm64": "bin/plugin" },
             "capabilities": [
                 "sessions.repository-context",
+                "sessions.prompt",
                 "session-events",
                 "sessions.actions",
                 "sessions.advisories",

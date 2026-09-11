@@ -34,6 +34,7 @@ const JIRA_SYNC_RPC_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROCESS_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RPC_FRAME_BYTES: u64 = 64 * 1024;
+const MAX_PLUGIN_SESSION_PROMPT_CHARS: usize = 100_000;
 const JIRA_PLUGIN_ID: &str = "jira";
 const GITHUB_PLUGIN_ID: &str = "github";
 const JIRA_BACKEND_ENTRYPOINT: &str = "planeai-plugin-jira";
@@ -129,6 +130,8 @@ pub enum PluginHostCapability {
     SessionsRead,
     #[serde(rename = "sessions.repository-context")]
     SessionsRepositoryContext,
+    #[serde(rename = "sessions.prompt")]
+    SessionsPrompt,
     #[serde(rename = "session-events")]
     SessionEvents,
     #[serde(rename = "sessions.actions")]
@@ -320,6 +323,7 @@ fn validate_capabilities(
                     | PluginHostCapability::ProjectsRead
                     | PluginHostCapability::SessionsRead
                     | PluginHostCapability::SessionsRepositoryContext
+                    | PluginHostCapability::SessionsPrompt
                     | PluginHostCapability::SessionEvents
                     | PluginHostCapability::SessionActions
                     | PluginHostCapability::SessionAdvisories
@@ -332,8 +336,7 @@ fn validate_capabilities(
         })
     {
         return Err(
-            "local plugins may only request settings, projects.read, sessions.read, sessions.repository-context, tasks.read, tasks.create, or task-events capabilities"
-                .to_string(),
+            "local plugins may only request documented local plugin capabilities".to_string(),
         );
     }
     Ok(())
@@ -369,8 +372,10 @@ fn validate_ui_contributions(
             &contribution.entrypoint,
             "UI contribution entrypoint",
         )?;
-        if !matches!(contribution.placement, PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel)
-            && contribution.shortcut.is_some()
+        if !matches!(
+            contribution.placement,
+            PluginUiPlacement::MainPane | PluginUiPlacement::SessionPanel
+        ) && contribution.shortcut.is_some()
         {
             return Err(
                 "UI contribution shortcuts are only valid for main-pane or session-panel contributions".to_string(),
@@ -1154,6 +1159,13 @@ struct PluginSessionCompletion {
     message: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginSessionPrompt {
+    session_id: String,
+    text: String,
+}
+
 fn validate_plugin_session_actions(
     request: SessionActionsRequest,
 ) -> Result<Vec<PluginSessionAction>, String> {
@@ -1203,6 +1215,35 @@ fn validate_plugin_session_advisory(
         return Err("plugin session advisory requires a session_id and a message of at most 1000 characters".to_string());
     }
     Ok(advisory)
+}
+
+fn validate_plugin_session_prompt(
+    prompt: PluginSessionPrompt,
+) -> Result<PluginSessionPrompt, String> {
+    if prompt.session_id.trim().is_empty()
+        || prompt.text.trim().is_empty()
+        || prompt.text.chars().count() > MAX_PLUGIN_SESSION_PROMPT_CHARS
+    {
+        return Err(format!(
+            "plugin session prompt requires a session_id and nonempty text of at most {MAX_PLUGIN_SESSION_PROMPT_CHARS} characters"
+        ));
+    }
+    Ok(prompt)
+}
+
+fn dispatch_plugin_session_prompt(
+    capabilities: &HashSet<PluginHostCapability>,
+    params: Value,
+    send: impl FnOnce(&str, &str) -> Result<(), String>,
+) -> Result<Value, String> {
+    if !capabilities.contains(&PluginHostCapability::SessionsPrompt) {
+        return Err("plugin capability is not granted".to_string());
+    }
+    let prompt = serde_json::from_value(params)
+        .map_err(|error| format!("invalid plugin session prompt: {error}"))
+        .and_then(validate_plugin_session_prompt)?;
+    send(&prompt.session_id, &prompt.text)?;
+    Ok(serde_json::json!({ "delivered": true }))
 }
 
 fn validate_plugin_session_completion(
@@ -1430,6 +1471,19 @@ impl RuntimeProcess {
                         })
                         .map(|_| serde_json::json!({ "accepted": true }))
                 }
+            }
+            "host.sessions.prompt" => {
+                let capabilities = self.capabilities.clone();
+                commands::blocking(move || {
+                    let conn = Connection::open(planeai_paths::db_path())
+                        .map_err(|error| error.to_string())?;
+                    let ops =
+                        crate::session_ops::real_prompt_ops(planeai_paths::notify_socket_path());
+                    dispatch_plugin_session_prompt(&capabilities, params, |session_id, text| {
+                        crate::session_ops::send_prompt(&conn, session_id, text, &ops).map(|_| ())
+                    })
+                })
+                .await
             }
             "host.sessions.complete" => {
                 if !self
@@ -4297,5 +4351,63 @@ mod placement_tests {
         assert!(PluginUiPlacement::SidebarNavigation.is_sidebar());
         assert!(!PluginUiPlacement::Preferences.is_sidebar());
         assert!(!PluginUiPlacement::MainPane.is_sidebar());
+    }
+}
+
+#[cfg(test)]
+mod session_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn local_plugins_may_request_the_session_prompt_capability() {
+        assert!(validate_capabilities(
+            PluginSourceKind::Local,
+            &[PluginHostCapability::SessionsPrompt],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn session_prompt_payload_is_bounded_and_delivered_once() {
+        let sent = std::sync::Mutex::new(Vec::new());
+        let response = dispatch_plugin_session_prompt(
+            &HashSet::from([PluginHostCapability::SessionsPrompt]),
+            serde_json::json!({ "session_id": "session-123", "text": "Please fix the CI failure." }),
+            |session_id, text| {
+                sent.lock()
+                    .unwrap()
+                    .push((session_id.to_string(), text.to_string()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(response, serde_json::json!({ "delivered": true }));
+        assert_eq!(
+            sent.into_inner().unwrap(),
+            vec![(
+                "session-123".to_string(),
+                "Please fix the CI failure.".to_string()
+            )]
+        );
+
+        for invalid in [
+            serde_json::json!({ "session_id": "", "text": "hello" }),
+            serde_json::json!({ "session_id": "session-123", "text": "   " }),
+            serde_json::json!({ "session_id": "session-123", "text": "x".repeat(MAX_PLUGIN_SESSION_PROMPT_CHARS + 1) }),
+        ] {
+            assert!(dispatch_plugin_session_prompt(
+                &HashSet::from([PluginHostCapability::SessionsPrompt]),
+                invalid,
+                |_, _| Ok(())
+            )
+            .is_err());
+        }
+        assert!(dispatch_plugin_session_prompt(
+            &HashSet::new(),
+            serde_json::json!({ "session_id": "session-123", "text": "should not send" }),
+            |_, _| panic!("ungranted plugins must not deliver a prompt"),
+        )
+        .unwrap_err()
+        .contains("not granted"));
     }
 }
