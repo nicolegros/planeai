@@ -8,6 +8,16 @@ pub enum QueuePolicy {
     DropOldest,
 }
 
+/// WSL spawn configuration — when present, the session spawns inside a WSL distro.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WslSpawnConfig {
+    /// Distro name (e.g. "Ubuntu").
+    pub distro: String,
+    /// Working directory inside WSL (Linux path, e.g. "/home/user/project").
+    /// If None, WSL will use its own default.
+    pub cwd: Option<String>,
+}
+
 pub struct LocalPtyConfig {
     pub session_id: SessionId,
     /// Shell-wrapped command string (legacy). Used if `program` is None.
@@ -26,6 +36,10 @@ pub struct LocalPtyConfig {
     pub coalesce_threshold_bytes: usize,
     pub queue_policy: QueuePolicy,
     pub queue_capacity_bytes: usize,
+    /// When set, the session spawns inside a WSL distro via wsl.exe.
+    /// The `cwd`, `command`, `program`, and `args` fields are reinterpreted
+    /// as WSL targets (Linux paths/commands).
+    pub wsl: Option<WslSpawnConfig>,
 }
 
 impl Default for LocalPtyConfig {
@@ -45,6 +59,7 @@ impl Default for LocalPtyConfig {
             coalesce_threshold_bytes: 4096,
             queue_policy: QueuePolicy::Block,
             queue_capacity_bytes: 512 * 1024,
+            wsl: None,
         }
     }
 }

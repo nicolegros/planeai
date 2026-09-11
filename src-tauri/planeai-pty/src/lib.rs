@@ -21,7 +21,7 @@ pub mod platform;
 #[path = "platform_windows.rs"]
 pub mod platform;
 
-pub use config::{LocalPtyConfig, QueuePolicy};
+pub use config::{LocalPtyConfig, QueuePolicy, WslSpawnConfig};
 pub use diagnostics::{DiagnosticsSnapshot, PipelineDiagnostics};
 pub use event::{PtyEvent, PtyEventSink, SessionId};
 pub use flow_control::FlowControl;
