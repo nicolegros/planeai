@@ -73,7 +73,10 @@ describe("Titlebar", () => {
       },
     });
 
-    expect(target.querySelector('[data-plugin-titlebar-entry="github:pull-request-titlebar"]')).not.toBeNull();
+    const contribution = target.querySelector<HTMLElement>('[data-plugin-titlebar-entry="github:pull-request-titlebar"]');
+    expect(contribution).not.toBeNull();
+    expect(contribution?.className).toContain("overflow-hidden");
+    expect(contribution?.getAttribute("style")).toBe("width: 88px; min-width: 0; max-width: 88px");
     const legacy = target.querySelector<HTMLButtonElement>("[data-legacy-pr-control]");
     expect(legacy?.textContent).toContain("PR");
     legacy?.click();
